@@ -402,6 +402,55 @@ h2 {
   padding: 7px 10px;
 }
 
+.money-list {
+  display: grid;
+  width: 100%;
+}
+
+.money-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(78px, 0.42fr) minmax(108px, 0.62fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf0f3;
+  font-size: 0.86rem;
+}
+
+.money-row:last-child {
+  border-bottom: 0;
+}
+
+.money-head {
+  color: #5f6c7d;
+  background: #f8fafc;
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.money-list.dense .money-row {
+  padding: 7px 10px;
+}
+
+.money-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.money-amount {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .amount {
   text-align: right !important;
   font-variant-numeric: tabular-nums;

@@ -400,7 +400,15 @@ function Overview({
           <h2>Cash in accounts</h2>
           <span className="total-pill">{money(dashboard.metrics.totalCash)}</span>
         </div>
-        <SimpleMoneyTable rows={dashboard.accounts.map((item) => ({ id: item.id, name: item.name, amount: item.balance, source: sourceLabel(item.source) }))} />
+        <SimpleMoneyTable
+          rows={dashboard.accounts.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+        />
       </section>
 
       <section className="panel">
@@ -408,7 +416,15 @@ function Overview({
           <h2>Receivables</h2>
           <span className="total-pill">{money(dashboard.metrics.totalReceivables)}</span>
         </div>
-        <SimpleMoneyTable rows={dashboard.receivables.map((item) => ({ id: item.id, name: item.name, amount: item.balance, source: sourceLabel(item.source) }))} />
+        <SimpleMoneyTable
+          rows={dashboard.receivables.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+        />
       </section>
 
       <section className="panel tall">
@@ -416,7 +432,16 @@ function Overview({
           <h2>Open balance</h2>
           <span className="total-pill">{money(dashboard.metrics.totalOpenBalance)}</span>
         </div>
-        <SimpleMoneyTable rows={dashboard.openBalances.map((item) => ({ id: item.id, name: item.name, amount: item.balance, source: sourceLabel(item.source) }))} dense />
+        <SimpleMoneyTable
+          rows={dashboard.openBalances.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+          dense
+        />
       </section>
 
       <section className="panel wide">
@@ -533,31 +558,27 @@ function SimpleMoneyTable({
   rows,
   dense
 }: {
-  rows: Array<{ id: string; name: string; amount: number; source: string }>;
+  rows: Array<{ id: string; name: string; amount: number; currency: string; source: string }>;
   dense?: boolean;
 }) {
   return (
-    <div className="table-wrap">
-      <table className={`data-table ${dense ? "dense" : ""}`}>
-        <thead>
-          <tr>
-            <th>Account</th>
-            <th>Source</th>
-            <th>Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.name}</td>
-              <td>
-                <span className="source-pill">{row.source}</span>
-              </td>
-              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className={`money-list ${dense ? "dense" : ""}`}>
+      <div className="money-row money-head">
+        <span>Account</span>
+        <span>Source</span>
+        <span>Balance</span>
+      </div>
+      {rows.map((row) => (
+        <div className="money-row" key={row.id}>
+          <span className="money-name" title={row.name}>
+            {row.name}
+          </span>
+          <span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span>
+          <span className={`money-amount ${row.amount < 0 ? "danger-text" : ""}`}>
+            {money(row.amount, row.currency)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
