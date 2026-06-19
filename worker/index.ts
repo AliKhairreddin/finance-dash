@@ -1,4 +1,5 @@
 import type {
+  AccountBalance,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
@@ -60,6 +61,10 @@ interface PersistedState {
 }
 
 const stateKey = "finance-dashboard-state";
+const wiseBaseUrlByEnvironment = {
+  production: "https://api.wise.com",
+  sandbox: "https://api.wise-sandbox.com"
+};
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store"
@@ -81,6 +86,59 @@ function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] 
     map.set(item.id, item);
   }
   return [...map.values()];
+}
+
+function parseWiseBalanceIds(value: string | undefined): Set<string> {
+  if (!value) return new Set();
+  return new Set(
+    value
+      .split(",")
+      .map((pair) => pair.trim().split(":")[0])
+      .filter(Boolean)
+  );
+}
+
+function mergeLiveWiseAccounts(liveWiseAccounts: AccountBalance[]): AccountBalance[] {
+  if (liveWiseAccounts.length === 0) return seededAccounts;
+  return [...seededAccounts.filter((account) => account.source !== "wise"), ...liveWiseAccounts];
+}
+
+async function fetchWiseAccounts(env: Env): Promise<AccountBalance[]> {
+  if (!env.WISE_API_TOKEN || !env.WISE_PROFILE_ID || !env.WISE_BALANCE_IDS) return [];
+
+  const wiseBaseUrl =
+    env.WISE_ENVIRONMENT === "sandbox" ? wiseBaseUrlByEnvironment.sandbox : wiseBaseUrlByEnvironment.production;
+  const selectedBalanceIds = parseWiseBalanceIds(env.WISE_BALANCE_IDS);
+  const response = await fetch(`${wiseBaseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD`, {
+    headers: {
+      Authorization: `Bearer ${env.WISE_API_TOKEN}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Wise balance sync failed: ${response.status} ${response.statusText}`);
+  }
+
+  const balances = (await response.json()) as Array<{
+    id: number;
+    currency: string;
+    amount?: { value?: number; currency?: string };
+    modificationTime?: string;
+    visible?: boolean;
+  }>;
+
+  return balances
+    .filter((balance) => balance.visible !== false)
+    .filter((balance) => selectedBalanceIds.size === 0 || selectedBalanceIds.has(String(balance.id)))
+    .map((balance) => ({
+      id: `wise-${balance.id}`,
+      name: `Wise ${balance.currency}`,
+      source: "wise",
+      balance: balance.amount?.value ?? 0,
+      currency: balance.amount?.currency ?? balance.currency,
+      updatedAt: balance.modificationTime ?? new Date().toISOString(),
+      status: "live"
+    }));
 }
 
 async function loadPersisted(env: Env): Promise<PersistedState> {
@@ -165,6 +223,8 @@ function integrationStatus(env: Env): IntegrationStatus[] {
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
+  const liveWiseAccounts = await fetchWiseAccounts(env).catch(() => []);
+  const accounts = mergeLiveWiseAccounts(liveWiseAccounts);
   const transactions = enrichTransactions(
     seededTransactions.map((transaction) => {
       const invoice = state.invoices.find((item) => item.transactionId === transaction.id);
@@ -177,7 +237,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
 
   return {
     asOf: seededAsOf,
-    accounts: seededAccounts,
+    accounts,
     receivables: seededReceivables,
     openBalances: seededOpenBalances,
     payables: seededPayables,
@@ -186,7 +246,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     transactions,
     invoices: state.invoices,
     integrationStatus: integrationStatus(env),
-    metrics: calculateMetrics(seededAccounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments),
+    metrics: calculateMetrics(accounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments),
     lastSync: new Date().toISOString()
   };
 }

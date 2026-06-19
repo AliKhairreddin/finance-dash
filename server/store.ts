@@ -27,6 +27,7 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 let providers: Provider[] = [...seededProviders];
 let invoices: Invoice[] = [...seededInvoices];
 let transactions: Transaction[] = [...seededTransactions];
+let accounts = [...seededAccounts];
 let lastSync = new Date().toISOString();
 
 function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] {
@@ -59,10 +60,10 @@ function getMatchedTransactions(): Transaction[] {
 }
 
 export function getSnapshot(): DashboardSnapshot {
-  const metrics = calculateMetrics(seededAccounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments);
+  const metrics = calculateMetrics(accounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments);
   return {
     asOf: seededAsOf,
-    accounts: seededAccounts,
+    accounts,
     receivables: seededReceivables,
     openBalances: seededOpenBalances,
     payables: seededPayables,
@@ -152,6 +153,9 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   const liveTransactions: Transaction[] = [];
 
   if (wise.status === "fulfilled") {
+    if (wise.value.accounts.length > 0) {
+      accounts = [...seededAccounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
+    }
     liveTransactions.push(...wise.value.transactions);
   }
   if (slash.status === "fulfilled") {

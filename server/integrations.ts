@@ -99,8 +99,36 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
     const [id, currency = "USD"] = pair.trim().split(":");
     return { id, currency };
   });
+  const selectedBalanceIds = new Set(balances.map((balance) => balance.id));
 
   const transactions: Transaction[] = [];
+  const accounts = await fetchJson<
+    Array<{
+      id: number;
+      currency: string;
+      amount?: { value?: number; currency?: string };
+      modificationTime?: string;
+      visible?: boolean;
+    }>
+  >(`${wiseBaseUrl}/v4/profiles/${profileId}/balances?types=STANDARD`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  }).then((wiseBalances) => {
+    return wiseBalances
+      .filter((balance) => balance.visible !== false)
+      .filter((balance) => selectedBalanceIds.has(String(balance.id)))
+      .map((balance) => ({
+        id: `wise-${balance.id}`,
+        name: `Wise ${balance.currency}`,
+        source: "wise" as const,
+        balance: balance.amount?.value ?? 0,
+        currency: balance.amount?.currency ?? balance.currency,
+        updatedAt: balance.modificationTime ?? new Date().toISOString(),
+        status: "live" as const
+      }));
+  });
+
   for (const balance of balances) {
     const params = new URLSearchParams({
       currency: balance.currency,
@@ -145,7 +173,7 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
     }
   }
 
-  return { accounts: [], transactions };
+  return { accounts, transactions };
 }
 
 export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
