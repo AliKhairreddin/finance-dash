@@ -15,6 +15,7 @@
     }
   ],
   "vars": {
+    "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",
     "SLASH_BASE_URL": "https://api.slash.com",
     "QUICKBOOKS_ENVIRONMENT": "production"

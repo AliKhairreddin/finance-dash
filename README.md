@@ -29,6 +29,23 @@ https://finance.thatcanadian.dev
 
 The Worker is configured in `wrangler.jsonc` and persists lightweight dashboard state in Workers KV through the `FINANCE_KV` binding.
 
+## Convex Backend
+
+Convex is configured as the durable dashboard state backend.
+
+```text
+Cloud URL: https://fabulous-elephant-597.convex.cloud
+HTTP Actions URL: https://fabulous-elephant-597.convex.site
+```
+
+Push Convex schema/functions to the shared development deployment:
+
+```bash
+npm run convex:dev
+```
+
+The Cloudflare Worker uses `CONVEX_URL` to store provider aliases and mock invoices in Convex. Workers KV remains configured as a fallback store.
+
 ## What It Does
 
 - Shows cash in accounts, receivables, open balances, payables by supplier/month, profit, investments, total assets, cashback, and weekly growth checks.

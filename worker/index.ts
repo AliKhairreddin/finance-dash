@@ -9,6 +9,8 @@ import type {
   MatchTransactionPayload,
   Provider
 } from "../shared/types";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
 import { enrichTransactions, learnAlias } from "../server/matching";
 import {
@@ -36,6 +38,7 @@ interface KVNamespace {
 interface Env {
   ASSETS: Fetcher;
   FINANCE_KV?: KVNamespace;
+  CONVEX_URL?: string;
   WISE_API_TOKEN?: string;
   WISE_PROFILE_ID?: string;
   WISE_BALANCE_IDS?: string;
@@ -86,6 +89,10 @@ function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] 
     map.set(item.id, item);
   }
   return [...map.values()];
+}
+
+function getConvexClient(env: Env): ConvexHttpClient | null {
+  return env.CONVEX_URL ? new ConvexHttpClient(env.CONVEX_URL) : null;
 }
 
 function parseWiseBalanceIds(value: string | undefined): Set<string> {
@@ -142,7 +149,10 @@ async function fetchWiseAccounts(env: Env): Promise<AccountBalance[]> {
 }
 
 async function loadPersisted(env: Env): Promise<PersistedState> {
-  const stored = await env.FINANCE_KV?.get<Partial<PersistedState>>(stateKey, "json");
+  const convex = getConvexClient(env);
+  const convexState = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
+  const stored = convexState ?? (await env.FINANCE_KV?.get<Partial<PersistedState>>(stateKey, "json"));
+
   return {
     providers: mergeById(seededProviders, stored?.providers),
     invoices: mergeById(seededInvoices, stored?.invoices)
@@ -150,6 +160,10 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
 }
 
 async function savePersisted(env: Env, state: PersistedState): Promise<void> {
+  const convex = getConvexClient(env);
+  if (convex) {
+    await convex.mutation(api.dashboard.saveState, state).catch(() => undefined);
+  }
   await env.FINANCE_KV?.put(stateKey, JSON.stringify(state));
 }
 

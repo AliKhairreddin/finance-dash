@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "tsx watch server/index.ts",
     "build": "tsc -b && vite build",
+    "convex:dev": "convex dev --once --env-file .env.local",
     "deploy": "npm run build && wrangler deploy",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc -b --pretty false"
@@ -14,6 +15,7 @@
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.1",
+    "convex": "^1.41.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
@@ -31,5 +33,8 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
     "wrangler": "^4.103.0"
+  },
+  "overrides": {
+    "ws": "8.21.0"
   }
 }
