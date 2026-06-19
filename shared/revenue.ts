@@ -23,7 +23,7 @@ export function resolveRevenuePeriod({
   periodPreset = "last-week",
   periodStart,
   periodEnd,
-  timezone = "America/Toronto",
+  timezone = "America/New_York",
   now = new Date()
 }: {
   periodPreset?: RevenuePeriodPreset;
@@ -70,6 +70,12 @@ export function calculateInvoiceDueDate(periodEnd: string, invoiceDueDays: numbe
   return addDays(periodEnd, Math.max(0, invoiceDueDays));
 }
 
+export function calculateTuneHourOffset(timezone: string, networkTimezone: string, date: string): number {
+  const selectedOffset = timezoneOffsetMinutes(timezone, date);
+  const networkOffset = timezoneOffsetMinutes(networkTimezone, date);
+  return Math.round((selectedOffset - networkOffset) / 60);
+}
+
 export function calculateRevenueMetrics(partners: RevenuePartner[], runs: RevenueRun[]): RevenueMetrics {
   const billableRuns = runs.filter((run) => run.status !== "failed" && run.status !== "skipped");
   const invoicedRuns = runs.filter((run) => run.status === "invoiced");
@@ -84,6 +90,30 @@ export function calculateRevenueMetrics(partners: RevenuePartner[], runs: Revenu
     partnerCount: partners.filter((partner) => partner.enabled).length,
     lastRunAt
   };
+}
+
+function timezoneOffsetMinutes(timezone: string, date: string): number {
+  const [year, month, day] = date.split("-").map(Number);
+  const anchor = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(anchor);
+  const zonedAsUtc = Date.UTC(
+    Number(parts.find((part) => part.type === "year")?.value),
+    Number(parts.find((part) => part.type === "month")?.value) - 1,
+    Number(parts.find((part) => part.type === "day")?.value),
+    Number(parts.find((part) => part.type === "hour")?.value) % 24,
+    Number(parts.find((part) => part.type === "minute")?.value),
+    Number(parts.find((part) => part.type === "second")?.value)
+  );
+  return (zonedAsUtc - anchor.getTime()) / 60000;
 }
 
 function zonedDateStamp(now: Date, timezone: string): { date: string; year: number; month: number; weekday: number } {

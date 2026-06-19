@@ -210,7 +210,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
       periodPreset: payload.periodPreset,
       periodStart: payload.periodStart,
       periodEnd: payload.periodEnd,
-      timezone: payload.timezone || partner.timezone || process.env.REVENUE_TIMEZONE || "America/Toronto"
+      timezone: payload.timezone || partner.timezone || process.env.REVENUE_TIMEZONE || "America/New_York"
     });
     const existingInvoicedRun = revenueRuns.find(
       (run) =>

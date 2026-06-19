@@ -72,6 +72,7 @@ export interface RevenuePartner {
   externalId?: string;
   currency: string;
   timezone: string;
+  networkTimezone: string;
   networkIdEnv: string;
   apiKeyEnv: string;
   apiBaseUrlEnv?: string;

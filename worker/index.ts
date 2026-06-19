@@ -16,7 +16,7 @@ import type {
   TransactionTeamAssignment,
   Transaction
 } from "../shared/types";
-import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
+import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
@@ -487,6 +487,7 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
   }
 
   const apiBaseUrl = envString(env, partner.apiBaseUrlEnv) || `https://${networkId}.api.hasoffers.com/Apiv3/json`;
+  const hourOffset = calculateTuneHourOffset(period.timezone, partner.networkTimezone, period.periodStart);
   const params = new URLSearchParams({
     Target: "Affiliate_Report",
     Method: "getStats",
@@ -494,7 +495,8 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
     totals: "1",
     currency: partner.currency,
     data_start: period.periodStart,
-    data_end: period.periodEnd
+    data_end: period.periodEnd,
+    hour_offset: String(hourOffset)
   });
   params.append("fields[0]", "Stat.date");
   params.append("fields[1]", "Stat.payout");
@@ -812,7 +814,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
       periodPreset: payload.periodPreset,
       periodStart: payload.periodStart,
       periodEnd: payload.periodEnd,
-      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "America/Toronto"
+      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "America/New_York"
     });
     const existingInvoicedRun = state.revenueRuns.find(
       (run) =>
@@ -988,7 +990,7 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await syncRevenue(env, {
       periodPreset: "last-week",
-      timezone: env.REVENUE_TIMEZONE || "America/Toronto",
+      timezone: env.REVENUE_TIMEZONE || "America/New_York",
       createInvoices: true
     });
   }

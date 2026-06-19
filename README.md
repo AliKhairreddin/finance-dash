@@ -54,7 +54,8 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue runs,
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
 - Seeds Kissterra as a TUNE/HasOffers revenue partner.
-- Pulls last-week revenue using a Monday-to-Sunday period in the configured timezone, plus last-7-days, this-month, and custom filters.
+- Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
+- Sends TUNE `hour_offset` from the selected timezone against the partner network timezone.
 - Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
 - Supports optional Wise transaction team assignment with seeded `Cognitive Pixel` and `WGNR` teams, plus team filters and visible-team totals.
 - Keeps Slash balances, card activity, and cashback tracking on its own page.
@@ -99,7 +100,7 @@ MERIT_DEFAULT_TAX_ID=
 MERIT_DEFAULT_ITEM_CODE=SERVICES
 MERIT_DEFAULT_COUNTRY_CODE=CA
 
-REVENUE_TIMEZONE=America/Toronto
+REVENUE_TIMEZONE=America/New_York
 KISSTERRA_TUNE_NETWORK_ID=
 KISSTERRA_TUNE_API_KEY=
 KISSTERRA_TUNE_API_BASE_URL=

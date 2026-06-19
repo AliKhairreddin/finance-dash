@@ -8,6 +8,7 @@ import type {
   RevenueRun,
   Transaction
 } from "../shared/types";
+import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 
 const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
@@ -388,6 +389,7 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
   }
 
   const apiBaseUrl = process.env[partner.apiBaseUrlEnv ?? ""] || `https://${networkId}.api.hasoffers.com/Apiv3/json`;
+  const hourOffset = calculateTuneHourOffset(period.timezone, partner.networkTimezone, period.periodStart);
   const params = new URLSearchParams({
     Target: "Affiliate_Report",
     Method: "getStats",
@@ -395,7 +397,8 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
     totals: "1",
     currency: partner.currency,
     data_start: period.periodStart,
-    data_end: period.periodEnd
+    data_end: period.periodEnd,
+    hour_offset: String(hourOffset)
   });
   params.append("fields[0]", "Stat.date");
   params.append("fields[1]", "Stat.payout");

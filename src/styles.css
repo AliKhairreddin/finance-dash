@@ -607,6 +607,16 @@ h2 {
   white-space: nowrap;
 }
 
+.timezone-field {
+  grid-column: span 2;
+}
+
+.timezone-input-grid {
+  display: grid;
+  grid-template-columns: minmax(135px, 0.82fr) minmax(180px, 1fr);
+  gap: 8px;
+}
+
 .check-row input {
   width: auto;
   min-height: auto;
@@ -1049,6 +1059,10 @@ h2 {
   .revenue-controls {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .timezone-field {
+    grid-column: span 2;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1109,6 +1123,12 @@ h2 {
 
   .review-row {
     grid-template-columns: 38px 1fr;
+  }
+
+  .timezone-field,
+  .timezone-input-grid {
+    grid-column: auto;
+    grid-template-columns: 1fr;
   }
 
   .review-amount,
