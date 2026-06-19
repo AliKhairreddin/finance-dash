@@ -5,6 +5,7 @@ import type {
   LedgerItem,
   Payable,
   Provider,
+  RevenuePartner,
   Team,
   Transaction
 } from "../shared/types";
@@ -86,6 +87,24 @@ export const seededProviders: Provider[] = [
 export const seededTeams: Team[] = [
   { id: "team-cognitive-pixel", name: "Cognitive Pixel", createdAt: seededAsOf },
   { id: "team-wgnr", name: "WGNR", createdAt: seededAsOf }
+];
+
+export const seededRevenuePartners: RevenuePartner[] = [
+  {
+    id: "revenue-partner-kissterra",
+    name: "Kissterra",
+    source: "tune",
+    externalId: "kissterra",
+    currency: "USD",
+    timezone: "America/Toronto",
+    networkIdEnv: "KISSTERRA_TUNE_NETWORK_ID",
+    apiKeyEnv: "KISSTERRA_TUNE_API_KEY",
+    apiBaseUrlEnv: "KISSTERRA_TUNE_API_BASE_URL",
+    meritCustomerName: "Kissterra",
+    invoiceDueDays: 7,
+    enabled: true,
+    createdAt: seededAsOf
+  }
 ];
 
 export const seededTransactions: Transaction[] = [

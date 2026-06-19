@@ -7,11 +7,14 @@ import type {
   Invoice,
   MatchTransactionPayload,
   Provider,
+  RevenueRun,
+  SyncRevenuePayload,
   Team,
   Transaction
 } from "../shared/types";
+import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
-import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchWiseActivity, getIntegrationStatus } from "./integrations";
+import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchTuneRevenue, fetchWiseActivity, getIntegrationStatus } from "./integrations";
 import { enrichTransactions, learnAlias } from "./matching";
 import {
   seededAccounts,
@@ -22,6 +25,7 @@ import {
   seededPayables,
   seededProviders,
   seededReceivables,
+  seededRevenuePartners,
   seededTeams,
   seededTransactions
 } from "./mockData";
@@ -30,6 +34,8 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 let providers: Provider[] = [...seededProviders];
 let invoices: Invoice[] = [...seededInvoices];
 let teams: Team[] = [...seededTeams];
+let revenuePartners = [...seededRevenuePartners];
+let revenueRuns: RevenueRun[] = [];
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let transactions: Transaction[] = [...seededTransactions];
 let accounts = [...seededAccounts];
@@ -48,11 +54,12 @@ export async function initializeStore(): Promise<void> {
   providers = mergeById(seededProviders, persisted.providers);
   invoices = mergeById(seededInvoices, persisted.invoices);
   teams = mergeById(seededTeams, persisted.teams);
+  revenueRuns = persisted.revenueRuns ?? [];
   transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
 }
 
 async function persist(): Promise<void> {
-  await savePersistedState({ providers, invoices, teams, transactionTeamAssignments });
+  await savePersistedState({ providers, invoices, teams, transactionTeamAssignments, revenueRuns });
 }
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
@@ -85,6 +92,9 @@ export function getSnapshot(): DashboardSnapshot {
     investments: seededInvestments,
     providers,
     teams,
+    revenuePartners,
+    revenueRuns,
+    revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
     transactions: getMatchedTransactions(),
     invoices,
     integrationStatus: getIntegrationStatus(),
@@ -186,6 +196,89 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
   }
   await persist();
   return invoice;
+}
+
+export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
+  const selectedPartners = revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  if (selectedPartners.length === 0) {
+    throw new Error("No revenue partner found for this sync");
+  }
+
+  const nextRuns: RevenueRun[] = [];
+  for (const partner of selectedPartners) {
+    const period = resolveRevenuePeriod({
+      periodPreset: payload.periodPreset,
+      periodStart: payload.periodStart,
+      periodEnd: payload.periodEnd,
+      timezone: payload.timezone || partner.timezone || process.env.REVENUE_TIMEZONE || "America/Toronto"
+    });
+    const existingInvoicedRun = revenueRuns.find(
+      (run) =>
+        run.partnerId === partner.id &&
+        run.periodStart === period.periodStart &&
+        run.periodEnd === period.periodEnd &&
+        run.status === "invoiced"
+    );
+
+    try {
+      let run = await fetchTuneRevenue(partner, period);
+      if (payload.createInvoices && existingInvoicedRun) {
+        run = {
+          ...run,
+          status: "skipped",
+          invoiceId: existingInvoicedRun.invoiceId,
+          externalInvoiceId: existingInvoicedRun.externalInvoiceId,
+          error: "Invoice already exists for this partner and period"
+        };
+      } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
+        const invoice = await createMeritInvoice({
+          customerName: partner.meritCustomerName || partner.name,
+          amount: run.revenue,
+          currency: run.currency,
+          dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
+          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+        });
+
+        if (invoice) {
+          invoices = [invoice, ...invoices.filter((item) => item.id !== invoice.id)];
+          run = {
+            ...run,
+            status: "invoiced",
+            invoiceId: invoice.id,
+            externalInvoiceId: invoice.externalId
+          };
+        } else {
+          run = {
+            ...run,
+            status: "pulled",
+            error: "Revenue pulled, but Merit invoice credentials are not configured"
+          };
+        }
+      }
+      nextRuns.push(run);
+    } catch (error) {
+      nextRuns.push({
+        id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
+        partnerId: partner.id,
+        partnerName: partner.name,
+        source: "tune",
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        timezone: period.timezone,
+        revenue: 0,
+        currency: partner.currency,
+        status: "failed",
+        error: error instanceof Error ? error.message : "Revenue sync failed",
+        createdAt: new Date().toISOString()
+      });
+    }
+  }
+
+  const nextRunIds = new Set(nextRuns.map((run) => run.id));
+  revenueRuns = [...nextRuns, ...revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
+  lastSync = new Date().toISOString();
+  await persist();
+  return getSnapshot();
 }
 
 export async function setInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied"): Promise<Invoice> {

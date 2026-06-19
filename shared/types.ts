@@ -1,10 +1,14 @@
-export type DataSource = "wise" | "slash" | "merit" | "manual" | "mock";
+export type DataSource = "wise" | "slash" | "merit" | "manual" | "mock" | "tune";
 
 export type Direction = "in" | "out";
 
 export type ProviderType = "customer" | "supplier" | "platform" | "internal";
 
 export type InvoiceStatus = "draft" | "open" | "paid" | "created";
+
+export type RevenuePeriodPreset = "last-week" | "last-7-days" | "this-month" | "custom";
+
+export type RevenueRunStatus = "pulled" | "invoiced" | "failed" | "mock" | "skipped";
 
 export interface AccountBalance {
   id: string;
@@ -58,6 +62,41 @@ export interface Provider {
 export interface Team {
   id: string;
   name: string;
+  createdAt: string;
+}
+
+export interface RevenuePartner {
+  id: string;
+  name: string;
+  source: "tune";
+  externalId?: string;
+  currency: string;
+  timezone: string;
+  networkIdEnv: string;
+  apiKeyEnv: string;
+  apiBaseUrlEnv?: string;
+  meritCustomerName?: string;
+  invoiceDueDays: number;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface RevenueRun {
+  id: string;
+  partnerId: string;
+  partnerName: string;
+  source: "tune";
+  periodStart: string;
+  periodEnd: string;
+  timezone: string;
+  revenue: number;
+  currency: string;
+  clicks?: number;
+  conversions?: number;
+  status: RevenueRunStatus;
+  invoiceId?: string;
+  externalInvoiceId?: string;
+  error?: string;
   createdAt: string;
 }
 
@@ -132,6 +171,15 @@ export interface Metrics {
   monthTotals: Record<string, number>;
 }
 
+export interface RevenueMetrics {
+  totalRevenue: number;
+  invoicedRevenue: number;
+  pendingRevenue: number;
+  failedRuns: number;
+  partnerCount: number;
+  lastRunAt?: string;
+}
+
 export interface DashboardSnapshot {
   asOf: string;
   accounts: AccountBalance[];
@@ -141,6 +189,9 @@ export interface DashboardSnapshot {
   investments: Investment[];
   providers: Provider[];
   teams: Team[];
+  revenuePartners: RevenuePartner[];
+  revenueRuns: RevenueRun[];
+  revenueMetrics: RevenueMetrics;
   transactions: Transaction[];
   invoices: Invoice[];
   integrationStatus: IntegrationStatus[];
@@ -175,4 +226,13 @@ export interface CreateProviderPayload {
   type: ProviderType;
   category: string;
   aliases: string[];
+}
+
+export interface SyncRevenuePayload {
+  partnerId?: string;
+  periodPreset?: RevenuePeriodPreset;
+  periodStart?: string;
+  periodEnd?: string;
+  timezone?: string;
+  createInvoices?: boolean;
 }

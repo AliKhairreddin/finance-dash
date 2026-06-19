@@ -53,6 +53,14 @@ button:disabled {
   width: min(1540px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 24px 0 48px;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.main-column {
+  min-width: 0;
 }
 
 .topbar {
@@ -61,6 +69,67 @@ button:disabled {
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 18px;
+}
+
+.sidebar {
+  position: sticky;
+  top: 16px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 34px rgba(27, 39, 54, 0.07);
+  backdrop-filter: blur(16px);
+}
+
+.sidebar-brand,
+.sidebar-nav button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.sidebar-brand {
+  min-height: 38px;
+  padding: 0 8px;
+  color: var(--ink);
+}
+
+.sidebar-brand svg {
+  color: var(--blue);
+}
+
+.sidebar-nav {
+  display: grid;
+  gap: 5px;
+}
+
+.sidebar-nav button {
+  min-height: 38px;
+  width: 100%;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+}
+
+.sidebar-nav button.active {
+  color: var(--ink);
+  background: #eef4fa;
+  border-color: #d6e0eb;
+}
+
+.sidebar-nav span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .eyebrow {
@@ -497,6 +566,8 @@ h2 {
 .team-select select,
 .filters select,
 .filters input,
+.revenue-controls select,
+.revenue-controls input,
 .modal input,
 .modal select,
 .modal textarea {
@@ -507,6 +578,50 @@ h2 {
   color: var(--ink);
   background: white;
   padding: 0 9px;
+}
+
+.revenue-controls {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(170px, 1.2fr) repeat(2, minmax(130px, 0.85fr)) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+
+.revenue-controls label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #445166;
+  font-size: 0.8rem;
+  font-weight: 680;
+}
+
+.revenue-controls .check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+.check-row input {
+  width: auto;
+  min-height: auto;
+}
+
+.revenue-summary {
+  border-top: 0;
+}
+
+.revenue-table {
+  min-width: 840px;
+}
+
+.revenue-error {
+  margin: 12px 14px 0;
 }
 
 .team-select small {
@@ -930,12 +1045,37 @@ h2 {
   .split-view {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .revenue-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
   .app-shell {
     width: min(100vw - 18px, 1540px);
     padding-top: 12px;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .sidebar-brand {
+    display: none;
+  }
+
+  .sidebar-nav {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .sidebar-nav button {
+    width: auto;
+    flex: 0 0 auto;
   }
 
   .topbar,
@@ -962,12 +1102,9 @@ h2 {
   .integration-grid,
   .split-view,
   .wise-summary-grid,
+  .revenue-controls,
   .form-grid {
     grid-template-columns: 1fr;
-  }
-
-  .tabbar {
-    overflow-x: auto;
   }
 
   .review-row {

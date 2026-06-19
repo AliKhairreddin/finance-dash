@@ -1,7 +1,13 @@
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
-import type { AssignTransactionTeamPayload, CreateInvoicePayload, CreateProviderPayload, MatchTransactionPayload } from "../shared/types";
+import type {
+  AssignTransactionTeamPayload,
+  CreateInvoicePayload,
+  CreateProviderPayload,
+  MatchTransactionPayload,
+  SyncRevenuePayload
+} from "../shared/types";
 import {
   assignTransactionTeam,
   createInvoice,
@@ -11,7 +17,8 @@ import {
   markInvoicePaidLocally,
   matchTransaction,
   setInvoiceApproval,
-  syncExternalActivity
+  syncExternalActivity,
+  syncRevenue
 } from "./store";
 
 const app = express();
@@ -31,6 +38,14 @@ app.get("/api/dashboard", (_request, response) => {
 app.post("/api/sync", async (_request, response, next) => {
   try {
     response.json(await syncExternalActivity());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/revenue/sync", async (request, response, next) => {
+  try {
+    response.json(await syncRevenue(request.body as SyncRevenuePayload));
   } catch (error) {
     next(error);
   }

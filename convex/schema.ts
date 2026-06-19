@@ -6,7 +6,8 @@ const dataSource = v.union(
   v.literal("slash"),
   v.literal("merit"),
   v.literal("manual"),
-  v.literal("mock")
+  v.literal("mock"),
+  v.literal("tune")
 );
 
 const providerType = v.union(
@@ -60,6 +61,25 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const revenueRun = v.object({
+  id: v.string(),
+  partnerId: v.string(),
+  partnerName: v.string(),
+  source: v.literal("tune"),
+  periodStart: v.string(),
+  periodEnd: v.string(),
+  timezone: v.string(),
+  revenue: v.number(),
+  currency: v.string(),
+  clicks: v.optional(v.number()),
+  conversions: v.optional(v.number()),
+  status: v.union(v.literal("pulled"), v.literal("invoiced"), v.literal("failed"), v.literal("mock"), v.literal("skipped")),
+  invoiceId: v.optional(v.string()),
+  externalInvoiceId: v.optional(v.string()),
+  error: v.optional(v.string()),
+  createdAt: v.string()
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
@@ -67,6 +87,7 @@ export default defineSchema({
     invoices: v.array(invoice),
     teams: v.optional(v.array(team)),
     transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
+    revenueRuns: v.optional(v.array(revenueRun)),
     updatedAt: v.string()
   }).index("by_key", ["key"])
 });

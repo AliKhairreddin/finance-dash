@@ -3,6 +3,7 @@ import {
   ArrowUpRight,
   BadgeDollarSign,
   Banknote,
+  BarChart3,
   Building2,
   Check,
   CircleAlert,
@@ -28,12 +29,16 @@ import type {
   DashboardSnapshot,
   Provider,
   ProviderType,
+  RevenuePeriodPreset,
+  SyncRevenuePayload,
   Team,
   Transaction
 } from "../shared/types";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const months = ["June", "May", "April", "March"];
+
+type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "integrations";
 
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
@@ -53,11 +58,12 @@ function compactMoney(value: number): string {
 }
 
 function dateLabel(value: string): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric"
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function providerLabel(provider?: Provider): string {
@@ -70,7 +76,7 @@ function sourceLabel(value: string): string {
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "wise" | "slash" | "invoices" | "providers" | "integrations">("overview");
+  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
@@ -171,6 +177,22 @@ function App() {
     } finally {
       setIsSyncing(false);
     }
+  }
+
+  async function syncRevenue(payload: SyncRevenuePayload) {
+    setNotice(null);
+    setError(null);
+    const response = await fetch(`${apiBase}/revenue/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Revenue sync failed");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice(payload.createInvoices ? "Revenue pulled. Merit invoice creation was attempted for positive live revenue." : "Revenue pulled.");
   }
 
   async function matchTransaction(transaction: Transaction, providerId?: string) {
@@ -286,72 +308,47 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Finance operations</p>
-          <h1>Cash flow and open balance control</h1>
-          <div className="meta-row">
-            <span>Sheet seed: {dateLabel(dashboard.asOf)}</span>
-            <span>Last sync: {dateLabel(dashboard.lastSync)}</span>
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <div className="main-column">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Finance operations</p>
+            <h1>Cash flow and open balance control</h1>
+            <div className="meta-row">
+              <span>Sheet seed: {dateLabel(dashboard.asOf)}</span>
+              <span>Last sync: {dateLabel(dashboard.lastSync)}</span>
+            </div>
           </div>
-        </div>
-        <div className="topbar-actions">
-          <button className="secondary-button" onClick={() => setProviderModalOpen(true)}>
-            <Plus size={16} />
-            Provider
-          </button>
-          <button className="primary-button" onClick={syncNow} disabled={isSyncing}>
-            {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            Sync
-          </button>
-        </div>
-      </header>
+          <div className="topbar-actions">
+            <button className="secondary-button" onClick={() => setProviderModalOpen(true)}>
+              <Plus size={16} />
+              Provider
+            </button>
+            <button className="primary-button" onClick={syncNow} disabled={isSyncing}>
+              {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              Sync
+            </button>
+          </div>
+        </header>
 
-      {(error || notice) && (
-        <div className={error ? "toast error" : "toast"}>
-          {error ? <CircleAlert size={16} /> : <Check size={16} />}
-          <span>{error || notice}</span>
-          <button aria-label="Dismiss" onClick={() => (error ? setError(null) : setNotice(null))}>
-            <X size={14} />
-          </button>
-        </div>
-      )}
+        {(error || notice) && (
+          <div className={error ? "toast error" : "toast"}>
+            {error ? <CircleAlert size={16} /> : <Check size={16} />}
+            <span>{error || notice}</span>
+            <button aria-label="Dismiss" onClick={() => (error ? setError(null) : setNotice(null))}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
 
-      <section className="metric-grid" aria-label="Finance summary">
-        <MetricCard icon={<Banknote />} label="Cash in accounts" value={money(dashboard.metrics.totalCash)} detail="Wise, Slash, Revolut, crypto" />
-        <MetricCard icon={<BadgeDollarSign />} label="Receivables" value={money(dashboard.metrics.totalReceivables)} detail="Open invoices, VAT, tax" />
-        <MetricCard icon={<WalletCards />} label="Open balance" value={money(dashboard.metrics.totalOpenBalance)} detail="Customer and provider balances" />
-        <MetricCard icon={<ArrowDownRight />} label="Payables" value={money(dashboard.metrics.totalPayables)} detail="Unpaid platform/provider spend" danger />
-        <MetricCard icon={<CircleDollarSign />} label="Profit" value={money(dashboard.metrics.profit)} detail={`${dashboard.metrics.profitGrowth.toFixed(2)}% vs last week`} good />
-        <MetricCard icon={<ShieldCheck />} label="Total assets" value={money(dashboard.metrics.totalAssets)} detail={`${money(dashboard.metrics.investments)} investments`} />
-      </section>
-
-      <nav className="tabbar" aria-label="Dashboard views">
-        <button className={activeTab === "overview" ? "active" : ""} onClick={() => setActiveTab("overview")}>
-          <SlidersHorizontal size={16} />
-          Overview
-        </button>
-        <button className={activeTab === "wise" ? "active" : ""} onClick={() => setActiveTab("wise")}>
-          <Link2 size={16} />
-          Wise
-        </button>
-        <button className={activeTab === "slash" ? "active" : ""} onClick={() => setActiveTab("slash")}>
-          <WalletCards size={16} />
-          Slash
-        </button>
-        <button className={activeTab === "invoices" ? "active" : ""} onClick={() => setActiveTab("invoices")}>
-          <FilePlus2 size={16} />
-          Invoices
-        </button>
-        <button className={activeTab === "providers" ? "active" : ""} onClick={() => setActiveTab("providers")}>
-          <Tags size={16} />
-          Providers
-        </button>
-        <button className={activeTab === "integrations" ? "active" : ""} onClick={() => setActiveTab("integrations")}>
-          <Sparkles size={16} />
-          APIs
-        </button>
-      </nav>
+        <section className="metric-grid" aria-label="Finance summary">
+          <MetricCard icon={<Banknote />} label="Cash in accounts" value={money(dashboard.metrics.totalCash)} detail="Wise, Slash, Revolut, crypto" />
+          <MetricCard icon={<BadgeDollarSign />} label="Receivables" value={money(dashboard.metrics.totalReceivables)} detail="Open invoices, VAT, tax" />
+          <MetricCard icon={<WalletCards />} label="Open balance" value={money(dashboard.metrics.totalOpenBalance)} detail="Customer and provider balances" />
+          <MetricCard icon={<ArrowDownRight />} label="Payables" value={money(dashboard.metrics.totalPayables)} detail="Unpaid platform/provider spend" danger />
+          <MetricCard icon={<CircleDollarSign />} label="Profit" value={money(dashboard.metrics.profit)} detail={`${dashboard.metrics.profitGrowth.toFixed(2)}% vs last week`} good />
+          <MetricCard icon={<ShieldCheck />} label="Total assets" value={money(dashboard.metrics.totalAssets)} detail={`${money(dashboard.metrics.investments)} investments`} />
+        </section>
 
       {activeTab === "overview" && (
         <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
@@ -422,6 +419,10 @@ function App() {
         </section>
       )}
 
+      {activeTab === "revenue" && (
+        <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} />
+      )}
+
       {activeTab === "slash" && (
         <SlashView dashboard={dashboard} rows={slashTransactions} />
       )}
@@ -466,7 +467,43 @@ function App() {
           }}
         />
       )}
+      </div>
     </main>
+  );
+}
+
+function Sidebar({
+  activeTab,
+  setActiveTab
+}: {
+  activeTab: ActiveTab;
+  setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
+}) {
+  const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
+    { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
+    { id: "wise", label: "Wise", icon: <Link2 size={17} /> },
+    { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
+    { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
+    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
+    { id: "providers", label: "Providers", icon: <Tags size={17} /> },
+    { id: "integrations", label: "APIs", icon: <Sparkles size={17} /> }
+  ];
+
+  return (
+    <aside className="sidebar" aria-label="Finance dashboard navigation">
+      <div className="sidebar-brand">
+        <Banknote size={19} />
+        <strong>Finance</strong>
+      </div>
+      <nav className="sidebar-nav">
+        {items.map((item) => (
+          <button key={item.id} className={activeTab === item.id ? "active" : ""} onClick={() => setActiveTab(item.id)}>
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+    </aside>
   );
 }
 
@@ -843,6 +880,158 @@ function TransactionTable({
   );
 }
 
+function RevenueView({
+  dashboard,
+  onSyncRevenue
+}: {
+  dashboard: DashboardSnapshot;
+  onSyncRevenue: (payload: SyncRevenuePayload) => Promise<void>;
+}) {
+  const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
+  const [partnerId, setPartnerId] = useState("all");
+  const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "America/Toronto");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
+  const [createInvoices, setCreateInvoices] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
+  const latestRun = visibleRuns[0];
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await onSyncRevenue({
+        partnerId: partnerId === "all" ? undefined : partnerId,
+        periodPreset,
+        periodStart: periodPreset === "custom" ? periodStart : undefined,
+        periodEnd: periodPreset === "custom" ? periodEnd : undefined,
+        timezone,
+        createInvoices
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Revenue sync failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Partner revenue</p>
+          <h2>Revenue pulls and Merit invoices</h2>
+        </div>
+        <span className="total-pill">{dashboard.revenuePartners.length} partners</span>
+      </div>
+
+      <form className="revenue-controls" onSubmit={handleSubmit}>
+        <label>
+          Partner
+          <select value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
+            <option value="all">All partners</option>
+            {dashboard.revenuePartners.map((partner) => (
+              <option key={partner.id} value={partner.id}>
+                {partner.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Period
+          <select value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value as RevenuePeriodPreset)}>
+            <option value="last-week">Last week</option>
+            <option value="last-7-days">Last 7 days</option>
+            <option value="this-month">This month</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label>
+          Timezone
+          <input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
+        </label>
+        {periodPreset === "custom" && (
+          <>
+            <label>
+              Start
+              <input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} />
+            </label>
+            <label>
+              End
+              <input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} />
+            </label>
+          </>
+        )}
+        <label className="check-row">
+          <input type="checkbox" checked={createInvoices} onChange={(event) => setCreateInvoices(event.target.checked)} />
+          Merit invoice
+        </label>
+        <button className="primary-button" type="submit" disabled={busy}>
+          {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          Pull
+        </button>
+      </form>
+
+      {error && <div className="inline-error revenue-error">{error}</div>}
+
+      <div className="wise-summary-grid revenue-summary">
+        <SummaryTile label="Revenue" value={money(dashboard.revenueMetrics.totalRevenue)} />
+        <SummaryTile label="Invoiced" value={money(dashboard.revenueMetrics.invoicedRevenue)} />
+        <SummaryTile label="Pending" value={money(dashboard.revenueMetrics.pendingRevenue)} />
+        <SummaryTile label="Last run" value={latestRun ? dateLabel(latestRun.createdAt) : "None"} />
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table revenue-table">
+          <thead>
+            <tr>
+              <th>Partner</th>
+              <th>Period</th>
+              <th>Timezone</th>
+              <th>Revenue</th>
+              <th>Conversions</th>
+              <th>Status</th>
+              <th>Invoice</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRuns.length > 0 ? (
+              visibleRuns.map((run) => (
+                <tr key={`${run.id}-${run.createdAt}`}>
+                  <td>
+                    <strong>{run.partnerName}</strong>
+                    <small>TUNE</small>
+                  </td>
+                  <td>
+                    {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
+                  </td>
+                  <td>{run.timezone}</td>
+                  <td className="amount">{money(run.revenue, run.currency)}</td>
+                  <td>{run.conversions ?? 0}</td>
+                  <td>
+                    <span className={`status-pill ${run.status === "invoiced" ? "good" : run.status === "failed" || run.status === "skipped" ? "warning" : ""}`}>
+                      {run.status}
+                    </span>
+                    {run.error && <small>{run.error}</small>}
+                  </td>
+                  <td>{run.invoiceId ? run.externalInvoiceId ?? run.invoiceId : "None"}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={7}>No revenue runs yet</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
   const cashback = rows.filter((row) => row.category.toLowerCase().includes("cashback")).reduce((total, row) => total + row.amount, 0);
@@ -1101,8 +1290,8 @@ function IntegrationsView({ dashboard }: { dashboard: DashboardSnapshot }) {
       <div className="docs-note">
         <strong>Integration shape</strong>
         <span>
-          Wise pulls balances and statements for reconciliation. Slash has its own card/cashback page. Merit is the invoice system:
-          the dashboard can pull invoices, create invoices, and locally approve/deny matches. Marking paid here never marks paid in Merit.
+          Wise pulls balances and statements for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices. Slash has its own
+          card/cashback page. Marking paid here never marks paid in Merit.
         </span>
       </div>
     </section>

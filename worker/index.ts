@@ -9,10 +9,15 @@ import type {
   Invoice,
   MatchTransactionPayload,
   Provider,
+  RevenuePartner,
+  RevenueRun,
+  SyncRevenuePayload,
   Team,
   TransactionTeamAssignment,
   Transaction
 } from "../shared/types";
+import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
+import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
@@ -26,6 +31,7 @@ import {
   seededPayables,
   seededProviders,
   seededReceivables,
+  seededRevenuePartners,
   seededTeams,
   seededTransactions
 } from "../server/mockData";
@@ -59,6 +65,10 @@ interface Env {
   MERIT_DEFAULT_TAX_ID?: string;
   MERIT_DEFAULT_ITEM_CODE?: string;
   MERIT_DEFAULT_COUNTRY_CODE?: string;
+  REVENUE_TIMEZONE?: string;
+  KISSTERRA_TUNE_NETWORK_ID?: string;
+  KISSTERRA_TUNE_API_KEY?: string;
+  KISSTERRA_TUNE_API_BASE_URL?: string;
 }
 
 interface PersistedState {
@@ -66,6 +76,7 @@ interface PersistedState {
   invoices: Invoice[];
   teams: Team[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  revenueRuns: RevenueRun[];
 }
 
 const stateKey = "finance-dashboard-state";
@@ -451,6 +462,117 @@ async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Prom
   };
 }
 
+async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+  const networkId = envString(env, partner.networkIdEnv);
+  const apiKey = envString(env, partner.apiKeyEnv);
+  const now = new Date().toISOString();
+
+  if (!networkId || !apiKey) {
+    return {
+      id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+      partnerId: partner.id,
+      partnerName: partner.name,
+      source: "tune",
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      timezone: period.timezone,
+      revenue: 0,
+      currency: partner.currency,
+      clicks: 0,
+      conversions: 0,
+      status: "mock",
+      error: `Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !envString(env, name)).join(", ")}`,
+      createdAt: now
+    };
+  }
+
+  const apiBaseUrl = envString(env, partner.apiBaseUrlEnv) || `https://${networkId}.api.hasoffers.com/Apiv3/json`;
+  const params = new URLSearchParams({
+    Target: "Affiliate_Report",
+    Method: "getStats",
+    api_key: apiKey,
+    totals: "1",
+    currency: partner.currency,
+    data_start: period.periodStart,
+    data_end: period.periodEnd
+  });
+  params.append("fields[0]", "Stat.date");
+  params.append("fields[1]", "Stat.payout");
+  params.append("fields[2]", "Stat.conversions");
+  params.append("fields[3]", "Stat.clicks");
+  params.append("filters[Stat.date][conditional]", "BETWEEN");
+  params.append("filters[Stat.date][values][0]", period.periodStart);
+  params.append("filters[Stat.date][values][1]", period.periodEnd);
+
+  const response = await fetchJson<{
+    response?: {
+      status?: number;
+      data?: unknown;
+      errorMessage?: string | null;
+    };
+  }>(`${apiBaseUrl}?${params.toString()}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (response.response?.status === 0) {
+    throw new Error(response.response.errorMessage || "TUNE revenue request failed");
+  }
+
+  const rows = normalizeTuneRows(response.response?.data);
+  const totals = rows.reduce<{ revenue: number; clicks: number; conversions: number }>(
+    (sum, row) => ({
+      revenue: sum.revenue + tuneNumber(row, "payout"),
+      clicks: sum.clicks + tuneNumber(row, "clicks"),
+      conversions: sum.conversions + tuneNumber(row, "conversions")
+    }),
+    { revenue: 0, clicks: 0, conversions: 0 }
+  );
+
+  return {
+    id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    source: "tune",
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    timezone: period.timezone,
+    revenue: Number(totals.revenue.toFixed(2)),
+    currency: partner.currency,
+    clicks: totals.clicks,
+    conversions: totals.conversions,
+    status: "pulled",
+    createdAt: now
+  };
+}
+
+function envString(env: Env, name?: string): string | undefined {
+  if (!name) return undefined;
+  const value = env[name as keyof Env];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeTuneRows(data: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (isRecord(data)) {
+    if (Array.isArray(data.data)) return data.data.filter(isRecord);
+    if (Array.isArray(data.Data)) return data.Data.filter(isRecord);
+  }
+  return [];
+}
+
+function tuneNumber(row: Record<string, unknown>, field: "payout" | "clicks" | "conversions"): number {
+  const stat = isRecord(row.Stat) ? row.Stat : {};
+  const value = stat[field] ?? row[`Stat.${field}`] ?? row[field];
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 async function loadPersisted(env: Env): Promise<PersistedState> {
   const convex = getConvexClient(env);
   const convexState = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
@@ -460,7 +582,8 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     providers: mergeById(seededProviders, stored?.providers),
     invoices: mergeById(seededInvoices, stored?.invoices),
     teams: mergeById(seededTeams, stored?.teams),
-    transactionTeamAssignments: stored?.transactionTeamAssignments ?? []
+    transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
+    revenueRuns: stored?.revenueRuns ?? []
   };
 }
 
@@ -479,6 +602,7 @@ function integrationStatus(env: Env): IntegrationStatus[] {
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
+  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !env[name as keyof Env]);
 
   return [
     {
@@ -513,6 +637,17 @@ function integrationStatus(env: Env): IntegrationStatus[] {
           ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
           : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
       needs: meritNeeds
+    },
+    {
+      id: "tune" as DataSource,
+      label: "Partner revenue",
+      configured: tuneNeeds.length === 0,
+      mode: tuneNeeds.length === 0 ? "live" : "mock",
+      message:
+        tuneNeeds.length === 0
+          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
+          : "Kissterra revenue will use a zero-value mock run until the TUNE network ID and API key are configured.",
+      needs: tuneNeeds
     }
   ];
 }
@@ -557,6 +692,9 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     investments: seededInvestments,
     providers: state.providers,
     teams: state.teams,
+    revenuePartners: seededRevenuePartners,
+    revenueRuns: state.revenueRuns,
+    revenueMetrics: calculateRevenueMetrics(seededRevenuePartners, state.revenueRuns),
     transactions,
     invoices,
     integrationStatus: integrationStatus(env),
@@ -661,6 +799,89 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   return invoice;
 }
 
+async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const selectedPartners = seededRevenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  if (selectedPartners.length === 0) {
+    throw new Error("No revenue partner found for this sync");
+  }
+
+  const nextRuns: RevenueRun[] = [];
+  for (const partner of selectedPartners) {
+    const period = resolveRevenuePeriod({
+      periodPreset: payload.periodPreset,
+      periodStart: payload.periodStart,
+      periodEnd: payload.periodEnd,
+      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "America/Toronto"
+    });
+    const existingInvoicedRun = state.revenueRuns.find(
+      (run) =>
+        run.partnerId === partner.id &&
+        run.periodStart === period.periodStart &&
+        run.periodEnd === period.periodEnd &&
+        run.status === "invoiced"
+    );
+
+    try {
+      let run = await fetchTuneRevenue(env, partner, period);
+      if (payload.createInvoices && existingInvoicedRun) {
+        run = {
+          ...run,
+          status: "skipped",
+          invoiceId: existingInvoicedRun.invoiceId,
+          externalInvoiceId: existingInvoicedRun.externalInvoiceId,
+          error: "Invoice already exists for this partner and period"
+        };
+      } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
+        const invoice = await createMeritInvoice(env, {
+          customerName: partner.meritCustomerName || partner.name,
+          amount: run.revenue,
+          currency: run.currency,
+          dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
+          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+        });
+
+        if (invoice) {
+          state.invoices = [invoice, ...state.invoices.filter((item) => item.id !== invoice.id)];
+          run = {
+            ...run,
+            status: "invoiced",
+            invoiceId: invoice.id,
+            externalInvoiceId: invoice.externalId
+          };
+        } else {
+          run = {
+            ...run,
+            status: "pulled",
+            error: "Revenue pulled, but Merit invoice credentials are not configured"
+          };
+        }
+      }
+      nextRuns.push(run);
+    } catch (error) {
+      nextRuns.push({
+        id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
+        partnerId: partner.id,
+        partnerName: partner.name,
+        source: "tune",
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        timezone: period.timezone,
+        revenue: 0,
+        currency: partner.currency,
+        status: "failed",
+        error: error instanceof Error ? error.message : "Revenue sync failed",
+        createdAt: new Date().toISOString()
+      });
+    }
+  }
+
+  const nextRunIds = new Set(nextRuns.map((run) => run.id));
+  state.revenueRuns = [...nextRuns, ...state.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
 async function setInvoiceApproval(env: Env, invoiceId: string, approvalStatus: "approved" | "denied"): Promise<Invoice> {
   const state = await loadPersisted(env);
   let updated: Invoice | undefined;
@@ -713,6 +934,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await getSnapshot(env));
     }
 
+    if (url.pathname === "/api/revenue/sync" && request.method === "POST") {
+      return json(await syncRevenue(env, (await request.json()) as SyncRevenuePayload));
+    }
+
     if (url.pathname === "/api/providers" && request.method === "POST") {
       return json(await createProvider(env, (await request.json()) as CreateProviderPayload), { status: 201 });
     }
@@ -759,5 +984,12 @@ export default {
       return handleApi(request, env);
     }
     return env.ASSETS.fetch(request);
+  },
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await syncRevenue(env, {
+      periodPreset: "last-week",
+      timezone: env.REVENUE_TIMEZONE || "America/Toronto",
+      createInvoices: true
+    });
   }
 };

@@ -1,5 +1,14 @@
 import crypto from "node:crypto";
-import type { AccountBalance, CreateInvoicePayload, IntegrationStatus, Invoice, Transaction } from "../shared/types";
+import type {
+  AccountBalance,
+  CreateInvoicePayload,
+  IntegrationStatus,
+  Invoice,
+  RevenuePartner,
+  RevenueRun,
+  Transaction
+} from "../shared/types";
+import type { RevenuePeriod } from "../shared/revenue";
 
 const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
 const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.ee/api";
@@ -25,6 +34,7 @@ export function getIntegrationStatus(): IntegrationStatus[] {
 
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
+  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !process.env[name]);
 
   return [
     {
@@ -59,6 +69,17 @@ export function getIntegrationStatus(): IntegrationStatus[] {
           ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
           : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
       needs: meritNeeds
+    },
+    {
+      id: "tune",
+      label: "Partner revenue",
+      configured: tuneNeeds.length === 0,
+      mode: tuneNeeds.length === 0 ? "live" : "mock",
+      message:
+        tuneNeeds.length === 0
+          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
+          : "Kissterra revenue will use a zero-value mock run until the TUNE network ID and API key are configured.",
+      needs: tuneNeeds
     }
   ];
 }
@@ -340,4 +361,110 @@ export async function createMeritInvoice(payload: CreateInvoicePayload): Promise
     transactionId: payload.transactionId,
     createdAt: new Date().toISOString()
   };
+}
+
+export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+  const networkId = process.env[partner.networkIdEnv];
+  const apiKey = process.env[partner.apiKeyEnv];
+  const now = new Date().toISOString();
+
+  if (!networkId || !apiKey) {
+    return {
+      id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+      partnerId: partner.id,
+      partnerName: partner.name,
+      source: "tune",
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      timezone: period.timezone,
+      revenue: 0,
+      currency: partner.currency,
+      clicks: 0,
+      conversions: 0,
+      status: "mock",
+      error: `Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !process.env[name]).join(", ")}`,
+      createdAt: now
+    };
+  }
+
+  const apiBaseUrl = process.env[partner.apiBaseUrlEnv ?? ""] || `https://${networkId}.api.hasoffers.com/Apiv3/json`;
+  const params = new URLSearchParams({
+    Target: "Affiliate_Report",
+    Method: "getStats",
+    api_key: apiKey,
+    totals: "1",
+    currency: partner.currency,
+    data_start: period.periodStart,
+    data_end: period.periodEnd
+  });
+  params.append("fields[0]", "Stat.date");
+  params.append("fields[1]", "Stat.payout");
+  params.append("fields[2]", "Stat.conversions");
+  params.append("fields[3]", "Stat.clicks");
+  params.append("filters[Stat.date][conditional]", "BETWEEN");
+  params.append("filters[Stat.date][values][0]", period.periodStart);
+  params.append("filters[Stat.date][values][1]", period.periodEnd);
+
+  const response = await fetchJson<{
+    response?: {
+      status?: number;
+      data?: unknown;
+      errorMessage?: string | null;
+      errors?: unknown[];
+    };
+  }>(`${apiBaseUrl}?${params.toString()}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (response.response?.status === 0) {
+    throw new Error(response.response.errorMessage || "TUNE revenue request failed");
+  }
+
+  const rows = normalizeTuneRows(response.response?.data);
+  const totals = rows.reduce<{ revenue: number; clicks: number; conversions: number }>(
+    (sum, row) => ({
+      revenue: sum.revenue + tuneNumber(row, "payout"),
+      clicks: sum.clicks + tuneNumber(row, "clicks"),
+      conversions: sum.conversions + tuneNumber(row, "conversions")
+    }),
+    { revenue: 0, clicks: 0, conversions: 0 }
+  );
+
+  return {
+    id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    source: "tune",
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    timezone: period.timezone,
+    revenue: Number(totals.revenue.toFixed(2)),
+    currency: partner.currency,
+    clicks: totals.clicks,
+    conversions: totals.conversions,
+    status: "pulled",
+    createdAt: now
+  };
+}
+
+function normalizeTuneRows(data: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (isRecord(data)) {
+    if (Array.isArray(data.data)) return data.data.filter(isRecord);
+    if (Array.isArray(data.Data)) return data.Data.filter(isRecord);
+  }
+  return [];
+}
+
+function tuneNumber(row: Record<string, unknown>, field: "payout" | "clicks" | "conversions"): number {
+  const stat = isRecord(row.Stat) ? row.Stat : {};
+  const value = stat[field] ?? row[`Stat.${field}`] ?? row[field];
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
