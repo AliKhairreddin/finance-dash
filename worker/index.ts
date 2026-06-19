@@ -814,7 +814,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
       periodPreset: payload.periodPreset,
       periodStart: payload.periodStart,
       periodEnd: payload.periodEnd,
-      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "America/New_York"
+      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "UTC"
     });
     const existingInvoicedRun = state.revenueRuns.find(
       (run) =>
@@ -990,7 +990,7 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await syncRevenue(env, {
       periodPreset: "last-week",
-      timezone: env.REVENUE_TIMEZONE || "America/New_York",
+      timezone: env.REVENUE_TIMEZONE || "UTC",
       createInvoices: true
     });
   }

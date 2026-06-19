@@ -41,9 +41,8 @@ const months = ["June", "May", "April", "March"];
 type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "integrations";
 
 const timezoneOptions = [
+  { label: "GMT zero", value: "UTC" },
   { label: "Eastern Time", value: "America/New_York" },
-  { label: "Toronto", value: "America/Toronto" },
-  { label: "UTC", value: "UTC" },
   { label: "London", value: "Europe/London" },
   { label: "Dubai", value: "Asia/Dubai" },
   { label: "Los Angeles", value: "America/Los_Angeles" }
@@ -898,7 +897,7 @@ function RevenueView({
 }) {
   const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
   const [partnerId, setPartnerId] = useState("all");
-  const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "America/Toronto");
+  const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "UTC");
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [createInvoices, setCreateInvoices] = useState(true);
@@ -906,7 +905,6 @@ function RevenueView({
   const [error, setError] = useState<string | null>(null);
   const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
   const latestRun = visibleRuns[0];
-  const selectedTimezoneValue = timezoneOptions.some((option) => option.value === timezone) ? timezone : "manual";
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -961,29 +959,13 @@ function RevenueView({
         </label>
         <label className="timezone-field">
           Timezone
-          <div className="timezone-input-grid">
-            <select
-              value={selectedTimezoneValue}
-              onChange={(event) => {
-                if (event.target.value !== "manual") setTimezone(event.target.value);
-              }}
-            >
-              {timezoneOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-              <option value="manual">Manual</option>
-            </select>
-            <input list="timezone-list" value={timezone} onChange={(event) => setTimezone(event.target.value)} />
-            <datalist id="timezone-list">
-              {timezoneOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </datalist>
-          </div>
+          <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+            {timezoneOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
         {periodPreset === "custom" && (
           <>

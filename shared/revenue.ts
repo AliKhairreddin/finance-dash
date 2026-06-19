@@ -23,7 +23,7 @@ export function resolveRevenuePeriod({
   periodPreset = "last-week",
   periodStart,
   periodEnd,
-  timezone = "America/New_York",
+  timezone = "UTC",
   now = new Date()
 }: {
   periodPreset?: RevenuePeriodPreset;

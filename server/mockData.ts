@@ -96,7 +96,7 @@ export const seededRevenuePartners: RevenuePartner[] = [
     source: "tune",
     externalId: "kissterra",
     currency: "USD",
-    timezone: "America/New_York",
+    timezone: "UTC",
     networkTimezone: "America/New_York",
     networkIdEnv: "KISSTERRA_TUNE_NETWORK_ID",
     apiKeyEnv: "KISSTERRA_TUNE_API_KEY",
