@@ -233,21 +233,27 @@ h2 {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
 
 .metric-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
   min-height: 116px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
   box-shadow: 0 8px 28px rgba(26, 39, 53, 0.05);
+}
+
+.metric-card > div:last-child {
+  min-width: 0;
 }
 
 .metric-card span,
@@ -261,8 +267,10 @@ h2 {
   display: block;
   margin: 7px 0 5px;
   color: var(--ink);
-  font-size: clamp(1.1rem, 1.5vw, 1.48rem);
+  font-size: 1.34rem;
+  font-variant-numeric: tabular-nums;
   line-height: 1.05;
+  white-space: nowrap;
 }
 
 .metric-card.danger strong,
@@ -277,8 +285,8 @@ h2 {
 
 .metric-icon {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   place-items: center;
   color: var(--blue);
   background: var(--blue-soft);
@@ -1031,7 +1039,7 @@ h2 {
 
 @media (max-width: 1180px) {
   .metric-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   }
 
   .overview-grid {
