@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import type {
+  AssignTransactionTeamPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
   Invoice,
   MatchTransactionPayload,
   Provider,
+  Team,
   Transaction
 } from "../shared/types";
 import { calculateMetrics } from "./calculations";
@@ -20,12 +22,15 @@ import {
   seededPayables,
   seededProviders,
   seededReceivables,
+  seededTeams,
   seededTransactions
 } from "./mockData";
 import { loadPersistedState, savePersistedState } from "./persistence";
 
 let providers: Provider[] = [...seededProviders];
 let invoices: Invoice[] = [...seededInvoices];
+let teams: Team[] = [...seededTeams];
+let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let transactions: Transaction[] = [...seededTransactions];
 let accounts = [...seededAccounts];
 let lastSync = new Date().toISOString();
@@ -42,10 +47,20 @@ export async function initializeStore(): Promise<void> {
   const persisted = await loadPersistedState();
   providers = mergeById(seededProviders, persisted.providers);
   invoices = mergeById(seededInvoices, persisted.invoices);
+  teams = mergeById(seededTeams, persisted.teams);
+  transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
 }
 
 async function persist(): Promise<void> {
-  await savePersistedState({ providers, invoices });
+  await savePersistedState({ providers, invoices, teams, transactionTeamAssignments });
+}
+
+function applyTeamAssignments(rows: Transaction[]): Transaction[] {
+  const teamByTransaction = new Map(transactionTeamAssignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  return rows.map((transaction) => {
+    const teamId = teamByTransaction.get(transaction.id);
+    return teamId ? { ...transaction, teamId } : transaction;
+  });
 }
 
 function getMatchedTransactions(): Transaction[] {
@@ -56,7 +71,7 @@ function getMatchedTransactions(): Transaction[] {
       ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
       : transaction;
   });
-  return enrichTransactions(withInvoiceMatches, providers);
+  return enrichTransactions(applyTeamAssignments(withInvoiceMatches), providers);
 }
 
 export function getSnapshot(): DashboardSnapshot {
@@ -69,12 +84,34 @@ export function getSnapshot(): DashboardSnapshot {
     payables: seededPayables,
     investments: seededInvestments,
     providers,
+    teams,
     transactions: getMatchedTransactions(),
     invoices,
     integrationStatus: getIntegrationStatus(),
     metrics,
     lastSync
   };
+}
+
+export async function assignTransactionTeam(payload: AssignTransactionTeamPayload): Promise<Transaction> {
+  const transaction = transactions.find((item) => item.id === payload.transactionId);
+  if (!transaction) {
+    throw new Error("Transaction not found");
+  }
+  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Team not found");
+  }
+
+  transactionTeamAssignments = transactionTeamAssignments.filter((assignment) => assignment.transactionId !== payload.transactionId);
+  if (payload.teamId) {
+    transactionTeamAssignments = [
+      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      ...transactionTeamAssignments
+    ];
+  }
+
+  await persist();
+  return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
 }
 
 export async function createProvider(payload: CreateProviderPayload): Promise<Provider> {

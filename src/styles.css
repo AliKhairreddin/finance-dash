@@ -468,7 +468,7 @@ h2 {
 }
 
 .activity-table {
-  min-width: 860px;
+  min-width: 1060px;
 }
 
 .invoice-table {
@@ -479,13 +479,22 @@ h2 {
   min-width: 240px;
 }
 
-.provider-select {
+.provider-select,
+.team-select {
   display: grid;
   gap: 4px;
+}
+
+.provider-select {
   min-width: 210px;
 }
 
+.team-select {
+  min-width: 150px;
+}
+
 .provider-select select,
+.team-select select,
 .filters select,
 .filters input,
 .modal input,
@@ -498,6 +507,11 @@ h2 {
   color: var(--ink);
   background: white;
   padding: 0 9px;
+}
+
+.team-select small {
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .modal textarea {
@@ -536,6 +550,37 @@ h2 {
   color: var(--ink);
   background: #eef4fa;
   border-color: #d6e0eb;
+}
+
+.wise-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+
+.summary-tile {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid #edf0f3;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.summary-tile span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 680;
+}
+
+.summary-tile strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .filters label,
@@ -916,6 +961,7 @@ h2 {
   .provider-grid,
   .integration-grid,
   .split-view,
+  .wise-summary-grid,
   .form-grid {
     grid-template-columns: 1fr;
   }

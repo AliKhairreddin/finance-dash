@@ -5,6 +5,7 @@ import type {
   LedgerItem,
   Payable,
   Provider,
+  Team,
   Transaction
 } from "../shared/types";
 
@@ -80,6 +81,11 @@ export const seededProviders: Provider[] = [
   { id: "provider-advurtix", name: "Advurtix", type: "customer", category: "Customer", aliases: ["advurtix"], source: "manual", createdAt: seededAsOf },
   { id: "provider-scaladz", name: "Scaladz", type: "customer", category: "Customer", aliases: ["scaladz"], source: "manual", createdAt: seededAsOf },
   { id: "provider-blueglow", name: "BLUEGLOW", type: "customer", category: "Customer", aliases: ["blueglow"], source: "manual", createdAt: seededAsOf }
+];
+
+export const seededTeams: Team[] = [
+  { id: "team-cognitive-pixel", name: "Cognitive Pixel", createdAt: seededAsOf },
+  { id: "team-wgnr", name: "WGNR", createdAt: seededAsOf }
 ];
 
 export const seededTransactions: Transaction[] = [

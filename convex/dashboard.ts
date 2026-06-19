@@ -48,6 +48,18 @@ const invoice = v.object({
   createdAt: v.string()
 });
 
+const team = v.object({
+  id: v.string(),
+  name: v.string(),
+  createdAt: v.string()
+});
+
+const transactionTeamAssignment = v.object({
+  transactionId: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 export const getState = query({
   args: {},
   returns: v.union(
@@ -55,6 +67,8 @@ export const getState = query({
     v.object({
       providers: v.array(provider),
       invoices: v.array(invoice),
+      teams: v.array(team),
+      transactionTeamAssignments: v.array(transactionTeamAssignment),
       updatedAt: v.string()
     })
   ),
@@ -69,6 +83,8 @@ export const getState = query({
     return {
       providers: state.providers,
       invoices: state.invoices,
+      teams: state.teams ?? [],
+      transactionTeamAssignments: state.transactionTeamAssignments ?? [],
       updatedAt: state.updatedAt
     };
   }
@@ -77,7 +93,9 @@ export const getState = query({
 export const saveState = mutation({
   args: {
     providers: v.array(provider),
-    invoices: v.array(invoice)
+    invoices: v.array(invoice),
+    teams: v.array(team),
+    transactionTeamAssignments: v.array(transactionTeamAssignment)
   },
   returns: v.object({
     updatedAt: v.string()
@@ -93,6 +111,8 @@ export const saveState = mutation({
       await ctx.db.patch(existing._id, {
         providers: args.providers,
         invoices: args.invoices,
+        teams: args.teams,
+        transactionTeamAssignments: args.transactionTeamAssignments,
         updatedAt
       });
     } else {
@@ -100,6 +120,8 @@ export const saveState = mutation({
         key: "default",
         providers: args.providers,
         invoices: args.invoices,
+        teams: args.teams,
+        transactionTeamAssignments: args.transactionTeamAssignments,
         updatedAt
       });
     }

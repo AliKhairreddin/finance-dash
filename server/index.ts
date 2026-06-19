@@ -1,8 +1,9 @@
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
-import type { CreateInvoicePayload, CreateProviderPayload, MatchTransactionPayload } from "../shared/types";
+import type { AssignTransactionTeamPayload, CreateInvoicePayload, CreateProviderPayload, MatchTransactionPayload } from "../shared/types";
 import {
+  assignTransactionTeam,
   createInvoice,
   createProvider,
   getSnapshot,
@@ -56,6 +57,18 @@ app.post("/api/matches", async (request, response, next) => {
       return;
     }
     response.json(await matchTransaction(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/transactions/:transactionId/team", async (request, response, next) => {
+  try {
+    const payload = {
+      transactionId: request.params.transactionId,
+      teamId: request.body?.teamId || undefined
+    } satisfies AssignTransactionTeamPayload;
+    response.json(await assignTransactionTeam(payload));
   } catch (error) {
     next(error);
   }

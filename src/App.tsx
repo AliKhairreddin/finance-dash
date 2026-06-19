@@ -28,6 +28,7 @@ import type {
   DashboardSnapshot,
   Provider,
   ProviderType,
+  Team,
   Transaction
 } from "../shared/types";
 
@@ -71,6 +72,7 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "wise" | "slash" | "invoices" | "providers" | "integrations">("overview");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
+  const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,14 +102,21 @@ function App() {
     return map;
   }, [dashboard?.providers]);
 
+  const teamsById = useMemo(() => {
+    const map = new Map<string, Team>();
+    for (const team of dashboard?.teams ?? []) map.set(team.id, team);
+    return map;
+  }, [dashboard?.teams]);
+
   const filteredTransactions = useMemo(() => {
     const rows = dashboard?.transactions ?? [];
     const query = searchTerm.trim().toLowerCase();
     return rows.filter((transaction) => {
       const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+      const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
       const matchesQuery =
         !query ||
-        [transaction.counterparty, transaction.description, transaction.rawName, provider?.name ?? ""]
+        [transaction.counterparty, transaction.description, transaction.rawName, provider?.name ?? "", team?.name ?? ""]
           .join(" ")
           .toLowerCase()
           .includes(query);
@@ -118,12 +127,27 @@ function App() {
         (matchFilter === "matched" && !needsReview);
       return matchesQuery && matchesStatus;
     });
-  }, [dashboard?.transactions, matchFilter, providersById, searchTerm]);
+  }, [dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById]);
 
   const wiseTransactions = useMemo(
-    () => filteredTransactions.filter((transaction) => transaction.source === "wise" && transaction.direction === wiseDirection),
-    [filteredTransactions, wiseDirection]
+    () =>
+      filteredTransactions.filter((transaction) => {
+        const matchesDirection = transaction.source === "wise" && transaction.direction === wiseDirection;
+        const matchesTeam =
+          teamFilter === "all" ||
+          (teamFilter === "unassigned" && !transaction.teamId) ||
+          transaction.teamId === teamFilter;
+        return matchesDirection && matchesTeam;
+      }),
+    [filteredTransactions, teamFilter, wiseDirection]
   );
+
+  const wiseTeamSummary = useMemo(() => {
+    const total = wiseTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
+    const matched = wiseTransactions.filter((transaction) => transaction.matchedProviderId).length;
+    const unassigned = wiseTransactions.filter((transaction) => !transaction.teamId).length;
+    return { total, count: wiseTransactions.length, matched, unassigned };
+  }, [wiseTransactions]);
 
   const slashTransactions = useMemo(
     () => filteredTransactions.filter((transaction) => transaction.source === "slash"),
@@ -173,6 +197,22 @@ function App() {
     }
     await loadDashboard();
     setNotice(`Saved alias for ${transaction.counterparty}. Future rows will auto-match.`);
+  }
+
+  async function assignTransactionTeam(transaction: Transaction, teamId?: string) {
+    setError(null);
+    const response = await fetch(`${apiBase}/transactions/${transaction.id}/team`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamId: teamId || null })
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      setError(body.message || "Team assignment failed");
+      return;
+    }
+    await loadDashboard();
+    setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
   }
 
   async function submitProvider(payload: CreateProviderPayload) {
@@ -347,15 +387,36 @@ function App() {
                   <option value="all">All rows</option>
                 </select>
               </label>
+              <label>
+                Team
+                <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
+                  <option value="all">All teams</option>
+                  <option value="unassigned">Unassigned</option>
+                  {dashboard.teams.map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
+          </div>
+          <div className="wise-summary-grid">
+            <SummaryTile label="Visible volume" value={money(wiseTeamSummary.total)} />
+            <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
+            <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
+            <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
           </div>
           <TransactionTable
             rows={wiseTransactions}
+            teams={dashboard.teams}
+            teamsById={teamsById}
             providers={dashboard.providers}
             providersById={providersById}
             selectedProviders={selectedProviders}
             setSelectedProviders={setSelectedProviders}
             onMatch={matchTransaction}
+            onAssignTeam={assignTransactionTeam}
             onOpenInvoice={setInvoiceTransaction}
           />
         </section>
@@ -657,21 +718,36 @@ function GrowthItem({ label, value, danger }: { label: string; value: number; da
   );
 }
 
+function SummaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="summary-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function TransactionTable({
   rows,
+  teams,
+  teamsById,
   providers,
   providersById,
   selectedProviders,
   setSelectedProviders,
   onMatch,
+  onAssignTeam,
   onOpenInvoice
 }: {
   rows: Transaction[];
+  teams: Team[];
+  teamsById: Map<string, Team>;
   providers: Provider[];
   providersById: Map<string, Provider>;
   selectedProviders: Record<string, string>;
   setSelectedProviders: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
   return (
@@ -680,10 +756,10 @@ function TransactionTable({
         <thead>
           <tr>
             <th>Date</th>
-            <th>Source</th>
             <th>Counterparty</th>
             <th>Direction</th>
             <th>Amount</th>
+            <th>Team</th>
             <th>Suggested provider</th>
             <th>Invoice</th>
             <th>Actions</th>
@@ -697,9 +773,6 @@ function TransactionTable({
             return (
               <tr key={transaction.id}>
                 <td>{dateLabel(transaction.date)}</td>
-                <td>
-                  <span className={`source-pill ${transaction.source}`}>{sourceLabel(transaction.source)}</span>
-                </td>
                 <td className="counterparty-cell">
                   <strong>{transaction.counterparty}</strong>
                   <small>{transaction.description}</small>
@@ -711,6 +784,19 @@ function TransactionTable({
                   </span>
                 </td>
                 <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+                <td>
+                  <div className="team-select">
+                    <select value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
+                      <option value="">No team</option>
+                      {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                    <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
+                  </div>
+                </td>
                 <td>
                   <div className="provider-select">
                     <select

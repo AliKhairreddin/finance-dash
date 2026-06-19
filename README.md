@@ -52,6 +52,7 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases and mock invoi
 - Pulls all the sheet concepts into a compact dashboard instead of manual spreadsheet editing.
 - Includes separate Wise and Slash operating views.
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
+- Supports optional Wise transaction team assignment with seeded `Cognitive Pixel` and `WGNR` teams, plus team filters and visible-team totals.
 - Keeps Slash balances, card activity, and cashback tracking on its own page.
 - Suggests provider matches from saved aliases.
 - Lets you manually match a transaction to a provider and remembers that bank/card name for future auto-matching.

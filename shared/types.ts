@@ -55,6 +55,18 @@ export interface Provider {
   createdAt: string;
 }
 
+export interface Team {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface TransactionTeamAssignment {
+  transactionId: string;
+  teamId: string;
+  updatedAt: string;
+}
+
 export interface Invoice {
   id: string;
   providerId?: string;
@@ -89,6 +101,7 @@ export interface Transaction {
   category: string;
   matchedProviderId?: string;
   matchedInvoiceId?: string;
+  teamId?: string;
   confidence?: number;
   matchReason?: string;
 }
@@ -127,6 +140,7 @@ export interface DashboardSnapshot {
   payables: Payable[];
   investments: Investment[];
   providers: Provider[];
+  teams: Team[];
   transactions: Transaction[];
   invoices: Invoice[];
   integrationStatus: IntegrationStatus[];
@@ -149,6 +163,11 @@ export interface MatchTransactionPayload {
   providerId: string;
   invoiceId?: string;
   rememberAlias: boolean;
+}
+
+export interface AssignTransactionTeamPayload {
+  transactionId: string;
+  teamId?: string;
 }
 
 export interface CreateProviderPayload {

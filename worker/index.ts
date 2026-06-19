@@ -1,5 +1,6 @@
 import type {
   AccountBalance,
+  AssignTransactionTeamPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
@@ -8,6 +9,8 @@ import type {
   Invoice,
   MatchTransactionPayload,
   Provider,
+  Team,
+  TransactionTeamAssignment,
   Transaction
 } from "../shared/types";
 import { ConvexHttpClient } from "convex/browser";
@@ -23,6 +26,7 @@ import {
   seededPayables,
   seededProviders,
   seededReceivables,
+  seededTeams,
   seededTransactions
 } from "../server/mockData";
 
@@ -60,6 +64,8 @@ interface Env {
 interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
+  teams: Team[];
+  transactionTeamAssignments: TransactionTeamAssignment[];
 }
 
 const stateKey = "finance-dashboard-state";
@@ -284,7 +290,7 @@ async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<
   return (await fetchMeritInvoices(env).catch(() => [])).find((invoice) => invoice.id === invoiceId);
 }
 
-async function fetchTransactionForMatch(env: Env, transactionId: string): Promise<Transaction | undefined> {
+async function fetchTransactionForUpdate(env: Env, transactionId: string): Promise<Transaction | undefined> {
   const seeded = seededTransactions.find((transaction) => transaction.id === transactionId);
   if (seeded) return seeded;
 
@@ -293,6 +299,10 @@ async function fetchTransactionForMatch(env: Env, transactionId: string): Promis
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
   ]);
   return [...wise.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
+}
+
+async function fetchTransactionForMatch(env: Env, transactionId: string): Promise<Transaction | undefined> {
+  return fetchTransactionForUpdate(env, transactionId);
 }
 
 function meritTimestamp(): string {
@@ -448,7 +458,9 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
 
   return {
     providers: mergeById(seededProviders, stored?.providers),
-    invoices: mergeById(seededInvoices, stored?.invoices)
+    invoices: mergeById(seededInvoices, stored?.invoices),
+    teams: mergeById(seededTeams, stored?.teams),
+    transactionTeamAssignments: stored?.transactionTeamAssignments ?? []
   };
 }
 
@@ -505,6 +517,14 @@ function integrationStatus(env: Env): IntegrationStatus[] {
   ];
 }
 
+function applyTeamAssignments(rows: Transaction[], assignments: TransactionTeamAssignment[]): Transaction[] {
+  const teamByTransaction = new Map(assignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  return rows.map((transaction) => {
+    const teamId = teamByTransaction.get(transaction.id);
+    return teamId ? { ...transaction, teamId } : transaction;
+  });
+}
+
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
   const [wise, slash, liveMeritInvoices] = await Promise.all([
@@ -516,12 +536,15 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const invoices = mergeById(liveMeritInvoices, state.invoices);
   const rawTransactions = mergeById(seededTransactions, [...wise.transactions, ...slash.transactions]);
   const transactions = enrichTransactions(
-    rawTransactions.map((transaction) => {
-      const invoice = invoices.find((item) => item.transactionId === transaction.id);
-      return invoice
-        ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
-        : transaction;
-    }),
+    applyTeamAssignments(
+      rawTransactions.map((transaction) => {
+        const invoice = invoices.find((item) => item.transactionId === transaction.id);
+        return invoice
+          ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
+          : transaction;
+      }),
+      state.transactionTeamAssignments
+    ),
     state.providers
   );
 
@@ -533,6 +556,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     payables: seededPayables,
     investments: seededInvestments,
     providers: state.providers,
+    teams: state.teams,
     transactions,
     invoices,
     integrationStatus: integrationStatus(env),
@@ -575,10 +599,38 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   }
   return {
     ...transaction,
+    teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
     matchedProviderId: payload.providerId,
     matchedInvoiceId: payload.invoiceId,
     confidence: 1,
     matchReason: "Manual match"
+  };
+}
+
+async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
+  const state = await loadPersisted(env);
+  const transaction = await fetchTransactionForUpdate(env, payload.transactionId);
+  if (!transaction) {
+    throw new Error("Transaction not found");
+  }
+  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Team not found");
+  }
+
+  state.transactionTeamAssignments = state.transactionTeamAssignments.filter(
+    (assignment) => assignment.transactionId !== payload.transactionId
+  );
+  if (payload.teamId) {
+    state.transactionTeamAssignments = [
+      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      ...state.transactionTeamAssignments
+    ];
+  }
+
+  await savePersisted(env, state);
+  return {
+    ...transaction,
+    teamId: payload.teamId
   };
 }
 
@@ -667,6 +719,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/matches" && request.method === "POST") {
       return json(await matchTransaction(env, (await request.json()) as MatchTransactionPayload));
+    }
+
+    const teamMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/team$/);
+    if (teamMatch && request.method === "POST") {
+      const body = (await request.json()) as { teamId?: string | null };
+      return json(await assignTransactionTeam(env, { transactionId: teamMatch[1], teamId: body.teamId || undefined }));
     }
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {

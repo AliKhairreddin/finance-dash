@@ -48,11 +48,25 @@ const invoice = v.object({
   createdAt: v.string()
 });
 
+const team = v.object({
+  id: v.string(),
+  name: v.string(),
+  createdAt: v.string()
+});
+
+const transactionTeamAssignment = v.object({
+  transactionId: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
     providers: v.array(provider),
     invoices: v.array(invoice),
+    teams: v.optional(v.array(team)),
+    transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
     updatedAt: v.string()
   }).index("by_key", ["key"])
 });
