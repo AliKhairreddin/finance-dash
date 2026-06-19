@@ -467,8 +467,12 @@ h2 {
   font-weight: 780;
 }
 
-.transactions-table {
-  min-width: 1180px;
+.activity-table {
+  min-width: 860px;
+}
+
+.invoice-table {
+  min-width: 1040px;
 }
 
 .counterparty-cell {
@@ -504,6 +508,34 @@ h2 {
 .filters {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+}
+
+.segmented-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.segmented-control button.active {
+  color: var(--ink);
+  background: #eef4fa;
+  border-color: #d6e0eb;
 }
 
 .filters label,
@@ -624,6 +656,17 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   padding: 14px;
+}
+
+.split-view {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(320px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.wide-panel {
+  grid-column: 1 / -1;
 }
 
 .provider-card,
@@ -838,7 +881,8 @@ h2 {
   }
 
   .provider-grid,
-  .integration-grid {
+  .integration-grid,
+  .split-view {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -871,6 +915,7 @@ h2 {
   .overview-grid,
   .provider-grid,
   .integration-grid,
+  .split-view,
   .form-grid {
     grid-template-columns: 1fr;
   }

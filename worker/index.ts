@@ -7,7 +7,8 @@ import type {
   IntegrationStatus,
   Invoice,
   MatchTransactionPayload,
-  Provider
+  Provider,
+  Transaction
 } from "../shared/types";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
@@ -46,16 +47,14 @@ interface Env {
   SLASH_API_KEY?: string;
   SLASH_LEGAL_ENTITY_ID?: string;
   SLASH_BASE_URL?: string;
-  QUICKBOOKS_CLIENT_ID?: string;
-  QUICKBOOKS_CLIENT_SECRET?: string;
-  QUICKBOOKS_REFRESH_TOKEN?: string;
-  QUICKBOOKS_ACCESS_TOKEN?: string;
-  QUICKBOOKS_REALM_ID?: string;
-  QUICKBOOKS_ENVIRONMENT?: string;
-  QUICKBOOKS_INCOME_ITEM_ID?: string;
-  QUICKBOOKS_INCOME_ITEM_NAME?: string;
+  MERIT_API_ID?: string;
   MERIT_API_BASE_URL?: string;
+  MERIT_GET_INVOICES_PATH?: string;
+  MERIT_CREATE_INVOICE_PATH?: string;
   MERIT_API_KEY?: string;
+  MERIT_DEFAULT_TAX_ID?: string;
+  MERIT_DEFAULT_ITEM_CODE?: string;
+  MERIT_DEFAULT_COUNTRY_CODE?: string;
 }
 
 interface PersistedState {
@@ -68,6 +67,8 @@ const wiseBaseUrlByEnvironment = {
   production: "https://api.wise.com",
   sandbox: "https://api.wise-sandbox.com"
 };
+const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
+const defaultSlashBaseUrl = "https://api.slash.com";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store"
@@ -96,56 +97,348 @@ function getConvexClient(env: Env): ConvexHttpClient | null {
 }
 
 function parseWiseBalanceIds(value: string | undefined): Set<string> {
-  if (!value) return new Set();
-  return new Set(
-    value
-      .split(",")
-      .map((pair) => pair.trim().split(":")[0])
-      .filter(Boolean)
-  );
+  return new Set(parseWiseBalancePairs(value).map((balance) => balance.id));
 }
 
-function mergeLiveWiseAccounts(liveWiseAccounts: AccountBalance[]): AccountBalance[] {
-  if (liveWiseAccounts.length === 0) return seededAccounts;
-  return [...seededAccounts.filter((account) => account.source !== "wise"), ...liveWiseAccounts];
+function parseWiseBalancePairs(value: string | undefined): Array<{ id: string; currency: string }> {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((pair) => {
+      const [id, currency = "USD"] = pair.trim().split(":");
+      return { id, currency };
+    })
+    .filter((balance) => balance.id);
 }
 
-async function fetchWiseAccounts(env: Env): Promise<AccountBalance[]> {
-  if (!env.WISE_API_TOKEN || !env.WISE_PROFILE_ID || !env.WISE_BALANCE_IDS) return [];
+async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
 
-  const wiseBaseUrl =
-    env.WISE_ENVIRONMENT === "sandbox" ? wiseBaseUrlByEnvironment.sandbox : wiseBaseUrlByEnvironment.production;
+function wiseBaseUrl(env: Env): string {
+  return env.WISE_ENVIRONMENT === "sandbox" ? wiseBaseUrlByEnvironment.sandbox : wiseBaseUrlByEnvironment.production;
+}
+
+function parseStatementDate(value: string | undefined): string {
+  return (value ?? new Date().toISOString()).slice(0, 10);
+}
+
+async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  if (!env.WISE_API_TOKEN || !env.WISE_PROFILE_ID || !env.WISE_BALANCE_IDS) {
+    return { accounts: [], transactions: [] };
+  }
+
+  const balances = parseWiseBalancePairs(env.WISE_BALANCE_IDS);
   const selectedBalanceIds = parseWiseBalanceIds(env.WISE_BALANCE_IDS);
-  const response = await fetch(`${wiseBaseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD`, {
+  const baseUrl = wiseBaseUrl(env);
+  const intervalEnd = new Date().toISOString();
+  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
+
+  const wiseBalances = await fetchJson<
+    Array<{
+      id: number;
+      currency: string;
+      amount?: { value?: number; currency?: string };
+      modificationTime?: string;
+      visible?: boolean;
+    }>
+  >(`${baseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD`, {
     headers: {
       Authorization: `Bearer ${env.WISE_API_TOKEN}`
     }
   });
 
-  if (!response.ok) {
-    throw new Error(`Wise balance sync failed: ${response.status} ${response.statusText}`);
-  }
-
-  const balances = (await response.json()) as Array<{
-    id: number;
-    currency: string;
-    amount?: { value?: number; currency?: string };
-    modificationTime?: string;
-    visible?: boolean;
-  }>;
-
-  return balances
+  const accounts = wiseBalances
     .filter((balance) => balance.visible !== false)
     .filter((balance) => selectedBalanceIds.size === 0 || selectedBalanceIds.has(String(balance.id)))
     .map((balance) => ({
       id: `wise-${balance.id}`,
       name: `Wise ${balance.currency}`,
-      source: "wise",
+      source: "wise" as const,
       balance: balance.amount?.value ?? 0,
       currency: balance.amount?.currency ?? balance.currency,
       updatedAt: balance.modificationTime ?? new Date().toISOString(),
-      status: "live"
+      status: "live" as const
     }));
+
+  const transactions: Transaction[] = [];
+  for (const balance of balances) {
+    const params = new URLSearchParams({
+      currency: balance.currency,
+      intervalStart,
+      intervalEnd,
+      type: "COMPACT",
+      statementLocale: "en"
+    });
+    const statement = await fetchJson<{
+      transactions?: Array<{
+        date?: string;
+        type?: string;
+        details?: { description?: string; senderName?: string; recipientName?: string; referenceNumber?: string };
+        amount?: { value?: number; currency?: string };
+      }>;
+    }>(`${baseUrl}/v1/profiles/${env.WISE_PROFILE_ID}/balance-statements/${balance.id}/statement.json?${params}`, {
+      headers: {
+        Authorization: `Bearer ${env.WISE_API_TOKEN}`,
+        "X-External-Correlation-Id": crypto.randomUUID()
+      }
+    });
+
+    for (const [index, activity] of (statement.transactions ?? []).entries()) {
+      const value = activity.amount?.value ?? 0;
+      const counterparty = activity.details?.senderName || activity.details?.recipientName || activity.details?.description || "Wise activity";
+      transactions.push({
+        id: `wise-${balance.id}-${activity.details?.referenceNumber ?? index}`,
+        source: "wise",
+        accountName: `Wise ${balance.currency}`,
+        date: parseStatementDate(activity.date),
+        description: activity.details?.description ?? activity.type ?? "Wise transaction",
+        rawName: counterparty,
+        counterparty,
+        amount: Math.abs(value),
+        currency: activity.amount?.currency ?? balance.currency,
+        direction: value >= 0 ? "in" : "out",
+        status: "posted",
+        category: activity.type ?? "Wise"
+      });
+    }
+  }
+
+  return { accounts, transactions };
+}
+
+async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  if (!env.SLASH_API_KEY) return { accounts: [], transactions: [] };
+
+  const headers: Record<string, string> = { "X-API-Key": env.SLASH_API_KEY };
+  if (env.SLASH_LEGAL_ENTITY_ID) {
+    headers["x-legal-entity"] = env.SLASH_LEGAL_ENTITY_ID;
+  }
+
+  const slashBaseUrl = env.SLASH_BASE_URL || defaultSlashBaseUrl;
+  const [accountsResponse, transactionsResponse] = await Promise.all([
+    fetchJson<{ items?: Array<{ id: string; name?: string; balance?: { amountCents?: number } }> }>(
+      `${slashBaseUrl}/account`,
+      { headers }
+    ),
+    fetchJson<{
+      items?: Array<{
+        id: string;
+        createdAt?: string;
+        description?: string;
+        merchant?: { name?: string };
+        amountCents?: number;
+        currency?: string;
+        status?: string;
+        category?: string;
+      }>;
+    }>(`${slashBaseUrl}/transaction?filter:from_date=${Date.now() - 1000 * 60 * 60 * 24 * 45}`, { headers })
+  ]);
+
+  const accounts: AccountBalance[] = (accountsResponse.items ?? []).map((account) => ({
+    id: `slash-${account.id}`,
+    name: account.name ?? `Slash ${account.id}`,
+    source: "slash",
+    balance: (account.balance?.amountCents ?? 0) / 100,
+    currency: "USD",
+    updatedAt: new Date().toISOString(),
+    status: "live"
+  }));
+
+  const transactions: Transaction[] = (transactionsResponse.items ?? []).map((item) => {
+    const signedAmount = (item.amountCents ?? 0) / 100;
+    const counterparty = item.merchant?.name || item.description || "Slash transaction";
+    return {
+      id: `slash-${item.id}`,
+      source: "slash",
+      accountName: "Slash",
+      date: parseStatementDate(item.createdAt),
+      description: item.description ?? counterparty,
+      rawName: counterparty,
+      counterparty,
+      amount: Math.abs(signedAmount),
+      currency: item.currency ?? "USD",
+      direction: signedAmount >= 0 ? "in" : "out",
+      status: item.status === "pending" ? "pending" : "posted",
+      category: item.category ?? "Slash"
+    };
+  });
+
+  return { accounts, transactions };
+}
+
+function mergeLiveAccounts(liveWiseAccounts: AccountBalance[], liveSlashAccounts: AccountBalance[]): AccountBalance[] {
+  const omittedSources = new Set([
+    ...(liveWiseAccounts.length > 0 ? ["wise"] : []),
+    ...(liveSlashAccounts.length > 0 ? ["slash"] : [])
+  ]);
+  return [...seededAccounts.filter((account) => !omittedSources.has(account.source)), ...liveWiseAccounts, ...liveSlashAccounts];
+}
+
+async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<Invoice | undefined> {
+  return (await fetchMeritInvoices(env).catch(() => [])).find((invoice) => invoice.id === invoiceId);
+}
+
+async function fetchTransactionForMatch(env: Env, transactionId: string): Promise<Transaction | undefined> {
+  const seeded = seededTransactions.find((transaction) => transaction.id === transactionId);
+  if (seeded) return seeded;
+
+  const [wise, slash] = await Promise.all([
+    fetchWiseActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
+  ]);
+  return [...wise.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
+}
+
+function meritTimestamp(): string {
+  return new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+}
+
+function meritDate(value: string): string {
+  return value.replace(/\D/g, "").slice(0, 8);
+}
+
+function base64(bytes: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes)));
+}
+
+async function meritUrl(env: Env, path: string, body: string): Promise<string> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) {
+    throw new Error("Merit API credentials are not configured");
+  }
+
+  const timestamp = meritTimestamp();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.MERIT_API_KEY),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = base64(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${env.MERIT_API_ID}${timestamp}${body}`)));
+  const params = new URLSearchParams({ apiId: env.MERIT_API_ID, timestamp, signature });
+  return `${env.MERIT_API_BASE_URL || defaultMeritApiBaseUrl}${path}?${params.toString()}`;
+}
+
+async function fetchMeritJson<T>(env: Env, path: string, payload: unknown): Promise<T> {
+  const body = JSON.stringify(payload);
+  const response = await fetch(await meritUrl(env, path, body), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Merit API failed: ${response.status} ${response.statusText}`);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return [];
+
+  const periodEnd = new Date();
+  const periodStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 89);
+  const response = await fetchMeritJson<
+    Array<{
+      SIHId?: string;
+      InvoiceNo?: string;
+      CustomerName?: string;
+      DueDate?: string;
+      CurrencyCode?: string;
+      TotalSum?: number;
+      TotalAmount?: number;
+      Paid?: boolean;
+    }>
+  >(env, env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices", {
+    Periodstart: meritDate(periodStart.toISOString()),
+    PeriodEnd: meritDate(periodEnd.toISOString()),
+    UnPaid: false
+  });
+
+  return response.map((invoice) => ({
+    id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
+    customerName: invoice.CustomerName ?? "Merit invoice",
+    amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
+    currency: invoice.CurrencyCode ?? "USD",
+    status: invoice.Paid ? "paid" : "open",
+    approvalStatus: "approved",
+    paidLocally: false,
+    meritPaid: Boolean(invoice.Paid),
+    dueDate: invoice.DueDate ? String(invoice.DueDate) : new Date().toISOString().slice(0, 10),
+    source: "merit",
+    externalId: invoice.SIHId ?? invoice.InvoiceNo,
+    description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
+    createdAt: new Date().toISOString()
+  }));
+}
+
+async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice | undefined> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY || !env.MERIT_DEFAULT_TAX_ID) return undefined;
+
+  const invoiceNo = `FD-${Date.now()}`;
+  const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(
+    env,
+    env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice",
+    {
+      Customer: {
+        Name: payload.customerName,
+        NotTDCustomer: true,
+        CountryCode: env.MERIT_DEFAULT_COUNTRY_CODE || "CA"
+      },
+      AccountingDoc: 1,
+      DocDate: meritDate(new Date().toISOString()),
+      DueDate: meritDate(payload.dueDate),
+      InvoiceNo: invoiceNo,
+      CurrencyCode: payload.currency,
+      InvoiceRow: [
+        {
+          Item: {
+            Code: env.MERIT_DEFAULT_ITEM_CODE || "SERVICES",
+            Description: payload.description.slice(0, 150),
+            Type: 2
+          },
+          Quantity: 1,
+          Price: payload.amount,
+          TaxId: env.MERIT_DEFAULT_TAX_ID
+        }
+      ],
+      TaxAmount: [
+        {
+          TaxId: env.MERIT_DEFAULT_TAX_ID,
+          Amount: 0
+        }
+      ],
+      TotalAmount: payload.amount,
+      Hcomment: "Created from finance dashboard. Payment status is managed by accounting in Merit."
+    }
+  );
+
+  return {
+    id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
+    providerId: payload.providerId,
+    customerName: payload.customerName,
+    amount: payload.amount,
+    currency: payload.currency,
+    status: "created",
+    approvalStatus: "pending",
+    paidLocally: false,
+    meritPaid: false,
+    dueDate: payload.dueDate,
+    source: "merit",
+    externalId: response.InvoiceId ?? response.SIHId ?? response.Id ?? response.InvoiceNo ?? invoiceNo,
+    description: payload.description,
+    transactionId: payload.transactionId,
+    createdAt: new Date().toISOString()
+  };
 }
 
 async function loadPersisted(env: Env): Promise<PersistedState> {
@@ -173,19 +466,7 @@ function integrationStatus(env: Env): IntegrationStatus[] {
 
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
 
-  const hasQuickBooksAccess = Boolean(env.QUICKBOOKS_ACCESS_TOKEN && env.QUICKBOOKS_REALM_ID);
-  const hasQuickBooksRefresh = Boolean(
-    env.QUICKBOOKS_CLIENT_ID &&
-      env.QUICKBOOKS_CLIENT_SECRET &&
-      env.QUICKBOOKS_REFRESH_TOKEN &&
-      env.QUICKBOOKS_REALM_ID
-  );
-  const quickBooksNeeds =
-    hasQuickBooksAccess || hasQuickBooksRefresh
-      ? []
-      : ["QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_REFRESH_TOKEN", "QUICKBOOKS_REALM_ID"];
-
-  const meritNeeds = ["MERIT_API_BASE_URL", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
 
   return [
     {
@@ -211,25 +492,14 @@ function integrationStatus(env: Env): IntegrationStatus[] {
       needs: slashNeeds
     },
     {
-      id: "quickbooks" as DataSource,
-      label: "QuickBooks",
-      configured: quickBooksNeeds.length === 0,
-      mode: quickBooksNeeds.length === 0 ? "live" : "mock",
-      message:
-        quickBooksNeeds.length === 0
-          ? "QuickBooks OAuth credentials are present."
-          : "Invoice creation is simulated until QuickBooks credentials are added.",
-      needs: quickBooksNeeds
-    },
-    {
       id: "merit" as DataSource,
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "partial" : "mock",
+      mode: meritNeeds.length === 0 ? "live" : "mock",
       message:
         meritNeeds.length === 0
-          ? "Generic Merit connector variables are present."
-          : "Merit remains optional until the exact product/API is confirmed.",
+          ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
+          : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
       needs: meritNeeds
     }
   ];
@@ -237,11 +507,17 @@ function integrationStatus(env: Env): IntegrationStatus[] {
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const liveWiseAccounts = await fetchWiseAccounts(env).catch(() => []);
-  const accounts = mergeLiveWiseAccounts(liveWiseAccounts);
+  const [wise, slash, liveMeritInvoices] = await Promise.all([
+    fetchWiseActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchMeritInvoices(env).catch(() => [])
+  ]);
+  const accounts = mergeLiveAccounts(wise.accounts, slash.accounts);
+  const invoices = mergeById(liveMeritInvoices, state.invoices);
+  const rawTransactions = mergeById(seededTransactions, [...wise.transactions, ...slash.transactions]);
   const transactions = enrichTransactions(
-    seededTransactions.map((transaction) => {
-      const invoice = state.invoices.find((item) => item.transactionId === transaction.id);
+    rawTransactions.map((transaction) => {
+      const invoice = invoices.find((item) => item.transactionId === transaction.id);
       return invoice
         ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
         : transaction;
@@ -258,7 +534,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     investments: seededInvestments,
     providers: state.providers,
     transactions,
-    invoices: state.invoices,
+    invoices,
     integrationStatus: integrationStatus(env),
     metrics: calculateMetrics(accounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments),
     lastSync: new Date().toISOString()
@@ -286,7 +562,7 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
 
 async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const state = await loadPersisted(env);
-  const transaction = seededTransactions.find((item) => item.id === payload.transactionId);
+  const transaction = await fetchTransactionForMatch(env, payload.transactionId);
   const provider = state.providers.find((item) => item.id === payload.providerId);
   if (!transaction || !provider) {
     throw new Error("Provider or transaction not found");
@@ -311,22 +587,62 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     throw new Error("customerName, amount, and dueDate are required");
   }
   const state = await loadPersisted(env);
-  const invoice: Invoice = {
-    id: `mock-invoice-${crypto.randomUUID()}`,
-    providerId: payload.providerId,
-    customerName: payload.customerName,
-    amount: payload.amount,
-    currency: payload.currency,
-    status: "draft",
-    dueDate: payload.dueDate,
-    source: "mock",
-    description: payload.description,
-    transactionId: payload.transactionId,
-    createdAt: new Date().toISOString()
-  };
+  const invoice: Invoice =
+    (await createMeritInvoice(env, payload)) ?? {
+      id: `mock-invoice-${crypto.randomUUID()}`,
+      providerId: payload.providerId,
+      customerName: payload.customerName,
+      amount: payload.amount,
+      currency: payload.currency,
+      status: "draft",
+      approvalStatus: "pending",
+      paidLocally: false,
+      meritPaid: false,
+      dueDate: payload.dueDate,
+      source: "mock",
+      description: payload.description,
+      transactionId: payload.transactionId,
+      createdAt: new Date().toISOString()
+    };
   state.invoices = [invoice, ...state.invoices];
   await savePersisted(env, state);
   return invoice;
+}
+
+async function setInvoiceApproval(env: Env, invoiceId: string, approvalStatus: "approved" | "denied"): Promise<Invoice> {
+  const state = await loadPersisted(env);
+  let updated: Invoice | undefined;
+  state.invoices = state.invoices.map((invoice) => {
+    if (invoice.id !== invoiceId) return invoice;
+    updated = { ...invoice, approvalStatus };
+    return updated;
+  });
+  if (!updated) {
+    const liveInvoice = await fetchInvoiceForLocalUpdate(env, invoiceId);
+    if (!liveInvoice) throw new Error("Invoice not found");
+    updated = { ...liveInvoice, approvalStatus };
+    state.invoices = [updated, ...state.invoices];
+  }
+  await savePersisted(env, state);
+  return updated;
+}
+
+async function markInvoicePaidLocally(env: Env, invoiceId: string): Promise<Invoice> {
+  const state = await loadPersisted(env);
+  let updated: Invoice | undefined;
+  state.invoices = state.invoices.map((invoice) => {
+    if (invoice.id !== invoiceId) return invoice;
+    updated = { ...invoice, paidLocally: true, paidLocallyAt: new Date().toISOString() };
+    return updated;
+  });
+  if (!updated) {
+    const liveInvoice = await fetchInvoiceForLocalUpdate(env, invoiceId);
+    if (!liveInvoice) throw new Error("Invoice not found");
+    updated = { ...liveInvoice, paidLocally: true, paidLocallyAt: new Date().toISOString() };
+    state.invoices = [updated, ...state.invoices];
+  }
+  await savePersisted(env, state);
+  return updated;
 }
 
 async function handleApi(request: Request, env: Env): Promise<Response> {
@@ -355,6 +671,20 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
+    }
+
+    const approvalMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/approval$/);
+    if (approvalMatch && request.method === "POST") {
+      const body = (await request.json()) as { approvalStatus?: "approved" | "denied" };
+      if (body.approvalStatus !== "approved" && body.approvalStatus !== "denied") {
+        return json({ message: "approvalStatus must be approved or denied" }, { status: 400 });
+      }
+      return json(await setInvoiceApproval(env, approvalMatch[1], body.approvalStatus));
+    }
+
+    const localPaidMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/local-paid$/);
+    if (localPaidMatch && request.method === "POST") {
+      return json(await markInvoicePaidLocally(env, localPaidMatch[1]));
     }
 
     return json({ message: "Not found" }, { status: 404 });

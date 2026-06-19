@@ -19,7 +19,7 @@ export const seededAccounts: AccountBalance[] = [
 ];
 
 export const seededReceivables: LedgerItem[] = [
-  { id: "recv-open-invoices", name: "Open invoices", balance: 899917.68, currency: "USD", source: "quickbooks", notes: "Open customer invoices" },
+  { id: "recv-open-invoices", name: "Open invoices", balance: 899917.68, currency: "USD", source: "merit", notes: "Open customer invoices" },
   { id: "recv-vat-dn-q4", name: "VAT DN Q4", balance: 24878.81, currency: "USD", source: "manual" },
   { id: "recv-vat-april-2026", name: "VAT April 2026", balance: 1106.34, currency: "USD", source: "manual" },
   { id: "recv-vat-may-2026", name: "VAT May 2026", balance: 1106.34, currency: "USD", source: "manual" },
@@ -205,10 +205,13 @@ export const seededInvoices: Invoice[] = [
     amount: 899917.68,
     currency: "USD",
     status: "open",
+    approvalStatus: "approved",
+    paidLocally: false,
+    meritPaid: false,
     dueDate: "2026-06-30",
-    source: "quickbooks",
+    source: "merit",
     externalId: "seed-open-invoices",
-    description: "Imported open invoice total from current finance sheet.",
+    description: "Imported open invoice total from current finance sheet. Replace with Merit invoice sync when credentials are added.",
     createdAt: seededAsOf
   }
 ];

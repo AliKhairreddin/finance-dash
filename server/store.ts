@@ -9,7 +9,7 @@ import type {
   Transaction
 } from "../shared/types";
 import { calculateMetrics } from "./calculations";
-import { createQuickBooksInvoice, fetchSlashActivity, fetchWiseActivity, getIntegrationStatus } from "./integrations";
+import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchWiseActivity, getIntegrationStatus } from "./integrations";
 import { enrichTransactions, learnAlias } from "./matching";
 import {
   seededAccounts,
@@ -120,7 +120,7 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
-  const liveInvoice = await createQuickBooksInvoice(payload);
+  const liveInvoice = await createMeritInvoice(payload);
   const invoice: Invoice =
     liveInvoice ?? {
       id: `mock-invoice-${crypto.randomUUID()}`,
@@ -129,6 +129,9 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
       amount: payload.amount,
       currency: payload.currency,
       status: "draft",
+      approvalStatus: "pending",
+      paidLocally: false,
+      meritPaid: false,
       dueDate: payload.dueDate,
       source: "mock",
       description: payload.description,
@@ -148,8 +151,32 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
   return invoice;
 }
 
+export async function setInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied"): Promise<Invoice> {
+  let updated: Invoice | undefined;
+  invoices = invoices.map((invoice) => {
+    if (invoice.id !== invoiceId) return invoice;
+    updated = { ...invoice, approvalStatus };
+    return updated;
+  });
+  if (!updated) throw new Error("Invoice not found");
+  await persist();
+  return updated;
+}
+
+export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice> {
+  let updated: Invoice | undefined;
+  invoices = invoices.map((invoice) => {
+    if (invoice.id !== invoiceId) return invoice;
+    updated = { ...invoice, paidLocally: true, paidLocallyAt: new Date().toISOString() };
+    return updated;
+  });
+  if (!updated) throw new Error("Invoice not found");
+  await persist();
+  return updated;
+}
+
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, slash] = await Promise.allSettled([fetchWiseActivity(), fetchSlashActivity()]);
+  const [wise, slash, merit] = await Promise.allSettled([fetchWiseActivity(), fetchSlashActivity(), fetchMeritInvoices()]);
   const liveTransactions: Transaction[] = [];
 
   if (wise.status === "fulfilled") {
@@ -160,6 +187,9 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   }
   if (slash.status === "fulfilled") {
     liveTransactions.push(...slash.value.transactions);
+  }
+  if (merit.status === "fulfilled" && merit.value.length > 0) {
+    invoices = mergeById(merit.value, invoices);
   }
 
   if (liveTransactions.length > 0) {

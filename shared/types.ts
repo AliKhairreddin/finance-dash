@@ -1,4 +1,4 @@
-export type DataSource = "wise" | "slash" | "quickbooks" | "merit" | "manual" | "mock";
+export type DataSource = "wise" | "slash" | "merit" | "manual" | "mock";
 
 export type Direction = "in" | "out";
 
@@ -62,6 +62,10 @@ export interface Invoice {
   amount: number;
   currency: string;
   status: InvoiceStatus;
+  approvalStatus?: "pending" | "approved" | "denied";
+  paidLocally?: boolean;
+  paidLocallyAt?: string;
+  meritPaid?: boolean;
   dueDate: string;
   source: DataSource;
   externalId?: string;

@@ -2,14 +2,13 @@ import crypto from "node:crypto";
 import type { AccountBalance, CreateInvoicePayload, IntegrationStatus, Invoice, Transaction } from "../shared/types";
 
 const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
-const quickBooksApiBase =
-  process.env.QUICKBOOKS_ENVIRONMENT === "production"
-    ? "https://quickbooks.api.intuit.com"
-    : "https://sandbox-quickbooks.api.intuit.com";
+const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.ee/api";
+const meritGetInvoicesPath = process.env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices";
+const meritCreateInvoicePath = process.env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice";
 const wiseBaseUrl =
-  process.env.WISE_ENVIRONMENT === "production"
-    ? "https://api.wise.com"
-    : "https://api.wise-sandbox.com";
+  process.env.WISE_ENVIRONMENT === "sandbox"
+    ? "https://api.wise-sandbox.com"
+    : "https://api.wise.com";
 
 async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -25,19 +24,7 @@ export function getIntegrationStatus(): IntegrationStatus[] {
   if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
 
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !process.env[name]);
-
-  const hasQuickBooksAccess = Boolean(process.env.QUICKBOOKS_ACCESS_TOKEN && process.env.QUICKBOOKS_REALM_ID);
-  const hasQuickBooksRefresh = Boolean(
-    process.env.QUICKBOOKS_CLIENT_ID &&
-      process.env.QUICKBOOKS_CLIENT_SECRET &&
-      process.env.QUICKBOOKS_REFRESH_TOKEN &&
-      process.env.QUICKBOOKS_REALM_ID
-  );
-  const quickBooksNeeds = hasQuickBooksAccess || hasQuickBooksRefresh
-    ? []
-    : ["QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_REFRESH_TOKEN", "QUICKBOOKS_REALM_ID"];
-
-  const meritNeeds = ["MERIT_API_BASE_URL", "MERIT_API_KEY"].filter((name) => !process.env[name]);
+  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
 
   return [
     {
@@ -58,30 +45,19 @@ export function getIntegrationStatus(): IntegrationStatus[] {
       mode: slashNeeds.length === 0 ? "live" : "mock",
       message:
         slashNeeds.length === 0
-          ? "Ready to pull accounts, virtual accounts, card groups, and transactions."
+          ? "Ready to pull accounts, card activity, and transactions."
           : "Using seeded Slash account and card activity until beta API access is added.",
       needs: slashNeeds
-    },
-    {
-      id: "quickbooks",
-      label: "QuickBooks",
-      configured: quickBooksNeeds.length === 0,
-      mode: quickBooksNeeds.length === 0 ? "live" : "mock",
-      message:
-        quickBooksNeeds.length === 0
-          ? "Ready to query customers/invoices and create invoices."
-          : "Invoice creation is simulated until OAuth credentials or an access token are added.",
-      needs: quickBooksNeeds
     },
     {
       id: "merit",
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "partial" : "mock",
+      mode: meritNeeds.length === 0 ? "live" : "mock",
       message:
         meritNeeds.length === 0
-          ? "Generic Merit connector configured. Confirm the exact product and schema before live writes."
-          : "Merit is ambiguous, so this connector stays optional until the exact API is confirmed.",
+          ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
+          : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
       needs: meritNeeds
     }
   ];
@@ -101,7 +77,6 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
   });
   const selectedBalanceIds = new Set(balances.map((balance) => balance.id));
 
-  const transactions: Transaction[] = [];
   const accounts = await fetchJson<
     Array<{
       id: number;
@@ -114,8 +89,8 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
     headers: {
       Authorization: `Bearer ${token}`
     }
-  }).then((wiseBalances) => {
-    return wiseBalances
+  }).then((wiseBalances) =>
+    wiseBalances
       .filter((balance) => balance.visible !== false)
       .filter((balance) => selectedBalanceIds.has(String(balance.id)))
       .map((balance) => ({
@@ -126,9 +101,10 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
         currency: balance.amount?.currency ?? balance.currency,
         updatedAt: balance.modificationTime ?? new Date().toISOString(),
         status: "live" as const
-      }));
-  });
+      }))
+  );
 
+  const transactions: Transaction[] = [];
   for (const balance of balances) {
     const params = new URLSearchParams({
       currency: balance.currency,
@@ -138,13 +114,11 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
       statementLocale: "en"
     });
     const statement = await fetchJson<{
-      endOfStatementBalance?: { value?: number; currency?: string };
       transactions?: Array<{
         date?: string;
         type?: string;
         details?: { description?: string; senderName?: string; recipientName?: string; referenceNumber?: string };
         amount?: { value?: number; currency?: string };
-        totalFees?: { value?: number };
       }>;
     }>(`${wiseBaseUrl}/v1/profiles/${profileId}/balance-statements/${balance.id}/statement.json?${params}`, {
       headers: {
@@ -236,79 +210,132 @@ export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]
   return { accounts, transactions };
 }
 
-async function refreshQuickBooksToken(): Promise<string | undefined> {
-  if (process.env.QUICKBOOKS_ACCESS_TOKEN) return process.env.QUICKBOOKS_ACCESS_TOKEN;
-  const { QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET, QUICKBOOKS_REFRESH_TOKEN } = process.env;
-  if (!QUICKBOOKS_CLIENT_ID || !QUICKBOOKS_CLIENT_SECRET || !QUICKBOOKS_REFRESH_TOKEN) return undefined;
+function meritTimestamp(): string {
+  return new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+}
 
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: QUICKBOOKS_REFRESH_TOKEN
-  });
-  const token = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString("base64");
-  const response = await fetchJson<{ access_token: string }>("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
+function meritDate(value: string): string {
+  return value.replace(/\D/g, "").slice(0, 8);
+}
+
+function meritUrl(path: string, body: string): string {
+  const apiId = process.env.MERIT_API_ID;
+  const apiKey = process.env.MERIT_API_KEY;
+  if (!apiId || !apiKey) {
+    throw new Error("Merit API credentials are not configured");
+  }
+
+  const timestamp = meritTimestamp();
+  const signature = crypto
+    .createHmac("sha256", Buffer.from(apiKey, "ascii"))
+    .update(Buffer.from(`${apiId}${timestamp}${body}`, "utf8"))
+    .digest("base64");
+  const params = new URLSearchParams({ apiId, timestamp, signature });
+  return `${meritApiBaseUrl}${path}?${params.toString()}`;
+}
+
+async function fetchMeritJson<T>(path: string, payload: unknown): Promise<T> {
+  const body = JSON.stringify(payload);
+  return fetchJson<T>(meritUrl(path, body), {
     method: "POST",
     headers: {
-      Authorization: `Basic ${token}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
       Accept: "application/json"
     },
     body
   });
-  return response.access_token;
 }
 
-export async function createQuickBooksInvoice(payload: CreateInvoicePayload): Promise<Invoice | undefined> {
-  const realmId = process.env.QUICKBOOKS_REALM_ID;
-  const accessToken = await refreshQuickBooksToken();
-  if (!realmId || !accessToken) return undefined;
+export async function fetchMeritInvoices(): Promise<Invoice[]> {
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
 
-  const itemValue = process.env.QUICKBOOKS_INCOME_ITEM_ID || "1";
-  const itemName = process.env.QUICKBOOKS_INCOME_ITEM_NAME || "Services";
-  const requestBody = {
-    Line: [
+  const periodEnd = new Date();
+  const periodStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 89);
+  const response = await fetchMeritJson<
+    Array<{
+      SIHId?: string;
+      InvoiceNo?: string;
+      CustomerName?: string;
+      DueDate?: string;
+      CurrencyCode?: string;
+      TotalSum?: number;
+      TotalAmount?: number;
+      Paid?: boolean;
+    }>
+  >(meritGetInvoicesPath, {
+    Periodstart: meritDate(periodStart.toISOString()),
+    PeriodEnd: meritDate(periodEnd.toISOString()),
+    UnPaid: false
+  });
+
+  return response.map((invoice) => ({
+    id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
+    customerName: invoice.CustomerName ?? "Merit invoice",
+    amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
+    currency: invoice.CurrencyCode ?? "USD",
+    status: invoice.Paid ? "paid" : "open",
+    approvalStatus: "approved",
+    paidLocally: false,
+    meritPaid: Boolean(invoice.Paid),
+    dueDate: invoice.DueDate ? String(invoice.DueDate) : new Date().toISOString().slice(0, 10),
+    source: "merit",
+    externalId: invoice.SIHId ?? invoice.InvoiceNo,
+    description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
+    createdAt: new Date().toISOString()
+  }));
+}
+
+export async function createMeritInvoice(payload: CreateInvoicePayload): Promise<Invoice | undefined> {
+  const taxId = process.env.MERIT_DEFAULT_TAX_ID;
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY || !taxId) return undefined;
+
+  const invoiceNo = `FD-${Date.now()}`;
+  const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(meritCreateInvoicePath, {
+    Customer: {
+      Name: payload.customerName,
+      NotTDCustomer: true,
+      CountryCode: process.env.MERIT_DEFAULT_COUNTRY_CODE || "CA"
+    },
+    AccountingDoc: 1,
+    DocDate: meritDate(new Date().toISOString()),
+    DueDate: meritDate(payload.dueDate),
+    InvoiceNo: invoiceNo,
+    CurrencyCode: payload.currency,
+    InvoiceRow: [
       {
-        DetailType: "SalesItemLineDetail",
-        Amount: payload.amount,
-        Description: payload.description,
-        SalesItemLineDetail: {
-          ItemRef: {
-            name: itemName,
-            value: itemValue
-          }
-        }
+        Item: {
+          Code: process.env.MERIT_DEFAULT_ITEM_CODE || "SERVICES",
+          Description: payload.description.slice(0, 150),
+          Type: 2
+        },
+        Quantity: 1,
+        Price: payload.amount,
+        TaxId: taxId
       }
     ],
-    CustomerRef: {
-      name: payload.customerName,
-      value: payload.providerId || "1"
-    },
-    DueDate: payload.dueDate
-  };
-
-  const response = await fetchJson<{ Invoice?: { Id?: string; DocNumber?: string; TotalAmt?: number } }>(
-    `${quickBooksApiBase}/v3/company/${realmId}/invoice?minorversion=75`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(requestBody)
-    }
-  );
+    TaxAmount: [
+      {
+        TaxId: taxId,
+        Amount: 0
+      }
+    ],
+    TotalAmount: payload.amount,
+    Hcomment: "Created from finance dashboard. Payment status is managed by accounting in Merit."
+  });
 
   return {
-    id: `qbo-${response.Invoice?.Id ?? crypto.randomUUID()}`,
+    id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
     providerId: payload.providerId,
     customerName: payload.customerName,
-    amount: response.Invoice?.TotalAmt ?? payload.amount,
+    amount: payload.amount,
     currency: payload.currency,
     status: "created",
+    approvalStatus: "pending",
+    paidLocally: false,
+    meritPaid: false,
     dueDate: payload.dueDate,
-    source: "quickbooks",
-    externalId: response.Invoice?.Id,
+    source: "merit",
+    externalId: response.InvoiceId ?? response.SIHId ?? response.Id ?? response.InvoiceNo ?? invoiceNo,
     description: payload.description,
     transactionId: payload.transactionId,
     createdAt: new Date().toISOString()

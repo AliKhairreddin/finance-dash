@@ -2,7 +2,16 @@ import cors from "cors";
 import "dotenv/config";
 import express from "express";
 import type { CreateInvoicePayload, CreateProviderPayload, MatchTransactionPayload } from "../shared/types";
-import { createInvoice, createProvider, getSnapshot, initializeStore, matchTransaction, syncExternalActivity } from "./store";
+import {
+  createInvoice,
+  createProvider,
+  getSnapshot,
+  initializeStore,
+  markInvoicePaidLocally,
+  matchTransaction,
+  setInvoiceApproval,
+  syncExternalActivity
+} from "./store";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -60,6 +69,27 @@ app.post("/api/invoices", async (request, response, next) => {
       return;
     }
     response.status(201).json(await createInvoice(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/invoices/:invoiceId/approval", async (request, response, next) => {
+  try {
+    const approvalStatus = request.body?.approvalStatus;
+    if (approvalStatus !== "approved" && approvalStatus !== "denied") {
+      response.status(400).json({ message: "approvalStatus must be approved or denied" });
+      return;
+    }
+    response.json(await setInvoiceApproval(request.params.invoiceId, approvalStatus));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/invoices/:invoiceId/local-paid", async (request, response, next) => {
+  try {
+    response.json(await markInvoicePaidLocally(request.params.invoiceId));
   } catch (error) {
     next(error);
   }

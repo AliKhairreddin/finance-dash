@@ -27,7 +27,7 @@ Production URL:
 https://finance.thatcanadian.dev
 ```
 
-The Worker is configured in `wrangler.jsonc` and persists lightweight dashboard state in Workers KV through the `FINANCE_KV` binding.
+The Worker is configured in `wrangler.jsonc`. It uses Convex for provider aliases and local invoice decisions, with Workers KV still configured as a fallback store.
 
 ## Convex Backend
 
@@ -50,11 +50,16 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases and mock invoi
 
 - Shows cash in accounts, receivables, open balances, payables by supplier/month, profit, investments, total assets, cashback, and weekly growth checks.
 - Pulls all the sheet concepts into a compact dashboard instead of manual spreadsheet editing.
-- Includes a reconciliation queue for Wise/Slash transactions.
+- Includes separate Wise and Slash operating views.
+- Splits Wise transactions into incoming and outgoing reconciliation tabs.
+- Keeps Slash balances, card activity, and cashback tracking on its own page.
 - Suggests provider matches from saved aliases.
 - Lets you manually match a transaction to a provider and remembers that bank/card name for future auto-matching.
 - Lets you add providers, suppliers, platforms, and customers.
-- Lets you create an invoice/record from an unmatched transaction. This calls QuickBooks when credentials are configured; otherwise it creates a local mock draft.
+- Pulls Merit invoices when Merit credentials are configured.
+- Lets you create a Merit invoice from an unmatched Wise transaction. If Merit credentials are missing, the dashboard creates a local mock draft so the workflow can still be tested.
+- Lets you approve or deny invoice matches inside the dashboard.
+- Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
 - Persists provider aliases and created invoices in `.local/finance-dashboard-store.json`.
 
 ## API Integrations
@@ -63,8 +68,7 @@ The server-side integration code is in `server/integrations.ts`.
 
 - Wise: prepared for profiles, balance statements, and transaction activity using `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`.
 - Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
-- QuickBooks: prepared for OAuth refresh-token or temporary access-token based invoice creation using `QUICKBOOKS_*` variables.
-- Merit: left as an optional generic connector because the exact "Merit" product/API is ambiguous.
+- Merit: prepared to list sales invoices and create sales invoices using `MERIT_API_ID`, `MERIT_API_KEY`, and default tax/item settings. The dashboard intentionally does not send Merit payment updates.
 
 Copy `.env.example` to `.env` and fill credentials when ready.
 
@@ -73,28 +77,27 @@ Copy `.env.example` to `.env` and fill credentials when ready.
 ```bash
 WISE_API_TOKEN=
 WISE_PROFILE_ID=
+WISE_ENVIRONMENT=production
 WISE_BALANCE_IDS=
 
 SLASH_API_KEY=
 SLASH_LEGAL_ENTITY_ID=
+SLASH_BASE_URL=https://api.slash.com
 
-QUICKBOOKS_CLIENT_ID=
-QUICKBOOKS_CLIENT_SECRET=
-QUICKBOOKS_REFRESH_TOKEN=
-QUICKBOOKS_REALM_ID=
-QUICKBOOKS_INCOME_ITEM_ID=
-QUICKBOOKS_INCOME_ITEM_NAME=
-```
-
-Optional:
-
-```bash
-MERIT_API_BASE_URL=
+MERIT_API_BASE_URL=https://aktiva.merit.ee/api
+MERIT_GET_INVOICES_PATH=/v1/getinvoices
+MERIT_CREATE_INVOICE_PATH=/v2/sendinvoice
+MERIT_API_ID=
 MERIT_API_KEY=
+MERIT_DEFAULT_TAX_ID=
+MERIT_DEFAULT_ITEM_CODE=SERVICES
+MERIT_DEFAULT_COUNTRY_CODE=CA
 ```
 
 ## References
 
 - Wise Platform docs: https://docs.wise.com/
 - Slash API docs: https://docs.slash.com/
-- QuickBooks Online Accounting API docs: https://developer.intuit.com/app/developer/qbo/docs/develop
+- Merit API authentication: https://api.merit.ee/connecting-robots/reference-manual/authentication/
+- Merit sales invoice creation: https://api.merit.ee/connecting-robots/reference-manual/sales-invoices/create-sales-invoice/
+- Merit sales invoice list: https://apidoc.passelimerit.fi/parts/sales-invoices/get-list-of-invoices/

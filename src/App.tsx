@@ -69,13 +69,13 @@ function sourceLabel(value: string): string {
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "transactions" | "providers" | "integrations">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "wise" | "slash" | "invoices" | "providers" | "integrations">("overview");
+  const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("all");
   const [matchFilter, setMatchFilter] = useState("needs-review");
   const [selectedProviders, setSelectedProviders] = useState<Record<string, string>>({});
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
@@ -104,7 +104,6 @@ function App() {
     const rows = dashboard?.transactions ?? [];
     const query = searchTerm.trim().toLowerCase();
     return rows.filter((transaction) => {
-      const matchesSource = sourceFilter === "all" || transaction.source === sourceFilter;
       const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
       const matchesQuery =
         !query ||
@@ -117,9 +116,19 @@ function App() {
         matchFilter === "all" ||
         (matchFilter === "needs-review" && needsReview) ||
         (matchFilter === "matched" && !needsReview);
-      return matchesSource && matchesQuery && matchesStatus;
+      return matchesQuery && matchesStatus;
     });
-  }, [dashboard?.transactions, matchFilter, providersById, searchTerm, sourceFilter]);
+  }, [dashboard?.transactions, matchFilter, providersById, searchTerm]);
+
+  const wiseTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.source === "wise" && transaction.direction === wiseDirection),
+    [filteredTransactions, wiseDirection]
+  );
+
+  const slashTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.source === "slash"),
+    [filteredTransactions]
+  );
 
   async function syncNow() {
     setIsSyncing(true);
@@ -132,7 +141,7 @@ function App() {
         throw new Error(body.message || "Sync failed");
       }
       setDashboard((await response.json()) as DashboardSnapshot);
-      setNotice("Sync complete. Live credentials will replace seeded rows when env vars are set.");
+      setNotice("Sync complete. Live credentials replace seeded rows when env vars are set.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
@@ -190,7 +199,31 @@ function App() {
       throw new Error(body.message || "Invoice could not be created");
     }
     await loadDashboard();
-    setNotice("Invoice created. It is a QuickBooks draft simulation until QuickBooks credentials are configured.");
+    setNotice("Invoice created. If Merit is configured it was created there too; paid status remains dashboard-only here.");
+  }
+
+  async function updateInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied") {
+    const response = await fetch(`${apiBase}/invoices/${invoiceId}/approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approvalStatus })
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Invoice approval could not be saved");
+    }
+    await loadDashboard();
+    setNotice(`Invoice ${approvalStatus}.`);
+  }
+
+  async function markInvoicePaidLocally(invoiceId: string) {
+    const response = await fetch(`${apiBase}/invoices/${invoiceId}/local-paid`, { method: "POST" });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Invoice could not be marked paid locally");
+    }
+    await loadDashboard();
+    setNotice("Marked paid in this dashboard only. Merit is unchanged for the accountant.");
   }
 
   if (isLoading) {
@@ -258,9 +291,17 @@ function App() {
           <SlidersHorizontal size={16} />
           Overview
         </button>
-        <button className={activeTab === "transactions" ? "active" : ""} onClick={() => setActiveTab("transactions")}>
+        <button className={activeTab === "wise" ? "active" : ""} onClick={() => setActiveTab("wise")}>
           <Link2 size={16} />
-          Reconcile
+          Wise
+        </button>
+        <button className={activeTab === "slash" ? "active" : ""} onClick={() => setActiveTab("slash")}>
+          <WalletCards size={16} />
+          Slash
+        </button>
+        <button className={activeTab === "invoices" ? "active" : ""} onClick={() => setActiveTab("invoices")}>
+          <FilePlus2 size={16} />
+          Invoices
         </button>
         <button className={activeTab === "providers" ? "active" : ""} onClick={() => setActiveTab("providers")}>
           <Tags size={16} />
@@ -276,28 +317,30 @@ function App() {
         <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
       )}
 
-      {activeTab === "transactions" && (
+      {activeTab === "wise" && (
         <section className="panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Reconciliation queue</p>
-              <h2>Bank activity that needs a provider, invoice, or rule</h2>
+              <p className="eyebrow">Wise reconciliation</p>
+              <h2>Match incoming payments and outgoing spend</h2>
             </div>
             <div className="filters">
+              <div className="segmented-control" aria-label="Wise transaction direction">
+                <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
+                  <ArrowUpRight size={15} />
+                  In
+                </button>
+                <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
+                  <ArrowDownRight size={15} />
+                  Out
+                </button>
+              </div>
               <label className="search-box">
                 <Search size={15} />
                 <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
               </label>
               <label>
                 <Filter size={15} />
-                <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
-                  <option value="all">All sources</option>
-                  <option value="wise">Wise</option>
-                  <option value="slash">Slash</option>
-                  <option value="quickbooks">QuickBooks</option>
-                </select>
-              </label>
-              <label>
                 <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
                   <option value="needs-review">Needs review</option>
                   <option value="matched">Matched</option>
@@ -307,7 +350,7 @@ function App() {
             </div>
           </div>
           <TransactionTable
-            rows={filteredTransactions}
+            rows={wiseTransactions}
             providers={dashboard.providers}
             providersById={providersById}
             selectedProviders={selectedProviders}
@@ -316,6 +359,19 @@ function App() {
             onOpenInvoice={setInvoiceTransaction}
           />
         </section>
+      )}
+
+      {activeTab === "slash" && (
+        <SlashView dashboard={dashboard} rows={slashTransactions} />
+      )}
+
+      {activeTab === "invoices" && (
+        <InvoicesView
+          dashboard={dashboard}
+          providersById={providersById}
+          onApprove={updateInvoiceApproval}
+          onMarkPaid={markInvoicePaidLocally}
+        />
       )}
 
       {activeTab === "providers" && (
@@ -620,7 +676,7 @@ function TransactionTable({
 }) {
   return (
     <div className="table-wrap">
-      <table className="data-table transactions-table">
+      <table className="data-table activity-table">
         <thead>
           <tr>
             <th>Date</th>
@@ -701,6 +757,194 @@ function TransactionTable({
   );
 }
 
+function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
+  const cashback = rows.filter((row) => row.category.toLowerCase().includes("cashback")).reduce((total, row) => total + row.amount, 0);
+
+  return (
+    <div className="split-view">
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Slash balances</h2>
+          <span className="total-pill">{money(slashAccounts.reduce((total, account) => total + account.balance, 0))}</span>
+        </div>
+        <SimpleMoneyTable
+          rows={slashAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            amount: account.balance,
+            currency: account.currency,
+            source: sourceLabel(account.source)
+          }))}
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Slash cashback</h2>
+          <span className="total-pill good">{money(cashback || dashboard.metrics.cashbackRedeemed)}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Seeded cashback redeemed" value={dashboard.metrics.cashbackRedeemed} />
+          <div className="bridge-row">
+            <span>Slash transactions shown</span>
+            <strong>{rows.length}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Slash card activity</h2>
+          <span className="total-pill">{rows.length} rows</span>
+        </div>
+        <BasicTransactionsTable rows={rows} />
+      </section>
+    </div>
+  );
+}
+
+function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table activity-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Counterparty</th>
+            <th>Direction</th>
+            <th>Category</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((transaction) => (
+            <tr key={transaction.id}>
+              <td>{dateLabel(transaction.date)}</td>
+              <td className="counterparty-cell">
+                <strong>{transaction.counterparty}</strong>
+                <small>{transaction.description}</small>
+              </td>
+              <td>
+                <span className={`direction-label ${transaction.direction}`}>
+                  {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                  {transaction.direction === "in" ? "In" : "Out"}
+                </span>
+              </td>
+              <td>{transaction.category}</td>
+              <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function InvoicesView({
+  dashboard,
+  providersById,
+  onApprove,
+  onMarkPaid
+}: {
+  dashboard: DashboardSnapshot;
+  providersById: Map<string, Provider>;
+  onApprove: (invoiceId: string, approvalStatus: "approved" | "denied") => Promise<void>;
+  onMarkPaid: (invoiceId: string) => Promise<void>;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function runAction(invoiceId: string, action: () => Promise<void>) {
+    setBusyId(invoiceId);
+    try {
+      await action();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Merit invoices</p>
+          <h2>Match, create, approve, deny, and locally mark paid</h2>
+        </div>
+        <span className="total-pill">{dashboard.invoices.length} invoices</span>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table invoice-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Amount</th>
+              <th>Provider</th>
+              <th>Merit status</th>
+              <th>Dashboard status</th>
+              <th>Linked transaction</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dashboard.invoices.map((invoice) => {
+              const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
+              return (
+                <tr key={invoice.id}>
+                  <td className="counterparty-cell">
+                    <strong>{invoice.customerName}</strong>
+                    <small>{invoice.description}</small>
+                  </td>
+                  <td className="amount">{money(invoice.amount, invoice.currency)}</td>
+                  <td>{providerLabel(provider)}</td>
+                  <td>
+                    <span className={`status-pill ${invoice.meritPaid ? "good" : ""}`}>
+                      {invoice.meritPaid ? "Paid in Merit" : invoice.source === "merit" ? "Open in Merit" : "Local draft"}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`status-pill ${invoice.approvalStatus === "approved" ? "good" : invoice.approvalStatus === "denied" ? "warning" : ""}`}>
+                      {invoice.paidLocally ? "Paid locally" : invoice.approvalStatus ?? "pending"}
+                    </span>
+                  </td>
+                  <td>{invoice.transactionId ? invoice.transactionId : "Not linked"}</td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        title="Approve invoice match"
+                        disabled={busyId === invoice.id}
+                        onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "approved"))}
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        title="Deny invoice match"
+                        disabled={busyId === invoice.id}
+                        onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "denied"))}
+                      >
+                        <X size={16} />
+                      </button>
+                      <button
+                        className="icon-text-button"
+                        disabled={busyId === invoice.id || invoice.paidLocally}
+                        onClick={() => runAction(invoice.id, () => onMarkPaid(invoice.id))}
+                      >
+                        <Check size={15} />
+                        Paid here
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function ProvidersView({ providers, onAdd }: { providers: Provider[]; onAdd: () => void }) {
   return (
     <section className="panel">
@@ -771,9 +1015,8 @@ function IntegrationsView({ dashboard }: { dashboard: DashboardSnapshot }) {
       <div className="docs-note">
         <strong>Integration shape</strong>
         <span>
-          Wise pulls balance statements and can receive balance webhooks. Slash pulls accounts, virtual accounts, card activity,
-          and transactions. QuickBooks creates invoices and should be the ledger of record for invoices, customers, payments, and linked
-          transactions. Merit is left as an optional generic connector until the exact product/API is confirmed.
+          Wise pulls balances and statements for reconciliation. Slash has its own card/cashback page. Merit is the invoice system:
+          the dashboard can pull invoices, create invoices, and locally approve/deny matches. Marking paid here never marks paid in Merit.
         </span>
       </div>
     </section>
@@ -827,7 +1070,7 @@ function InvoiceModal({
       <form className="modal" onSubmit={handleSubmit}>
         <div className="modal-header">
           <div>
-            <p className="eyebrow">QuickBooks invoice</p>
+            <p className="eyebrow">Merit invoice</p>
             <h2>Create invoice from transaction</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">

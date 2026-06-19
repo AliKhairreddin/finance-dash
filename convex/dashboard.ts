@@ -4,7 +4,6 @@ import { v } from "convex/values";
 const dataSource = v.union(
   v.literal("wise"),
   v.literal("slash"),
-  v.literal("quickbooks"),
   v.literal("merit"),
   v.literal("manual"),
   v.literal("mock")
@@ -37,6 +36,10 @@ const invoice = v.object({
   amount: v.number(),
   currency: v.string(),
   status: invoiceStatus,
+  approvalStatus: v.optional(v.union(v.literal("pending"), v.literal("approved"), v.literal("denied"))),
+  paidLocally: v.optional(v.boolean()),
+  paidLocallyAt: v.optional(v.string()),
+  meritPaid: v.optional(v.boolean()),
   dueDate: v.string(),
   source: dataSource,
   externalId: v.optional(v.string()),
