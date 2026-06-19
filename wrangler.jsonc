@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "finance-dash",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-06-19",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [
+    {
+      "pattern": "finance.thatcanadian.dev",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "WISE_ENVIRONMENT": "production",
+    "SLASH_BASE_URL": "https://api.slash.com",
+    "QUICKBOOKS_ENVIRONMENT": "production"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "FINANCE_KV",
+      "id": "a88c43e9112f447cb129139003b6b684"
+    }
+  ]
+}

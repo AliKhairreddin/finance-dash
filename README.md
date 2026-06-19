@@ -13,6 +13,22 @@ npm run dev
 
 The frontend runs on `http://localhost:5173` and proxies API calls to the Express server on `http://localhost:8787`.
 
+## Deploy
+
+The production deployment runs on Cloudflare Workers with static assets and a Worker API.
+
+```bash
+npm run deploy
+```
+
+Production URL:
+
+```text
+https://finance.thatcanadian.dev
+```
+
+The Worker is configured in `wrangler.jsonc` and persists lightweight dashboard state in Workers KV through the `FINANCE_KV` binding.
+
 ## What It Does
 
 - Shows cash in accounts, receivables, open balances, payables by supplier/month, profit, investments, total assets, cashback, and weekly growth checks.
