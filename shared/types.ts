@@ -172,26 +172,21 @@ export interface IntegrationStatus {
 }
 
 export interface Metrics {
-  totalCash: number;
-  totalReceivables: number;
-  totalOpenBalance: number;
-  totalPayables: number;
-  totalFloat: number;
-  profit: number;
-  investments: number;
-  totalAssets: number;
-  cashbackRedeemed: number;
-  cryptoDifference: number;
-  cashGrowth: number;
-  spendGrowth: number;
-  profitGrowth: number;
+  totalCash: number | null;
+  totalReceivables: number | null;
+  totalOpenBalance: number | null;
+  totalPayables: number | null;
+  totalFloat: number | null;
+  profit: number | null;
+  investments: number | null;
+  totalAssets: number | null;
   monthTotals: Record<string, number>;
 }
 
 export interface RevenueMetrics {
-  totalRevenue: number;
-  invoicedRevenue: number;
-  pendingRevenue: number;
+  totalRevenue: number | null;
+  invoicedRevenue: number | null;
+  pendingRevenue: number | null;
   failedRuns: number;
   partnerCount: number;
   lastRunAt?: string;

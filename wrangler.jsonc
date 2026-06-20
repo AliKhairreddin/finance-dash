@@ -27,11 +27,5 @@
     "crons": [
       "0 12 * * 1"
     ]
-  },
-  "kv_namespaces": [
-    {
-      "binding": "FINANCE_KV",
-      "id": "a88c43e9112f447cb129139003b6b684"
-    }
-  ]
+  }
 }

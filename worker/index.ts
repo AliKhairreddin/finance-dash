@@ -28,33 +28,13 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
 import { enrichTransactions, learnAliases } from "../server/matching";
-import {
-  seededAccounts,
-  seededAsOf,
-  seededInvestments,
-  seededInvoices,
-  seededOpenBalances,
-  seededPayables,
-  seededProviders,
-  seededReceivables,
-  seededRevenuePartners,
-  seededTeams,
-  seededTransactions
-} from "../server/mockData";
 
 interface Fetcher {
   fetch(request: Request): Promise<Response>;
 }
 
-interface KVNamespace {
-  get<T = unknown>(key: string, type: "json"): Promise<T | null>;
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string): Promise<void>;
-}
-
 interface Env {
   ASSETS: Fetcher;
-  FINANCE_KV?: KVNamespace;
   CONVEX_URL?: string;
   WISE_API_TOKEN?: string;
   WISE_PROFILE_ID?: string;
@@ -88,7 +68,6 @@ interface PersistedState {
   aiSettings?: StoredAiSettings;
 }
 
-const stateKey = "finance-dashboard-state";
 const wiseBaseUrlByEnvironment = {
   production: "https://api.wise.com",
   sandbox: "https://api.wise-sandbox.com"
@@ -110,12 +89,22 @@ function json(data: unknown, init?: ResponseInit): Response {
   });
 }
 
-function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] {
-  const map = new Map(seeded.map((item) => [item.id, item]));
-  for (const item of persisted ?? []) {
+function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] {
+  const map = new Map(initial.map((item) => [item.id, item]));
+  for (const item of incoming ?? []) {
     map.set(item.id, item);
   }
   return [...map.values()];
+}
+
+function realInvoices(invoices?: Invoice[]): Invoice[] {
+  return (invoices ?? []).filter(
+    (invoice) => invoice.source !== "mock" && !invoice.id.startsWith("mock-invoice-") && invoice.externalId !== "seed-open-invoices"
+  );
+}
+
+function realRevenueRuns(runs?: RevenueRun[]): RevenueRun[] {
+  return (runs ?? []).filter((run) => run.status !== "mock");
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
@@ -308,11 +297,7 @@ async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[
 }
 
 function mergeLiveAccounts(liveWiseAccounts: AccountBalance[], liveSlashAccounts: AccountBalance[]): AccountBalance[] {
-  const omittedSources = new Set([
-    ...(liveWiseAccounts.length > 0 ? ["wise"] : []),
-    ...(liveSlashAccounts.length > 0 ? ["slash"] : [])
-  ]);
-  return [...seededAccounts.filter((account) => !omittedSources.has(account.source)), ...liveWiseAccounts, ...liveSlashAccounts];
+  return [...liveWiseAccounts, ...liveSlashAccounts];
 }
 
 async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<Invoice | undefined> {
@@ -320,9 +305,6 @@ async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<
 }
 
 async function fetchTransactionForUpdate(env: Env, transactionId: string): Promise<Transaction | undefined> {
-  const seeded = seededTransactions.find((transaction) => transaction.id === transactionId);
-  if (seeded) return seeded;
-
   const [wise, slash] = await Promise.all([
     fetchWiseActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
@@ -486,22 +468,7 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
   const now = new Date().toISOString();
 
   if (!networkId || !apiKey) {
-    return {
-      id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
-      partnerId: partner.id,
-      partnerName: partner.name,
-      source: "tune",
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      timezone: period.timezone,
-      revenue: 0,
-      currency: partner.currency,
-      clicks: 0,
-      conversions: 0,
-      status: "mock",
-      error: `Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !envString(env, name)).join(", ")}`,
-      createdAt: now
-    };
+    throw new Error(`Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !envString(env, name)).join(", ")}`);
   }
 
   const apiBaseUrl = envString(env, partner.apiBaseUrlEnv) || `https://${networkId}.api.hasoffers.com/Apiv3/json`;
@@ -595,26 +562,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadPersisted(env: Env): Promise<PersistedState> {
   const convex = getConvexClient(env);
-  const convexState = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
-  const stored = convexState ?? (await env.FINANCE_KV?.get<Partial<PersistedState>>(stateKey, "json"));
+  const stored = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
 
   return {
-    providers: mergeById(seededProviders, stored?.providers),
-    invoices: mergeById(seededInvoices, stored?.invoices),
-    teams: mergeById(seededTeams, stored?.teams),
-    revenuePartners: mergeById(seededRevenuePartners, stored?.revenuePartners),
+    providers: stored?.providers ?? [],
+    invoices: realInvoices(stored?.invoices),
+    teams: stored?.teams ?? [],
+    revenuePartners: stored?.revenuePartners ?? [],
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
-    revenueRuns: stored?.revenueRuns ?? [],
+    revenueRuns: realRevenueRuns(stored?.revenueRuns),
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
 }
 
 async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const convex = getConvexClient(env);
-  if (convex) {
-    await convex.mutation(api.dashboard.saveState, state).catch(() => undefined);
+  if (!convex) {
+    throw new Error("CONVEX_URL is not configured");
   }
-  await env.FINANCE_KV?.put(stateKey, JSON.stringify(state));
+  await convex.mutation(api.dashboard.saveState, state);
 }
 
 function integrationStatus(env: Env): IntegrationStatus[] {
@@ -631,44 +597,44 @@ function integrationStatus(env: Env): IntegrationStatus[] {
       id: "wise" as DataSource,
       label: "Wise",
       configured: wiseNeeds.length === 0,
-      mode: wiseNeeds.length === 0 ? "live" : "mock",
+      mode: wiseNeeds.length === 0 ? "live" : "partial",
       message:
         wiseNeeds.length === 0
           ? "Credentials are present. Live Wise sync can be enabled for statements."
-          : "Using seeded Wise balances and transactions until credentials are added.",
+          : "Wise rows stay empty until API token, profile, and balance IDs are configured.",
       needs: wiseNeeds
     },
     {
       id: "slash" as DataSource,
       label: "Slash",
       configured: slashNeeds.length === 0,
-      mode: slashNeeds.length === 0 ? "live" : "mock",
+      mode: slashNeeds.length === 0 ? "live" : "partial",
       message:
         slashNeeds.length === 0
           ? "Slash API key is present."
-          : "Using seeded Slash account and card activity until beta API access is added.",
+          : "Slash rows stay empty until API access is configured.",
       needs: slashNeeds
     },
     {
       id: "merit" as DataSource,
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "live" : "mock",
+      mode: meritNeeds.length === 0 ? "live" : "partial",
       message:
         meritNeeds.length === 0
           ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
-          : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
+          : "Merit invoices stay empty until API credentials and default tax configuration are added.",
       needs: meritNeeds
     },
     {
       id: "tune" as DataSource,
       label: "Partner revenue",
       configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "mock",
+      mode: tuneNeeds.length === 0 ? "live" : "partial",
       message:
         tuneNeeds.length === 0
           ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Kissterra revenue will use a zero-value mock run until the TUNE network ID and API key are configured.",
+          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
       needs: tuneNeeds
     }
   ];
@@ -690,15 +656,8 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     fetchMeritInvoices(env).catch(() => [])
   ]);
   const accounts = mergeLiveAccounts(wise.accounts, slash.accounts);
-  const invoices = mergeById(liveMeritInvoices, state.invoices);
-  const liveTransactionSources = new Set([
-    ...(wise.accounts.length > 0 || wise.transactions.length > 0 ? ["wise"] : []),
-    ...(slash.accounts.length > 0 || slash.transactions.length > 0 ? ["slash"] : [])
-  ]);
-  const rawTransactions = mergeById(
-    seededTransactions.filter((transaction) => !liveTransactionSources.has(transaction.source)),
-    [...wise.transactions, ...slash.transactions]
-  );
+  const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
+  const rawTransactions = [...wise.transactions, ...slash.transactions];
   const transactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {
@@ -713,12 +672,12 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   );
 
   return {
-    asOf: seededAsOf,
+    asOf: new Date().toISOString(),
     accounts,
-    receivables: seededReceivables,
-    openBalances: seededOpenBalances,
-    payables: seededPayables,
-    investments: seededInvestments,
+    receivables: [],
+    openBalances: [],
+    payables: [],
+    investments: [],
     providers: state.providers,
     teams: state.teams,
     revenuePartners: state.revenuePartners,
@@ -728,7 +687,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     transactions,
     invoices,
     integrationStatus: integrationStatus(env),
-    metrics: calculateMetrics(accounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments),
+    metrics: calculateMetrics(accounts, [], [], [], []),
     lastSync: new Date().toISOString()
   };
 }
@@ -881,23 +840,10 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     throw new Error("customerName, amount, and dueDate are required");
   }
   const state = await loadPersisted(env);
-  const invoice: Invoice =
-    (await createMeritInvoice(env, payload)) ?? {
-      id: `mock-invoice-${crypto.randomUUID()}`,
-      providerId: payload.providerId,
-      customerName: payload.customerName,
-      amount: payload.amount,
-      currency: payload.currency,
-      status: "draft",
-      approvalStatus: "pending",
-      paidLocally: false,
-      meritPaid: false,
-      dueDate: payload.dueDate,
-      source: "mock",
-      description: payload.description,
-      transactionId: payload.transactionId,
-      createdAt: new Date().toISOString()
-    };
+  const invoice = await createMeritInvoice(env, payload);
+  if (!invoice) {
+    throw new Error("Merit API credentials are not configured; invoice was not created.");
+  }
   if (payload.transactionId && payload.providerId) {
     const transaction = await fetchTransactionForUpdate(env, payload.transactionId);
     if (transaction) {

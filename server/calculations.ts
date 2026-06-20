@@ -9,13 +9,18 @@ export function calculateMetrics(
   payables: Payable[],
   investments: Investment[]
 ): Metrics {
-  const totalCash = sum(accounts.map((account) => account.balance));
-  const totalReceivables = sum(receivables.map((item) => item.balance));
-  const totalOpenBalance = sum(openBalances.map((item) => item.balance));
-  const totalPayables = sum(payables.map((payable) => payable.balance));
-  const totalFloat = totalCash + totalReceivables + totalOpenBalance;
-  const profit = totalFloat - totalPayables;
-  const investmentsTotal = sum(investments.map((investment) => investment.balance));
+  const totalCash = accounts.length > 0 ? sum(accounts.map((account) => account.balance)) : null;
+  const totalReceivables = receivables.length > 0 ? sum(receivables.map((item) => item.balance)) : null;
+  const totalOpenBalance = openBalances.length > 0 ? sum(openBalances.map((item) => item.balance)) : null;
+  const totalPayables = payables.length > 0 ? sum(payables.map((payable) => payable.balance)) : null;
+  const totalFloat =
+    totalCash !== null || totalReceivables !== null || totalOpenBalance !== null
+      ? (totalCash ?? 0) + (totalReceivables ?? 0) + (totalOpenBalance ?? 0)
+      : null;
+  const hasOperatingRows = receivables.length > 0 || openBalances.length > 0 || payables.length > 0;
+  const profit = hasOperatingRows && totalFloat !== null ? totalFloat - (totalPayables ?? 0) : null;
+  const investmentsTotal = investments.length > 0 ? sum(investments.map((investment) => investment.balance)) : null;
+  const totalAssets = profit !== null || investmentsTotal !== null ? (profit ?? 0) + (investmentsTotal ?? 0) : null;
   const monthTotals = payables.reduce<Record<string, number>>((months, payable) => {
     for (const [month, amount] of Object.entries(payable.monthBuckets)) {
       months[month] = (months[month] ?? 0) + amount;
@@ -31,12 +36,7 @@ export function calculateMetrics(
     totalFloat,
     profit,
     investments: investmentsTotal,
-    totalAssets: profit + investmentsTotal,
-    cashbackRedeemed: 9966.35,
-    cryptoDifference: 28690,
-    cashGrowth: 10.23,
-    spendGrowth: 34.45,
-    profitGrowth: 3.54,
+    totalAssets,
     monthTotals
   };
 }

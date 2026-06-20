@@ -24,47 +24,44 @@ import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod 
 import { calculateMetrics } from "./calculations";
 import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchTuneRevenue, fetchWiseActivity, getIntegrationStatus } from "./integrations";
 import { enrichTransactions, learnAliases } from "./matching";
-import {
-  seededAccounts,
-  seededAsOf,
-  seededInvoices,
-  seededInvestments,
-  seededOpenBalances,
-  seededPayables,
-  seededProviders,
-  seededReceivables,
-  seededRevenuePartners,
-  seededTeams,
-  seededTransactions
-} from "./mockData";
 import { loadPersistedState, savePersistedState } from "./persistence";
 
-let providers: Provider[] = [...seededProviders];
-let invoices: Invoice[] = [...seededInvoices];
-let teams: Team[] = [...seededTeams];
-let revenuePartners: RevenuePartner[] = [...seededRevenuePartners];
+let providers: Provider[] = [];
+let invoices: Invoice[] = [];
+let teams: Team[] = [];
+let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
 let aiSettings: StoredAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
-let transactions: Transaction[] = [...seededTransactions];
-let accounts = [...seededAccounts];
+let transactions: Transaction[] = [];
+let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 
-function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] {
-  const map = new Map(seeded.map((item) => [item.id, item]));
-  for (const item of persisted ?? []) {
+function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] {
+  const map = new Map(initial.map((item) => [item.id, item]));
+  for (const item of incoming ?? []) {
     map.set(item.id, item);
   }
   return [...map.values()];
 }
 
+function realInvoices(rows?: Invoice[]): Invoice[] {
+  return (rows ?? []).filter(
+    (invoice) => invoice.source !== "mock" && !invoice.id.startsWith("mock-invoice-") && invoice.externalId !== "seed-open-invoices"
+  );
+}
+
+function realRevenueRuns(rows?: RevenueRun[]): RevenueRun[] {
+  return (rows ?? []).filter((run) => run.status !== "mock");
+}
+
 export async function initializeStore(): Promise<void> {
   const persisted = await loadPersistedState();
-  providers = mergeById(seededProviders, persisted.providers);
-  invoices = mergeById(seededInvoices, persisted.invoices);
-  teams = mergeById(seededTeams, persisted.teams);
-  revenuePartners = mergeById(seededRevenuePartners, persisted.revenuePartners);
-  revenueRuns = persisted.revenueRuns ?? [];
+  providers = persisted.providers ?? [];
+  invoices = realInvoices(persisted.invoices);
+  teams = persisted.teams ?? [];
+  revenuePartners = persisted.revenuePartners ?? [];
+  revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
 }
@@ -97,14 +94,14 @@ function getMatchedTransactions(): Transaction[] {
 }
 
 export function getSnapshot(): DashboardSnapshot {
-  const metrics = calculateMetrics(accounts, seededReceivables, seededOpenBalances, seededPayables, seededInvestments);
+  const metrics = calculateMetrics(accounts, [], [], [], []);
   return {
-    asOf: seededAsOf,
+    asOf: new Date().toISOString(),
     accounts,
-    receivables: seededReceivables,
-    openBalances: seededOpenBalances,
-    payables: seededPayables,
-    investments: seededInvestments,
+    receivables: [],
+    openBalances: [],
+    payables: [],
+    investments: [],
     providers,
     teams,
     revenuePartners,
@@ -248,23 +245,10 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
   const liveInvoice = await createMeritInvoice(payload);
-  const invoice: Invoice =
-    liveInvoice ?? {
-      id: `mock-invoice-${crypto.randomUUID()}`,
-      providerId: payload.providerId,
-      customerName: payload.customerName,
-      amount: payload.amount,
-      currency: payload.currency,
-      status: "draft",
-      approvalStatus: "pending",
-      paidLocally: false,
-      meritPaid: false,
-      dueDate: payload.dueDate,
-      source: "mock",
-      description: payload.description,
-      transactionId: payload.transactionId,
-      createdAt: new Date().toISOString()
-    };
+  if (!liveInvoice) {
+    throw new Error("Merit API credentials are not configured; invoice was not created.");
+  }
+  const invoice: Invoice = liveInvoice;
 
   invoices = [invoice, ...invoices];
   if (payload.transactionId && payload.providerId) {
@@ -398,18 +382,22 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
 
   if (wise.status === "fulfilled") {
     if (wise.value.accounts.length > 0) {
-      accounts = [...seededAccounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
+      accounts = [...accounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
       liveSources.add("wise");
     }
     if (wise.value.transactions.length > 0) liveSources.add("wise");
     liveTransactions.push(...wise.value.transactions);
   }
   if (slash.status === "fulfilled") {
+    if (slash.value.accounts.length > 0) {
+      accounts = [...accounts.filter((account) => account.source !== "slash"), ...slash.value.accounts];
+      liveSources.add("slash");
+    }
     if (slash.value.transactions.length > 0) liveSources.add("slash");
     liveTransactions.push(...slash.value.transactions);
   }
   if (merit.status === "fulfilled" && merit.value.length > 0) {
-    invoices = mergeById(merit.value, invoices);
+    invoices = realInvoices(mergeById(merit.value, invoices));
   }
 
   if (liveSources.size > 0) {

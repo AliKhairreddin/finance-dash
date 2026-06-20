@@ -42,44 +42,44 @@ export function getIntegrationStatus(): IntegrationStatus[] {
       id: "wise",
       label: "Wise",
       configured: wiseNeeds.length === 0,
-      mode: wiseNeeds.length === 0 ? "live" : "mock",
+      mode: wiseNeeds.length === 0 ? "live" : "partial",
       message:
         wiseNeeds.length === 0
           ? "Ready to pull balances, statements, and transaction activity."
-          : "Using seeded Wise balances and transactions until credentials are added.",
+          : "Wise rows stay empty until API token, profile, and balance IDs are configured.",
       needs: wiseNeeds
     },
     {
       id: "slash",
       label: "Slash",
       configured: slashNeeds.length === 0,
-      mode: slashNeeds.length === 0 ? "live" : "mock",
+      mode: slashNeeds.length === 0 ? "live" : "partial",
       message:
         slashNeeds.length === 0
           ? "Ready to pull accounts, card activity, and transactions."
-          : "Using seeded Slash account and card activity until beta API access is added.",
+          : "Slash rows stay empty until API access is configured.",
       needs: slashNeeds
     },
     {
       id: "merit",
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "live" : "mock",
+      mode: meritNeeds.length === 0 ? "live" : "partial",
       message:
         meritNeeds.length === 0
           ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
-          : "Using seeded invoices until Merit API credentials and default tax configuration are added.",
+          : "Merit invoices stay empty until API credentials and default tax configuration are added.",
       needs: meritNeeds
     },
     {
       id: "tune",
       label: "Partner revenue",
       configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "mock",
+      mode: tuneNeeds.length === 0 ? "live" : "partial",
       message:
         tuneNeeds.length === 0
           ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Kissterra revenue will use a zero-value mock run until the TUNE network ID and API key are configured.",
+          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
       needs: tuneNeeds
     }
   ];
@@ -375,22 +375,7 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
   const now = new Date().toISOString();
 
   if (!networkId || !apiKey) {
-    return {
-      id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
-      partnerId: partner.id,
-      partnerName: partner.name,
-      source: "tune",
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      timezone: period.timezone,
-      revenue: 0,
-      currency: partner.currency,
-      clicks: 0,
-      conversions: 0,
-      status: "mock",
-      error: `Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !process.env[name]).join(", ")}`,
-      createdAt: now
-    };
+    throw new Error(`Missing ${[partner.networkIdEnv, partner.apiKeyEnv].filter((name) => !process.env[name]).join(", ")}`);
   }
 
   const apiBaseUrl = process.env[partner.apiBaseUrlEnv ?? ""] || `https://${networkId}.api.hasoffers.com/Apiv3/json`;

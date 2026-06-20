@@ -512,6 +512,12 @@ h2 {
   padding: 7px 10px;
 }
 
+.money-empty {
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .money-name {
   min-width: 0;
   overflow: hidden;

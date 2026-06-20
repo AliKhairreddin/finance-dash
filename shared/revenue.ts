@@ -79,13 +79,13 @@ export function calculateTuneHourOffset(timezone: string, networkTimezone: strin
 export function calculateRevenueMetrics(partners: RevenuePartner[], runs: RevenueRun[]): RevenueMetrics {
   const billableRuns = runs.filter((run) => run.status !== "failed" && run.status !== "skipped");
   const invoicedRuns = runs.filter((run) => run.status === "invoiced");
-  const pendingRuns = runs.filter((run) => run.status === "pulled" || run.status === "mock");
+  const pendingRuns = runs.filter((run) => run.status === "pulled");
   const lastRunAt = runs.reduce<string | undefined>((latest, run) => (!latest || run.createdAt > latest ? run.createdAt : latest), undefined);
 
   return {
-    totalRevenue: billableRuns.reduce((sum, run) => sum + run.revenue, 0),
-    invoicedRevenue: invoicedRuns.reduce((sum, run) => sum + run.revenue, 0),
-    pendingRevenue: pendingRuns.reduce((sum, run) => sum + run.revenue, 0),
+    totalRevenue: billableRuns.length > 0 ? billableRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
+    invoicedRevenue: invoicedRuns.length > 0 ? invoicedRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
+    pendingRevenue: pendingRuns.length > 0 ? pendingRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
     failedRuns: runs.filter((run) => run.status === "failed").length,
     partnerCount: partners.filter((partner) => partner.enabled).length,
     lastRunAt

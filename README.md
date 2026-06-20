@@ -2,7 +2,7 @@
 
 Operational dashboard for cash flow, open balances, receivables, payables, provider matching, and invoice creation.
 
-The first version is seeded from the June 15, 2026 Google Sheet screenshot and runs with mock/API-ready data until real credentials are configured.
+The dashboard shows live integration data and saved user-managed records only. Missing integrations render empty sections instead of invented balances.
 
 ## Run
 
@@ -27,7 +27,7 @@ Production URL:
 https://finance.thatcanadian.dev
 ```
 
-The Worker is configured in `wrangler.jsonc`. It uses Convex for provider aliases, revenue runs, and local invoice decisions, with Workers KV still configured as a fallback store.
+The Worker is configured in `wrangler.jsonc`. It uses Convex for provider aliases, revenue runs, and local invoice decisions.
 
 ## Convex Backend
 
@@ -44,29 +44,29 @@ Push Convex schema/functions to the shared development deployment:
 npm run convex:dev
 ```
 
-The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue runs, and mock invoices in Convex. Workers KV remains configured as a fallback store.
+The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partners, revenue runs, AI settings, and local invoice decisions in Convex.
 
 ## What It Does
 
-- Shows cash in accounts, receivables, open balances, payables by supplier/month, profit, investments, total assets, cashback, and weekly growth checks.
-- Pulls all the sheet concepts into a compact dashboard instead of manual spreadsheet editing.
+- Shows cash in accounts, receivables, open balances, payables, profit, and total assets when live or saved data exists.
+- Keeps the overview focused on the six summary cards.
 - Includes separate Wise and Slash operating views.
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
-- Seeds Kissterra as a TUNE/HasOffers revenue partner.
+- Lets saved TUNE/HasOffers revenue partners store the affiliate ID used by the network.
 - Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
 - Sends TUNE `hour_offset` from the selected timezone against the partner network timezone.
 - Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
-- Supports optional Wise transaction team assignment with seeded `Cognitive Pixel` and `WGNR` teams, plus team filters and visible-team totals.
+- Supports optional Wise transaction team assignment with saved teams, plus team filters and visible-team totals.
 - Keeps Slash balances, card activity, and cashback tracking on its own page.
 - Suggests provider matches from saved aliases.
 - Lets you manually match a transaction to a provider and remembers that bank/card name for future auto-matching.
 - Lets you add providers, suppliers, platforms, and customers.
 - Pulls Merit invoices when Merit credentials are configured.
-- Lets you create a Merit invoice from an unmatched Wise transaction. If Merit credentials are missing, the dashboard creates a local mock draft so the workflow can still be tested.
+- Lets you create a Merit invoice from an unmatched Wise transaction when Merit credentials are configured.
 - Lets you approve or deny invoice matches inside the dashboard.
 - Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
-- Persists provider aliases, revenue runs, and created invoices in `.local/finance-dashboard-store.json`.
+- Persists provider aliases, revenue partners, revenue runs, AI settings, and created invoices in `.local/finance-dashboard-store.json`.
 
 ## API Integrations
 

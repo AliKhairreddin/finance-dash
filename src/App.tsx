@@ -46,8 +46,6 @@ import type {
 } from "../shared/types";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const months = ["June", "May", "April", "March"];
-
 type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "settings";
 
 const openRouterModelOptions = [
@@ -72,6 +70,16 @@ function money(value: number, currency = "USD"): string {
     currency,
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function maybeMoney(hasValue: boolean, value: number, currency = "USD"): string {
+  return hasValue ? money(value, currency) : "—";
+}
+
+function maybeDate(value?: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : dateLabel(value);
 }
 
 function compactMoney(value: number): string {
@@ -213,7 +221,7 @@ function App() {
         throw new Error(body.message || "Sync failed");
       }
       setDashboard((await response.json()) as DashboardSnapshot);
-      setNotice("Sync complete. Live credentials replace seeded rows when env vars are set.");
+      setNotice("Sync complete. Connected integrations refreshed.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
@@ -355,7 +363,7 @@ function App() {
       throw new Error(body.message || "Invoice could not be created");
     }
     await loadDashboard();
-    setNotice("Invoice created. If Merit is configured it was created there too; paid status remains dashboard-only here.");
+    setNotice("Invoice created in Merit. Paid status remains dashboard-only here.");
   }
 
   async function updateInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied") {
@@ -400,6 +408,14 @@ function App() {
     );
   }
 
+  const hasCash = dashboard.accounts.length > 0;
+  const hasReceivables = dashboard.receivables.length > 0;
+  const hasOpenBalances = dashboard.openBalances.length > 0;
+  const hasPayables = dashboard.payables.length > 0;
+  const hasInvestments = dashboard.investments.length > 0;
+  const hasProfit = hasReceivables || hasOpenBalances || hasPayables;
+  const hasTotalAssets = hasProfit || hasInvestments;
+
   return (
     <main className="app-shell">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -409,8 +425,8 @@ function App() {
             <p className="eyebrow">Finance operations</p>
             <h1>Cash flow and open balance control</h1>
             <div className="meta-row">
-              <span>Sheet seed: {dateLabel(dashboard.asOf)}</span>
-              <span>Last sync: {dateLabel(dashboard.lastSync)}</span>
+              <span>Data as of: {maybeDate(dashboard.asOf)}</span>
+              <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
             </div>
           </div>
           <div className="topbar-actions">
@@ -442,17 +458,46 @@ function App() {
         )}
 
       {activeTab === "overview" && (
-        <>
-          <section className="metric-grid" aria-label="Finance summary">
-            <MetricCard icon={<Banknote />} label="Cash in accounts" value={money(dashboard.metrics.totalCash)} detail="Wise, Slash, Revolut, crypto" />
-            <MetricCard icon={<BadgeDollarSign />} label="Receivables" value={money(dashboard.metrics.totalReceivables)} detail="Open invoices, VAT, tax" />
-            <MetricCard icon={<WalletCards />} label="Open balance" value={money(dashboard.metrics.totalOpenBalance)} detail="Customer and provider balances" />
-            <MetricCard icon={<ArrowDownRight />} label="Payables" value={money(dashboard.metrics.totalPayables)} detail="Unpaid platform/provider spend" danger />
-            <MetricCard icon={<CircleDollarSign />} label="Profit" value={money(dashboard.metrics.profit)} detail={`${dashboard.metrics.profitGrowth.toFixed(2)}% vs last week`} good />
-            <MetricCard icon={<ShieldCheck />} label="Total assets" value={money(dashboard.metrics.totalAssets)} detail={`${money(dashboard.metrics.investments)} investments`} />
-          </section>
-          <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
-        </>
+        <section className="metric-grid" aria-label="Finance summary">
+          <MetricCard
+            icon={<Banknote />}
+            label="Cash in accounts"
+            value={maybeMoney(hasCash, dashboard.metrics.totalCash ?? 0)}
+            detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
+          />
+          <MetricCard
+            icon={<BadgeDollarSign />}
+            label="Receivables"
+            value={maybeMoney(hasReceivables, dashboard.metrics.totalReceivables ?? 0)}
+            detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
+          />
+          <MetricCard
+            icon={<WalletCards />}
+            label="Open balance"
+            value={maybeMoney(hasOpenBalances, dashboard.metrics.totalOpenBalance ?? 0)}
+            detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
+          />
+          <MetricCard
+            icon={<ArrowDownRight />}
+            label="Payables"
+            value={maybeMoney(hasPayables, dashboard.metrics.totalPayables ?? 0)}
+            detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
+            danger
+          />
+          <MetricCard
+            icon={<CircleDollarSign />}
+            label="Profit"
+            value={maybeMoney(hasProfit, dashboard.metrics.profit ?? 0)}
+            detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
+            good
+          />
+          <MetricCard
+            icon={<ShieldCheck />}
+            label="Total assets"
+            value={maybeMoney(hasTotalAssets, dashboard.metrics.totalAssets ?? 0)}
+            detail={hasInvestments ? `${money(dashboard.metrics.investments ?? 0)} investments` : "No live investments"}
+          />
+        </section>
       )}
 
       {activeTab === "wise" && (
@@ -500,7 +545,7 @@ function App() {
             </div>
           </div>
           <div className="wise-summary-grid">
-            <SummaryTile label="Visible volume" value={money(wiseTeamSummary.total)} />
+            <SummaryTile label="Visible volume" value={maybeMoney(wiseTransactions.length > 0, wiseTeamSummary.total)} />
             <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
             <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
             <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
@@ -667,186 +712,14 @@ function MetricCard({
   );
 }
 
-function Overview({
-  dashboard,
-  providersById,
-  onOpenInvoice,
-  onQuickMatch
-}: {
-  dashboard: DashboardSnapshot;
-  providersById: Map<string, Provider>;
-  onOpenInvoice: (transaction: Transaction) => void;
-  onQuickMatch: (transaction: Transaction, providerId?: string) => void;
-}) {
-  const reviewRows = dashboard.transactions.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86).slice(0, 5);
-
-  return (
-    <div className="overview-grid">
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Cash in accounts</h2>
-          <span className="total-pill">{money(dashboard.metrics.totalCash)}</span>
-        </div>
-        <SimpleMoneyTable
-          rows={dashboard.accounts.map((item) => ({
-            id: item.id,
-            name: item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-        />
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Receivables</h2>
-          <span className="total-pill">{money(dashboard.metrics.totalReceivables)}</span>
-        </div>
-        <SimpleMoneyTable
-          rows={dashboard.receivables.map((item) => ({
-            id: item.id,
-            name: item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-        />
-      </section>
-
-      <section className="panel tall">
-        <div className="panel-header compact">
-          <h2>Open balance</h2>
-          <span className="total-pill">{money(dashboard.metrics.totalOpenBalance)}</span>
-        </div>
-        <SimpleMoneyTable
-          rows={dashboard.openBalances.map((item) => ({
-            id: item.id,
-            name: item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-          dense
-        />
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-header compact">
-          <h2>Payables by supplier and month</h2>
-          <span className="total-pill danger">{money(dashboard.metrics.totalPayables)}</span>
-        </div>
-        <div className="table-wrap">
-          <table className="data-table payables-table">
-            <thead>
-              <tr>
-                <th>Supplier / platform</th>
-                <th>Balance</th>
-                {months.map((month) => (
-                  <th key={month}>{month}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {dashboard.payables.map((payable) => (
-                <tr key={payable.id}>
-                  <td>
-                    <strong>{payable.supplier}</strong>
-                    <small>{payable.category}</small>
-                  </td>
-                  <td className="amount danger-text">{money(payable.balance, payable.currency)}</td>
-                  {months.map((month) => (
-                    <td className="amount" key={month}>
-                      {payable.monthBuckets[month] ? money(payable.monthBuckets[month], payable.currency) : "-"}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td>Total</td>
-                <td className="amount">{money(dashboard.metrics.totalPayables)}</td>
-                {months.map((month) => (
-                  <td className="amount" key={month}>
-                    {dashboard.metrics.monthTotals[month] ? money(dashboard.metrics.monthTotals[month]) : "-"}
-                  </td>
-                ))}
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Assets bridge</h2>
-          <span className="total-pill good">{money(dashboard.metrics.totalAssets)}</span>
-        </div>
-        <div className="bridge">
-          <BridgeRow label="Cash + receivables + open balance" value={dashboard.metrics.totalFloat} />
-          <BridgeRow label="Spend without payment" value={-dashboard.metrics.totalPayables} danger />
-          <BridgeRow label="Profit" value={dashboard.metrics.profit} good />
-          <BridgeRow label="Investments" value={dashboard.metrics.investments} />
-          <BridgeRow label="Cashback redeemed from Slash" value={dashboard.metrics.cashbackRedeemed} />
-          <BridgeRow label="Crypto difference from last week" value={dashboard.metrics.cryptoDifference} />
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Growth checks</h2>
-          <span className="total-pill">{dashboard.metrics.cashGrowth.toFixed(2)}%</span>
-        </div>
-        <div className="growth-list">
-          <GrowthItem label="Cash growth vs last week" value={dashboard.metrics.cashGrowth} />
-          <GrowthItem label="Spend growth vs last week" value={dashboard.metrics.spendGrowth} danger />
-          <GrowthItem label="Profit growth vs last week" value={dashboard.metrics.profitGrowth} />
-        </div>
-      </section>
-
-      <section className="panel wide">
-        <div className="panel-header compact">
-          <h2>Needs review</h2>
-          <span className="total-pill">{reviewRows.length} rows</span>
-        </div>
-        <div className="review-list">
-          {reviewRows.map((transaction) => {
-            const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-            return (
-              <article className="review-row" key={transaction.id}>
-                <div className={`direction-badge ${transaction.direction}`}>
-                  {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-                </div>
-                <div>
-                  <strong>{transaction.counterparty}</strong>
-                  <span>{transaction.description}</span>
-                </div>
-                <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
-                <div className="match-chip">{providerLabel(provider)}</div>
-                <button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
-                  <Link2 size={15} />
-                  Match
-                </button>
-                <button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
-                  <FilePlus2 size={15} />
-                  Invoice
-                </button>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function SimpleMoneyTable({
   rows,
-  dense
+  dense,
+  emptyLabel = "No live rows"
 }: {
   rows: Array<{ id: string; name: string; amount: number; currency: string; source: string }>;
   dense?: boolean;
+  emptyLabel?: string;
 }) {
   return (
     <div className={`money-list ${dense ? "dense" : ""}`}>
@@ -855,35 +728,21 @@ function SimpleMoneyTable({
         <span>Source</span>
         <span>Balance</span>
       </div>
-      {rows.map((row) => (
-        <div className="money-row" key={row.id}>
-          <span className="money-name" title={row.name}>
-            {row.name}
-          </span>
-          <span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span>
-          <span className={`money-amount ${row.amount < 0 ? "danger-text" : ""}`}>
-            {money(row.amount, row.currency)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function BridgeRow({ label, value, danger, good }: { label: string; value: number; danger?: boolean; good?: boolean }) {
-  return (
-    <div className="bridge-row">
-      <span>{label}</span>
-      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{money(value)}</strong>
-    </div>
-  );
-}
-
-function GrowthItem({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
-  return (
-    <div className="growth-item">
-      <span>{label}</span>
-      <strong className={danger ? "danger-text" : "good-text"}>{value.toFixed(2)}%</strong>
+      {rows.length > 0 ? (
+        rows.map((row) => (
+          <div className="money-row" key={row.id}>
+            <span className="money-name" title={row.name}>
+              {row.name}
+            </span>
+            <span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span>
+            <span className={`money-amount ${row.amount < 0 ? "danger-text" : ""}`}>
+              {money(row.amount, row.currency)}
+            </span>
+          </div>
+        ))
+      ) : (
+        <div className="money-empty">{emptyLabel}</div>
+      )}
     </div>
   );
 }
@@ -936,77 +795,83 @@ function TransactionTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((transaction) => {
-            const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-            const selected = selectedProviders[transaction.id] || transaction.matchedProviderId || "";
-            const confidence = transaction.confidence ?? 0;
-            return (
-              <tr key={transaction.id}>
-                <td>{dateLabel(transaction.date)}</td>
-                <td className="counterparty-cell">
-                  <strong>{transaction.counterparty}</strong>
-                  <small>{transaction.description}</small>
-                </td>
-                <td>
-                  <span className={`direction-label ${transaction.direction}`}>
-                    {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                    {transaction.direction === "in" ? "In" : "Out"}
-                  </span>
-                </td>
-                <td className="amount">{money(transaction.amount, transaction.currency)}</td>
-                <td>
-                  <div className="team-select">
-                    <select value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
-                      <option value="">No team</option>
-                      {teams.map((team) => (
-                        <option key={team.id} value={team.id}>
-                          {team.name}
-                        </option>
-                      ))}
-                    </select>
-                    <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
-                  </div>
-                </td>
-                <td>
-                  <div className="provider-select">
-                    <select
-                      value={selected}
-                      onChange={(event) =>
-                        setSelectedProviders((current) => ({ ...current, [transaction.id]: event.target.value }))
-                      }
-                    >
-                      <option value="">Choose provider</option>
-                      {providers.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                    <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
-                      {providerLabel(provider)} · {(confidence * 100).toFixed(0)}%
-                    </small>
-                  </div>
-                </td>
-                <td>
-                  {transaction.matchedInvoiceId ? (
-                    <span className="status-pill good">Linked</span>
-                  ) : (
-                    <span className="status-pill">None</span>
-                  )}
-                </td>
-                <td>
-                  <div className="row-actions">
-                    <button className="icon-button" title="Save match and remember alias" onClick={() => onMatch(transaction, selected)}>
-                      <Link2 size={16} />
-                    </button>
-                    <button className="icon-button" title="Create invoice" onClick={() => onOpenInvoice(transaction)}>
-                      <FilePlus2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
+          {rows.length > 0 ? (
+            rows.map((transaction) => {
+              const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              const selected = selectedProviders[transaction.id] || transaction.matchedProviderId || "";
+              const confidence = transaction.confidence ?? 0;
+              return (
+                <tr key={transaction.id}>
+                  <td>{dateLabel(transaction.date)}</td>
+                  <td className="counterparty-cell">
+                    <strong>{transaction.counterparty}</strong>
+                    <small>{transaction.description}</small>
+                  </td>
+                  <td>
+                    <span className={`direction-label ${transaction.direction}`}>
+                      {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                      {transaction.direction === "in" ? "In" : "Out"}
+                    </span>
+                  </td>
+                  <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+                  <td>
+                    <div className="team-select">
+                      <select value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
+                        <option value="">No team</option>
+                        {teams.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
+                      <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="provider-select">
+                      <select
+                        value={selected}
+                        onChange={(event) =>
+                          setSelectedProviders((current) => ({ ...current, [transaction.id]: event.target.value }))
+                        }
+                      >
+                        <option value="">Choose provider</option>
+                        {providers.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
+                        {providerLabel(provider)} · {(confidence * 100).toFixed(0)}%
+                      </small>
+                    </div>
+                  </td>
+                  <td>
+                    {transaction.matchedInvoiceId ? (
+                      <span className="status-pill good">Linked</span>
+                    ) : (
+                      <span className="status-pill">None</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button className="icon-button" title="Save match and remember alias" onClick={() => onMatch(transaction, selected)}>
+                        <Link2 size={16} />
+                      </button>
+                      <button className="icon-button" title="Create invoice" onClick={() => onOpenInvoice(transaction)}>
+                        <FilePlus2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })
+          ) : (
+            <tr>
+              <td colSpan={8}>No live transactions</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
@@ -1030,6 +895,7 @@ function RevenueView({
   const [error, setError] = useState<string | null>(null);
   const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
   const latestRun = visibleRuns[0];
+  const hasPulledRevenue = visibleRuns.some((run) => run.status === "pulled" || run.status === "invoiced");
   const revenuePartnersById = useMemo(() => {
     const map = new Map<string, RevenuePartner>();
     for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
@@ -1133,9 +999,9 @@ function RevenueView({
       {error && <div className="inline-error revenue-error">{error}</div>}
 
       <div className="wise-summary-grid revenue-summary">
-        <SummaryTile label="Revenue" value={money(dashboard.revenueMetrics.totalRevenue)} />
-        <SummaryTile label="Invoiced" value={money(dashboard.revenueMetrics.invoicedRevenue)} />
-        <SummaryTile label="Pending" value={money(dashboard.revenueMetrics.pendingRevenue)} />
+        <SummaryTile label="Revenue" value={maybeMoney(hasPulledRevenue, dashboard.revenueMetrics.totalRevenue ?? 0)} />
+        <SummaryTile label="Invoiced" value={maybeMoney(dashboard.revenueMetrics.invoicedRevenue !== null, dashboard.revenueMetrics.invoicedRevenue ?? 0)} />
+        <SummaryTile label="Pending" value={maybeMoney(dashboard.revenueMetrics.pendingRevenue !== null, dashboard.revenueMetrics.pendingRevenue ?? 0)} />
         <SummaryTile label="Last run" value={latestRun ? dateLabel(latestRun.createdAt) : "None"} />
       </div>
 
@@ -1164,8 +1030,8 @@ function RevenueView({
                     {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
                   </td>
                   <td>{run.timezone}</td>
-                  <td className="amount">{money(run.revenue, run.currency)}</td>
-                  <td>{run.conversions ?? 0}</td>
+                  <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
+                  <td>{run.status === "failed" ? "—" : run.conversions ?? 0}</td>
                   <td>
                     <span className={`status-pill ${run.status === "invoiced" ? "good" : run.status === "failed" || run.status === "skipped" ? "warning" : ""}`}>
                       {run.status}
@@ -1189,14 +1055,16 @@ function RevenueView({
 
 function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
-  const cashback = rows.filter((row) => row.category.toLowerCase().includes("cashback")).reduce((total, row) => total + row.amount, 0);
+  const cashbackRows = rows.filter((row) => row.category.toLowerCase().includes("cashback"));
+  const cashback = cashbackRows.reduce((total, row) => total + row.amount, 0);
+  const balance = slashAccounts.reduce((total, account) => total + account.balance, 0);
 
   return (
     <div className="split-view">
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash balances</h2>
-          <span className="total-pill">{money(slashAccounts.reduce((total, account) => total + account.balance, 0))}</span>
+          <span className="total-pill">{maybeMoney(slashAccounts.length > 0, balance)}</span>
         </div>
         <SimpleMoneyTable
           rows={slashAccounts.map((account) => ({
@@ -1212,10 +1080,9 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash cashback</h2>
-          <span className="total-pill good">{money(cashback || dashboard.metrics.cashbackRedeemed)}</span>
+          <span className="total-pill good">{maybeMoney(cashbackRows.length > 0, cashback)}</span>
         </div>
         <div className="bridge">
-          <BridgeRow label="Seeded cashback redeemed" value={dashboard.metrics.cashbackRedeemed} />
           <div className="bridge-row">
             <span>Slash transactions shown</span>
             <strong>{rows.length}</strong>
@@ -1248,23 +1115,29 @@ function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((transaction) => (
-            <tr key={transaction.id}>
-              <td>{dateLabel(transaction.date)}</td>
-              <td className="counterparty-cell">
-                <strong>{transaction.counterparty}</strong>
-                <small>{transaction.description}</small>
-              </td>
-              <td>
-                <span className={`direction-label ${transaction.direction}`}>
-                  {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                  {transaction.direction === "in" ? "In" : "Out"}
-                </span>
-              </td>
-              <td>{transaction.category}</td>
-              <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+          {rows.length > 0 ? (
+            rows.map((transaction) => (
+              <tr key={transaction.id}>
+                <td>{dateLabel(transaction.date)}</td>
+                <td className="counterparty-cell">
+                  <strong>{transaction.counterparty}</strong>
+                  <small>{transaction.description}</small>
+                </td>
+                <td>
+                  <span className={`direction-label ${transaction.direction}`}>
+                    {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                    {transaction.direction === "in" ? "In" : "Out"}
+                  </span>
+                </td>
+                <td>{transaction.category}</td>
+                <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={5}>No live transactions</td>
             </tr>
-          ))}
+          )}
         </tbody>
       </table>
     </div>
@@ -1314,9 +1187,10 @@ function InvoicesView({
               <th>Linked transaction</th>
               <th>Actions</th>
             </tr>
-          </thead>
-          <tbody>
-            {dashboard.invoices.map((invoice) => {
+        </thead>
+        <tbody>
+            {dashboard.invoices.length > 0 ? (
+              dashboard.invoices.map((invoice) => {
               const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
               return (
                 <tr key={invoice.id}>
@@ -1367,7 +1241,12 @@ function InvoicesView({
                   </td>
                 </tr>
               );
-            })}
+              })
+            ) : (
+              <tr>
+                <td colSpan={7}>No live invoices</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
