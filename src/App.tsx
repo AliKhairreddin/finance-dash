@@ -441,17 +441,18 @@ function App() {
           </div>
         )}
 
-        <section className="metric-grid" aria-label="Finance summary">
-          <MetricCard icon={<Banknote />} label="Cash in accounts" value={money(dashboard.metrics.totalCash)} detail="Wise, Slash, Revolut, crypto" />
-          <MetricCard icon={<BadgeDollarSign />} label="Receivables" value={money(dashboard.metrics.totalReceivables)} detail="Open invoices, VAT, tax" />
-          <MetricCard icon={<WalletCards />} label="Open balance" value={money(dashboard.metrics.totalOpenBalance)} detail="Customer and provider balances" />
-          <MetricCard icon={<ArrowDownRight />} label="Payables" value={money(dashboard.metrics.totalPayables)} detail="Unpaid platform/provider spend" danger />
-          <MetricCard icon={<CircleDollarSign />} label="Profit" value={money(dashboard.metrics.profit)} detail={`${dashboard.metrics.profitGrowth.toFixed(2)}% vs last week`} good />
-          <MetricCard icon={<ShieldCheck />} label="Total assets" value={money(dashboard.metrics.totalAssets)} detail={`${money(dashboard.metrics.investments)} investments`} />
-        </section>
-
       {activeTab === "overview" && (
-        <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
+        <>
+          <section className="metric-grid" aria-label="Finance summary">
+            <MetricCard icon={<Banknote />} label="Cash in accounts" value={money(dashboard.metrics.totalCash)} detail="Wise, Slash, Revolut, crypto" />
+            <MetricCard icon={<BadgeDollarSign />} label="Receivables" value={money(dashboard.metrics.totalReceivables)} detail="Open invoices, VAT, tax" />
+            <MetricCard icon={<WalletCards />} label="Open balance" value={money(dashboard.metrics.totalOpenBalance)} detail="Customer and provider balances" />
+            <MetricCard icon={<ArrowDownRight />} label="Payables" value={money(dashboard.metrics.totalPayables)} detail="Unpaid platform/provider spend" danger />
+            <MetricCard icon={<CircleDollarSign />} label="Profit" value={money(dashboard.metrics.profit)} detail={`${dashboard.metrics.profitGrowth.toFixed(2)}% vs last week`} good />
+            <MetricCard icon={<ShieldCheck />} label="Total assets" value={money(dashboard.metrics.totalAssets)} detail={`${money(dashboard.metrics.investments)} investments`} />
+          </section>
+          <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
+        </>
       )}
 
       {activeTab === "wise" && (
