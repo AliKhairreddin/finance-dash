@@ -76,6 +76,10 @@ function maybeMoney(hasValue: boolean, value: number, currency = "USD"): string 
   return hasValue ? money(value, currency) : "—";
 }
 
+function optionalMoney(value: number | null | undefined, currency = "USD"): string {
+  return typeof value === "number" ? money(value, currency) : "—";
+}
+
 function maybeDate(value?: string): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -413,8 +417,8 @@ function App() {
   const hasOpenBalances = dashboard.openBalances.length > 0;
   const hasPayables = dashboard.payables.length > 0;
   const hasInvestments = dashboard.investments.length > 0;
-  const hasProfit = hasReceivables || hasOpenBalances || hasPayables;
-  const hasTotalAssets = hasProfit || hasInvestments;
+  const hasProfit = dashboard.metrics.profit !== null;
+  const hasTotalAssets = dashboard.metrics.totalAssets !== null;
 
   return (
     <main className="app-shell">
@@ -458,46 +462,49 @@ function App() {
         )}
 
       {activeTab === "overview" && (
-        <section className="metric-grid" aria-label="Finance summary">
-          <MetricCard
-            icon={<Banknote />}
-            label="Cash in accounts"
-            value={maybeMoney(hasCash, dashboard.metrics.totalCash ?? 0)}
-            detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
-          />
-          <MetricCard
-            icon={<BadgeDollarSign />}
-            label="Receivables"
-            value={maybeMoney(hasReceivables, dashboard.metrics.totalReceivables ?? 0)}
-            detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
-          />
-          <MetricCard
-            icon={<WalletCards />}
-            label="Open balance"
-            value={maybeMoney(hasOpenBalances, dashboard.metrics.totalOpenBalance ?? 0)}
-            detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
-          />
-          <MetricCard
-            icon={<ArrowDownRight />}
-            label="Payables"
-            value={maybeMoney(hasPayables, dashboard.metrics.totalPayables ?? 0)}
-            detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
-            danger
-          />
-          <MetricCard
-            icon={<CircleDollarSign />}
-            label="Profit"
-            value={maybeMoney(hasProfit, dashboard.metrics.profit ?? 0)}
-            detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
-            good
-          />
-          <MetricCard
-            icon={<ShieldCheck />}
-            label="Total assets"
-            value={maybeMoney(hasTotalAssets, dashboard.metrics.totalAssets ?? 0)}
-            detail={hasInvestments ? `${money(dashboard.metrics.investments ?? 0)} investments` : "No live investments"}
-          />
-        </section>
+        <>
+          <section className="metric-grid" aria-label="Finance summary">
+            <MetricCard
+              icon={<Banknote />}
+              label="Cash in accounts"
+              value={maybeMoney(hasCash, dashboard.metrics.totalCash ?? 0)}
+              detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
+            />
+            <MetricCard
+              icon={<BadgeDollarSign />}
+              label="Receivables"
+              value={maybeMoney(hasReceivables, dashboard.metrics.totalReceivables ?? 0)}
+              detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
+            />
+            <MetricCard
+              icon={<WalletCards />}
+              label="Open balance"
+              value={maybeMoney(hasOpenBalances, dashboard.metrics.totalOpenBalance ?? 0)}
+              detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
+            />
+            <MetricCard
+              icon={<ArrowDownRight />}
+              label="Payables"
+              value={maybeMoney(hasPayables, dashboard.metrics.totalPayables ?? 0)}
+              detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
+              danger
+            />
+            <MetricCard
+              icon={<CircleDollarSign />}
+              label="Profit"
+              value={maybeMoney(hasProfit, dashboard.metrics.profit ?? 0)}
+              detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
+              good
+            />
+            <MetricCard
+              icon={<ShieldCheck />}
+              label="Total assets"
+              value={maybeMoney(hasTotalAssets, dashboard.metrics.totalAssets ?? 0)}
+              detail={hasInvestments ? `${money(dashboard.metrics.investments ?? 0)} investments` : "No live investments"}
+            />
+          </section>
+          <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
+        </>
       )}
 
       {activeTab === "wise" && (
@@ -712,19 +719,226 @@ function MetricCard({
   );
 }
 
+function Overview({
+  dashboard,
+  providersById,
+  onOpenInvoice,
+  onQuickMatch
+}: {
+  dashboard: DashboardSnapshot;
+  providersById: Map<string, Provider>;
+  onOpenInvoice: (transaction: Transaction) => void;
+  onQuickMatch: (transaction: Transaction, providerId?: string) => void;
+}) {
+  const reviewRows = dashboard.transactions.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86).slice(0, 5);
+  const payableMonths = Array.from(new Set(dashboard.payables.flatMap((payable) => Object.keys(payable.monthBuckets))));
+  const hasCash = dashboard.accounts.length > 0;
+  const hasReceivables = dashboard.receivables.length > 0;
+  const hasOpenBalances = dashboard.openBalances.length > 0;
+  const hasPayables = dashboard.payables.length > 0;
+  const hasInvestments = dashboard.investments.length > 0;
+  const hasCompleteFloat = hasCash && hasReceivables && hasOpenBalances;
+  const hasProfit = dashboard.metrics.profit !== null;
+  const hasTotalAssets = dashboard.metrics.totalAssets !== null;
+
+  return (
+    <div className="overview-grid">
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Cash in accounts</h2>
+          <span className="total-pill">{optionalMoney(dashboard.metrics.totalCash)}</span>
+        </div>
+        <SimpleMoneyTable
+          nameLabel="Account"
+          rows={dashboard.accounts.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+          emptyLabel="No live account data"
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Receivables</h2>
+          <span className="total-pill">{optionalMoney(dashboard.metrics.totalReceivables)}</span>
+        </div>
+        <SimpleMoneyTable
+          nameLabel="Name"
+          rows={dashboard.receivables.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+          emptyLabel="No live receivables"
+        />
+      </section>
+
+      <section className="panel tall">
+        <div className="panel-header compact">
+          <h2>Open balance</h2>
+          <span className="total-pill">{optionalMoney(dashboard.metrics.totalOpenBalance)}</span>
+        </div>
+        <SimpleMoneyTable
+          nameLabel="Name"
+          rows={dashboard.openBalances.map((item) => ({
+            id: item.id,
+            name: item.name,
+            amount: item.balance,
+            currency: item.currency,
+            source: sourceLabel(item.source)
+          }))}
+          emptyLabel="No live open balances"
+          dense
+        />
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-header compact">
+          <h2>Payables by supplier and month</h2>
+          <span className="total-pill danger">{optionalMoney(dashboard.metrics.totalPayables)}</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table payables-table">
+            <thead>
+              <tr>
+                <th>Supplier / platform</th>
+                <th>Balance</th>
+                {payableMonths.map((month) => (
+                  <th key={month}>{month}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {dashboard.payables.length > 0 ? (
+                dashboard.payables.map((payable) => (
+                  <tr key={payable.id}>
+                    <td>
+                      <strong>{payable.supplier}</strong>
+                      <small>{payable.category}</small>
+                    </td>
+                    <td className="amount danger-text">{money(payable.balance, payable.currency)}</td>
+                    {payableMonths.map((month) => {
+                      const hasMonth = Object.prototype.hasOwnProperty.call(payable.monthBuckets, month);
+                      return (
+                        <td className="amount" key={month}>
+                          {hasMonth ? money(payable.monthBuckets[month], payable.currency) : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={2 + payableMonths.length}>No live payables</td>
+                </tr>
+              )}
+            </tbody>
+            {dashboard.payables.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td>Total</td>
+                  <td className="amount">{optionalMoney(dashboard.metrics.totalPayables)}</td>
+                  {payableMonths.map((month) => (
+                    <td className="amount" key={month}>
+                      {Object.prototype.hasOwnProperty.call(dashboard.metrics.monthTotals, month) ? money(dashboard.metrics.monthTotals[month]) : "—"}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Assets bridge</h2>
+          <span className="total-pill good">{hasTotalAssets ? optionalMoney(dashboard.metrics.totalAssets) : "—"}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Cash" value={dashboard.metrics.totalCash} />
+          <BridgeRow label="Receivables" value={dashboard.metrics.totalReceivables} />
+          <BridgeRow label="Open balance" value={dashboard.metrics.totalOpenBalance} />
+          <BridgeRow label="Cash + receivables + open balance" value={hasCompleteFloat ? dashboard.metrics.totalFloat : null} />
+          <BridgeRow label="Spend without payment" value={hasPayables && dashboard.metrics.totalPayables !== null ? -dashboard.metrics.totalPayables : null} danger />
+          <BridgeRow label="Profit" value={dashboard.metrics.profit} good />
+          <BridgeRow label="Investments" value={dashboard.metrics.investments} />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Growth checks</h2>
+          <span className="total-pill">—</span>
+        </div>
+        <div className="growth-list">
+          <GrowthItem label="Cash growth vs last week" />
+          <GrowthItem label="Spend growth vs last week" danger />
+          <GrowthItem label="Profit growth vs last week" />
+        </div>
+      </section>
+
+      <section className="panel wide">
+        <div className="panel-header compact">
+          <h2>Needs review</h2>
+          <span className="total-pill">{reviewRows.length} rows</span>
+        </div>
+        <div className="review-list">
+          {reviewRows.length > 0 ? (
+            reviewRows.map((transaction) => {
+              const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              return (
+                <article className="review-row" key={transaction.id}>
+                  <div className={`direction-badge ${transaction.direction}`}>
+                    {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+                  </div>
+                  <div>
+                    <strong>{transaction.counterparty}</strong>
+                    <span>{transaction.description}</span>
+                  </div>
+                  <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
+                  <div className="match-chip">{providerLabel(provider)}</div>
+                  <button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
+                    <Link2 size={15} />
+                    Match
+                  </button>
+                  <button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
+                    <FilePlus2 size={15} />
+                    Invoice
+                  </button>
+                </article>
+              );
+            })
+          ) : (
+            <div className="empty-state">No live transactions needing review</div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SimpleMoneyTable({
   rows,
   dense,
-  emptyLabel = "No live rows"
+  emptyLabel = "No live rows",
+  nameLabel = "Account"
 }: {
   rows: Array<{ id: string; name: string; amount: number; currency: string; source: string }>;
   dense?: boolean;
   emptyLabel?: string;
+  nameLabel?: string;
 }) {
   return (
     <div className={`money-list ${dense ? "dense" : ""}`}>
       <div className="money-row money-head">
-        <span>Account</span>
+        <span>{nameLabel}</span>
         <span>Source</span>
         <span>Balance</span>
       </div>
@@ -743,6 +957,26 @@ function SimpleMoneyTable({
       ) : (
         <div className="money-empty">{emptyLabel}</div>
       )}
+    </div>
+  );
+}
+
+function BridgeRow({ label, value, danger, good }: { label: string; value?: number | null; danger?: boolean; good?: boolean }) {
+  return (
+    <div className="bridge-row">
+      <span>{label}</span>
+      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{optionalMoney(value)}</strong>
+    </div>
+  );
+}
+
+function GrowthItem({ label, value, danger }: { label: string; value?: number | null; danger?: boolean }) {
+  return (
+    <div className="growth-item">
+      <span>{label}</span>
+      <strong className={typeof value === "number" ? (danger ? "danger-text" : "good-text") : ""}>
+        {typeof value === "number" ? `${value.toFixed(2)}%` : "—"}
+      </strong>
     </div>
   );
 }
