@@ -394,23 +394,30 @@ export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   const [wise, slash, merit] = await Promise.allSettled([fetchWiseActivity(), fetchSlashActivity(), fetchMeritInvoices()]);
   const liveTransactions: Transaction[] = [];
+  const liveSources = new Set<Transaction["source"]>();
 
   if (wise.status === "fulfilled") {
     if (wise.value.accounts.length > 0) {
       accounts = [...seededAccounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
+      liveSources.add("wise");
     }
+    if (wise.value.transactions.length > 0) liveSources.add("wise");
     liveTransactions.push(...wise.value.transactions);
   }
   if (slash.status === "fulfilled") {
+    if (slash.value.transactions.length > 0) liveSources.add("slash");
     liveTransactions.push(...slash.value.transactions);
   }
   if (merit.status === "fulfilled" && merit.value.length > 0) {
     invoices = mergeById(merit.value, invoices);
   }
 
-  if (liveTransactions.length > 0) {
+  if (liveSources.size > 0) {
     const existingIds = new Set(transactions.map((transaction) => transaction.id));
-    transactions = [...liveTransactions.filter((transaction) => !existingIds.has(transaction.id)), ...transactions];
+    transactions = [
+      ...liveTransactions.filter((transaction) => !existingIds.has(transaction.id)),
+      ...transactions.filter((transaction) => !liveSources.has(transaction.source))
+    ];
   }
 
   lastSync = new Date().toISOString();

@@ -136,7 +136,7 @@ function parseWiseBalancePairs(value: string | undefined): Array<{ id: string; c
     .split(",")
     .map((pair) => {
       const [id, currency = "USD"] = pair.trim().split(":");
-      return { id, currency };
+      return { id: id.trim(), currency: currency.trim() };
     })
     .filter((balance) => balance.id);
 }
@@ -177,7 +177,7 @@ async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]
       modificationTime?: string;
       visible?: boolean;
     }>
-  >(`${baseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD`, {
+  >(`${baseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD,SAVINGS`, {
     headers: {
       Authorization: `Bearer ${env.WISE_API_TOKEN}`
     }
@@ -217,6 +217,11 @@ async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]
         Authorization: `Bearer ${env.WISE_API_TOKEN}`,
         "X-External-Correlation-Id": crypto.randomUUID()
       }
+    }).catch((error: unknown) => {
+      console.warn(
+        `Wise statement fetch failed for balance ${balance.id}: ${error instanceof Error ? error.message : "Unknown Wise statement error"}`
+      );
+      return { transactions: [] };
     });
 
     for (const [index, activity] of (statement.transactions ?? []).entries()) {
@@ -686,7 +691,14 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   ]);
   const accounts = mergeLiveAccounts(wise.accounts, slash.accounts);
   const invoices = mergeById(liveMeritInvoices, state.invoices);
-  const rawTransactions = mergeById(seededTransactions, [...wise.transactions, ...slash.transactions]);
+  const liveTransactionSources = new Set([
+    ...(wise.accounts.length > 0 || wise.transactions.length > 0 ? ["wise"] : []),
+    ...(slash.accounts.length > 0 || slash.transactions.length > 0 ? ["slash"] : [])
+  ]);
+  const rawTransactions = mergeById(
+    seededTransactions.filter((transaction) => !liveTransactionSources.has(transaction.source)),
+    [...wise.transactions, ...slash.transactions]
+  );
   const transactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {

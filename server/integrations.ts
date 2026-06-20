@@ -95,7 +95,7 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
   const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
   const balances = balancePairs.split(",").map((pair) => {
     const [id, currency = "USD"] = pair.trim().split(":");
-    return { id, currency };
+    return { id: id.trim(), currency: currency.trim() };
   });
   const selectedBalanceIds = new Set(balances.map((balance) => balance.id));
 
@@ -107,7 +107,7 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
       modificationTime?: string;
       visible?: boolean;
     }>
-  >(`${wiseBaseUrl}/v4/profiles/${profileId}/balances?types=STANDARD`, {
+  >(`${wiseBaseUrl}/v4/profiles/${profileId}/balances?types=STANDARD,SAVINGS`, {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -147,6 +147,11 @@ export async function fetchWiseActivity(): Promise<{ accounts: AccountBalance[];
         Authorization: `Bearer ${token}`,
         "X-External-Correlation-Id": crypto.randomUUID()
       }
+    }).catch((error: unknown) => {
+      console.warn(
+        `Wise statement fetch failed for balance ${balance.id}: ${error instanceof Error ? error.message : "Unknown Wise statement error"}`
+      );
+      return { transactions: [] };
     });
 
     for (const [index, activity] of (statement.transactions ?? []).entries()) {
