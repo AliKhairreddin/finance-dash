@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { Invoice, Provider, RevenueRun, Team, TransactionTeamAssignment } from "../shared/types";
+import type { Invoice, Provider, RevenuePartner, RevenueRun, StoredAiSettings, Team, TransactionTeamAssignment } from "../shared/types";
 
 const storePath = resolve(process.cwd(), ".local", "finance-dashboard-store.json");
 
@@ -8,8 +8,10 @@ export interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
   teams: Team[];
+  revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
   revenueRuns: RevenueRun[];
+  aiSettings?: StoredAiSettings;
 }
 
 export async function loadPersistedState(): Promise<Partial<PersistedState>> {

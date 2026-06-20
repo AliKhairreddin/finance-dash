@@ -67,21 +67,21 @@ export const seededInvestments: Investment[] = [
 ];
 
 export const seededProviders: Provider[] = [
-  { id: "provider-p2w", name: "P2W", type: "supplier", category: "Provider", aliases: ["p2w", "point to web", "point2web"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-position2", name: "Position2", type: "supplier", category: "Provider", aliases: ["position2", "position 2"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-p2w", name: "P2W", type: "provider", category: "Provider", aliases: ["p2w", "point to web", "point2web"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-position2", name: "Position2", type: "provider", category: "Provider", aliases: ["position2", "position 2"], source: "manual", createdAt: seededAsOf },
   { id: "provider-facebook", name: "Facebook Direct", type: "platform", category: "Ad platform", aliases: ["facebook", "meta", "fb direct", "facebook direct"], source: "manual", createdAt: seededAsOf },
   { id: "provider-google", name: "Google", type: "platform", category: "Ad platform", aliases: ["google", "google ads", "payment center", "google mojo"], source: "manual", createdAt: seededAsOf },
   { id: "provider-tiktok", name: "TikTok", type: "platform", category: "Ad platform", aliases: ["tiktok", "tik tok"], source: "manual", createdAt: seededAsOf },
   { id: "provider-bigo", name: "Bigo", type: "platform", category: "Ad platform", aliases: ["bigo"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-amex", name: "Amex", type: "supplier", category: "Card", aliases: ["amex", "american express"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-blink", name: "Blink", type: "customer", category: "Customer", aliases: ["blink"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-starstream", name: "Starstream Solutions", type: "customer", category: "Customer", aliases: ["starstream", "buumerang"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-digital-uprising", name: "Digital Uprising", type: "customer", category: "Customer", aliases: ["digital uprising"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-ronin", name: "Ronin", type: "customer", category: "Customer", aliases: ["ronin"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-silverpush", name: "SilverPush", type: "customer", category: "Customer", aliases: ["silverpush"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-advurtix", name: "Advurtix", type: "customer", category: "Customer", aliases: ["advurtix"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-scaladz", name: "Scaladz", type: "customer", category: "Customer", aliases: ["scaladz"], source: "manual", createdAt: seededAsOf },
-  { id: "provider-blueglow", name: "BLUEGLOW", type: "customer", category: "Customer", aliases: ["blueglow"], source: "manual", createdAt: seededAsOf }
+  { id: "provider-amex", name: "Amex", type: "provider", category: "Card", aliases: ["amex", "american express"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-blink", name: "Blink", type: "partner", category: "Media buying client", aliases: ["blink"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-starstream", name: "Starstream Solutions", type: "partner", category: "Media buying client", aliases: ["starstream", "buumerang"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-digital-uprising", name: "Digital Uprising", type: "partner", category: "Media buying client", aliases: ["digital uprising"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-ronin", name: "Ronin", type: "partner", category: "Media buying client", aliases: ["ronin"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-silverpush", name: "SilverPush", type: "partner", category: "Media buying client", aliases: ["silverpush"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-advurtix", name: "Advurtix", type: "partner", category: "Media buying client", aliases: ["advurtix"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-scaladz", name: "Scaladz", type: "partner", category: "Media buying client", aliases: ["scaladz"], source: "manual", createdAt: seededAsOf },
+  { id: "provider-blueglow", name: "BLUEGLOW", type: "partner", category: "Media buying client", aliases: ["blueglow"], source: "manual", createdAt: seededAsOf }
 ];
 
 export const seededTeams: Team[] = [
@@ -94,6 +94,7 @@ export const seededRevenuePartners: RevenuePartner[] = [
     id: "revenue-partner-kissterra",
     name: "Kissterra",
     source: "tune",
+    affiliateId: "",
     externalId: "kissterra",
     currency: "USD",
     timezone: "UTC",

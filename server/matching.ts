@@ -64,15 +64,22 @@ export function enrichTransactions(transactions: Transaction[], providers: Provi
   });
 }
 
-export function learnAlias(provider: Provider, rawName: string): Provider {
-  const normalized = normalizeName(rawName);
-  const existing = new Set(provider.aliases.map(normalizeName));
-  if (!normalized || existing.has(normalized) || normalizeName(provider.name) === normalized) {
-    return provider;
+export function learnAliases(provider: Provider, bankNames: string[]): Provider {
+  const existing = new Set([normalizeName(provider.name), ...provider.aliases.map(normalizeName)]);
+  const nextAliases = [...provider.aliases];
+
+  for (const bankName of bankNames) {
+    const alias = bankName.trim().replace(/\s+/g, " ");
+    const normalized = normalizeName(alias);
+    if (!alias || !normalized || existing.has(normalized)) continue;
+    existing.add(normalized);
+    nextAliases.push(alias);
   }
 
-  return {
-    ...provider,
-    aliases: [...provider.aliases, normalized]
-  };
+  return nextAliases.length === provider.aliases.length
+    ? provider
+    : {
+        ...provider,
+        aliases: nextAliases
+      };
 }

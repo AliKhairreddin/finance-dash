@@ -11,8 +11,8 @@ const dataSource = v.union(
 );
 
 const providerType = v.union(
-  v.literal("customer"),
-  v.literal("supplier"),
+  v.literal("partner"),
+  v.literal("provider"),
   v.literal("platform"),
   v.literal("internal")
 );
@@ -80,6 +80,31 @@ const revenueRun = v.object({
   createdAt: v.string()
 });
 
+const revenuePartner = v.object({
+  id: v.string(),
+  name: v.string(),
+  source: v.literal("tune"),
+  affiliateId: v.string(),
+  externalId: v.optional(v.string()),
+  currency: v.string(),
+  timezone: v.string(),
+  networkTimezone: v.string(),
+  networkIdEnv: v.string(),
+  apiKeyEnv: v.string(),
+  apiBaseUrlEnv: v.optional(v.string()),
+  meritCustomerName: v.optional(v.string()),
+  invoiceDueDays: v.number(),
+  enabled: v.boolean(),
+  createdAt: v.string()
+});
+
+const aiSettings = v.object({
+  provider: v.literal("openrouter"),
+  model: v.string(),
+  openRouterApiKey: v.optional(v.string()),
+  updatedAt: v.optional(v.string())
+});
+
 export const getState = query({
   args: {},
   returns: v.union(
@@ -88,8 +113,10 @@ export const getState = query({
       providers: v.array(provider),
       invoices: v.array(invoice),
       teams: v.array(team),
+      revenuePartners: v.array(revenuePartner),
       transactionTeamAssignments: v.array(transactionTeamAssignment),
       revenueRuns: v.array(revenueRun),
+      aiSettings: v.optional(aiSettings),
       updatedAt: v.string()
     })
   ),
@@ -105,8 +132,10 @@ export const getState = query({
       providers: state.providers,
       invoices: state.invoices,
       teams: state.teams ?? [],
+      revenuePartners: state.revenuePartners ?? [],
       transactionTeamAssignments: state.transactionTeamAssignments ?? [],
       revenueRuns: state.revenueRuns ?? [],
+      aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
     };
   }
@@ -117,8 +146,10 @@ export const saveState = mutation({
     providers: v.array(provider),
     invoices: v.array(invoice),
     teams: v.array(team),
+    revenuePartners: v.array(revenuePartner),
     transactionTeamAssignments: v.array(transactionTeamAssignment),
-    revenueRuns: v.array(revenueRun)
+    revenueRuns: v.array(revenueRun),
+    aiSettings: v.optional(aiSettings)
   },
   returns: v.object({
     updatedAt: v.string()
@@ -135,8 +166,10 @@ export const saveState = mutation({
         providers: args.providers,
         invoices: args.invoices,
         teams: args.teams,
+        revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
         revenueRuns: args.revenueRuns,
+        aiSettings: args.aiSettings,
         updatedAt
       });
     } else {
@@ -145,8 +178,10 @@ export const saveState = mutation({
         providers: args.providers,
         invoices: args.invoices,
         teams: args.teams,
+        revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
         revenueRuns: args.revenueRuns,
+        aiSettings: args.aiSettings,
         updatedAt
       });
     }

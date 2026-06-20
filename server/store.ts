@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type {
+  AiPromptPayload,
+  AiPromptResult,
   AssignTransactionTeamPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
@@ -7,15 +9,21 @@ import type {
   Invoice,
   MatchTransactionPayload,
   Provider,
+  RevenuePartner,
   RevenueRun,
+  SaveAiSettingsPayload,
+  StoredAiSettings,
   SyncRevenuePayload,
   Team,
-  Transaction
+  Transaction,
+  UpdateProviderPayload,
+  UpdateRevenuePartnerPayload
 } from "../shared/types";
+import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
 import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchTuneRevenue, fetchWiseActivity, getIntegrationStatus } from "./integrations";
-import { enrichTransactions, learnAlias } from "./matching";
+import { enrichTransactions, learnAliases } from "./matching";
 import {
   seededAccounts,
   seededAsOf,
@@ -34,8 +42,9 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 let providers: Provider[] = [...seededProviders];
 let invoices: Invoice[] = [...seededInvoices];
 let teams: Team[] = [...seededTeams];
-let revenuePartners = [...seededRevenuePartners];
+let revenuePartners: RevenuePartner[] = [...seededRevenuePartners];
 let revenueRuns: RevenueRun[] = [];
+let aiSettings: StoredAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let transactions: Transaction[] = [...seededTransactions];
 let accounts = [...seededAccounts];
@@ -54,12 +63,18 @@ export async function initializeStore(): Promise<void> {
   providers = mergeById(seededProviders, persisted.providers);
   invoices = mergeById(seededInvoices, persisted.invoices);
   teams = mergeById(seededTeams, persisted.teams);
+  revenuePartners = mergeById(seededRevenuePartners, persisted.revenuePartners);
   revenueRuns = persisted.revenueRuns ?? [];
+  aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
 }
 
 async function persist(): Promise<void> {
-  await savePersistedState({ providers, invoices, teams, transactionTeamAssignments, revenueRuns });
+  await savePersistedState({ providers, invoices, teams, revenuePartners, transactionTeamAssignments, revenueRuns, aiSettings });
+}
+
+function bankAliasNames(transaction: Transaction): string[] {
+  return [transaction.rawName, transaction.counterparty].filter(Boolean);
 }
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
@@ -95,6 +110,7 @@ export function getSnapshot(): DashboardSnapshot {
     revenuePartners,
     revenueRuns,
     revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
+    aiSettings: publicAiSettings(aiSettings),
     transactions: getMatchedTransactions(),
     invoices,
     integrationStatus: getIntegrationStatus(),
@@ -139,6 +155,70 @@ export async function createProvider(payload: CreateProviderPayload): Promise<Pr
   return provider;
 }
 
+export async function updateProvider(providerId: string, payload: UpdateProviderPayload): Promise<Provider> {
+  let updated: Provider | undefined;
+  providers = providers.map((provider) => {
+    if (provider.id !== providerId) return provider;
+    updated = {
+      ...provider,
+      name: payload.name.trim(),
+      type: payload.type,
+      category: payload.category.trim() || "Uncategorized",
+      aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
+      defaultAccount: payload.defaultAccount?.trim() || undefined
+    };
+    return updated;
+  });
+  if (!updated) throw new Error("Provider not found");
+  await persist();
+  return updated;
+}
+
+export async function updateRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
+  let updated: RevenuePartner | undefined;
+  revenuePartners = revenuePartners.map((partner) => {
+    if (partner.id !== partnerId) return partner;
+    updated = {
+      ...partner,
+      name: payload.name.trim(),
+      affiliateId: payload.affiliateId.trim(),
+      externalId: payload.externalId?.trim() || undefined,
+      currency: payload.currency.trim() || "USD",
+      timezone: payload.timezone,
+      networkTimezone: payload.networkTimezone,
+      networkIdEnv: payload.networkIdEnv.trim(),
+      apiKeyEnv: payload.apiKeyEnv.trim(),
+      apiBaseUrlEnv: payload.apiBaseUrlEnv?.trim() || undefined,
+      meritCustomerName: payload.meritCustomerName?.trim() || undefined,
+      invoiceDueDays: payload.invoiceDueDays,
+      enabled: payload.enabled
+    };
+    return updated;
+  });
+  if (!updated) throw new Error("Revenue partner not found");
+  await persist();
+  return updated;
+}
+
+export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {
+  const model = payload.model.trim();
+  if (!model) throw new Error("OpenRouter model is required");
+
+  const nextKey = payload.clearApiKey ? undefined : payload.openRouterApiKey?.trim() || aiSettings.openRouterApiKey;
+  aiSettings = {
+    provider: "openrouter",
+    model,
+    openRouterApiKey: nextKey,
+    updatedAt: new Date().toISOString()
+  };
+  await persist();
+  return getSnapshot();
+}
+
+export async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptResult> {
+  return runOpenRouterPrompt(aiSettings, payload, process.env.PUBLIC_APP_URL);
+}
+
 export async function matchTransaction(payload: MatchTransactionPayload): Promise<Transaction> {
   const provider = providers.find((item) => item.id === payload.providerId);
   const transaction = transactions.find((item) => item.id === payload.transactionId);
@@ -159,7 +239,7 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
   );
 
   if (payload.rememberAlias) {
-    providers = providers.map((item) => (item.id === payload.providerId ? learnAlias(item, transaction.rawName) : item));
+    providers = providers.map((item) => (item.id === payload.providerId ? learnAliases(item, bankAliasNames(transaction)) : item));
   }
 
   await persist();
@@ -188,6 +268,12 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
 
   invoices = [invoice, ...invoices];
   if (payload.transactionId && payload.providerId) {
+    const sourceTransaction = transactions.find((transaction) => transaction.id === payload.transactionId);
+    if (sourceTransaction) {
+      providers = providers.map((provider) =>
+        provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(sourceTransaction)) : provider
+      );
+    }
     transactions = transactions.map((transaction) =>
       transaction.id === payload.transactionId
         ? { ...transaction, matchedProviderId: payload.providerId, matchedInvoiceId: invoice.id, confidence: 1, matchReason: "Invoice created" }

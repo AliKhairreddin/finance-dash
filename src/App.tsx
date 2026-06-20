@@ -10,11 +10,15 @@ import {
   CircleDollarSign,
   FilePlus2,
   Filter,
+  KeyRound,
   Link2,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
+  Save,
   Search,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -24,21 +28,35 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type {
+  AiPromptPayload,
+  AiPromptResult,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
   Provider,
   ProviderType,
+  RevenuePartner,
   RevenuePeriodPreset,
+  SaveAiSettingsPayload,
   SyncRevenuePayload,
   Team,
-  Transaction
+  Transaction,
+  UpdateProviderPayload,
+  UpdateRevenuePartnerPayload
 } from "../shared/types";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const months = ["June", "May", "April", "March"];
 
-type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "integrations";
+type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+
+const openRouterModelOptions = [
+  { label: "OpenRouter auto", value: "openrouter/auto" },
+  { label: "Latest OpenAI flagship", value: "~openai/gpt-latest" },
+  { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4.5" },
+  { label: "Gemini Pro", value: "google/gemini-2.5-pro" },
+  { label: "Custom slug", value: "custom" }
+];
 
 const timezoneOptions = [
   { label: "GMT zero", value: "UTC" },
@@ -78,6 +96,20 @@ function providerLabel(provider?: Provider): string {
   return provider ? provider.name : "Unmatched";
 }
 
+function providerTypeLabel(type: ProviderType): string {
+  const labels: Record<ProviderType, string> = {
+    partner: "Partner",
+    provider: "Provider",
+    platform: "Platform",
+    internal: "Internal"
+  };
+  return labels[type];
+}
+
+function bankInvoiceName(transaction: Transaction): string {
+  return transaction.counterparty || transaction.rawName;
+}
+
 function sourceLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -96,6 +128,8 @@ function App() {
   const [selectedProviders, setSelectedProviders] = useState<Record<string, string>>({});
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
 
   async function loadDashboard() {
     setError(null);
@@ -258,6 +292,58 @@ function App() {
     await loadDashboard();
   }
 
+  async function saveProvider(providerId: string, payload: UpdateProviderPayload) {
+    const response = await fetch(`${apiBase}/providers/${providerId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Provider could not be saved");
+    }
+    await loadDashboard();
+  }
+
+  async function saveRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload) {
+    const response = await fetch(`${apiBase}/revenue-partners/${partnerId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Revenue partner could not be saved");
+    }
+    await loadDashboard();
+  }
+
+  async function saveAiSettings(payload: SaveAiSettingsPayload) {
+    const response = await fetch(`${apiBase}/settings/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "AI settings could not be saved");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+  }
+
+  async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptResult> {
+    const response = await fetch(`${apiBase}/ai/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "AI prompt failed");
+    }
+    return (await response.json()) as AiPromptResult;
+  }
+
   async function submitInvoice(payload: CreateInvoicePayload) {
     const response = await fetch(`${apiBase}/invoices`, {
       method: "POST",
@@ -328,9 +414,15 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <button className="secondary-button" onClick={() => setProviderModalOpen(true)}>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setEditingProvider(null);
+                setProviderModalOpen(true);
+              }}
+            >
               <Plus size={16} />
-              Provider
+              Company
             </button>
             <button className="primary-button" onClick={syncNow} disabled={isSyncing}>
               {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
@@ -445,11 +537,23 @@ function App() {
       )}
 
       {activeTab === "providers" && (
-        <ProvidersView providers={dashboard.providers} onAdd={() => setProviderModalOpen(true)} />
+        <ProvidersView
+          providers={dashboard.providers}
+          revenuePartners={dashboard.revenuePartners}
+          onAdd={() => {
+            setEditingProvider(null);
+            setProviderModalOpen(true);
+          }}
+          onEditProvider={(provider) => {
+            setEditingProvider(provider);
+            setProviderModalOpen(true);
+          }}
+          onEditRevenuePartner={setEditingRevenuePartner}
+        />
       )}
 
-      {activeTab === "integrations" && (
-        <IntegrationsView dashboard={dashboard} />
+      {activeTab === "settings" && (
+        <SettingsView dashboard={dashboard} onSaveAiSettings={saveAiSettings} onRunAiPrompt={runAiPrompt} />
       )}
 
       {invoiceTransaction && (
@@ -467,11 +571,31 @@ function App() {
 
       {providerModalOpen && (
         <ProviderModal
-          onClose={() => setProviderModalOpen(false)}
-          onSubmit={async (payload) => {
-            await submitProvider(payload);
+          provider={editingProvider ?? undefined}
+          onClose={() => {
             setProviderModalOpen(false);
-            setNotice("Provider saved. Add aliases anytime by matching transactions to it.");
+            setEditingProvider(null);
+          }}
+          onSubmit={async (payload) => {
+            if (editingProvider) {
+              await saveProvider(editingProvider.id, payload);
+            } else {
+              await submitProvider(payload);
+            }
+            setProviderModalOpen(false);
+            setEditingProvider(null);
+            setNotice("Company saved. Matching transactions to it will keep learning bank aliases.");
+          }}
+        />
+      )}
+      {editingRevenuePartner && (
+        <RevenuePartnerModal
+          partner={editingRevenuePartner}
+          onClose={() => setEditingRevenuePartner(null)}
+          onSubmit={async (payload) => {
+            await saveRevenuePartner(editingRevenuePartner.id, payload);
+            setEditingRevenuePartner(null);
+            setNotice("Revenue partner saved.");
           }}
         />
       )}
@@ -493,8 +617,8 @@ function Sidebar({
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
-    { id: "providers", label: "Providers", icon: <Tags size={17} /> },
-    { id: "integrations", label: "APIs", icon: <Sparkles size={17} /> }
+    { id: "providers", label: "Partners", icon: <Tags size={17} /> },
+    { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
 
   return (
@@ -905,6 +1029,12 @@ function RevenueView({
   const [error, setError] = useState<string | null>(null);
   const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
   const latestRun = visibleRuns[0];
+  const revenuePartnersById = useMemo(() => {
+    const map = new Map<string, RevenuePartner>();
+    for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
+    return map;
+  }, [dashboard.revenuePartners]);
+  const visiblePartners = dashboard.revenuePartners.filter((partner) => partnerId === "all" || partner.id === partnerId);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -944,6 +1074,7 @@ function RevenueView({
             {dashboard.revenuePartners.map((partner) => (
               <option key={partner.id} value={partner.id}>
                 {partner.name}
+                {partner.affiliateId ? ` · ${partner.affiliateId}` : ""}
               </option>
             ))}
           </select>
@@ -989,6 +1120,15 @@ function RevenueView({
         </button>
       </form>
 
+      <div className="revenue-partner-strip">
+        {visiblePartners.map((partner) => (
+          <div className="revenue-partner-chip" key={partner.id}>
+            <strong>{partner.name}</strong>
+            <span>Affiliate ID {partner.affiliateId || "Not set"}</span>
+          </div>
+        ))}
+      </div>
+
       {error && <div className="inline-error revenue-error">{error}</div>}
 
       <div className="wise-summary-grid revenue-summary">
@@ -1017,7 +1157,7 @@ function RevenueView({
                 <tr key={`${run.id}-${run.createdAt}`}>
                   <td>
                     <strong>{run.partnerName}</strong>
-                    <small>TUNE</small>
+                    <small>TUNE · Affiliate ID {revenuePartnersById.get(run.partnerId)?.affiliateId || "Not set"}</small>
                   </td>
                   <td>
                     {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
@@ -1234,21 +1374,62 @@ function InvoicesView({
   );
 }
 
-function ProvidersView({ providers, onAdd }: { providers: Provider[]; onAdd: () => void }) {
+function ProvidersView({
+  providers,
+  revenuePartners,
+  onAdd,
+  onEditProvider,
+  onEditRevenuePartner
+}: {
+  providers: Provider[];
+  revenuePartners: RevenuePartner[];
+  onAdd: () => void;
+  onEditProvider: (provider: Provider) => void;
+  onEditRevenuePartner: (partner: RevenuePartner) => void;
+}) {
+  const [scope, setScope] = useState<"all" | ProviderType | "revenue">("all");
+  const visibleProviders = providers.filter((provider) => {
+    if (scope === "all") return true;
+    if (scope === "revenue") return false;
+    return provider.type === scope;
+  });
+  const showRevenuePartners = scope === "all" || scope === "revenue";
+  const partnerCount = providers.filter((provider) => provider.type === "partner").length;
+  const providerCount = providers.filter((provider) => provider.type === "provider").length;
+
   return (
     <section className="panel">
       <div className="panel-header">
         <div>
-          <p className="eyebrow">Alias memory</p>
-          <h2>Companies, suppliers, platforms, and known bank names</h2>
+          <p className="eyebrow">Business directory</p>
+          <h2>Partners, providers, platforms, and known bank names</h2>
         </div>
         <button className="secondary-button" onClick={onAdd}>
           <Plus size={16} />
-          Add provider
+          Add company
         </button>
       </div>
+      <div className="directory-toolbar">
+        <div className="segmented-control" aria-label="Directory filter">
+          {[
+            { id: "all", label: "All" },
+            { id: "partner", label: `Partners ${partnerCount}` },
+            { id: "provider", label: `Providers ${providerCount}` },
+            { id: "platform", label: "Platforms" },
+            { id: "revenue", label: "Revenue" }
+          ].map((item) => (
+            <button
+              key={item.id}
+              className={scope === item.id ? "active" : ""}
+              onClick={() => setScope(item.id as "all" | ProviderType | "revenue")}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="provider-grid">
-        {providers.map((provider) => (
+        {visibleProviders.map((provider) => (
           <article className="provider-card" key={provider.id}>
             <div className="provider-card-head">
               <div className="provider-avatar">
@@ -1256,8 +1437,11 @@ function ProvidersView({ providers, onAdd }: { providers: Provider[]; onAdd: () 
               </div>
               <div>
                 <strong>{provider.name}</strong>
-                <span>{provider.type} · {provider.category}</span>
+                <span>{providerTypeLabel(provider.type)} · {provider.category}</span>
               </div>
+              <button className="icon-button" title="Edit company" onClick={() => onEditProvider(provider)}>
+                <Pencil size={15} />
+              </button>
             </div>
             <div className="alias-list">
               {[provider.name, ...provider.aliases].slice(0, 7).map((alias) => (
@@ -1266,49 +1450,209 @@ function ProvidersView({ providers, onAdd }: { providers: Provider[]; onAdd: () 
             </div>
           </article>
         ))}
+        {showRevenuePartners &&
+          revenuePartners.map((partner) => (
+            <article className="provider-card revenue-partner-card" key={partner.id}>
+              <div className="provider-card-head">
+                <div className="provider-avatar">
+                  <BarChart3 size={18} />
+                </div>
+                <div>
+                  <strong>{partner.name}</strong>
+                  <span>TUNE · Affiliate ID {partner.affiliateId || "Not set"}</span>
+                </div>
+                <button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
+                  <Pencil size={15} />
+                </button>
+              </div>
+              <div className="alias-list">
+                <span>{partner.currency}</span>
+                <span>{partner.timezone}</span>
+                <span>{partner.enabled ? "Enabled" : "Disabled"}</span>
+                <span>{partner.networkIdEnv}</span>
+              </div>
+            </article>
+          ))}
+        {visibleProviders.length === 0 && !showRevenuePartners && <div className="empty-state">No companies in this filter</div>}
       </div>
     </section>
   );
 }
 
-function IntegrationsView({ dashboard }: { dashboard: DashboardSnapshot }) {
+function SettingsView({
+  dashboard,
+  onSaveAiSettings,
+  onRunAiPrompt
+}: {
+  dashboard: DashboardSnapshot;
+  onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
+  onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
+}) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
+  const initialModelIsPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
+  const [apiKey, setApiKey] = useState("");
+  const [modelChoice, setModelChoice] = useState(initialModelIsPreset ? dashboard.aiSettings.model : "custom");
+  const [customModel, setCustomModel] = useState(initialModelIsPreset ? "" : dashboard.aiSettings.model);
+  const [prompt, setPrompt] = useState("");
+  const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
+  const [busy, setBusy] = useState<"save" | "prompt" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const isPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
+    setModelChoice(isPreset ? dashboard.aiSettings.model : "custom");
+    setCustomModel(isPreset ? "" : dashboard.aiSettings.model);
+  }, [dashboard.aiSettings.model]);
+
+  const selectedModel = modelChoice === "custom" ? customModel : modelChoice;
+
+  async function saveSettings(event: FormEvent) {
+    event.preventDefault();
+    setBusy("save");
+    setError(null);
+    try {
+      await onSaveAiSettings({
+        model: selectedModel,
+        openRouterApiKey: apiKey || undefined
+      });
+      setApiKey("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "AI settings could not be saved");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runPrompt(event: FormEvent) {
+    event.preventDefault();
+    setBusy("prompt");
+    setError(null);
+    setAiResult(null);
+    try {
+      setAiResult(
+        await onRunAiPrompt({
+          prompt,
+          systemPrompt: "You are the finance dashboard AI assistant. Be concise and operational."
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "AI prompt failed");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">API readiness</p>
-          <h2>Live integrations and credentials needed</h2>
+    <div className="settings-stack">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">AI settings</p>
+            <h2>OpenRouter model for website and backend tasks</h2>
+          </div>
+          <span className={`status-pill ${dashboard.aiSettings.apiKeyConfigured ? "good" : "warning"}`}>
+            {dashboard.aiSettings.apiKeyConfigured ? `Key ${dashboard.aiSettings.apiKeyPreview}` : "No key"}
+          </span>
         </div>
-        <span className="total-pill">{missing.length} missing</span>
-      </div>
-
-      <div className="integration-grid">
-        {dashboard.integrationStatus.map((integration) => (
-          <article className="integration-card" key={integration.id}>
-            <div className="integration-head">
-              <strong>{integration.label}</strong>
-              <span className={`status-pill ${integration.configured ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
-                {integration.mode}
-              </span>
+        <form className="settings-form" onSubmit={saveSettings}>
+          <label>
+            OpenRouter API key
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={dashboard.aiSettings.apiKeyConfigured ? "Leave blank to keep saved key" : "sk-or-v1..."}
+              autoComplete="off"
+            />
+          </label>
+          <div className="form-grid">
+            <label>
+              Model
+              <select value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}>
+                {openRouterModelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Model slug
+              <input
+                value={selectedModel}
+                onChange={(event) => {
+                  setModelChoice("custom");
+                  setCustomModel(event.target.value);
+                }}
+              />
+            </label>
+          </div>
+          {error && <div className="inline-error">{error}</div>}
+          <div className="modal-actions">
+            <button className="primary-button" type="submit" disabled={busy === "save"}>
+              {busy === "save" ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+              Save AI settings
+            </button>
+          </div>
+        </form>
+        <form className="settings-form ai-prompt-form" onSubmit={runPrompt}>
+          <label>
+            Prompt
+            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={3} />
+          </label>
+          <div className="modal-actions">
+            <button className="secondary-button" type="submit" disabled={busy === "prompt" || !dashboard.aiSettings.apiKeyConfigured}>
+              {busy === "prompt" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+              Run prompt
+            </button>
+          </div>
+          {aiResult && (
+            <div className="prompt-result">
+              <div>
+                <KeyRound size={15} />
+                <span>{aiResult.model}</span>
+              </div>
+              <p>{aiResult.output}</p>
             </div>
-            <p>{integration.message}</p>
-            <div className="need-list">
-              {integration.needs.length > 0 ? integration.needs.map((need) => <code key={need}>{need}</code>) : <code>configured</code>}
-            </div>
-          </article>
-        ))}
-      </div>
+          )}
+        </form>
+      </section>
 
-      <div className="docs-note">
-        <strong>Integration shape</strong>
-        <span>
-          Wise pulls balances and statements for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices. Slash has its own
-          card/cashback page. Marking paid here never marks paid in Merit.
-        </span>
-      </div>
-    </section>
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">API readiness</p>
+            <h2>Live integrations and credentials needed</h2>
+          </div>
+          <span className="total-pill">{missing.length} missing</span>
+        </div>
+
+        <div className="integration-grid">
+          {dashboard.integrationStatus.map((integration) => (
+            <article className="integration-card" key={integration.id}>
+              <div className="integration-head">
+                <strong>{integration.label}</strong>
+                <span className={`status-pill ${integration.configured ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
+                  {integration.mode}
+                </span>
+              </div>
+              <p>{integration.message}</p>
+              <div className="need-list">
+                {integration.needs.length > 0 ? integration.needs.map((need) => <code key={need}>{need}</code>) : <code>configured</code>}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="docs-note">
+          <strong>Integration shape</strong>
+          <span>
+            Wise pulls balances and statements for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices. Slash has its own
+            card/cashback page. Marking paid here never marks paid in Merit.
+          </span>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1326,7 +1670,7 @@ function InvoiceModal({
   onSubmit: (payload: CreateInvoicePayload) => Promise<void>;
 }) {
   const [providerId, setProviderId] = useState(provider?.id || "");
-  const [customerName, setCustomerName] = useState(provider?.name || transaction.counterparty);
+  const [customerName, setCustomerName] = useState(bankInvoiceName(transaction));
   const [amount, setAmount] = useState(String(transaction.amount));
   const [dueDate, setDueDate] = useState("2026-06-30");
   const [description, setDescription] = useState(transaction.description);
@@ -1373,13 +1717,11 @@ function InvoiceModal({
         </div>
         {error && <div className="inline-error">{error}</div>}
         <label>
-          Provider
+          Internal match
           <select
             value={providerId}
             onChange={(event) => {
-              const selected = providers.find((item) => item.id === event.target.value);
               setProviderId(event.target.value);
-              if (selected) setCustomerName(selected.name);
             }}
           >
             <option value="">No provider selected</option>
@@ -1391,7 +1733,7 @@ function InvoiceModal({
           </select>
         </label>
         <label>
-          Customer name
+          Invoice name
           <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
         </label>
         <div className="form-grid">
@@ -1423,16 +1765,19 @@ function InvoiceModal({
 }
 
 function ProviderModal({
+  provider,
   onClose,
   onSubmit
 }: {
+  provider?: Provider;
   onClose: () => void;
-  onSubmit: (payload: CreateProviderPayload) => Promise<void>;
+  onSubmit: (payload: UpdateProviderPayload) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
-  const [type, setType] = useState<ProviderType>("supplier");
-  const [category, setCategory] = useState("Provider");
-  const [aliases, setAliases] = useState("");
+  const [name, setName] = useState(provider?.name ?? "");
+  const [type, setType] = useState<ProviderType>(provider?.type ?? "provider");
+  const [category, setCategory] = useState(provider?.category ?? "Provider");
+  const [aliases, setAliases] = useState(provider?.aliases.join(", ") ?? "");
+  const [defaultAccount, setDefaultAccount] = useState(provider?.defaultAccount ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1445,7 +1790,8 @@ function ProviderModal({
         name,
         type,
         category,
-        aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean)
+        aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
+        defaultAccount: defaultAccount.trim() || undefined
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Provider could not be saved");
@@ -1459,8 +1805,8 @@ function ProviderModal({
       <form className="modal" onSubmit={handleSubmit}>
         <div className="modal-header">
           <div>
-            <p className="eyebrow">Provider setup</p>
-            <h2>Add company or platform</h2>
+            <p className="eyebrow">Directory setup</p>
+            <h2>{provider ? "Edit company" : "Add company or platform"}</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -1475,8 +1821,8 @@ function ProviderModal({
           <label>
             Type
             <select value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
-              <option value="supplier">Supplier</option>
-              <option value="customer">Customer</option>
+              <option value="partner">Partner</option>
+              <option value="provider">Provider</option>
               <option value="platform">Platform</option>
               <option value="internal">Internal</option>
             </select>
@@ -1486,6 +1832,10 @@ function ProviderModal({
             <input value={category} onChange={(event) => setCategory(event.target.value)} />
           </label>
         </div>
+        <label>
+          Default account
+          <input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />
+        </label>
         <label>
           Aliases
           <textarea
@@ -1501,6 +1851,153 @@ function ProviderModal({
           </button>
           <button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function RevenuePartnerModal({
+  partner,
+  onClose,
+  onSubmit
+}: {
+  partner: RevenuePartner;
+  onClose: () => void;
+  onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
+}) {
+  const [name, setName] = useState(partner.name);
+  const [affiliateId, setAffiliateId] = useState(partner.affiliateId);
+  const [externalId, setExternalId] = useState(partner.externalId ?? "");
+  const [currency, setCurrency] = useState(partner.currency);
+  const [timezone, setTimezone] = useState(partner.timezone);
+  const [networkTimezone, setNetworkTimezone] = useState(partner.networkTimezone);
+  const [networkIdEnv, setNetworkIdEnv] = useState(partner.networkIdEnv);
+  const [apiKeyEnv, setApiKeyEnv] = useState(partner.apiKeyEnv);
+  const [apiBaseUrlEnv, setApiBaseUrlEnv] = useState(partner.apiBaseUrlEnv ?? "");
+  const [meritCustomerName, setMeritCustomerName] = useState(partner.meritCustomerName ?? "");
+  const [invoiceDueDays, setInvoiceDueDays] = useState(String(partner.invoiceDueDays));
+  const [enabled, setEnabled] = useState(partner.enabled);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        name,
+        affiliateId,
+        externalId: externalId.trim() || undefined,
+        currency,
+        timezone,
+        networkTimezone,
+        networkIdEnv,
+        apiKeyEnv,
+        apiBaseUrlEnv: apiBaseUrlEnv.trim() || undefined,
+        meritCustomerName: meritCustomerName.trim() || undefined,
+        invoiceDueDays: Number(invoiceDueDays),
+        enabled
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Revenue partner could not be saved");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal wide-modal" onSubmit={handleSubmit}>
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Revenue partner</p>
+            <h2>Edit {partner.name}</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="form-grid">
+          <label>
+            Name
+            <input value={name} onChange={(event) => setName(event.target.value)} />
+          </label>
+          <label>
+            Affiliate ID
+            <input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            External ID
+            <input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
+          </label>
+          <label>
+            Currency
+            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Timezone
+            <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+              {timezoneOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Network timezone
+            <select value={networkTimezone} onChange={(event) => setNetworkTimezone(event.target.value)}>
+              {timezoneOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Network ID env
+            <input value={networkIdEnv} onChange={(event) => setNetworkIdEnv(event.target.value)} />
+          </label>
+          <label>
+            API key env
+            <input value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} />
+          </label>
+        </div>
+        <label>
+          API base URL env
+          <input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
+        </label>
+        <div className="form-grid">
+          <label>
+            Merit customer
+            <input value={meritCustomerName} onChange={(event) => setMeritCustomerName(event.target.value)} />
+          </label>
+          <label>
+            Invoice due days
+            <input type="number" min="0" step="1" value={invoiceDueDays} onChange={(event) => setInvoiceDueDays(event.target.value)} />
+          </label>
+        </div>
+        <label className="check-row modal-check-row">
+          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          Enabled
+        </label>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary-button" disabled={submitting}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
             Save
           </button>
         </div>

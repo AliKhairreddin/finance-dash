@@ -576,6 +576,9 @@ h2 {
 .filters input,
 .revenue-controls select,
 .revenue-controls input,
+.settings-form input,
+.settings-form select,
+.settings-form textarea,
 .modal input,
 .modal select,
 .modal textarea {
@@ -615,6 +618,35 @@ h2 {
   white-space: nowrap;
 }
 
+.revenue-partner-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfd;
+}
+
+.revenue-partner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+}
+
+.revenue-partner-chip strong {
+  color: var(--ink);
+}
+
+.revenue-partner-chip span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .timezone-field {
   grid-column: span 1;
 }
@@ -642,6 +674,11 @@ h2 {
 }
 
 .modal textarea {
+  padding: 9px;
+  resize: vertical;
+}
+
+.settings-form textarea {
   padding: 9px;
   resize: vertical;
 }
@@ -830,6 +867,67 @@ h2 {
   padding: 14px;
 }
 
+.directory-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+
+.settings-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #445166;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.ai-prompt-form {
+  border-bottom: 0;
+  background: #fbfcfd;
+}
+
+.prompt-result {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d7e4f2;
+  border-radius: 8px;
+  background: #f6faff;
+}
+
+.prompt-result div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 720;
+}
+
+.prompt-result p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .split-view {
   display: grid;
   grid-template-columns: minmax(320px, 0.85fr) minmax(320px, 0.75fr);
@@ -861,6 +959,15 @@ h2 {
   justify-content: flex-start;
 }
 
+.provider-card-head > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-card-head .icon-button {
+  flex: 0 0 auto;
+}
+
 .provider-avatar {
   display: grid;
   width: 36px;
@@ -885,6 +992,11 @@ h2 {
   line-height: 1.45;
 }
 
+.revenue-partner-card .provider-avatar {
+  color: var(--teal);
+  background: #e8f7f8;
+}
+
 .alias-list,
 .need-list {
   display: flex;
@@ -904,6 +1016,15 @@ h2 {
   border: 1px solid var(--line);
   color: #435164;
   font-size: 0.74rem;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  padding: 18px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
 }
 
 .docs-note {
@@ -971,6 +1092,10 @@ h2 {
   padding: 16px;
 }
 
+.wide-modal {
+  width: min(720px, calc(100vw - 30px));
+}
+
 .modal-header {
   display: flex;
   align-items: flex-start;
@@ -992,6 +1117,18 @@ h2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.modal-check-row {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px !important;
+}
+
+.modal-check-row input {
+  width: auto;
+  min-height: auto;
 }
 
 .transaction-summary {
@@ -1118,6 +1255,14 @@ h2 {
   .revenue-controls,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .directory-toolbar {
+    overflow-x: auto;
+  }
+
+  .directory-toolbar .segmented-control {
+    flex: 0 0 auto;
   }
 
   .review-row {

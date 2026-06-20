@@ -11,8 +11,8 @@ const dataSource = v.union(
 );
 
 const providerType = v.union(
-  v.literal("customer"),
-  v.literal("supplier"),
+  v.literal("partner"),
+  v.literal("provider"),
   v.literal("platform"),
   v.literal("internal")
 );
@@ -80,14 +80,41 @@ const revenueRun = v.object({
   createdAt: v.string()
 });
 
+const revenuePartner = v.object({
+  id: v.string(),
+  name: v.string(),
+  source: v.literal("tune"),
+  affiliateId: v.string(),
+  externalId: v.optional(v.string()),
+  currency: v.string(),
+  timezone: v.string(),
+  networkTimezone: v.string(),
+  networkIdEnv: v.string(),
+  apiKeyEnv: v.string(),
+  apiBaseUrlEnv: v.optional(v.string()),
+  meritCustomerName: v.optional(v.string()),
+  invoiceDueDays: v.number(),
+  enabled: v.boolean(),
+  createdAt: v.string()
+});
+
+const aiSettings = v.object({
+  provider: v.literal("openrouter"),
+  model: v.string(),
+  openRouterApiKey: v.optional(v.string()),
+  updatedAt: v.optional(v.string())
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
     providers: v.array(provider),
     invoices: v.array(invoice),
     teams: v.optional(v.array(team)),
+    revenuePartners: v.optional(v.array(revenuePartner)),
     transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
     revenueRuns: v.optional(v.array(revenueRun)),
+    aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"])
 });

@@ -2,7 +2,7 @@ export type DataSource = "wise" | "slash" | "merit" | "manual" | "mock" | "tune"
 
 export type Direction = "in" | "out";
 
-export type ProviderType = "customer" | "supplier" | "platform" | "internal";
+export type ProviderType = "partner" | "provider" | "platform" | "internal";
 
 export type InvoiceStatus = "draft" | "open" | "paid" | "created";
 
@@ -69,6 +69,7 @@ export interface RevenuePartner {
   id: string;
   name: string;
   source: "tune";
+  affiliateId: string;
   externalId?: string;
   currency: string;
   timezone: string;
@@ -80,6 +81,21 @@ export interface RevenuePartner {
   invoiceDueDays: number;
   enabled: boolean;
   createdAt: string;
+}
+
+export interface AiSettings {
+  provider: "openrouter";
+  model: string;
+  apiKeyConfigured: boolean;
+  apiKeyPreview?: string;
+  updatedAt?: string;
+}
+
+export interface StoredAiSettings {
+  provider: "openrouter";
+  model: string;
+  openRouterApiKey?: string;
+  updatedAt?: string;
 }
 
 export interface RevenueRun {
@@ -147,7 +163,7 @@ export interface Transaction {
 }
 
 export interface IntegrationStatus {
-  id: DataSource;
+  id: DataSource | "openrouter";
   label: string;
   configured: boolean;
   mode: "live" | "mock" | "partial";
@@ -193,6 +209,7 @@ export interface DashboardSnapshot {
   revenuePartners: RevenuePartner[];
   revenueRuns: RevenueRun[];
   revenueMetrics: RevenueMetrics;
+  aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
   integrationStatus: IntegrationStatus[];
@@ -229,6 +246,25 @@ export interface CreateProviderPayload {
   aliases: string[];
 }
 
+export interface UpdateProviderPayload extends CreateProviderPayload {
+  defaultAccount?: string;
+}
+
+export interface UpdateRevenuePartnerPayload {
+  name: string;
+  affiliateId: string;
+  externalId?: string;
+  currency: string;
+  timezone: string;
+  networkTimezone: string;
+  networkIdEnv: string;
+  apiKeyEnv: string;
+  apiBaseUrlEnv?: string;
+  meritCustomerName?: string;
+  invoiceDueDays: number;
+  enabled: boolean;
+}
+
 export interface SyncRevenuePayload {
   partnerId?: string;
   periodPreset?: RevenuePeriodPreset;
@@ -236,4 +272,21 @@ export interface SyncRevenuePayload {
   periodEnd?: string;
   timezone?: string;
   createInvoices?: boolean;
+}
+
+export interface SaveAiSettingsPayload {
+  openRouterApiKey?: string;
+  clearApiKey?: boolean;
+  model: string;
+}
+
+export interface AiPromptPayload {
+  prompt: string;
+  systemPrompt?: string;
+}
+
+export interface AiPromptResult {
+  output: string;
+  model: string;
+  createdAt: string;
 }

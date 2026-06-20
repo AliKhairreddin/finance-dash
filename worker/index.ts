@@ -1,5 +1,6 @@
 import type {
   AccountBalance,
+  AiPromptPayload,
   AssignTransactionTeamPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
@@ -11,17 +12,22 @@ import type {
   Provider,
   RevenuePartner,
   RevenueRun,
+  SaveAiSettingsPayload,
+  StoredAiSettings,
   SyncRevenuePayload,
   Team,
   TransactionTeamAssignment,
-  Transaction
+  Transaction,
+  UpdateProviderPayload,
+  UpdateRevenuePartnerPayload
 } from "../shared/types";
+import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
-import { enrichTransactions, learnAlias } from "../server/matching";
+import { enrichTransactions, learnAliases } from "../server/matching";
 import {
   seededAccounts,
   seededAsOf,
@@ -69,14 +75,17 @@ interface Env {
   KISSTERRA_TUNE_NETWORK_ID?: string;
   KISSTERRA_TUNE_API_KEY?: string;
   KISSTERRA_TUNE_API_BASE_URL?: string;
+  PUBLIC_APP_URL?: string;
 }
 
 interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
   teams: Team[];
+  revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
   revenueRuns: RevenueRun[];
+  aiSettings?: StoredAiSettings;
 }
 
 const stateKey = "finance-dashboard-state";
@@ -107,6 +116,10 @@ function mergeById<T extends { id: string }>(seeded: T[], persisted?: T[]): T[] 
     map.set(item.id, item);
   }
   return [...map.values()];
+}
+
+function bankAliasNames(transaction: Transaction): string[] {
+  return [transaction.rawName, transaction.counterparty].filter(Boolean);
 }
 
 function getConvexClient(env: Env): ConvexHttpClient | null {
@@ -584,8 +597,10 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     providers: mergeById(seededProviders, stored?.providers),
     invoices: mergeById(seededInvoices, stored?.invoices),
     teams: mergeById(seededTeams, stored?.teams),
+    revenuePartners: mergeById(seededRevenuePartners, stored?.revenuePartners),
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
-    revenueRuns: stored?.revenueRuns ?? []
+    revenueRuns: stored?.revenueRuns ?? [],
+    aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
 }
 
@@ -694,9 +709,10 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     investments: seededInvestments,
     providers: state.providers,
     teams: state.teams,
-    revenuePartners: seededRevenuePartners,
+    revenuePartners: state.revenuePartners,
     revenueRuns: state.revenueRuns,
-    revenueMetrics: calculateRevenueMetrics(seededRevenuePartners, state.revenueRuns),
+    revenueMetrics: calculateRevenueMetrics(state.revenuePartners, state.revenueRuns),
+    aiSettings: publicAiSettings(state.aiSettings ?? { ...defaultAiSettings }),
     transactions,
     invoices,
     integrationStatus: integrationStatus(env),
@@ -724,6 +740,80 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
   return provider;
 }
 
+async function updateProvider(env: Env, providerId: string, payload: UpdateProviderPayload): Promise<Provider> {
+  if (!payload.name?.trim()) {
+    throw new Error("Provider name is required");
+  }
+  const state = await loadPersisted(env);
+  let updated: Provider | undefined;
+  state.providers = state.providers.map((provider) => {
+    if (provider.id !== providerId) return provider;
+    updated = {
+      ...provider,
+      name: payload.name.trim(),
+      type: payload.type,
+      category: payload.category.trim() || "Uncategorized",
+      aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
+      defaultAccount: payload.defaultAccount?.trim() || undefined
+    };
+    return updated;
+  });
+  if (!updated) throw new Error("Provider not found");
+  await savePersisted(env, state);
+  return updated;
+}
+
+async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
+  if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
+    throw new Error("name, networkIdEnv, and apiKeyEnv are required");
+  }
+  const state = await loadPersisted(env);
+  let updated: RevenuePartner | undefined;
+  state.revenuePartners = state.revenuePartners.map((partner) => {
+    if (partner.id !== partnerId) return partner;
+    updated = {
+      ...partner,
+      name: payload.name.trim(),
+      affiliateId: payload.affiliateId.trim(),
+      externalId: payload.externalId?.trim() || undefined,
+      currency: payload.currency.trim() || "USD",
+      timezone: payload.timezone,
+      networkTimezone: payload.networkTimezone,
+      networkIdEnv: payload.networkIdEnv.trim(),
+      apiKeyEnv: payload.apiKeyEnv.trim(),
+      apiBaseUrlEnv: payload.apiBaseUrlEnv?.trim() || undefined,
+      meritCustomerName: payload.meritCustomerName?.trim() || undefined,
+      invoiceDueDays: payload.invoiceDueDays,
+      enabled: payload.enabled
+    };
+    return updated;
+  });
+  if (!updated) throw new Error("Revenue partner not found");
+  await savePersisted(env, state);
+  return updated;
+}
+
+async function saveAiSettings(env: Env, payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {
+  const model = payload.model.trim();
+  if (!model) throw new Error("OpenRouter model is required");
+
+  const state = await loadPersisted(env);
+  const nextKey = payload.clearApiKey ? undefined : payload.openRouterApiKey?.trim() || state.aiSettings?.openRouterApiKey;
+  state.aiSettings = {
+    provider: "openrouter",
+    model,
+    openRouterApiKey: nextKey,
+    updatedAt: new Date().toISOString()
+  };
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
+async function runAiPrompt(env: Env, payload: AiPromptPayload) {
+  const state = await loadPersisted(env);
+  return runOpenRouterPrompt(state.aiSettings ?? { ...defaultAiSettings }, payload, env.PUBLIC_APP_URL);
+}
+
 async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const state = await loadPersisted(env);
   const transaction = await fetchTransactionForMatch(env, payload.transactionId);
@@ -733,7 +823,7 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   }
   if (payload.rememberAlias) {
     state.providers = state.providers.map((item) =>
-      item.id === provider.id ? learnAlias(item, transaction.rawName) : item
+      item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
     );
     await savePersisted(env, state);
   }
@@ -796,6 +886,14 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
       transactionId: payload.transactionId,
       createdAt: new Date().toISOString()
     };
+  if (payload.transactionId && payload.providerId) {
+    const transaction = await fetchTransactionForUpdate(env, payload.transactionId);
+    if (transaction) {
+      state.providers = state.providers.map((provider) =>
+        provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
+      );
+    }
+  }
   state.invoices = [invoice, ...state.invoices];
   await savePersisted(env, state);
   return invoice;
@@ -803,7 +901,7 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
 
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const selectedPartners = seededRevenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  const selectedPartners = state.revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
   }
@@ -942,6 +1040,24 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/providers" && request.method === "POST") {
       return json(await createProvider(env, (await request.json()) as CreateProviderPayload), { status: 201 });
+    }
+
+    const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+    if (providerMatch && request.method === "PUT") {
+      return json(await updateProvider(env, providerMatch[1], (await request.json()) as UpdateProviderPayload));
+    }
+
+    const revenuePartnerMatch = url.pathname.match(/^\/api\/revenue-partners\/([^/]+)$/);
+    if (revenuePartnerMatch && request.method === "PUT") {
+      return json(await updateRevenuePartner(env, revenuePartnerMatch[1], (await request.json()) as UpdateRevenuePartnerPayload));
+    }
+
+    if (url.pathname === "/api/settings/ai" && request.method === "POST") {
+      return json(await saveAiSettings(env, (await request.json()) as SaveAiSettingsPayload));
+    }
+
+    if (url.pathname === "/api/ai/prompt" && request.method === "POST") {
+      return json(await runAiPrompt(env, (await request.json()) as AiPromptPayload));
     }
 
     if (url.pathname === "/api/matches" && request.method === "POST") {

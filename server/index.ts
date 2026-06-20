@@ -3,9 +3,11 @@ import "dotenv/config";
 import express from "express";
 import type {
   AssignTransactionTeamPayload,
+  AiPromptPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
   MatchTransactionPayload,
+  SaveAiSettingsPayload,
   SyncRevenuePayload
 } from "../shared/types";
 import {
@@ -16,9 +18,13 @@ import {
   initializeStore,
   markInvoicePaidLocally,
   matchTransaction,
+  runAiPrompt,
+  saveAiSettings,
   setInvoiceApproval,
   syncExternalActivity,
-  syncRevenue
+  syncRevenue,
+  updateProvider,
+  updateRevenuePartner
 } from "./store";
 
 const app = express();
@@ -59,6 +65,53 @@ app.post("/api/providers", async (request, response, next) => {
       return;
     }
     response.status(201).json(await createProvider(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/providers/:providerId", async (request, response, next) => {
+  try {
+    const payload = request.body as CreateProviderPayload;
+    if (!payload.name?.trim()) {
+      response.status(400).json({ message: "Provider name is required" });
+      return;
+    }
+    response.json(await updateProvider(request.params.providerId, payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
+  try {
+    const payload = request.body;
+    if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
+      response.status(400).json({ message: "name, networkIdEnv, and apiKeyEnv are required" });
+      return;
+    }
+    response.json(await updateRevenuePartner(request.params.partnerId, payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/ai", async (request, response, next) => {
+  try {
+    response.json(await saveAiSettings(request.body as SaveAiSettingsPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ai/prompt", async (request, response, next) => {
+  try {
+    const payload = request.body as AiPromptPayload;
+    if (!payload.prompt?.trim()) {
+      response.status(400).json({ message: "Prompt is required" });
+      return;
+    }
+    response.json(await runAiPrompt(payload));
   } catch (error) {
     next(error);
   }
