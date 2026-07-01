@@ -21,7 +21,9 @@ import type {
   SyncRevenuePayload,
   Team,
   Transaction,
+  TransactionCategoryRule,
   UpdateProviderPayload,
+  UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
   WiseStatementImport
 } from "../shared/types";
@@ -42,6 +44,7 @@ import {
 import {
   enrichTransactions,
   learnAliases,
+  learnCategoryAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
   semanticCategorizeTransaction,
@@ -53,6 +56,7 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 let providers: Provider[] = [];
 let invoices: Invoice[] = [];
 let teams: Team[] = [];
+let transactionCategoryRules: TransactionCategoryRule[] = [];
 let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
 let aiSettings: StoredAiSettings = { ...defaultAiSettings };
@@ -136,6 +140,7 @@ export async function initializeStore(): Promise<void> {
   providers = mergeProviderDirectory(persisted.providers ?? []);
   invoices = realInvoices(persisted.invoices);
   teams = mergeTeamDirectory(persisted.teams ?? []);
+  transactionCategoryRules = persisted.transactionCategoryRules ?? [];
   revenuePartners = persisted.revenuePartners ?? [];
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
@@ -149,6 +154,7 @@ async function persist(): Promise<void> {
     providers,
     invoices,
     teams,
+    transactionCategoryRules,
     revenuePartners,
     transactionTeamAssignments,
     wiseStatementTransactions,
@@ -160,6 +166,41 @@ async function persist(): Promise<void> {
 
 function bankAliasNames(transaction: Transaction): string[] {
   return transactionAliasCandidates(transaction);
+}
+
+function cleanOptional(value?: string): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function cleanOptionalNumber(value?: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload): Pick<
+  Provider,
+  | "defaultAccount"
+  | "legalName"
+  | "email"
+  | "country"
+  | "address"
+  | "taxId"
+  | "defaultCurrency"
+  | "paymentTermsDays"
+  | "meritCustomerId"
+  | "meritSupplierId"
+> {
+  return {
+    defaultAccount: cleanOptional(payload.defaultAccount),
+    legalName: cleanOptional(payload.legalName),
+    email: cleanOptional(payload.email),
+    country: cleanOptional(payload.country),
+    address: cleanOptional(payload.address),
+    taxId: cleanOptional(payload.taxId),
+    defaultCurrency: cleanOptional(payload.defaultCurrency),
+    paymentTermsDays: cleanOptionalNumber(payload.paymentTermsDays),
+    meritCustomerId: cleanOptional(payload.meritCustomerId),
+    meritSupplierId: cleanOptional(payload.meritSupplierId)
+  };
 }
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
@@ -178,7 +219,7 @@ function getMatchedTransactions(): Transaction[] {
       ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
       : transaction;
   });
-  return enrichTransactions(applyTeamAssignments(withInvoiceMatches), providers);
+  return enrichTransactions(applyTeamAssignments(withInvoiceMatches), providers, transactionCategoryRules);
 }
 
 function getKnownTransactions(): Transaction[] {
@@ -209,7 +250,7 @@ function transactionNeedsCategorization(transaction: Transaction): boolean {
 }
 
 function applySemanticCategorization(transaction: Transaction): { transaction: Transaction; matched: boolean; categorizedOnly: boolean } {
-  const categorized = semanticCategorizeTransaction(transaction, providers);
+  const categorized = semanticCategorizeTransaction(transaction, providers, transactionCategoryRules);
   return {
     transaction: categorized,
     matched: Boolean(categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId),
@@ -225,7 +266,7 @@ function applyAiCategorization(
   return {
     ...transaction,
     matchedProviderId: provider?.id ?? transaction.matchedProviderId,
-    category: provider?.category ?? match.category ?? transaction.category,
+    category: match.category ?? transaction.category,
     confidence: match.confidence,
     matchReason: `AI: ${match.reason}`
   };
@@ -307,6 +348,7 @@ export function getSnapshot(): DashboardSnapshot {
     aiSettings: publicAiSettings(aiSettings),
     transactions: getMatchedTransactions(),
     invoices,
+    transactionCategoryRules,
     wiseStatementImports,
     integrationStatus: getIntegrationStatus(wiseSyncIssue),
     metrics,
@@ -400,6 +442,7 @@ export async function createProvider(payload: CreateProviderPayload): Promise<Pr
     type: payload.type,
     category: payload.category.trim() || "Uncategorized",
     aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
+    ...companyDetails(payload),
     source: "manual",
     createdAt: new Date().toISOString()
   };
@@ -418,7 +461,7 @@ export async function updateProvider(providerId: string, payload: UpdateProvider
       type: payload.type,
       category: payload.category.trim() || "Uncategorized",
       aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
-      defaultAccount: payload.defaultAccount?.trim() || undefined
+      ...companyDetails(payload)
     };
     return updated;
   });
@@ -477,16 +520,15 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
   const provider = providers.find((item) => item.id === payload.providerId);
   const transaction = findKnownTransaction(payload.transactionId);
   if (!provider || !transaction) {
-    throw new Error("Provider or transaction not found");
+    throw new Error("Company or transaction not found");
   }
 
   const matchedTransaction: Transaction = {
     ...transaction,
     matchedProviderId: payload.providerId,
     matchedInvoiceId: payload.invoiceId,
-    category: provider.category,
     confidence: 1,
-    matchReason: "Approved match"
+    matchReason: "Approved company match"
   };
   updateStoredTransaction(matchedTransaction);
 
@@ -495,15 +537,49 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
   }
 
   await persist();
-  return enrichTransactions([matchedTransaction], providers)[0];
+  return enrichTransactions([matchedTransaction], providers, transactionCategoryRules)[0];
+}
+
+export async function updateTransactionCategory(payload: UpdateTransactionCategoryPayload): Promise<Transaction> {
+  const transaction = findKnownTransaction(payload.transactionId);
+  if (!transaction) {
+    throw new Error("Transaction not found");
+  }
+
+  const category = payload.category.trim() || "Uncategorized";
+  const updated: Transaction = {
+    ...transaction,
+    category,
+    matchReason: "Manual category"
+  };
+  updateStoredTransaction(updated);
+
+  if (payload.rememberAlias) {
+    transactionCategoryRules = learnCategoryAliases(transactionCategoryRules, transaction, category);
+  }
+
+  await persist();
+  return enrichTransactions([updated], providers, transactionCategoryRules)[0];
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
-  const liveInvoice = await createMeritInvoice(payload);
-  if (!liveInvoice) {
-    throw new Error("Merit API credentials are not configured; invoice was not created.");
-  }
-  const invoice: Invoice = liveInvoice;
+  const invoice: Invoice = {
+    id: `local-${payload.documentType}-${crypto.randomUUID()}`,
+    providerId: payload.providerId,
+    documentType: payload.documentType,
+    customerName: payload.customerName.trim(),
+    amount: payload.amount,
+    currency: payload.currency,
+    status: "draft",
+    approvalStatus: "pending",
+    paidLocally: false,
+    meritPaid: false,
+    dueDate: payload.dueDate,
+    source: "manual",
+    description: payload.description.trim(),
+    transactionId: payload.transactionId,
+    createdAt: new Date().toISOString()
+  };
 
   invoices = [invoice, ...invoices];
   if (payload.transactionId && payload.providerId) {
@@ -518,9 +594,8 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
           ...sourceTransaction,
           matchedProviderId: payload.providerId,
           matchedInvoiceId: invoice.id,
-          category: provider.category,
           confidence: 1,
-          matchReason: "Invoice created"
+          matchReason: payload.documentType === "sales_invoice" ? "Sales invoice draft created" : "Supplier bill draft created"
         });
       }
     }
@@ -563,6 +638,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
         };
       } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const invoice = await createMeritInvoice({
+          documentType: "sales_invoice",
           customerName: partner.meritCustomerName || partner.name,
           amount: run.revenue,
           currency: run.currency,

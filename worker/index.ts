@@ -23,7 +23,9 @@ import type {
   Team,
   TransactionTeamAssignment,
   Transaction,
+  TransactionCategoryRule,
   UpdateProviderPayload,
+  UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
   WiseStatementImport
 } from "../shared/types";
@@ -36,6 +38,7 @@ import { calculateMetrics } from "../server/calculations";
 import {
   enrichTransactions,
   learnAliases,
+  learnCategoryAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
   semanticCategorizeTransaction,
@@ -79,12 +82,48 @@ interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
   teams: Team[];
+  transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
   aiSettings?: StoredAiSettings;
+}
+
+function cleanOptional(value?: string): string | undefined {
+  return value?.trim() || undefined;
+}
+
+function cleanOptionalNumber(value?: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload): Pick<
+  Provider,
+  | "defaultAccount"
+  | "legalName"
+  | "email"
+  | "country"
+  | "address"
+  | "taxId"
+  | "defaultCurrency"
+  | "paymentTermsDays"
+  | "meritCustomerId"
+  | "meritSupplierId"
+> {
+  return {
+    defaultAccount: cleanOptional(payload.defaultAccount),
+    legalName: cleanOptional(payload.legalName),
+    email: cleanOptional(payload.email),
+    country: cleanOptional(payload.country),
+    address: cleanOptional(payload.address),
+    taxId: cleanOptional(payload.taxId),
+    defaultCurrency: cleanOptional(payload.defaultCurrency),
+    paymentTermsDays: cleanOptionalNumber(payload.paymentTermsDays),
+    meritCustomerId: cleanOptional(payload.meritCustomerId),
+    meritSupplierId: cleanOptional(payload.meritSupplierId)
+  };
 }
 
 interface WiseActivityResult {
@@ -651,6 +690,7 @@ async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
 
   return response.map((invoice) => ({
     id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
+    documentType: "sales_invoice" as const,
     customerName: invoice.CustomerName ?? "Merit invoice",
     amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
     currency: invoice.CurrencyCode ?? "USD",
@@ -710,6 +750,7 @@ async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Prom
   return {
     id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
     providerId: payload.providerId,
+    documentType: payload.documentType,
     customerName: payload.customerName,
     amount: payload.amount,
     currency: payload.currency,
@@ -832,6 +873,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: realInvoices(stored?.invoices),
     teams: mergeTeamDirectory(stored?.teams ?? []),
+    transactionCategoryRules: stored?.transactionCategoryRules ?? [],
     revenuePartners: stored?.revenuePartners ?? [],
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
@@ -1009,7 +1051,8 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
       }),
       state.transactionTeamAssignments
     ),
-    state.providers
+    state.providers,
+    state.transactionCategoryRules
   );
 
   return {
@@ -1027,6 +1070,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     aiSettings: publicAiSettings(state.aiSettings ?? { ...defaultAiSettings }),
     transactions,
     invoices,
+    transactionCategoryRules: state.transactionCategoryRules,
     wiseStatementImports: state.wiseStatementImports,
     integrationStatus: integrationStatus(env, wise),
     metrics: calculateMetrics(accounts, [], [], [], []),
@@ -1036,7 +1080,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
 
 async function createProvider(env: Env, payload: CreateProviderPayload): Promise<Provider> {
   if (!payload.name?.trim()) {
-    throw new Error("Provider name is required");
+    throw new Error("Company name is required");
   }
   const state = await loadPersisted(env);
   const provider: Provider = {
@@ -1045,6 +1089,7 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
     type: payload.type,
     category: payload.category.trim() || "Uncategorized",
     aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
+    ...companyDetails(payload),
     source: "manual",
     createdAt: new Date().toISOString()
   };
@@ -1055,7 +1100,7 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
 
 async function updateProvider(env: Env, providerId: string, payload: UpdateProviderPayload): Promise<Provider> {
   if (!payload.name?.trim()) {
-    throw new Error("Provider name is required");
+    throw new Error("Company name is required");
   }
   const state = await loadPersisted(env);
   let updated: Provider | undefined;
@@ -1067,7 +1112,7 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
       type: payload.type,
       category: payload.category.trim() || "Uncategorized",
       aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
-      defaultAccount: payload.defaultAccount?.trim() || undefined
+      ...companyDetails(payload)
     };
     return updated;
   });
@@ -1147,7 +1192,7 @@ async function autoCategorizeState(
     if (targetIds && !targetIds.has(transaction.id)) return transaction;
     if (!transactionNeedsCategorization(transaction)) return transaction;
     reviewed += 1;
-    const categorized = semanticCategorizeTransaction(transaction, state.providers);
+    const categorized = semanticCategorizeTransaction(transaction, state.providers, state.transactionCategoryRules);
     if (categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId) {
       semanticMatches += 1;
     }
@@ -1179,7 +1224,7 @@ async function autoCategorizeState(
       const updated: Transaction = {
         ...transaction,
         matchedProviderId: provider?.id ?? transaction.matchedProviderId,
-        category: provider?.category ?? aiResult.category ?? transaction.category,
+        category: aiResult.category ?? transaction.category,
         confidence: aiResult.confidence,
         matchReason: `AI: ${aiResult.reason}`
       };
@@ -1216,15 +1261,14 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const transaction = await fetchTransactionForMatch(env, payload.transactionId, state);
   const provider = state.providers.find((item) => item.id === payload.providerId);
   if (!transaction || !provider) {
-    throw new Error("Provider or transaction not found");
+    throw new Error("Company or transaction not found");
   }
   const matchedTransaction: Transaction = {
     ...transaction,
     matchedProviderId: payload.providerId,
     matchedInvoiceId: payload.invoiceId,
-    category: provider.category,
     confidence: 1,
-    matchReason: "Approved match"
+    matchReason: "Approved company match"
   };
   if (payload.rememberAlias) {
     state.providers = state.providers.map((item) =>
@@ -1233,12 +1277,39 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   }
   updatePersistedTransaction(state, matchedTransaction);
   await savePersisted(env, state);
-  return enrichTransactions([
-    {
-      ...matchedTransaction,
-      teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
-    }
-  ], state.providers)[0];
+  return enrichTransactions(
+    [
+      {
+        ...matchedTransaction,
+        teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
+      }
+    ],
+    state.providers,
+    state.transactionCategoryRules
+  )[0];
+}
+
+async function updateTransactionCategory(env: Env, payload: UpdateTransactionCategoryPayload): Promise<Transaction> {
+  const state = await loadPersisted(env);
+  const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
+  if (!transaction) {
+    throw new Error("Transaction not found");
+  }
+
+  const category = payload.category.trim() || "Uncategorized";
+  const updated: Transaction = {
+    ...transaction,
+    category,
+    matchReason: "Manual category"
+  };
+  updatePersistedTransaction(state, updated);
+
+  if (payload.rememberAlias) {
+    state.transactionCategoryRules = learnCategoryAliases(state.transactionCategoryRules, transaction, category);
+  }
+
+  await savePersisted(env, state);
+  return enrichTransactions([updated], state.providers, state.transactionCategoryRules)[0];
 }
 
 async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
@@ -1269,14 +1340,32 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
 }
 
 async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
-  if (!payload.customerName?.trim() || !payload.amount || !payload.dueDate) {
-    throw new Error("customerName, amount, and dueDate are required");
+  if (
+    !payload.customerName?.trim() ||
+    !payload.amount ||
+    !payload.dueDate ||
+    (payload.documentType !== "sales_invoice" && payload.documentType !== "supplier_bill")
+  ) {
+    throw new Error("customerName, amount, dueDate, and documentType are required");
   }
   const state = await loadPersisted(env);
-  const invoice = await createMeritInvoice(env, payload);
-  if (!invoice) {
-    throw new Error("Merit API credentials are not configured; invoice was not created.");
-  }
+  const invoice: Invoice = {
+    id: `local-${payload.documentType}-${crypto.randomUUID()}`,
+    providerId: payload.providerId,
+    documentType: payload.documentType,
+    customerName: payload.customerName.trim(),
+    amount: payload.amount,
+    currency: payload.currency,
+    status: "draft",
+    approvalStatus: "pending",
+    paidLocally: false,
+    meritPaid: false,
+    dueDate: payload.dueDate,
+    source: "manual",
+    description: payload.description.trim(),
+    transactionId: payload.transactionId,
+    createdAt: new Date().toISOString()
+  };
   if (payload.transactionId && payload.providerId) {
     const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
     if (transaction) {
@@ -1289,9 +1378,8 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
           ...transaction,
           matchedProviderId: payload.providerId,
           matchedInvoiceId: invoice.id,
-          category: provider.category,
           confidence: 1,
-          matchReason: "Invoice created"
+          matchReason: payload.documentType === "sales_invoice" ? "Sales invoice draft created" : "Supplier bill draft created"
         });
       }
     }
@@ -1336,6 +1424,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
         };
       } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const invoice = await createMeritInvoice(env, {
+          documentType: "sales_invoice",
           customerName: partner.meritCustomerName || partner.name,
           amount: run.revenue,
           currency: run.currency,
@@ -1478,6 +1567,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (teamMatch && request.method === "POST") {
       const body = (await request.json()) as { teamId?: string | null };
       return json(await assignTransactionTeam(env, { transactionId: teamMatch[1], teamId: body.teamId || undefined }));
+    }
+
+    const categoryMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/category$/);
+    if (categoryMatch && request.method === "POST") {
+      const body = (await request.json()) as { category?: string; rememberAlias?: boolean | null };
+      return json(
+        await updateTransactionCategory(env, {
+          transactionId: categoryMatch[1],
+          category: body.category ?? "",
+          rememberAlias: body.rememberAlias !== false
+        })
+      );
     }
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {

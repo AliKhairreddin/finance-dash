@@ -20,6 +20,8 @@ const providerType = v.union(
 
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"), v.literal("created"));
 
+const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
+
 const provider = v.object({
   id: v.string(),
   name: v.string(),
@@ -27,6 +29,15 @@ const provider = v.object({
   category: v.string(),
   aliases: v.array(v.string()),
   defaultAccount: v.optional(v.string()),
+  legalName: v.optional(v.string()),
+  email: v.optional(v.string()),
+  country: v.optional(v.string()),
+  address: v.optional(v.string()),
+  taxId: v.optional(v.string()),
+  defaultCurrency: v.optional(v.string()),
+  paymentTermsDays: v.optional(v.number()),
+  meritCustomerId: v.optional(v.string()),
+  meritSupplierId: v.optional(v.string()),
   source: dataSource,
   createdAt: v.string()
 });
@@ -34,6 +45,7 @@ const provider = v.object({
 const invoice = v.object({
   id: v.string(),
   providerId: v.optional(v.string()),
+  documentType: v.optional(invoiceDocumentType),
   customerName: v.string(),
   amount: v.number(),
   currency: v.string(),
@@ -59,6 +71,15 @@ const team = v.object({
 const transactionTeamAssignment = v.object({
   transactionId: v.string(),
   teamId: v.string(),
+  updatedAt: v.string()
+});
+
+const transactionCategoryRule = v.object({
+  id: v.string(),
+  category: v.string(),
+  direction: v.optional(v.union(v.literal("in"), v.literal("out"))),
+  aliases: v.array(v.string()),
+  createdAt: v.string(),
   updatedAt: v.string()
 });
 
@@ -143,6 +164,7 @@ export default defineSchema({
     providers: v.array(provider),
     invoices: v.array(invoice),
     teams: v.optional(v.array(team)),
+    transactionCategoryRules: v.optional(v.array(transactionCategoryRule)),
     revenuePartners: v.optional(v.array(revenuePartner)),
     transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
     wiseStatementTransactions: v.optional(v.array(transaction)),

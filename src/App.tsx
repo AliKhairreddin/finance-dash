@@ -51,6 +51,7 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
+import { transactionCategoryOptions } from "../shared/categories";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
@@ -115,51 +116,28 @@ function dateLabel(value: string): string {
 }
 
 function providerLabel(provider?: Provider): string {
-  return provider ? provider.name : "Unmatched";
+  return provider ? provider.name : "Unmatched company";
 }
 
 function providerTypeLabel(type: ProviderType): string {
   const labels: Record<ProviderType, string> = {
     partner: "Partner",
-    provider: "Provider",
+    provider: "Supplier",
     platform: "Platform",
     internal: "Internal"
   };
   return labels[type];
 }
 
-function providerGroupLabel(provider: Provider): string {
-  if (provider.category === "Ad account provider") return "Ad account providers";
-  if (provider.category === "Ad platform") return "Ad platforms";
-  if (provider.category === "Subscription") return "Subscriptions";
-  if (provider.type === "partner") return "Partners";
-  if (provider.type === "internal") return "Internal";
-  return `${providerTypeLabel(provider.type)} · ${provider.category}`;
+function effectiveCategory(transaction: Transaction): string {
+  return transaction.category || "Uncategorized";
 }
 
-function providerGroupRank(label: string): number {
-  const order = ["Ad account providers", "Ad platforms", "Subscriptions", "Partners", "Provider · Card", "Internal"];
-  const index = order.indexOf(label);
-  return index >= 0 ? index : 50;
-}
-
-function providerOptionGroups(providers: Provider[]): Array<{ label: string; providers: Provider[] }> {
-  const groups = new Map<string, Provider[]>();
-  for (const provider of providers) {
-    const label = providerGroupLabel(provider);
-    groups.set(label, [...(groups.get(label) ?? []), provider]);
-  }
-  return [...groups.entries()]
-    .map(([label, rows]) => ({
-      label,
-      providers: rows.sort((left, right) => left.name.localeCompare(right.name))
-    }))
-    .sort((left, right) => providerGroupRank(left.label) - providerGroupRank(right.label) || left.label.localeCompare(right.label));
-}
-
-function effectiveCategory(transaction: Transaction, providersById: Map<string, Provider>): string {
-  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-  return provider?.category || transaction.category || "Uncategorized";
+function transactionCategoryChoices(currentCategory: string): string[] {
+  const current = currentCategory || "Uncategorized";
+  return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
+    ? [...transactionCategoryOptions]
+    : [current, ...transactionCategoryOptions];
 }
 
 function formatTransactionGroups(rows: Transaction[]): string {
@@ -200,7 +178,6 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [matchFilter, setMatchFilter] = useState("needs-review");
-  const [selectedProviders, setSelectedProviders] = useState<Record<string, string>>({});
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -376,9 +353,9 @@ function App() {
   }
 
   async function matchTransaction(transaction: Transaction, providerId?: string) {
-    const selectedProviderId = providerId || selectedProviders[transaction.id] || transaction.matchedProviderId;
+    const selectedProviderId = providerId || transaction.matchedProviderId;
     if (!selectedProviderId) {
-      setError("Choose a provider before saving the match.");
+      setError("Choose a company before saving the match.");
       return;
     }
     setError(null);
@@ -398,7 +375,23 @@ function App() {
       return;
     }
     await loadDashboard();
-    setNotice(`Saved alias for ${transaction.counterparty}. Future rows will auto-match.`);
+    setNotice(`Saved company alias for ${transaction.counterparty}. Future rows will auto-match.`);
+  }
+
+  async function updateTransactionCategory(transaction: Transaction, category: string) {
+    setError(null);
+    const response = await fetch(`${apiBase}/transactions/${transaction.id}/category`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category, rememberAlias: true })
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      setError(body.message || "Category update failed");
+      return;
+    }
+    await loadDashboard();
+    setNotice(`Saved ${category} for ${transaction.counterparty}. Future similar rows can auto-categorize.`);
   }
 
   async function assignTransactionTeam(transaction: Transaction, teamId?: string) {
@@ -516,10 +509,10 @@ function App() {
     });
     if (!response.ok) {
       const body = await response.json();
-      throw new Error(body.message || "Invoice could not be created");
+      throw new Error(body.message || "Document draft could not be created");
     }
     await loadDashboard();
-    setNotice("Invoice created in Merit. Paid status remains dashboard-only here.");
+    setNotice(payload.documentType === "sales_invoice" ? "Sales invoice draft created." : "Supplier bill draft recorded.");
   }
 
   async function updateInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied") {
@@ -749,12 +742,10 @@ function App() {
             rows={wiseTransactions}
             teams={dashboard.teams}
             teamsById={teamsById}
-            providers={dashboard.providers}
             providersById={providersById}
-            selectedProviders={selectedProviders}
-            setSelectedProviders={setSelectedProviders}
             onMatch={matchTransaction}
             onAssignTeam={assignTransactionTeam}
+            onUpdateCategory={updateTransactionCategory}
             onOpenInvoice={setInvoiceTransaction}
           />
         </section>
@@ -897,7 +888,7 @@ function Sidebar({
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
-    { id: "providers", label: "Partners", icon: <Tags size={17} /> },
+    { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
 
@@ -1143,7 +1134,7 @@ function Overview({
                   </button>
                   <button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
                     <FilePlus2 size={15} />
-                    Invoice
+                    Document
                   </button>
                 </article>
               );
@@ -1172,7 +1163,7 @@ function CategorizationView({
   const needsReview = rows.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86);
 
   const categoryRows = [...rows.reduce((map, transaction) => {
-    const category = effectiveCategory(transaction, providersById);
+    const category = effectiveCategory(transaction);
     map.set(category, [...(map.get(category) ?? []), transaction]);
     return map;
   }, new Map<string, Transaction[]>())]
@@ -1199,7 +1190,7 @@ function CategorizationView({
 
   const companyRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-    const category = effectiveCategory(transaction, providersById);
+    const category = effectiveCategory(transaction);
     const key = provider?.id ?? `unmatched-${category}`;
     const existing = map.get(key) ?? {
       id: key,
@@ -1307,7 +1298,7 @@ function CategorizationView({
               </div>
               <div>
                 <strong>{transaction.counterparty}</strong>
-                <span>{effectiveCategory(transaction, providersById)} · {transaction.matchReason ?? "Needs review"}</span>
+                <span>{effectiveCategory(transaction)} · {transaction.matchReason ?? "Needs review"}</span>
               </div>
               <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
             </article>
@@ -1430,27 +1421,21 @@ function TransactionTable({
   rows,
   teams,
   teamsById,
-  providers,
   providersById,
-  selectedProviders,
-  setSelectedProviders,
   onMatch,
   onAssignTeam,
+  onUpdateCategory,
   onOpenInvoice
 }: {
   rows: Transaction[];
   teams: Team[];
   teamsById: Map<string, Team>;
-  providers: Provider[];
   providersById: Map<string, Provider>;
-  selectedProviders: Record<string, string>;
-  setSelectedProviders: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
-  const providerGroups = providerOptionGroups(providers);
-
   return (
     <div className="table-wrap">
       <table className="data-table activity-table">
@@ -1461,9 +1446,9 @@ function TransactionTable({
             <th>Direction</th>
             <th>Amount</th>
             <th>Team</th>
-            <th>Suggested provider</th>
             <th>Category</th>
-            <th>Invoice</th>
+            <th>Company</th>
+            <th>Document</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -1471,8 +1456,8 @@ function TransactionTable({
           {rows.length > 0 ? (
             rows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-              const selected = selectedProviders[transaction.id] || transaction.matchedProviderId || "";
               const confidence = transaction.confidence ?? 0;
+              const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
@@ -1501,31 +1486,26 @@ function TransactionTable({
                     </div>
                   </td>
                   <td>
-                    <div className="provider-select">
+                    <div className="category-select">
                       <select
-                        value={selected}
-                        onChange={(event) =>
-                          setSelectedProviders((current) => ({ ...current, [transaction.id]: event.target.value }))
-                        }
+                        value={transaction.category || "Uncategorized"}
+                        onChange={(event) => onUpdateCategory(transaction, event.target.value)}
                       >
-                        <option value="">Choose provider</option>
-                        {providerGroups.map((group) => (
-                          <optgroup key={group.label} label={group.label}>
-                            {group.providers.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.name}
-                              </option>
-                            ))}
-                          </optgroup>
+                        {transactionCategoryChoices(transaction.category).map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
                         ))}
                       </select>
-                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
-                        {providerLabel(provider)} · {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
-                      </small>
                     </div>
                   </td>
                   <td>
-                    <span className="status-pill category-pill">{provider?.category ?? transaction.category}</span>
+                    <div className="company-match">
+                      <span className={`status-pill ${provider ? "good" : "warning"}`}>{providerLabel(provider)}</span>
+                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
+                        {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
+                      </small>
+                    </div>
                   </td>
                   <td>
                     {transaction.matchedInvoiceId ? (
@@ -1536,10 +1516,10 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="row-actions">
-                      <button className="icon-button" title="Save match and remember alias" onClick={() => onMatch(transaction, selected)}>
+                      <button className="icon-button" title="Confirm company and remember alias" onClick={() => onMatch(transaction, provider?.id)} disabled={!provider}>
                         <Link2 size={16} />
                       </button>
-                      <button className="icon-button" title="Create invoice" onClick={() => onOpenInvoice(transaction)}>
+                      <button className="icon-button" title={documentTitle} onClick={() => onOpenInvoice(transaction)}>
                         <FilePlus2 size={16} />
                       </button>
                     </div>
@@ -1899,7 +1879,7 @@ function InvoicesView({
     <section className="panel">
       <div className="panel-header">
         <div>
-          <p className="eyebrow">Merit invoices</p>
+          <p className="eyebrow">Finance documents</p>
           <h2>Match, create, approve, deny, and locally mark paid</h2>
         </div>
         <span className="total-pill">{dashboard.invoices.length} invoices</span>
@@ -1908,9 +1888,10 @@ function InvoicesView({
         <table className="data-table invoice-table">
           <thead>
             <tr>
-              <th>Customer</th>
+              <th>Name</th>
+              <th>Document</th>
               <th>Amount</th>
-              <th>Provider</th>
+              <th>Company</th>
               <th>Merit status</th>
               <th>Dashboard status</th>
               <th>Linked transaction</th>
@@ -1927,6 +1908,7 @@ function InvoicesView({
                     <strong>{invoice.customerName}</strong>
                     <small>{invoice.description}</small>
                   </td>
+                  <td>{invoice.documentType === "supplier_bill" ? "Supplier bill" : "Sales invoice"}</td>
                   <td className="amount">{money(invoice.amount, invoice.currency)}</td>
                   <td>{providerLabel(provider)}</td>
                   <td>
@@ -1973,7 +1955,7 @@ function InvoicesView({
               })
             ) : (
               <tr>
-                <td colSpan={7}>No live invoices</td>
+                <td colSpan={8}>No live invoices</td>
               </tr>
             )}
           </tbody>
@@ -2011,7 +1993,7 @@ function ProvidersView({
       <div className="panel-header">
         <div>
           <p className="eyebrow">Business directory</p>
-          <h2>Partners, providers, platforms, and known bank names</h2>
+          <h2>Companies, platforms, partners, and known bank names</h2>
         </div>
         <button className="secondary-button" onClick={onAdd}>
           <Plus size={16} />
@@ -2023,7 +2005,7 @@ function ProvidersView({
           {[
             { id: "all", label: "All" },
             { id: "partner", label: `Partners ${partnerCount}` },
-            { id: "provider", label: `Providers ${providerCount}` },
+            { id: "provider", label: `Suppliers ${providerCount}` },
             { id: "platform", label: "Platforms" },
             { id: "revenue", label: "Revenue" }
           ].map((item) => (
@@ -2284,10 +2266,13 @@ function InvoiceModal({
   onClose: () => void;
   onSubmit: (payload: CreateInvoicePayload) => Promise<void>;
 }) {
+  const documentType = transaction.direction === "in" ? "sales_invoice" : "supplier_bill";
+  const documentTitle = documentType === "sales_invoice" ? "Create sales invoice draft" : "Record supplier bill draft";
+  const selectedProvider = provider?.id ? provider : undefined;
   const [providerId, setProviderId] = useState(provider?.id || "");
-  const [customerName, setCustomerName] = useState(bankInvoiceName(transaction));
-  const [amount, setAmount] = useState(String(transaction.amount));
-  const [dueDate, setDueDate] = useState("2026-06-30");
+  const [customerName, setCustomerName] = useState(selectedProvider?.legalName || selectedProvider?.name || bankInvoiceName(transaction));
+  const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
+  const [dueDate, setDueDate] = useState(new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState(transaction.description);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2300,6 +2285,7 @@ function InvoiceModal({
       await onSubmit({
         transactionId: transaction.id,
         providerId: providerId || undefined,
+        documentType,
         customerName,
         amount: Number(amount),
         currency: transaction.currency,
@@ -2318,8 +2304,8 @@ function InvoiceModal({
       <form className="modal" onSubmit={handleSubmit}>
         <div className="modal-header">
           <div>
-            <p className="eyebrow">Merit invoice</p>
-            <h2>Create invoice from transaction</h2>
+            <p className="eyebrow">Finance document</p>
+            <h2>{documentTitle}</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -2332,14 +2318,17 @@ function InvoiceModal({
         </div>
         {error && <div className="inline-error">{error}</div>}
         <label>
-          Internal match
+          Company
           <select
             value={providerId}
             onChange={(event) => {
-              setProviderId(event.target.value);
+              const nextProviderId = event.target.value;
+              const nextProvider = providers.find((item) => item.id === nextProviderId);
+              setProviderId(nextProviderId);
+              if (nextProvider) setCustomerName(nextProvider.legalName || nextProvider.name);
             }}
           >
-            <option value="">No provider selected</option>
+            <option value="">No company selected</option>
             {providers.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
@@ -2348,7 +2337,7 @@ function InvoiceModal({
           </select>
         </label>
         <label>
-          Invoice name
+          {documentType === "sales_invoice" ? "Customer name" : "Supplier name"}
           <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
         </label>
         <div className="form-grid">
@@ -2371,7 +2360,7 @@ function InvoiceModal({
           </button>
           <button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />}
-            Create
+            Create draft
           </button>
         </div>
       </form>
@@ -2390,9 +2379,20 @@ function ProviderModal({
 }) {
   const [name, setName] = useState(provider?.name ?? "");
   const [type, setType] = useState<ProviderType>(provider?.type ?? "provider");
-  const [category, setCategory] = useState(provider?.category ?? "Provider");
+  const [category, setCategory] = useState(provider?.category ?? "Supplier");
   const [aliases, setAliases] = useState(provider?.aliases.join(", ") ?? "");
   const [defaultAccount, setDefaultAccount] = useState(provider?.defaultAccount ?? "");
+  const [legalName, setLegalName] = useState(provider?.legalName ?? "");
+  const [email, setEmail] = useState(provider?.email ?? "");
+  const [country, setCountry] = useState(provider?.country ?? "");
+  const [address, setAddress] = useState(provider?.address ?? "");
+  const [taxId, setTaxId] = useState(provider?.taxId ?? "");
+  const [defaultCurrency, setDefaultCurrency] = useState(provider?.defaultCurrency ?? "");
+  const [paymentTermsDays, setPaymentTermsDays] = useState(
+    provider?.paymentTermsDays === undefined ? "" : String(provider.paymentTermsDays)
+  );
+  const [meritCustomerId, setMeritCustomerId] = useState(provider?.meritCustomerId ?? "");
+  const [meritSupplierId, setMeritSupplierId] = useState(provider?.meritSupplierId ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2406,7 +2406,16 @@ function ProviderModal({
         type,
         category,
         aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
-        defaultAccount: defaultAccount.trim() || undefined
+        defaultAccount: defaultAccount.trim() || undefined,
+        legalName: legalName.trim() || undefined,
+        email: email.trim() || undefined,
+        country: country.trim() || undefined,
+        address: address.trim() || undefined,
+        taxId: taxId.trim() || undefined,
+        defaultCurrency: defaultCurrency.trim() || undefined,
+        paymentTermsDays: paymentTermsDays.trim() ? Number(paymentTermsDays) : undefined,
+        meritCustomerId: meritCustomerId.trim() || undefined,
+        meritSupplierId: meritSupplierId.trim() || undefined
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Provider could not be saved");
@@ -2437,14 +2446,58 @@ function ProviderModal({
             Type
             <select value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
               <option value="partner">Partner</option>
-              <option value="provider">Provider</option>
+              <option value="provider">Supplier</option>
               <option value="platform">Platform</option>
               <option value="internal">Internal</option>
             </select>
           </label>
           <label>
-            Category
+            Company category
             <input value={category} onChange={(event) => setCategory(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Legal name
+            <input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
+          </label>
+          <label>
+            Email
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Country
+            <input value={country} onChange={(event) => setCountry(event.target.value)} />
+          </label>
+          <label>
+            Tax ID
+            <input value={taxId} onChange={(event) => setTaxId(event.target.value)} />
+          </label>
+        </div>
+        <label>
+          Address
+          <textarea value={address} onChange={(event) => setAddress(event.target.value)} rows={2} />
+        </label>
+        <div className="form-grid">
+          <label>
+            Default currency
+            <input value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value.toUpperCase())} placeholder="USD" />
+          </label>
+          <label>
+            Payment terms days
+            <input type="number" min="0" step="1" value={paymentTermsDays} onChange={(event) => setPaymentTermsDays(event.target.value)} />
+          </label>
+        </div>
+        <div className="form-grid">
+          <label>
+            Merit customer ID
+            <input value={meritCustomerId} onChange={(event) => setMeritCustomerId(event.target.value)} />
+          </label>
+          <label>
+            Merit supplier ID
+            <input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
           </label>
         </div>
         <label>

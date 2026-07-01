@@ -61,11 +61,12 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 - Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
 - Supports optional Wise transaction team assignment with saved teams, plus team filters and visible-team totals.
 - Keeps Slash balances, card activity, and cashback tracking on its own page.
-- Suggests provider matches from saved aliases.
-- Lets you manually match a transaction to a provider and remembers that bank/card name for future auto-matching.
-- Lets you add providers, suppliers, platforms, and customers.
+- Suggests company matches from saved aliases.
+- Lets you manually confirm a transaction company and remembers that bank/card name for future auto-matching.
+- Lets you categorize transactions from the Wise table and remembers category aliases for future auto-categorization.
+- Lets you add companies, suppliers, platforms, customers, and invoice-ready company details.
 - Pulls Merit invoices when Merit credentials are configured.
-- Lets you create a Merit invoice from an unmatched Wise transaction when Merit credentials are configured.
+- Lets you create local sales invoice drafts for money-in Wise transactions and local supplier bill drafts for money-out Wise transactions.
 - Lets you approve or deny invoice matches inside the dashboard.
 - Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
 - Persists provider aliases, revenue partners, revenue runs, AI settings, created invoices, and uploaded Wise statement rows in Convex on the deployed Worker; local Express development persists the same dashboard state in `.local/finance-dashboard-store.json`.

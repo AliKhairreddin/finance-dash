@@ -1,4 +1,4 @@
-import type { Provider, Team, Transaction } from "../shared/types";
+import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
 
 export const semanticMatchThreshold = 0.86;
 const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
@@ -256,6 +256,10 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
   }
 ];
 
+function categoryRuleId(category: string, direction: Transaction["direction"]): string {
+  return `category-rule-${direction}-${normalizeName(category).replace(/\s+/g, "-")}`;
+}
+
 export function normalizeName(value: string): string {
   return value
     .toLowerCase()
@@ -427,6 +431,38 @@ function businessCategory(transaction: Transaction): { category: string; reason:
   return undefined;
 }
 
+function learnedCategory(
+  transaction: Transaction,
+  rules: TransactionCategoryRule[]
+): { category: string; reason: string; confidence: number } | undefined {
+  const haystack = transactionHaystack(transaction);
+  const txTokens = new Set(haystack.split(" ").filter((token) => token.length > 1));
+  const ranked = rules
+    .filter((rule) => !rule.direction || rule.direction === transaction.direction)
+    .flatMap((rule) =>
+      rule.aliases
+        .map((alias) => normalizeName(alias))
+        .filter(Boolean)
+        .map((alias) => {
+          if (haystack === alias) return { rule, alias, confidence: 0.99 };
+          if (alias.split(" ").length === 1 && txTokens.has(alias)) return { rule, alias, confidence: Math.min(0.94, 0.76 + alias.length / 80) };
+          if (alias.split(" ").length > 1 && haystack.includes(alias)) return { rule, alias, confidence: Math.min(0.97, 0.7 + alias.length / 60) };
+          return { rule, alias, confidence: 0 };
+        })
+    )
+    .filter((candidate) => candidate.confidence >= 0.72)
+    .sort((left, right) => right.confidence - left.confidence);
+
+  const best = ranked[0];
+  return best
+    ? {
+        category: best.rule.category,
+        reason: `Saved category alias: ${best.alias}`,
+        confidence: best.confidence
+      }
+    : undefined;
+}
+
 export function scoreProvider(transaction: Transaction, provider: Provider): { confidence: number; reason: string } {
   const hardReason = hardTypedReason(transaction, provider);
   if (hardReason) {
@@ -462,17 +498,21 @@ export function scoreProvider(transaction: Transaction, provider: Provider): { c
   return { confidence: 0, reason: "No alias match" };
 }
 
-export function enrichTransactions(transactions: Transaction[], providers: Provider[]): Transaction[] {
-  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-
+export function enrichTransactions(
+  transactions: Transaction[],
+  providers: Provider[],
+  categoryMemory: TransactionCategoryRule[] = []
+): Transaction[] {
   return transactions.map((transaction) => {
+    const learned = learnedCategory(transaction, categoryMemory);
+    const ruleCategory = learned ?? businessCategory(transaction);
+
     if (transaction.matchedProviderId) {
-      const provider = providerById.get(transaction.matchedProviderId);
       return {
         ...transaction,
-        category: provider?.category ?? transaction.category,
+        category: ruleCategory?.category ?? transaction.category,
         confidence: transaction.confidence ?? 1,
-        matchReason: transaction.matchReason ?? "Manual match"
+        matchReason: transaction.matchReason ?? ruleCategory?.reason ?? "Manual company match"
       };
     }
 
@@ -483,31 +523,34 @@ export function enrichTransactions(transactions: Transaction[], providers: Provi
 
     const best = ranked[0];
     if (!best) {
-      const category = businessCategory(transaction);
-      if (category) {
-        return { ...transaction, category: category.category, confidence: 0.74, matchReason: category.reason };
+      if (ruleCategory) {
+        const categoryConfidence = learned ? learned.confidence : 0.74;
+        return {
+          ...transaction,
+          category: ruleCategory.category,
+          confidence: categoryConfidence,
+          matchReason: ruleCategory.reason
+        };
       }
       return { ...transaction, confidence: 0, matchReason: "Needs review" };
     }
 
-    const category = businessCategory(transaction);
     return {
       ...transaction,
       matchedProviderId: best.confidence >= semanticMatchThreshold ? best.provider.id : undefined,
-      category: best.confidence >= semanticMatchThreshold ? best.provider.category : category?.category ?? transaction.category,
-      confidence: best.confidence >= semanticMatchThreshold ? best.confidence : category ? Math.max(0.74, best.confidence) : best.confidence,
-      matchReason: best.confidence >= semanticMatchThreshold ? best.reason : category?.reason ?? best.reason
+      category: ruleCategory?.category ?? transaction.category,
+      confidence: best.confidence >= semanticMatchThreshold ? best.confidence : ruleCategory ? Math.max(0.74, best.confidence) : best.confidence,
+      matchReason: best.confidence >= semanticMatchThreshold ? best.reason : ruleCategory?.reason ?? best.reason
     };
   });
 }
 
-export function semanticCategorizeTransaction(transaction: Transaction, providers: Provider[]): Transaction {
-  if (transaction.matchedProviderId && (transaction.confidence ?? 0) >= semanticMatchThreshold) {
-    const provider = providers.find((item) => item.id === transaction.matchedProviderId);
-    return provider ? { ...transaction, category: provider.category } : transaction;
-  }
-
-  const enriched = enrichTransactions([transaction], providers)[0];
+export function semanticCategorizeTransaction(
+  transaction: Transaction,
+  providers: Provider[],
+  categoryMemory: TransactionCategoryRule[] = []
+): Transaction {
+  const enriched = enrichTransactions([transaction], providers, categoryMemory)[0];
   return enriched.matchedProviderId || enriched.category !== transaction.category ? enriched : transaction;
 }
 
@@ -537,4 +580,51 @@ export function learnAliases(provider: Provider, bankNames: string[]): Provider 
         ...provider,
         aliases: nextAliases
       };
+}
+
+export function learnCategoryAliases(
+  rules: TransactionCategoryRule[],
+  transaction: Transaction,
+  category: string,
+  now = new Date().toISOString()
+): TransactionCategoryRule[] {
+  const normalizedCategory = category.trim() || "Uncategorized";
+  const aliases = transactionAliasCandidates(transaction);
+  const learnedAliasNames = new Set(aliases.map(normalizeName));
+  const id = categoryRuleId(normalizedCategory, transaction.direction);
+  const withoutMovedAliases = rules.map((rule) =>
+    rule.id === id
+      ? rule
+      : {
+          ...rule,
+          aliases: rule.aliases.filter((alias) => !learnedAliasNames.has(normalizeName(alias)))
+        }
+  );
+  const existing = withoutMovedAliases.find((rule) => rule.id === id);
+
+  if (!existing) {
+    return [
+      ...withoutMovedAliases,
+      {
+        id,
+        category: normalizedCategory,
+        direction: transaction.direction,
+        aliases,
+        createdAt: now,
+        updatedAt: now
+      }
+    ];
+  }
+
+  const mergedAliases = uniqueAliases([...existing.aliases, ...aliases]);
+  return withoutMovedAliases.map((rule) =>
+    rule.id === id
+      ? {
+          ...rule,
+          category: normalizedCategory,
+          aliases: mergedAliases,
+          updatedAt: now
+        }
+      : rule
+  );
 }

@@ -485,6 +485,7 @@ export async function fetchMeritInvoices(): Promise<Invoice[]> {
 
   return response.map((invoice) => ({
     id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
+    documentType: "sales_invoice" as const,
     customerName: invoice.CustomerName ?? "Merit invoice",
     amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
     currency: invoice.CurrencyCode ?? "USD",
@@ -541,6 +542,7 @@ export async function createMeritInvoice(payload: CreateInvoicePayload): Promise
   return {
     id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
     providerId: payload.providerId,
+    documentType: payload.documentType,
     customerName: payload.customerName,
     amount: payload.amount,
     currency: payload.currency,

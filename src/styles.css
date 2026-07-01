@@ -871,13 +871,15 @@ textarea:focus-visible {
   min-width: 240px;
 }
 
-.provider-select,
+.category-select,
+.company-match,
 .team-select {
   display: grid;
   gap: 4px;
 }
 
-.provider-select {
+.category-select,
+.company-match {
   min-width: 210px;
 }
 
@@ -885,7 +887,7 @@ textarea:focus-visible {
   min-width: 150px;
 }
 
-.provider-select select,
+.category-select select,
 .team-select select,
 .filters select,
 .filters input,
@@ -911,7 +913,7 @@ textarea:focus-visible {
     background-color 0.16s ease;
 }
 
-.provider-select select:hover,
+.category-select select:hover,
 .team-select select:hover,
 .filters select:hover,
 .filters input:hover,

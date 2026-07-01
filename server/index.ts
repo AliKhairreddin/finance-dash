@@ -10,7 +10,8 @@ import type {
   ImportWiseStatementPayload,
   MatchTransactionPayload,
   SaveAiSettingsPayload,
-  SyncRevenuePayload
+  SyncRevenuePayload,
+  UpdateTransactionCategoryPayload
 } from "../shared/types";
 import {
   assignTransactionTeam,
@@ -27,6 +28,7 @@ import {
   setInvoiceApproval,
   syncExternalActivity,
   syncRevenue,
+  updateTransactionCategory,
   updateProvider,
   updateRevenuePartner
 } from "./store";
@@ -73,7 +75,7 @@ app.post("/api/providers", async (request, response, next) => {
   try {
     const payload = request.body as CreateProviderPayload;
     if (!payload.name?.trim()) {
-      response.status(400).json({ message: "Provider name is required" });
+      response.status(400).json({ message: "Company name is required" });
       return;
     }
     response.status(201).json(await createProvider(payload));
@@ -86,7 +88,7 @@ app.put("/api/providers/:providerId", async (request, response, next) => {
   try {
     const payload = request.body as CreateProviderPayload;
     if (!payload.name?.trim()) {
-      response.status(400).json({ message: "Provider name is required" });
+      response.status(400).json({ message: "Company name is required" });
       return;
     }
     response.json(await updateProvider(request.params.providerId, payload));
@@ -162,11 +164,33 @@ app.post("/api/transactions/:transactionId/team", async (request, response, next
   }
 });
 
+app.post("/api/transactions/:transactionId/category", async (request, response, next) => {
+  try {
+    const payload = {
+      transactionId: request.params.transactionId,
+      category: request.body?.category,
+      rememberAlias: request.body?.rememberAlias !== false
+    } satisfies UpdateTransactionCategoryPayload;
+    if (!payload.category?.trim()) {
+      response.status(400).json({ message: "category is required" });
+      return;
+    }
+    response.json(await updateTransactionCategory(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/invoices", async (request, response, next) => {
   try {
     const payload = request.body as CreateInvoicePayload;
-    if (!payload.customerName?.trim() || !payload.amount || !payload.dueDate) {
-      response.status(400).json({ message: "customerName, amount, and dueDate are required" });
+    if (
+      !payload.customerName?.trim() ||
+      !payload.amount ||
+      !payload.dueDate ||
+      (payload.documentType !== "sales_invoice" && payload.documentType !== "supplier_bill")
+    ) {
+      response.status(400).json({ message: "customerName, amount, dueDate, and documentType are required" });
       return;
     }
     response.status(201).json(await createInvoice(payload));

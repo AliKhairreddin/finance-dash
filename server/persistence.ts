@@ -8,6 +8,7 @@ import type {
   StoredAiSettings,
   Team,
   Transaction,
+  TransactionCategoryRule,
   TransactionTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
@@ -18,6 +19,7 @@ export interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
   teams: Team[];
+  transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
   wiseStatementTransactions: Transaction[];

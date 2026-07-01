@@ -6,6 +6,8 @@ export type ProviderType = "partner" | "provider" | "platform" | "internal";
 
 export type InvoiceStatus = "draft" | "open" | "paid" | "created";
 
+export type InvoiceDocumentType = "sales_invoice" | "supplier_bill";
+
 export type RevenuePeriodPreset = "last-week" | "last-7-days" | "this-month" | "custom";
 
 export type RevenueRunStatus = "pulled" | "invoiced" | "failed" | "mock" | "skipped";
@@ -55,6 +57,15 @@ export interface Provider {
   category: string;
   aliases: string[];
   defaultAccount?: string;
+  legalName?: string;
+  email?: string;
+  country?: string;
+  address?: string;
+  taxId?: string;
+  defaultCurrency?: string;
+  paymentTermsDays?: number;
+  meritCustomerId?: string;
+  meritSupplierId?: string;
   source: DataSource;
   createdAt: string;
 }
@@ -123,9 +134,19 @@ export interface TransactionTeamAssignment {
   updatedAt: string;
 }
 
+export interface TransactionCategoryRule {
+  id: string;
+  category: string;
+  direction?: Direction;
+  aliases: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Invoice {
   id: string;
   providerId?: string;
+  documentType?: InvoiceDocumentType;
   customerName: string;
   amount: number;
   currency: string;
@@ -219,6 +240,7 @@ export interface DashboardSnapshot {
   aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
+  transactionCategoryRules: TransactionCategoryRule[];
   wiseStatementImports: WiseStatementImport[];
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
@@ -248,6 +270,7 @@ export interface ImportWiseStatementResult {
 export interface CreateInvoicePayload {
   transactionId?: string;
   providerId?: string;
+  documentType: InvoiceDocumentType;
   customerName: string;
   amount: number;
   currency: string;
@@ -267,16 +290,30 @@ export interface AssignTransactionTeamPayload {
   teamId?: string;
 }
 
+export interface UpdateTransactionCategoryPayload {
+  transactionId: string;
+  category: string;
+  rememberAlias: boolean;
+}
+
 export interface CreateProviderPayload {
   name: string;
   type: ProviderType;
   category: string;
   aliases: string[];
+  defaultAccount?: string;
+  legalName?: string;
+  email?: string;
+  country?: string;
+  address?: string;
+  taxId?: string;
+  defaultCurrency?: string;
+  paymentTermsDays?: number;
+  meritCustomerId?: string;
+  meritSupplierId?: string;
 }
 
-export interface UpdateProviderPayload extends CreateProviderPayload {
-  defaultAccount?: string;
-}
+export interface UpdateProviderPayload extends CreateProviderPayload {}
 
 export interface UpdateRevenuePartnerPayload {
   name: string;

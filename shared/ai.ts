@@ -168,6 +168,7 @@ export async function runOpenRouterTransactionCategorization(
         systemPrompt: [
           "You categorize finance dashboard transactions for a media buying business.",
           "Use only providerId values present in provider_directory. Do not invent companies.",
+          "provider_directory.category is company metadata; transaction category should describe what the money is for.",
           "Return only JSON with this shape: {\"matches\":[{\"transactionId\":\"...\",\"providerId\":\"... or null\",\"category\":\"...\",\"confidence\":0.0,\"reason\":\"short reason\"}]}",
           "Taxonomy: P2W, Rezono, and Position2 are Ad account provider. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are Ad platform. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are Subscription.",
           "If the row is not clearly matchable, omit it from matches."
