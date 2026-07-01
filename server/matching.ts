@@ -1,4 +1,5 @@
 import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
+import { transactionBusinessCategory } from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
 const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
@@ -515,11 +516,12 @@ export function enrichTransactions(
   return transactions.map((transaction) => {
     const learned = learnedCategory(transaction, categoryMemory);
     const ruleCategory = learned ?? businessCategory(transaction);
+    const existingCategory = transactionBusinessCategory(transaction.category);
 
     if (transaction.matchedProviderId) {
       return {
         ...transaction,
-        category: ruleCategory?.category ?? transaction.category,
+        category: ruleCategory?.category ?? existingCategory,
         confidence: transaction.confidence ?? 1,
         matchReason: transaction.matchReason ?? ruleCategory?.reason ?? "Manual company match"
       };
@@ -541,13 +543,13 @@ export function enrichTransactions(
           matchReason: ruleCategory.reason
         };
       }
-      return { ...transaction, confidence: 0, matchReason: "Needs review" };
+      return { ...transaction, category: existingCategory, confidence: 0, matchReason: "Needs review" };
     }
 
     return {
       ...transaction,
       matchedProviderId: best.confidence >= semanticMatchThreshold ? best.provider.id : undefined,
-      category: ruleCategory?.category ?? transaction.category,
+      category: ruleCategory?.category ?? existingCategory,
       confidence: best.confidence >= semanticMatchThreshold ? best.confidence : ruleCategory ? Math.max(0.74, best.confidence) : best.confidence,
       matchReason: best.confidence >= semanticMatchThreshold ? best.reason : ruleCategory?.reason ?? best.reason
     };

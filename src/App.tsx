@@ -52,7 +52,7 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
-import { transactionCategoryOptions } from "../shared/categories";
+import { isReviewOnlyTransactionCategory, transactionBusinessCategory, transactionCategoryOptions } from "../shared/categories";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
@@ -100,10 +100,10 @@ function maybeDate(value?: string): string {
   return Number.isNaN(date.getTime()) ? "—" : dateLabel(value);
 }
 
-function compactMoney(value: number): string {
+function compactMoney(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency,
     maximumFractionDigits: value > 999999 ? 1 : 0,
     notation: "compact"
   }).format(value);
@@ -133,12 +133,11 @@ function providerTypeLabel(type: ProviderType): string {
 }
 
 function effectiveCategory(transaction: Transaction): string {
-  return transaction.category || "Uncategorized";
+  return transactionBusinessCategory(transaction.category);
 }
 
 function categoryNeedsReview(transaction: Transaction): boolean {
-  const category = effectiveCategory(transaction).trim().toLowerCase();
-  return !category || category === "uncategorized" || category === "wise" || category === "revolut" || category === "slash";
+  return isReviewOnlyTransactionCategory(transaction.category);
 }
 
 function transactionNeedsCompanyReview(transaction: Transaction): boolean {
@@ -150,7 +149,7 @@ function transactionNeedsReview(transaction: Transaction): boolean {
 }
 
 function transactionCategoryChoices(currentCategory: string): string[] {
-  const current = currentCategory || "Uncategorized";
+  const current = transactionBusinessCategory(currentCategory);
   return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
     ? [...transactionCategoryOptions]
     : [current, ...transactionCategoryOptions];
@@ -176,6 +175,82 @@ function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["d
   }
   const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+}
+
+const categoryChartPalette = [
+  "#1f5592",
+  "#0f7a4c",
+  "#b42335",
+  "#95640a",
+  "#087682",
+  "#5d56b3",
+  "#c2410c",
+  "#0f766e",
+  "#7c3aed",
+  "#64748b"
+];
+
+type CategoryPieSegment = {
+  category: string;
+  amount: number;
+  count: number;
+  color: string;
+};
+
+type CategoryPieGroup = {
+  currency: string;
+  total: number;
+  segments: CategoryPieSegment[];
+};
+
+function categoryChartColor(category: string): string {
+  let hash = 0;
+  for (let index = 0; index < category.length; index += 1) {
+    hash = (hash * 31 + category.charCodeAt(index)) % categoryChartPalette.length;
+  }
+  return categoryChartPalette[Math.abs(hash) % categoryChartPalette.length];
+}
+
+function categoryPieGroups(rows: Transaction[], direction: Transaction["direction"]): CategoryPieGroup[] {
+  const totals = new Map<string, Map<string, { amount: number; count: number }>>();
+
+  for (const transaction of rows) {
+    if (transaction.direction !== direction) continue;
+    const category = effectiveCategory(transaction);
+    const currencyTotals = totals.get(transaction.currency) ?? new Map<string, { amount: number; count: number }>();
+    const current = currencyTotals.get(category) ?? { amount: 0, count: 0 };
+    currencyTotals.set(category, {
+      amount: current.amount + transaction.amount,
+      count: current.count + 1
+    });
+    totals.set(transaction.currency, currencyTotals);
+  }
+
+  return [...totals.entries()]
+    .map(([currency, categoryTotals]) => {
+      const sortedTotals = [...categoryTotals.entries()].sort(
+        ([leftCategory, left], [rightCategory, right]) => right.amount - left.amount || leftCategory.localeCompare(rightCategory)
+      );
+      const segments = sortedTotals.map(([category, value]) => ({
+        category,
+        amount: value.amount,
+        count: value.count,
+        color: categoryChartColor(category)
+      }));
+      return {
+        currency,
+        total: segments.reduce((sum, segment) => sum + segment.amount, 0),
+        segments
+      };
+    })
+    .filter((group) => group.total > 0)
+    .sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
+}
+
+function formatShare(amount: number, total: number): string {
+  if (total <= 0) return "0%";
+  const share = (amount / total) * 100;
+  return share < 1 ? "<1%" : `${share.toFixed(0)}%`;
 }
 
 function transactionPeriod(transaction: Transaction): string {
@@ -1266,6 +1341,9 @@ function CategorizationView({
     }))
     .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
 
+  const spendPieGroups = categoryPieGroups(rows, "out");
+  const revenuePieGroups = categoryPieGroups(rows, "in");
+
   const typeRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     const label = provider ? providerTypeLabel(provider.type) : "Unmatched";
@@ -1311,6 +1389,9 @@ function CategorizationView({
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
       </section>
+
+      <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} emptyLabel="No spend transactions yet" />
+      <CategoryPiePanel title="Revenue pie" tone="good" groups={revenuePieGroups} emptyLabel="No revenue transactions yet" />
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -1436,6 +1517,94 @@ function CategorizationView({
   );
 }
 
+function CategoryPiePanel({
+  title,
+  tone,
+  groups,
+  emptyLabel
+}: {
+  title: string;
+  tone: "good" | "danger";
+  groups: CategoryPieGroup[];
+  emptyLabel: string;
+}) {
+  const totalLabel = groups.length > 0 ? groups.map((group) => money(group.total, group.currency)).join(" · ") : "—";
+
+  return (
+    <section className={`panel category-chart-panel ${tone}`}>
+      <div className="panel-header compact">
+        <h2>{title}</h2>
+        <span className={`total-pill ${tone}`}>{totalLabel}</span>
+      </div>
+      <div className="category-chart-body">
+        {groups.length > 0 ? (
+          groups.map((group) => <CategoryPieGroupView group={group} key={group.currency} />)
+        ) : (
+          <div className="money-empty">{emptyLabel}</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
+  return (
+    <div className="category-pie-group">
+      <div className="category-pie-visual">
+        <CategoryPieSvg group={group} />
+        <div className="pie-center">
+          <span>{group.currency}</span>
+          <strong>{compactMoney(group.total, group.currency)}</strong>
+        </div>
+      </div>
+      <div className="category-legend" aria-label={`${group.currency} category share`}>
+        {group.segments.map((segment) => (
+          <div className="category-legend-row" key={segment.category}>
+            <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
+            <span className="legend-name" title={segment.category}>{segment.category}</span>
+            <strong>{money(segment.amount, group.currency)}</strong>
+            <small>{formatShare(segment.amount, group.total)}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CategoryPieSvg({ group }: { group: CategoryPieGroup }) {
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+
+  return (
+    <svg className="category-pie-svg" viewBox="0 0 120 120" role="img" aria-label={`${group.currency} categories`}>
+      <circle className="pie-track" cx="60" cy="60" r={radius} />
+      {group.segments.map((segment) => {
+        const dash = group.total > 0 ? (segment.amount / group.total) * circumference : 0;
+        const strokeDasharray = group.segments.length === 1 ? `${circumference} 0` : `${dash} ${circumference - dash}`;
+        const strokeDashoffset = -offset;
+        offset += dash;
+        return (
+          <circle
+            className="pie-segment"
+            cx="60"
+            cy="60"
+            r={radius}
+            key={segment.category}
+            stroke={segment.color}
+            strokeDasharray={strokeDasharray}
+            strokeDashoffset={strokeDashoffset}
+          >
+            <title>
+              {segment.category}: {money(segment.amount, group.currency)} ({formatShare(segment.amount, group.total)})
+            </title>
+          </circle>
+        );
+      })}
+    </svg>
+  );
+}
+
 function SimpleMoneyTable({
   rows,
   dense,
@@ -1553,6 +1722,7 @@ function TransactionTable({
             rows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const confidence = transaction.confidence ?? 0;
+              const displayCategory = effectiveCategory(transaction);
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
               const companyActionTitle = provider
@@ -1591,10 +1761,10 @@ function TransactionTable({
                     <div className="category-select">
                       <div className="category-control-row">
                         <select
-                          value={transaction.category || "Uncategorized"}
+                          value={displayCategory}
                           onChange={(event) => onUpdateCategory(transaction, event.target.value)}
                         >
-                          {transactionCategoryChoices(transaction.category).map((category) => (
+                          {transactionCategoryChoices(displayCategory).map((category) => (
                             <option key={category} value={category}>
                               {category}
                             </option>
@@ -1604,7 +1774,7 @@ function TransactionTable({
                           className="icon-button"
                           title={categoryActionTitle}
                           aria-label={categoryActionTitle}
-                          onClick={() => onUpdateCategory(transaction, effectiveCategory(transaction))}
+                          onClick={() => onUpdateCategory(transaction, displayCategory)}
                         >
                           <Save size={15} />
                         </button>

@@ -29,6 +29,7 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
 import {
@@ -248,8 +249,7 @@ function updateStoredTransaction(updated: Transaction): boolean {
 }
 
 function transactionCategoryNeedsReview(transaction: Transaction): boolean {
-  const category = (transaction.category || "Uncategorized").trim().toLowerCase();
-  return !category || category === "uncategorized" || category === "wise" || category === "revolut" || category === "slash";
+  return isReviewOnlyTransactionCategory(transaction.category);
 }
 
 function transactionNeedsCategorization(transaction: Transaction): boolean {
@@ -385,7 +385,7 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transaction.category || "Wise"
+      category: transactionBusinessCategory(transaction.category || "Wise")
     }));
 }
 
@@ -575,7 +575,7 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
     throw new Error("Transaction not found");
   }
 
-  const category = payload.category.trim() || "Uncategorized";
+  const category = transactionBusinessCategory(payload.category);
   const updated: Transaction = {
     ...transaction,
     category,

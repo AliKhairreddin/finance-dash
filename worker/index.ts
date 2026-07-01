@@ -31,6 +31,7 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
@@ -992,7 +993,7 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transaction.category || "Wise"
+      category: transactionBusinessCategory(transaction.category || "Wise")
     }));
 }
 
@@ -1176,8 +1177,7 @@ async function runAiPrompt(env: Env, payload: AiPromptPayload) {
 }
 
 function transactionCategoryNeedsReview(transaction: Transaction): boolean {
-  const category = (transaction.category || "Uncategorized").trim().toLowerCase();
-  return !category || category === "uncategorized" || category === "wise" || category === "revolut" || category === "slash";
+  return isReviewOnlyTransactionCategory(transaction.category);
 }
 
 function transactionNeedsCategorization(transaction: Transaction): boolean {
@@ -1306,7 +1306,7 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
     throw new Error("Transaction not found");
   }
 
-  const category = payload.category.trim() || "Uncategorized";
+  const category = transactionBusinessCategory(payload.category);
   const updated: Transaction = {
     ...transaction,
     category,

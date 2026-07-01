@@ -7,6 +7,7 @@ import type {
   StoredAiSettings,
   Transaction
 } from "./types";
+import { isReviewOnlyTransactionCategory } from "./categories";
 
 interface OpenRouterChatResponse {
   choices?: Array<{
@@ -133,7 +134,8 @@ function validAiCategorization(value: unknown, providerIds: Set<string>, transac
   const row = value as Record<string, unknown>;
   const transactionId = typeof row.transactionId === "string" ? row.transactionId : undefined;
   const providerId = typeof row.providerId === "string" && providerIds.has(row.providerId) ? row.providerId : undefined;
-  const category = typeof row.category === "string" ? row.category.trim() : undefined;
+  const category =
+    typeof row.category === "string" && !isReviewOnlyTransactionCategory(row.category) ? row.category.trim() : undefined;
   const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : 0;
   const reason = typeof row.reason === "string" ? row.reason.trim() : "AI categorization";
 
@@ -169,6 +171,7 @@ export async function runOpenRouterTransactionCategorization(
           "You categorize finance dashboard transactions for a media buying business.",
           "Use only providerId values present in provider_directory. Do not invent companies.",
           "provider_directory.category is company metadata; transaction category should describe what the money is for.",
+          "Never use DEBIT, CREDIT, card, transfer, source names, or money-in/money-out direction as transaction categories.",
           "Return only JSON with this shape: {\"matches\":[{\"transactionId\":\"...\",\"providerId\":\"... or null\",\"category\":\"...\",\"confidence\":0.0,\"reason\":\"short reason\"}]}",
           "Taxonomy: P2W, Rezono, and Position2 are Ad account provider. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are Ad platform. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are Subscription.",
           "If the row is not clearly matchable, omit it from matches."
