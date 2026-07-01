@@ -60,6 +60,12 @@ type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "s
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
+type TransactionDescriptionToast = {
+  counterparty: string;
+  description: string;
+  left: number;
+  top: number;
+};
 const themeStorageKey = "finance-dash-theme";
 
 const openRouterModelOptions = [
@@ -286,6 +292,23 @@ function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, dire
     const result = compareTransactions(left, right, sortKey);
     return direction === "asc" ? result : -result;
   });
+}
+
+function descriptionToastPosition(element: HTMLElement): { left: number; top: number } {
+  const rect = element.getBoundingClientRect();
+  const viewportPadding = 16;
+  const toastWidth = 420;
+  const toastEstimatedHeight = 150;
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - toastWidth - viewportPadding);
+  const left = Math.min(Math.max(rect.left, viewportPadding), maxLeft);
+  const roomBelow = window.innerHeight - rect.bottom - viewportPadding;
+  const canFitAbove = rect.top > toastEstimatedHeight + viewportPadding;
+  const top =
+    roomBelow < toastEstimatedHeight && canFitAbove
+      ? Math.max(viewportPadding, rect.top - toastEstimatedHeight - 8)
+      : Math.min(rect.bottom + 8, Math.max(viewportPadding, window.innerHeight - toastEstimatedHeight - viewportPadding));
+
+  return { left, top };
 }
 
 function App() {
@@ -1690,8 +1713,34 @@ function TransactionTable({
   onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
+  const [descriptionToast, setDescriptionToast] = useState<TransactionDescriptionToast | null>(null);
+
+  function showDescriptionToast(transaction: Transaction, element: HTMLElement) {
+    const description = transaction.description.trim();
+    if (!description) {
+      setDescriptionToast(null);
+      return;
+    }
+
+    setDescriptionToast({
+      counterparty: transaction.counterparty,
+      description,
+      ...descriptionToastPosition(element)
+    });
+  }
+
   return (
     <div className="table-wrap">
+      {descriptionToast && (
+        <div
+          className="transaction-description-toast"
+          role="status"
+          style={{ left: descriptionToast.left, top: descriptionToast.top }}
+        >
+          <strong>{descriptionToast.counterparty}</strong>
+          <span>{descriptionToast.description}</span>
+        </div>
+      )}
       <table className="data-table activity-table transaction-table">
         <colgroup>
           <col className="transaction-date-col" />
@@ -1733,7 +1782,11 @@ function TransactionTable({
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
-                  <td className="counterparty-cell">
+                  <td
+                    className="counterparty-cell"
+                    onMouseEnter={(event) => showDescriptionToast(transaction, event.currentTarget)}
+                    onMouseLeave={() => setDescriptionToast(null)}
+                  >
                     <strong>{transaction.counterparty}</strong>
                     <small>{transaction.description}</small>
                   </td>
