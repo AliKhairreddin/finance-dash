@@ -13,6 +13,7 @@ import {
   KeyRound,
   Link2,
   Loader2,
+  Moon,
   Pencil,
   Plus,
   RefreshCw,
@@ -22,6 +23,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   Tags,
   Upload,
   WalletCards,
@@ -51,6 +53,8 @@ import { extractPdfText } from "./pdfText";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 type ActiveTab = "overview" | "wise" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+type ThemeMode = "light" | "dark";
+const themeStorageKey = "finance-dash-theme";
 
 const openRouterModelOptions = [
   { label: "OpenRouter auto", value: "openrouter/auto" },
@@ -141,6 +145,9 @@ function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["d
 }
 
 function App() {
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    return window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light";
+  });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
@@ -157,6 +164,15 @@ function App() {
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem(themeStorageKey, themeMode);
+  }, [themeMode]);
+
+  function toggleThemeMode() {
+    setThemeMode((current) => (current === "dark" ? "light" : "dark"));
+  }
 
   async function loadDashboard() {
     setError(null);
@@ -455,6 +471,9 @@ function App() {
   if (isLoading) {
     return (
       <main className="loading-screen">
+        <div className="floating-theme-toggle">
+          <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
+        </div>
         <Loader2 className="spin" size={28} />
         <span>Loading finance dashboard</span>
       </main>
@@ -464,6 +483,9 @@ function App() {
   if (!dashboard) {
     return (
       <main className="loading-screen">
+        <div className="floating-theme-toggle">
+          <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
+        </div>
         <CircleAlert size={28} />
         <span>{error || "Dashboard could not load"}</span>
       </main>
@@ -495,6 +517,7 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
+            <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
             <button
               className="secondary-button"
               onClick={() => {
@@ -751,6 +774,30 @@ function App() {
   );
 }
 
+function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: () => void }) {
+  const isDark = themeMode === "dark";
+  return (
+    <button
+      aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+      aria-pressed={isDark}
+      className={`theme-toggle ${isDark ? "dark" : "light"}`}
+      onClick={onToggle}
+      title={`Switch to ${isDark ? "light" : "dark"} mode`}
+      type="button"
+    >
+      <span className="theme-toggle-option">
+        <Sun size={15} />
+      </span>
+      <span className="theme-toggle-option">
+        <Moon size={15} />
+      </span>
+      <span className="theme-toggle-thumb" aria-hidden="true">
+        {isDark ? <Moon size={16} /> : <Sun size={16} />}
+      </span>
+    </button>
+  );
+}
+
 function Sidebar({
   activeTab,
   setActiveTab
@@ -777,7 +824,13 @@ function Sidebar({
       </div>
       <nav className="sidebar-nav">
         {items.map((item) => (
-          <button key={item.id} className={activeTab === item.id ? "active" : ""} onClick={() => setActiveTab(item.id)}>
+          <button
+            key={item.id}
+            className={activeTab === item.id ? "active" : ""}
+            onClick={() => setActiveTab(item.id)}
+            aria-current={activeTab === item.id ? "page" : undefined}
+            title={item.label}
+          >
             {item.icon}
             <span>{item.label}</span>
           </button>
