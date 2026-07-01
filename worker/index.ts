@@ -7,6 +7,8 @@ import type {
   DashboardSnapshot,
   DataSource,
   ImportWiseStatementPayload,
+  ImportWiseStatementResult,
+  ImportWiseStatementSummary,
   IntegrationStatus,
   Invoice,
   MatchTransactionPayload,
@@ -139,6 +141,29 @@ function mergeWiseStatementTransactions(initial: Transaction[], incoming: Transa
     map.set(wiseStatementTransactionKey(transaction), transaction);
   }
   return [...map.values()];
+}
+
+function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
+  const existingKeys = new Set(existing.map((transaction) => wiseStatementTransactionKey(transaction)));
+  const incomingKeys = new Set<string>();
+  let newTransactions = 0;
+  let duplicateTransactions = 0;
+
+  for (const transaction of incoming) {
+    const key = wiseStatementTransactionKey(transaction);
+    if (existingKeys.has(key) || incomingKeys.has(key)) {
+      duplicateTransactions += 1;
+    } else {
+      newTransactions += 1;
+      incomingKeys.add(key);
+    }
+  }
+
+  return {
+    processedTransactions: incoming.length,
+    newTransactions,
+    duplicateTransactions
+  };
 }
 
 function realInvoices(invoices?: Invoice[]): Invoice[] {
@@ -898,12 +923,13 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
     }));
 }
 
-async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload): Promise<DashboardSnapshot> {
+async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload): Promise<ImportWiseStatementResult> {
   if (!payload.balanceId || !payload.currency || !payload.periodStart || !payload.periodEnd || !payload.fileName) {
     throw new Error("balanceId, currency, periodStart, periodEnd, and fileName are required");
   }
   const state = await loadPersisted(env);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
+  const summary = summarizeWiseStatementImport(state.wiseStatementTransactions, importedTransactions);
   const importedAt = new Date().toISOString();
   const importRecord: WiseStatementImport = {
     id: wiseImportId(payload),
@@ -923,7 +949,10 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
     right.importedAt.localeCompare(left.importedAt)
   );
   await savePersisted(env, state);
-  return getSnapshot(env);
+  return {
+    dashboard: await getSnapshot(env),
+    summary
+  };
 }
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {

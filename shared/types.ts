@@ -234,6 +234,17 @@ export interface ImportWiseStatementPayload {
   transactions: Transaction[];
 }
 
+export interface ImportWiseStatementSummary {
+  processedTransactions: number;
+  newTransactions: number;
+  duplicateTransactions: number;
+}
+
+export interface ImportWiseStatementResult {
+  dashboard: DashboardSnapshot;
+  summary: ImportWiseStatementSummary;
+}
+
 export interface CreateInvoicePayload {
   transactionId?: string;
   providerId?: string;

@@ -1422,25 +1422,6 @@ textarea:focus-visible {
   margin-top: 1px;
 }
 
-.statement-import-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 16px 16px;
-  padding: 11px 12px;
-  color: var(--info-text);
-  border: 1px solid var(--info-border);
-  border-radius: 8px;
-  background: var(--info-bg);
-  font-size: 0.86rem;
-  line-height: 1.4;
-}
-
-.statement-import-note svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
 .warning-text {
   color: var(--amber);
 }

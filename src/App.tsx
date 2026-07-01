@@ -37,6 +37,7 @@ import type {
   CreateProviderPayload,
   DashboardSnapshot,
   ImportWiseStatementPayload,
+  ImportWiseStatementResult,
   Provider,
   ProviderType,
   RevenuePartner,
@@ -276,7 +277,9 @@ function App() {
     try {
       let nextDashboard: DashboardSnapshot | null = dashboard;
       let importedFiles = 0;
-      let importedRows = 0;
+      let processedTransactions = 0;
+      let newTransactions = 0;
+      let duplicateTransactions = 0;
       for (const file of Array.from(files)) {
         const text = await file.text();
         const parsedStatements = parseWiseStatementCsv(text, file.name);
@@ -294,13 +297,20 @@ function App() {
             const body = await response.json();
             throw new Error(body.message || `${file.name} could not be imported`);
           }
-          nextDashboard = (await response.json()) as DashboardSnapshot;
-          importedRows += parsed.transactions.length;
+          const result = (await response.json()) as ImportWiseStatementResult;
+          nextDashboard = result.dashboard;
+          processedTransactions += result.summary.processedTransactions;
+          newTransactions += result.summary.newTransactions;
+          duplicateTransactions += result.summary.duplicateTransactions;
         }
         importedFiles += 1;
       }
       if (nextDashboard) setDashboard(nextDashboard);
-      setNotice(`Imported ${importedFiles} Wise statement CSV${importedFiles === 1 ? "" : "s"} with ${importedRows} transaction rows.`);
+      setNotice(
+        `Processed ${importedFiles} Wise statement CSV${importedFiles === 1 ? "" : "s"}: ${processedTransactions} transaction${
+          processedTransactions === 1 ? "" : "s"
+        }, ${newTransactions} new, ${duplicateTransactions} duplicate${duplicateTransactions === 1 ? "" : "s"}.`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Wise statement import failed");
     } finally {
@@ -501,8 +511,6 @@ function App() {
   const hasProfit = dashboard.metrics.profit !== null;
   const hasTotalAssets = dashboard.metrics.totalAssets !== null;
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
-  const wiseImportedRows = dashboard.wiseStatementImports.reduce((total, item) => total + item.transactionCount, 0);
-  const latestWiseImport = dashboard.wiseStatementImports[0];
 
   return (
     <main className="app-shell">
@@ -656,15 +664,6 @@ function App() {
             <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
             <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
           </div>
-          {dashboard.wiseStatementImports.length > 0 && (
-            <div className="statement-import-note">
-              <Upload size={15} />
-              <span>
-                {dashboard.wiseStatementImports.length} Wise statement import{dashboard.wiseStatementImports.length === 1 ? "" : "s"} loaded with{" "}
-                {wiseImportedRows} CSV row{wiseImportedRows === 1 ? "" : "s"}. Latest: {maybeDate(latestWiseImport?.importedAt)}.
-              </span>
-            </div>
-          )}
           {wiseStatus?.issue && (
             <div className="integration-alert">
               <CircleAlert size={16} />
