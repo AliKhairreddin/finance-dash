@@ -121,6 +121,11 @@ export const canonicalProviders: Provider[] = canonicalProviderDrafts.map((provi
 
 export const canonicalTeams: Team[] = [
   {
+    id: "team-general",
+    name: "General",
+    createdAt: canonicalCreatedAt
+  },
+  {
     id: "team-acp",
     name: "ACP",
     createdAt: canonicalCreatedAt
@@ -332,7 +337,11 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
     if (next.some((team) => normalizeName(team.name) === normalizeName(canonical.name))) continue;
     next.push(canonical);
   }
-  return next.sort((left, right) => left.name.localeCompare(right.name));
+  return next.sort((left, right) => {
+    if (normalizeName(left.name) === "general") return -1;
+    if (normalizeName(right.name) === "general") return 1;
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function providerCategoryOrder(provider: Provider): number {
