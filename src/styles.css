@@ -956,6 +956,11 @@ textarea:focus-visible {
   display: block;
 }
 
+.transaction-table .counterparty-cell,
+.transaction-table .category-select small {
+  cursor: help;
+}
+
 .transaction-description-toast {
   position: fixed;
   right: 24px;

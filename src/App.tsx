@@ -61,7 +61,7 @@ type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
 type TransactionDescriptionToast = {
-  counterparty: string;
+  title: string;
   description: string;
 };
 const themeStorageKey = "finance-dash-theme";
@@ -1727,24 +1727,28 @@ function TransactionTable({
 }) {
   const [descriptionToast, setDescriptionToast] = useState<TransactionDescriptionToast | null>(null);
 
-  function showDescriptionToast(transaction: Transaction) {
-    const description = transaction.description.trim();
+  function showDetailToast(title: string, detail: string) {
+    const description = detail.trim();
     if (!description) {
       setDescriptionToast(null);
       return;
     }
 
     setDescriptionToast({
-      counterparty: transaction.counterparty,
+      title,
       description
     });
+  }
+
+  function showDescriptionToast(transaction: Transaction) {
+    showDetailToast(transaction.counterparty, transaction.description);
   }
 
   return (
     <div className="table-wrap">
       {descriptionToast && (
         <div className="transaction-description-toast" role="status">
-          <strong>{descriptionToast.counterparty}</strong>
+          <strong>{descriptionToast.title}</strong>
           <span>{descriptionToast.description}</span>
         </div>
       )}
@@ -1779,6 +1783,7 @@ function TransactionTable({
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const confidence = transaction.confidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
+              const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
               const companyActionTitle = provider
@@ -1839,8 +1844,12 @@ function TransactionTable({
                           <Save size={15} />
                         </button>
                       </div>
-                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
-                        {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
+                      <small
+                        className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}
+                        onMouseEnter={() => showDetailToast(displayCategory, categoryDetail)}
+                        onMouseLeave={() => setDescriptionToast(null)}
+                      >
+                        {categoryDetail}
                       </small>
                     </div>
                   </td>
