@@ -958,17 +958,19 @@ textarea:focus-visible {
 
 .transaction-description-toast {
   position: fixed;
+  right: 24px;
+  bottom: 24px;
   z-index: 70;
   display: grid;
   gap: 5px;
   width: min(420px, calc(100vw - 32px));
   max-height: min(260px, calc(100vh - 32px));
-  padding: 11px 12px;
-  color: var(--ink);
-  background: var(--panel-bg);
-  border: 1px solid var(--line);
+  padding: 12px 14px;
+  color: #ffffff;
+  background: #173762;
+  border: 1px solid #6aa6e8;
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 18px 46px rgba(16, 27, 43, 0.28);
   line-height: 1.35;
   overflow: auto;
   pointer-events: none;
@@ -977,17 +979,32 @@ textarea:focus-visible {
 .transaction-description-toast strong {
   min-width: 0;
   overflow: hidden;
-  color: var(--ink);
+  color: #ffffff;
   font-size: 0.82rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .transaction-description-toast span {
-  color: var(--muted);
+  color: #dceaff;
   font-size: 0.84rem;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+:root[data-theme="dark"] .transaction-description-toast {
+  color: #09111f;
+  background: #f5d37a;
+  border-color: #ffebad;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme="dark"] .transaction-description-toast strong {
+  color: #09111f;
+}
+
+:root[data-theme="dark"] .transaction-description-toast span {
+  color: #24344f;
 }
 
 .transaction-table .row-actions {
