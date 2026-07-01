@@ -37,6 +37,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
+  CreateTeamPayload,
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
@@ -450,6 +451,20 @@ function App() {
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
   }
 
+  async function createTeam(payload: CreateTeamPayload) {
+    const response = await fetch(`${apiBase}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Team could not be created");
+    }
+    await loadDashboard();
+    setNotice(`${payload.name.trim()} team added.`);
+  }
+
   async function submitProvider(payload: CreateProviderPayload) {
     const response = await fetch(`${apiBase}/providers`, {
       method: "POST",
@@ -856,7 +871,7 @@ function App() {
       )}
 
       {activeTab === "settings" && (
-        <SettingsView dashboard={dashboard} onSaveAiSettings={saveAiSettings} onRunAiPrompt={runAiPrompt} />
+        <SettingsView dashboard={dashboard} onCreateTeam={createTeam} onSaveAiSettings={saveAiSettings} onRunAiPrompt={runAiPrompt} />
       )}
 
       {invoiceTransaction && (
@@ -2141,10 +2156,12 @@ function ProvidersView({
 
 function SettingsView({
   dashboard,
+  onCreateTeam,
   onSaveAiSettings,
   onRunAiPrompt
 }: {
   dashboard: DashboardSnapshot;
+  onCreateTeam: (payload: CreateTeamPayload) => Promise<void>;
   onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
@@ -2153,10 +2170,12 @@ function SettingsView({
   const [apiKey, setApiKey] = useState("");
   const [modelChoice, setModelChoice] = useState(initialModelIsPreset ? dashboard.aiSettings.model : "custom");
   const [customModel, setCustomModel] = useState(initialModelIsPreset ? "" : dashboard.aiSettings.model);
+  const [teamName, setTeamName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
-  const [busy, setBusy] = useState<"save" | "prompt" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"team" | "save" | "prompt" | null>(null);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   useEffect(() => {
     const isPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
@@ -2166,10 +2185,24 @@ function SettingsView({
 
   const selectedModel = modelChoice === "custom" ? customModel : modelChoice;
 
+  async function addTeam(event: FormEvent) {
+    event.preventDefault();
+    setBusy("team");
+    setTeamError(null);
+    try {
+      await onCreateTeam({ name: teamName });
+      setTeamName("");
+    } catch (err) {
+      setTeamError(err instanceof Error ? err.message : "Team could not be created");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
     setBusy("save");
-    setError(null);
+    setAiError(null);
     try {
       await onSaveAiSettings({
         model: selectedModel,
@@ -2177,7 +2210,7 @@ function SettingsView({
       });
       setApiKey("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "AI settings could not be saved");
+      setAiError(err instanceof Error ? err.message : "AI settings could not be saved");
     } finally {
       setBusy(null);
     }
@@ -2186,7 +2219,7 @@ function SettingsView({
   async function runPrompt(event: FormEvent) {
     event.preventDefault();
     setBusy("prompt");
-    setError(null);
+    setAiError(null);
     setAiResult(null);
     try {
       setAiResult(
@@ -2196,7 +2229,7 @@ function SettingsView({
         })
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "AI prompt failed");
+      setAiError(err instanceof Error ? err.message : "AI prompt failed");
     } finally {
       setBusy(null);
     }
@@ -2204,6 +2237,36 @@ function SettingsView({
 
   return (
     <div className="settings-stack">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Operating setup</p>
+            <h2>Teams</h2>
+          </div>
+          <span className="total-pill">{dashboard.teams.length} teams</span>
+        </div>
+        <form className="settings-form" onSubmit={addTeam}>
+          <div className="form-grid">
+            <label>
+              Team name
+              <input value={teamName} onChange={(event) => setTeamName(event.target.value)} />
+            </label>
+          </div>
+          {teamError && <div className="inline-error">{teamError}</div>}
+          <div className="modal-actions">
+            <button className="primary-button" type="submit" disabled={busy === "team" || !teamName.trim()}>
+              {busy === "team" ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+              Add team
+            </button>
+          </div>
+        </form>
+        <div className="settings-chip-list">
+          {dashboard.teams.map((team) => (
+            <span key={team.id}>{team.name}</span>
+          ))}
+        </div>
+      </section>
+
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -2247,7 +2310,7 @@ function SettingsView({
               />
             </label>
           </div>
-          {error && <div className="inline-error">{error}</div>}
+          {aiError && <div className="inline-error">{aiError}</div>}
           <div className="modal-actions">
             <button className="primary-button" type="submit" disabled={busy === "save"}>
               {busy === "save" ? <Loader2 className="spin" size={16} /> : <Save size={16} />}

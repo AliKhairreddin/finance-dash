@@ -290,6 +290,10 @@ export interface AssignTransactionTeamPayload {
   teamId?: string;
 }
 
+export interface CreateTeamPayload {
+  name: string;
+}
+
 export interface UpdateTransactionCategoryPayload {
   transactionId: string;
   category: string;

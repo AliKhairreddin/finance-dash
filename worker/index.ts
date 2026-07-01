@@ -6,6 +6,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
+  CreateTeamPayload,
   DashboardSnapshot,
   DataSource,
   ImportWiseStatementPayload,
@@ -41,6 +42,7 @@ import {
   learnCategoryAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates
@@ -1339,6 +1341,27 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
   };
 }
 
+async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
+  const name = payload.name.trim();
+  if (!name) {
+    throw new Error("Team name is required");
+  }
+
+  const state = await loadPersisted(env);
+  if (state.teams.some((team) => normalizeName(team.name) === normalizeName(name))) {
+    throw new Error("Team already exists");
+  }
+
+  const team: Team = {
+    id: `team-${crypto.randomUUID()}`,
+    name,
+    createdAt: new Date().toISOString()
+  };
+  state.teams = mergeTeamDirectory([...state.teams, team]);
+  await savePersisted(env, state);
+  return team;
+}
+
 async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
   if (
     !payload.customerName?.trim() ||
@@ -1579,6 +1602,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
           rememberAlias: body.rememberAlias !== false
         })
       );
+    }
+
+    if (url.pathname === "/api/teams" && request.method === "POST") {
+      return json(await createTeam(env, (await request.json()) as CreateTeamPayload), { status: 201 });
     }
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {

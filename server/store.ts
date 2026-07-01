@@ -7,6 +7,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
+  CreateTeamPayload,
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
@@ -47,6 +48,7 @@ import {
   learnCategoryAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates
@@ -433,6 +435,25 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
 
   await persist();
   return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
+}
+
+export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
+  const name = payload.name.trim();
+  if (!name) {
+    throw new Error("Team name is required");
+  }
+  if (teams.some((team) => normalizeName(team.name) === normalizeName(name))) {
+    throw new Error("Team already exists");
+  }
+
+  const team: Team = {
+    id: `team-${crypto.randomUUID()}`,
+    name,
+    createdAt: new Date().toISOString()
+  };
+  teams = mergeTeamDirectory([...teams, team]);
+  await persist();
+  return team;
 }
 
 export async function createProvider(payload: CreateProviderPayload): Promise<Provider> {
