@@ -152,6 +152,30 @@ function transactionNeedsReview(transaction: Transaction): boolean {
   return categoryNeedsReview(transaction) || transactionNeedsCompanyReview(transaction);
 }
 
+function transactionCompanyStatus(transaction: Transaction): "Matched" | "Needs company match" | "Unmatched" {
+  if (transaction.matchedProviderId) return "Matched";
+  return transaction.direction === "in" ? "Needs company match" : "Unmatched";
+}
+
+function companyRollupStatus(transactions: Transaction[]): string {
+  const needsCompany = transactions.some((transaction) => transactionCompanyStatus(transaction) === "Needs company match");
+  const hasUnmatched = transactions.some((transaction) => transactionCompanyStatus(transaction) === "Unmatched");
+  const needsCategory = transactions.some(categoryNeedsReview);
+
+  if (needsCompany && needsCategory) return "Needs company and category";
+  if (needsCompany) return "Needs company match";
+  if (hasUnmatched && needsCategory) return "Unmatched, needs category";
+  if (needsCategory) return "Needs category review";
+  if (hasUnmatched) return "Unmatched";
+  return "Matched";
+}
+
+function companyRollupStatusClass(status: string): "good" | "warning" | "" {
+  if (status === "Matched") return "good";
+  if (status.startsWith("Needs") || status.includes("needs")) return "warning";
+  return "";
+}
+
 function transactionCategoryChoices(currentCategory: string): string[] {
   const current = transactionBusinessCategory(currentCategory);
   return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
@@ -1324,7 +1348,7 @@ function CategorizationView({
   onAutoCategorize: () => void;
 }) {
   const rows = dashboard.transactions;
-  const needsReview = rows.filter(categoryNeedsReview);
+  const needsReview = rows.filter(transactionNeedsReview);
 
   const categoryRows = [...rows.reduce((map, transaction) => {
     const category = effectiveCategory(transaction);
@@ -1348,9 +1372,9 @@ function CategorizationView({
   const spendPieGroups = categoryPieGroups(rows, "out");
   const revenuePieGroups = categoryPieGroups(rows, "in");
 
-  const typeRows = [...rows.reduce((map, transaction) => {
+  const relationshipRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-    const label = provider ? providerTypeLabel(provider.type) : "Unmatched";
+    const label = provider ? providerTypeLabel(provider.type) : "Unknown";
     map.set(label, [...(map.get(label) ?? []), transaction]);
     return map;
   }, new Map<string, Transaction[]>())].sort(([left], [right]) => left.localeCompare(right));
@@ -1361,16 +1385,19 @@ function CategorizationView({
     const key = provider?.id ?? `unmatched-${category}`;
     const existing = map.get(key) ?? {
       id: key,
-      name: provider?.name ?? "Unmatched",
-      type: provider ? providerTypeLabel(provider.type) : "Needs review",
+      name: provider?.name ?? "Unmatched counterparty",
+      relationship: provider ? providerTypeLabel(provider.type) : "Unknown",
       category,
       transactions: [] as Transaction[]
     };
     existing.transactions.push(transaction);
     map.set(key, existing);
     return map;
-  }, new Map<string, { id: string; name: string; type: string; category: string; transactions: Transaction[] }>())]
-    .map(([, value]) => value)
+  }, new Map<string, { id: string; name: string; relationship: string; category: string; transactions: Transaction[] }>())]
+    .map(([, value]) => ({
+      ...value,
+      status: companyRollupStatus(value.transactions)
+    }))
     .sort((left, right) => right.transactions.length - left.transactions.length || left.name.localeCompare(right.name));
 
   return (
@@ -1440,18 +1467,18 @@ function CategorizationView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>By directory type</h2>
-          <span className="total-pill">{typeRows.length} types</span>
+          <h2>By company relationship</h2>
+          <span className="total-pill">{relationshipRows.length} relationships</span>
         </div>
         <div className="bridge categorization-bridge">
-          {typeRows.map(([type, transactions]) => (
-            <div className="bridge-row" key={type}>
-              <span>{type}</span>
+          {relationshipRows.map(([relationship, transactions]) => (
+            <div className="bridge-row" key={relationship}>
+              <span>{relationship}</span>
               <strong>{transactions.length}</strong>
               <small>In {groupedTransactionMoney(transactions, "in")} · Out {groupedTransactionMoney(transactions, "out")}</small>
             </div>
           ))}
-          {typeRows.length === 0 && <div className="money-empty">No transaction types yet</div>}
+          {relationshipRows.length === 0 && <div className="money-empty">No company relationships yet</div>}
         </div>
       </section>
 
@@ -1487,8 +1514,9 @@ function CategorizationView({
             <thead>
               <tr>
                 <th>Company</th>
-                <th>Type</th>
-                <th>Category</th>
+                <th title="Business relationship to your company">Relationship</th>
+                <th>Transaction category</th>
+                <th>Match status</th>
                 <th>Transactions</th>
                 <th>Money in</th>
                 <th>Money out</th>
@@ -1501,8 +1529,11 @@ function CategorizationView({
                     <td>
                       <strong>{row.name}</strong>
                     </td>
-                    <td>{row.type}</td>
+                    <td>{row.relationship}</td>
                     <td>{row.category}</td>
+                    <td>
+                      <span className={`status-pill ${companyRollupStatusClass(row.status)}`}>{row.status}</span>
+                    </td>
                     <td>{row.transactions.length}</td>
                     <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
                     <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
@@ -1510,7 +1541,7 @@ function CategorizationView({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6}>No company rollup yet</td>
+                  <td colSpan={7}>No company rollup yet</td>
                 </tr>
               )}
             </tbody>
@@ -2815,7 +2846,7 @@ function ProviderModal({
         </label>
         <div className="form-grid">
           <label>
-            Type
+            Relationship
             <select value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
               <option value="partner">Partner</option>
               <option value="provider">Supplier</option>
