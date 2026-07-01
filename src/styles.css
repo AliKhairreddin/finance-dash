@@ -858,6 +858,53 @@ textarea:focus-visible {
   min-width: 1190px;
 }
 
+.transaction-table {
+  table-layout: fixed;
+  min-width: 1082px;
+  font-size: 0.82rem;
+}
+
+.transaction-table th,
+.transaction-table td {
+  padding: 7px 8px;
+}
+
+.transaction-date-col {
+  width: 88px;
+}
+
+.transaction-counterparty-col {
+  width: 214px;
+}
+
+.transaction-direction-col {
+  width: 78px;
+}
+
+.transaction-amount-col {
+  width: 106px;
+}
+
+.transaction-team-col {
+  width: 128px;
+}
+
+.transaction-category-col {
+  width: 178px;
+}
+
+.transaction-company-col {
+  width: 150px;
+}
+
+.transaction-document-col {
+  width: 76px;
+}
+
+.transaction-actions-col {
+  width: 64px;
+}
+
 .invoice-table {
   min-width: 1040px;
 }
@@ -885,6 +932,37 @@ textarea:focus-visible {
 
 .team-select {
   min-width: 150px;
+}
+
+.transaction-table .counterparty-cell,
+.transaction-table .category-select,
+.transaction-table .company-match,
+.transaction-table .team-select {
+  min-width: 0;
+}
+
+.transaction-table .counterparty-cell strong,
+.transaction-table .counterparty-cell small,
+.transaction-table .category-select small,
+.transaction-table .team-select small,
+.transaction-table .status-pill {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transaction-table .counterparty-cell strong {
+  display: block;
+}
+
+.transaction-table .row-actions {
+  gap: 4px;
+}
+
+.transaction-table .icon-button {
+  width: 30px;
+  height: 30px;
 }
 
 .category-select select,
@@ -1006,6 +1084,7 @@ textarea:focus-visible {
   margin: 12px 14px 0;
 }
 
+.category-select small,
 .team-select small {
   color: var(--muted);
   font-size: 0.74rem;
@@ -1259,6 +1338,26 @@ textarea:focus-visible {
 .ai-prompt-form {
   border-bottom: 0;
   background: var(--subtle-bg);
+}
+
+.settings-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px;
+}
+
+.settings-chip-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--code-text);
+  background: var(--control-bg);
+  font-size: 0.76rem;
+  font-weight: 650;
 }
 
 .prompt-result {

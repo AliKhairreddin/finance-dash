@@ -57,6 +57,8 @@ import { parseWiseStatementCsv } from "../shared/wiseStatements";
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
 type ThemeMode = "light" | "dark";
+type SortDirection = "asc" | "desc";
+type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
 const themeStorageKey = "finance-dash-theme";
 
 const openRouterModelOptions = [
@@ -162,6 +164,41 @@ function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["d
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
 }
 
+function transactionPeriod(transaction: Transaction): string {
+  return transaction.date.slice(0, 7);
+}
+
+function compareTransactions(left: Transaction, right: Transaction, sortKey: TransactionSortKey): number {
+  if (sortKey === "match") {
+    return (left.confidence ?? 0) - (right.confidence ?? 0) || left.date.localeCompare(right.date);
+  }
+
+  if (sortKey === "date") {
+    return left.date.localeCompare(right.date) || left.counterparty.localeCompare(right.counterparty);
+  }
+
+  if (sortKey === "period") {
+    return transactionPeriod(left).localeCompare(transactionPeriod(right)) || left.date.localeCompare(right.date);
+  }
+
+  if (sortKey === "amount") {
+    return left.amount - right.amount || left.date.localeCompare(right.date);
+  }
+
+  if (sortKey === "category") {
+    return effectiveCategory(left).localeCompare(effectiveCategory(right)) || left.date.localeCompare(right.date);
+  }
+
+  return left.counterparty.localeCompare(right.counterparty) || left.date.localeCompare(right.date);
+}
+
+function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, direction: SortDirection): Transaction[] {
+  return [...rows].sort((left, right) => {
+    const result = compareTransactions(left, right, sortKey);
+    return direction === "asc" ? result : -result;
+  });
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     return window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light";
@@ -178,6 +215,8 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [matchFilter, setMatchFilter] = useState("needs-review");
+  const [transactionSortKey, setTransactionSortKey] = useState<TransactionSortKey>("date");
+  const [transactionSortDirection, setTransactionSortDirection] = useState<SortDirection>("desc");
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -220,7 +259,7 @@ function App() {
   const filteredTransactions = useMemo(() => {
     const rows = dashboard?.transactions ?? [];
     const query = searchTerm.trim().toLowerCase();
-    return rows.filter((transaction) => {
+    const matchingRows = rows.filter((transaction) => {
       const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
       const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
       const matchesQuery =
@@ -236,7 +275,8 @@ function App() {
         (matchFilter === "matched" && !needsReview);
       return matchesQuery && matchesStatus;
     });
-  }, [dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById]);
+    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection);
+  }, [dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
 
   const wiseTransactions = useMemo(
     () =>
@@ -688,6 +728,24 @@ function App() {
                   <option value="needs-review">Needs review</option>
                   <option value="matched">Matched</option>
                   <option value="all">All rows</option>
+                </select>
+              </label>
+              <label>
+                <SlidersHorizontal size={15} />
+                <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
+                  <option value="match">% match</option>
+                  <option value="date">Date</option>
+                  <option value="period">Period</option>
+                  <option value="amount">Amount</option>
+                  <option value="category">Category</option>
+                  <option value="counterparty">Counterparty</option>
+                </select>
+              </label>
+              <label>
+                Order
+                <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
                 </select>
               </label>
               <label>
@@ -1438,7 +1496,18 @@ function TransactionTable({
 }) {
   return (
     <div className="table-wrap">
-      <table className="data-table activity-table">
+      <table className="data-table activity-table transaction-table">
+        <colgroup>
+          <col className="transaction-date-col" />
+          <col className="transaction-counterparty-col" />
+          <col className="transaction-direction-col" />
+          <col className="transaction-amount-col" />
+          <col className="transaction-team-col" />
+          <col className="transaction-category-col" />
+          <col className="transaction-company-col" />
+          <col className="transaction-document-col" />
+          <col className="transaction-actions-col" />
+        </colgroup>
         <thead>
           <tr>
             <th>Date</th>
@@ -1497,14 +1566,14 @@ function TransactionTable({
                           </option>
                         ))}
                       </select>
+                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
+                        {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
+                      </small>
                     </div>
                   </td>
                   <td>
                     <div className="company-match">
                       <span className={`status-pill ${provider ? "good" : "warning"}`}>{providerLabel(provider)}</span>
-                      <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
-                        {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
-                      </small>
                     </div>
                   </td>
                   <td>
