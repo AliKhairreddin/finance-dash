@@ -15,7 +15,8 @@
     }
   ],
   "vars": {
-    "CONVEX_URL": "https://famous-oyster-878.convex.cloud",
+    // Current showcase/development data store. Switch to famous-oyster-878 only when the app is production-ready.
+    "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",
     "REVOLUT_ENVIRONMENT": "production",
     "SLASH_BASE_URL": "https://api.slash.com",

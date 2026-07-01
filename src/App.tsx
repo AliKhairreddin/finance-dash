@@ -48,8 +48,7 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
-import { parseWiseStatementText } from "../shared/wiseStatements";
-import { extractPdfText } from "./pdfText";
+import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 type ActiveTab = "overview" | "wise" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
@@ -279,27 +278,29 @@ function App() {
       let importedFiles = 0;
       let importedRows = 0;
       for (const file of Array.from(files)) {
-        const text = await extractPdfText(file);
-        const parsed = parseWiseStatementText(text, file.name);
-        const payload: ImportWiseStatementPayload = {
-          ...parsed.metadata,
-          transactions: parsed.transactions
-        };
-        const response = await fetch(`${apiBase}/wise/import-statement`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        if (!response.ok) {
-          const body = await response.json();
-          throw new Error(body.message || `${file.name} could not be imported`);
+        const text = await file.text();
+        const parsedStatements = parseWiseStatementCsv(text, file.name);
+        for (const parsed of parsedStatements) {
+          const payload: ImportWiseStatementPayload = {
+            ...parsed.metadata,
+            transactions: parsed.transactions
+          };
+          const response = await fetch(`${apiBase}/wise/import-statement`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) {
+            const body = await response.json();
+            throw new Error(body.message || `${file.name} could not be imported`);
+          }
+          nextDashboard = (await response.json()) as DashboardSnapshot;
+          importedRows += parsed.transactions.length;
         }
-        nextDashboard = (await response.json()) as DashboardSnapshot;
         importedFiles += 1;
-        importedRows += parsed.transactions.length;
       }
       if (nextDashboard) setDashboard(nextDashboard);
-      setNotice(`Imported ${importedFiles} Wise statement PDF${importedFiles === 1 ? "" : "s"} with ${importedRows} transaction rows.`);
+      setNotice(`Imported ${importedFiles} Wise statement CSV${importedFiles === 1 ? "" : "s"} with ${importedRows} transaction rows.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Wise statement import failed");
     } finally {
@@ -635,10 +636,10 @@ function App() {
               </label>
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
                 {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                Statements
+                CSV
                 <input
                   type="file"
-                  accept="application/pdf"
+                  accept=".csv,text/csv"
                   multiple
                   disabled={isImportingWise}
                   onChange={(event) => {
@@ -660,7 +661,7 @@ function App() {
               <Upload size={15} />
               <span>
                 {dashboard.wiseStatementImports.length} Wise statement import{dashboard.wiseStatementImports.length === 1 ? "" : "s"} loaded with{" "}
-                {wiseImportedRows} PDF row{wiseImportedRows === 1 ? "" : "s"}. Latest: {maybeDate(latestWiseImport?.importedAt)}.
+                {wiseImportedRows} CSV row{wiseImportedRows === 1 ? "" : "s"}. Latest: {maybeDate(latestWiseImport?.importedAt)}.
               </span>
             </div>
           )}

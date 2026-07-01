@@ -15,27 +15,28 @@ The frontend runs on `http://localhost:5173` and proxies API calls to the Expres
 
 ## Deploy
 
-The production deployment runs on Cloudflare Workers with static assets and a Worker API.
+The current showcase deployment runs on Cloudflare Workers with static assets and a Worker API.
 
 ```bash
 npm run deploy
 ```
 
-Production URL:
+Showcase URL:
 
 ```text
 https://finance.thatcanadian.dev
 ```
 
-The Worker is configured in `wrangler.jsonc`. It uses Convex for provider aliases, revenue runs, and local invoice decisions.
+The Worker is configured in `wrangler.jsonc`. While the dashboard is still in development/showcase mode, it points at the shared development Convex deployment so uploaded Wise statement rows, provider aliases, revenue runs, and local invoice decisions are visible after refreshes. Switch `CONVEX_URL` to the production Convex deployment only when the app is ready for full production data.
 
 ## Convex Backend
 
 Convex is configured as the durable dashboard state backend.
 
 ```text
-Cloud URL: https://fabulous-elephant-597.convex.cloud
-HTTP Actions URL: https://fabulous-elephant-597.convex.site
+Development Cloud URL: https://fabulous-elephant-597.convex.cloud
+Development HTTP Actions URL: https://fabulous-elephant-597.convex.site
+Production Cloud URL: https://famous-oyster-878.convex.cloud
 ```
 
 Push Convex schema/functions to the shared development deployment:
@@ -44,7 +45,7 @@ Push Convex schema/functions to the shared development deployment:
 npm run convex:dev
 ```
 
-The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partners, revenue runs, AI settings, and local invoice decisions in Convex.
+The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.jsonc`. The production Convex deployment is `https://famous-oyster-878.convex.cloud`, but it should stay unused until the dashboard is ready for production data.
 
 ## What It Does
 
@@ -52,7 +53,7 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partn
 - Keeps the overview focused on the six summary cards.
 - Includes separate Wise, Revolut, and Slash operating views.
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
-- Imports manually downloaded Wise statement PDFs in the Wise tab and stores extracted rows for reconciliation.
+- Imports manually downloaded Wise statement CSVs in the Wise tab and stores rows for reconciliation.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
 - Lets saved TUNE/HasOffers revenue partners store the affiliate ID used by the network.
 - Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
@@ -67,13 +68,13 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partn
 - Lets you create a Merit invoice from an unmatched Wise transaction when Merit credentials are configured.
 - Lets you approve or deny invoice matches inside the dashboard.
 - Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
-- Persists provider aliases, revenue partners, revenue runs, AI settings, and created invoices in `.local/finance-dashboard-store.json`.
+- Persists provider aliases, revenue partners, revenue runs, AI settings, created invoices, and uploaded Wise statement rows in Convex on the deployed Worker; local Express development persists the same dashboard state in `.local/finance-dashboard-store.json`.
 
 ## API Integrations
 
 The server-side integration code is in `server/integrations.ts`.
 
-- Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement PDFs when live balance statements are blocked by Wise.
+- Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement CSVs when live balance statements are blocked by Wise.
 - Revolut: prepared for Business API accounts and transaction activity using `REVOLUT_REFRESH_TOKEN`, `REVOLUT_CLIENT_ASSERTION_JWT`, and `REVOLUT_ENVIRONMENT`.
 - Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
 - Partner revenue: prepared for Kissterra through the TUNE Affiliate API using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`.
@@ -83,12 +84,12 @@ Copy `.env.example` to `.env` and fill credentials when ready.
 
 ## Wise Statement Imports
 
-Wise confirmed that live balance statement retrieval is not supported for the current Netherlands Wise Business profile. Use Wise statement PDFs instead:
+Wise confirmed that live balance statement retrieval is not supported for the current Netherlands Wise Business profile. Use Wise statement CSVs instead:
 
-- Preferred cadence: upload one monthly statement PDF per currency balance after month end.
-- Faster cadence: upload custom weekly or daily statement PDFs when reconciliation needs to be fresher than month end.
+- Preferred cadence: upload one monthly statement CSV per currency balance after month end.
+- Faster cadence: upload custom weekly or daily statement CSVs when reconciliation needs to be fresher than month end.
 - Overlapping periods are safe because rows are deduplicated by Wise transaction id.
-- Upload the PDFs from the Wise page in the dashboard with the **Statements** button.
+- Upload the CSVs from the Wise page in the dashboard with the **CSV** button.
 
 ## Credentials Needed
 

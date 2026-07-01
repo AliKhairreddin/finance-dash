@@ -176,7 +176,7 @@ function emptyWiseActivity(statementIssues: string[] = []): WiseActivityResult {
 function wiseStatementIssue(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Wise statement error";
   if (/^403\b/.test(message)) {
-    return "Wise denied live statement API access for this business profile. Upload Wise statement PDFs from Wise instead.";
+    return "Wise denied live statement API access for this business profile. Upload Wise statement CSVs from Wise instead.";
   }
   if (/^401\b/.test(message)) {
     return "Wise rejected the API token. Refresh the Wise token and update WISE_API_TOKEN.";
