@@ -301,9 +301,9 @@ function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: st
   const reference = cell(row, columnAliases.reference);
   const description = cell(row, columnAliases.description) ?? categoryFromRow(row, reference);
   const sourceId = cell(row, columnAliases.transactionId) ?? reference;
-  const fallbackId = `${fileName}-${date}-${description}-${signedAmount}-${currency}`;
-  const idKey = transactionIdKey(sourceId, fallbackId);
   const counterparty = counterpartyFromRow(row, description, signedAmount);
+  const fallbackId = `${date}-${counterparty}-${description}-${signedAmount}-${currency}`;
+  const idKey = transactionIdKey(sourceId, fallbackId);
   const category = categoryFromRow(row, reference, description);
 
   return {

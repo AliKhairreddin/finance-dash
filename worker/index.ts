@@ -115,6 +115,32 @@ function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] 
   return [...map.values()];
 }
 
+function normalizedTransactionText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function wiseStatementTransactionKey(transaction: Transaction): string {
+  const sourceId = transaction.id.match(/^wise-(?:csv|pdf)-[^-]+-(.+)$/)?.[1];
+  if (sourceId) return `${transaction.currency}:${sourceId}`;
+
+  return [
+    transaction.date,
+    transaction.currency,
+    transaction.direction,
+    transaction.amount.toFixed(2),
+    normalizedTransactionText(transaction.counterparty),
+    normalizedTransactionText(transaction.description)
+  ].join("|");
+}
+
+function mergeWiseStatementTransactions(initial: Transaction[], incoming: Transaction[]): Transaction[] {
+  const map = new Map<string, Transaction>();
+  for (const transaction of [...initial, ...incoming]) {
+    map.set(wiseStatementTransactionKey(transaction), transaction);
+  }
+  return [...map.values()];
+}
+
 function realInvoices(invoices?: Invoice[]): Invoice[] {
   return (invoices ?? []).filter(
     (invoice) => invoice.source !== "mock" && !invoice.id.startsWith("mock-invoice-") && invoice.externalId !== "seed-open-invoices"
@@ -890,7 +916,7 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
     importedAt
   };
 
-  state.wiseStatementTransactions = mergeById(state.wiseStatementTransactions, importedTransactions).sort((left, right) =>
+  state.wiseStatementTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, importedTransactions).sort((left, right) =>
     right.date.localeCompare(left.date)
   );
   state.wiseStatementImports = [importRecord, ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
