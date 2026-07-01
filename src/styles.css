@@ -960,9 +960,27 @@ textarea:focus-visible {
   gap: 4px;
 }
 
+.category-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+
 .transaction-table .icon-button {
   width: 30px;
   height: 30px;
+}
+
+.action-placeholder {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--subtle-bg);
 }
 
 .category-select select,

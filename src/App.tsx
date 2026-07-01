@@ -136,6 +136,19 @@ function effectiveCategory(transaction: Transaction): string {
   return transaction.category || "Uncategorized";
 }
 
+function categoryNeedsReview(transaction: Transaction): boolean {
+  const category = effectiveCategory(transaction).trim().toLowerCase();
+  return !category || category === "uncategorized" || category === "wise" || category === "revolut" || category === "slash";
+}
+
+function transactionNeedsCompanyReview(transaction: Transaction): boolean {
+  return transaction.direction === "in" && (!transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86);
+}
+
+function transactionNeedsReview(transaction: Transaction): boolean {
+  return categoryNeedsReview(transaction) || transactionNeedsCompanyReview(transaction);
+}
+
 function transactionCategoryChoices(currentCategory: string): string[] {
   const current = currentCategory || "Uncategorized";
   return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
@@ -269,11 +282,10 @@ function App() {
           .join(" ")
           .toLowerCase()
           .includes(query);
-      const needsReview = !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86;
       const matchesStatus =
         matchFilter === "all" ||
-        (matchFilter === "needs-review" && needsReview) ||
-        (matchFilter === "matched" && !needsReview);
+        (matchFilter === "needs-review" && transactionNeedsReview(transaction)) ||
+        (matchFilter === "matched" && !transactionNeedsReview(transaction));
       return matchesQuery && matchesStatus;
     });
     return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection);
@@ -1202,7 +1214,7 @@ function Overview({
                   <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
                   <div className="match-chip">{providerLabel(provider)}</div>
                   <button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
-                    <Link2 size={15} />
+                    <ShieldCheck size={15} />
                     Match
                   </button>
                   <button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
@@ -1233,7 +1245,7 @@ function CategorizationView({
   onAutoCategorize: () => void;
 }) {
   const rows = dashboard.transactions;
-  const needsReview = rows.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86);
+  const needsReview = rows.filter(categoryNeedsReview);
 
   const categoryRows = [...rows.reduce((map, transaction) => {
     const category = effectiveCategory(transaction);
@@ -1542,6 +1554,12 @@ function TransactionTable({
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const confidence = transaction.confidence ?? 0;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
+              const categoryActionTitle = "Save category and remember alias";
+              const companyActionTitle = provider
+                ? "Save suggested company match"
+                : transaction.direction === "in"
+                  ? "No suggested company to save"
+                  : "Company match is optional for money out";
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
@@ -1571,16 +1589,26 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="category-select">
-                      <select
-                        value={transaction.category || "Uncategorized"}
-                        onChange={(event) => onUpdateCategory(transaction, event.target.value)}
-                      >
-                        {transactionCategoryChoices(transaction.category).map((category) => (
-                          <option key={category} value={category}>
-                            {category}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="category-control-row">
+                        <select
+                          value={transaction.category || "Uncategorized"}
+                          onChange={(event) => onUpdateCategory(transaction, event.target.value)}
+                        >
+                          {transactionCategoryChoices(transaction.category).map((category) => (
+                            <option key={category} value={category}>
+                              {category}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="icon-button"
+                          title={categoryActionTitle}
+                          aria-label={categoryActionTitle}
+                          onClick={() => onUpdateCategory(transaction, effectiveCategory(transaction))}
+                        >
+                          <Save size={15} />
+                        </button>
+                      </div>
                       <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
                         {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
                       </small>
@@ -1588,7 +1616,9 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="company-match">
-                      <span className={`status-pill ${provider ? "good" : "warning"}`}>{providerLabel(provider)}</span>
+                      <span className={`status-pill ${provider ? "good" : transaction.direction === "in" ? "warning" : ""}`}>
+                        {provider ? provider.name : transaction.direction === "in" ? "Needs company" : "Optional"}
+                      </span>
                     </div>
                   </td>
                   <td>
@@ -1600,9 +1630,20 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="row-actions">
-                      <button className="icon-button" title="Confirm company and remember alias" onClick={() => onMatch(transaction, provider?.id)} disabled={!provider}>
-                        <Link2 size={16} />
-                      </button>
+                      {provider ? (
+                        <button
+                          className="icon-button"
+                          title={companyActionTitle}
+                          aria-label={companyActionTitle}
+                          onClick={() => onMatch(transaction, provider.id)}
+                        >
+                          <ShieldCheck size={16} />
+                        </button>
+                      ) : (
+                        <span className="action-placeholder" title={companyActionTitle}>
+                          —
+                        </span>
+                      )}
                       <button className="icon-button" title={documentTitle} onClick={() => onOpenInvoice(transaction)}>
                         <FilePlus2 size={16} />
                       </button>

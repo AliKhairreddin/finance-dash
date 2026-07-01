@@ -247,8 +247,16 @@ function updateStoredTransaction(updated: Transaction): boolean {
   return stored;
 }
 
+function transactionCategoryNeedsReview(transaction: Transaction): boolean {
+  const category = (transaction.category || "Uncategorized").trim().toLowerCase();
+  return !category || category === "uncategorized" || category === "wise" || category === "revolut" || category === "slash";
+}
+
 function transactionNeedsCategorization(transaction: Transaction): boolean {
-  return !transaction.matchedProviderId || (transaction.confidence ?? 0) < semanticMatchThreshold;
+  const needsIncomingCompany = transaction.direction === "in" && !transaction.matchedProviderId;
+  const hasLowIncomingCompanyConfidence =
+    transaction.direction === "in" && Boolean(transaction.matchedProviderId) && (transaction.confidence ?? 0) < semanticMatchThreshold;
+  return transactionCategoryNeedsReview(transaction) || needsIncomingCompany || hasLowIncomingCompanyConfidence;
 }
 
 function applySemanticCategorization(transaction: Transaction): { transaction: Transaction; matched: boolean; categorizedOnly: boolean } {
