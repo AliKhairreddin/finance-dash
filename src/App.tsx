@@ -63,6 +63,8 @@ type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | 
 type TransactionDescriptionToast = {
   title: string;
   description: string;
+  left: number;
+  top: number;
 };
 const themeStorageKey = "finance-dash-theme";
 
@@ -314,6 +316,23 @@ function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, dire
     const result = compareTransactions(left, right, sortKey);
     return direction === "asc" ? result : -result;
   });
+}
+
+function detailToastPosition(event: React.MouseEvent<HTMLElement>): { left: number; top: number } {
+  const viewportPadding = 16;
+  const offset = 18;
+  const toastWidth = Math.min(420, window.innerWidth - viewportPadding * 2);
+  const toastMaxHeight = Math.min(260, window.innerHeight - viewportPadding * 2);
+  const left =
+    event.clientX + offset + toastWidth <= window.innerWidth - viewportPadding
+      ? event.clientX + offset
+      : Math.max(viewportPadding, event.clientX - toastWidth - offset);
+  const top =
+    event.clientY + offset + toastMaxHeight <= window.innerHeight - viewportPadding
+      ? event.clientY + offset
+      : Math.max(viewportPadding, event.clientY - toastMaxHeight - offset);
+
+  return { left, top };
 }
 
 function App() {
@@ -1727,7 +1746,7 @@ function TransactionTable({
 }) {
   const [descriptionToast, setDescriptionToast] = useState<TransactionDescriptionToast | null>(null);
 
-  function showDetailToast(title: string, detail: string) {
+  function showDetailToast(title: string, detail: string, event: React.MouseEvent<HTMLElement>) {
     const description = detail.trim();
     if (!description) {
       setDescriptionToast(null);
@@ -1736,18 +1755,23 @@ function TransactionTable({
 
     setDescriptionToast({
       title,
-      description
+      description,
+      ...detailToastPosition(event)
     });
   }
 
-  function showDescriptionToast(transaction: Transaction) {
-    showDetailToast(transaction.counterparty, transaction.description);
+  function showDescriptionToast(transaction: Transaction, event: React.MouseEvent<HTMLElement>) {
+    showDetailToast(transaction.counterparty, transaction.description, event);
   }
 
   return (
     <div className="table-wrap">
       {descriptionToast && (
-        <div className="transaction-description-toast" role="status">
+        <div
+          className="transaction-description-toast"
+          role="status"
+          style={{ left: descriptionToast.left, top: descriptionToast.top }}
+        >
           <strong>{descriptionToast.title}</strong>
           <span>{descriptionToast.description}</span>
         </div>
@@ -1796,7 +1820,8 @@ function TransactionTable({
                   <td>{dateLabel(transaction.date)}</td>
                   <td
                     className="counterparty-cell"
-                    onMouseEnter={() => showDescriptionToast(transaction)}
+                    onMouseEnter={(event) => showDescriptionToast(transaction, event)}
+                    onMouseMove={(event) => showDescriptionToast(transaction, event)}
                     onMouseLeave={() => setDescriptionToast(null)}
                   >
                     <strong>{transaction.counterparty}</strong>
@@ -1846,7 +1871,8 @@ function TransactionTable({
                       </div>
                       <small
                         className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}
-                        onMouseEnter={() => showDetailToast(displayCategory, categoryDetail)}
+                        onMouseEnter={(event) => showDetailToast(displayCategory, categoryDetail, event)}
+                        onMouseMove={(event) => showDetailToast(displayCategory, categoryDetail, event)}
                         onMouseLeave={() => setDescriptionToast(null)}
                       >
                         {categoryDetail}

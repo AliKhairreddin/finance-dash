@@ -963,8 +963,6 @@ textarea:focus-visible {
 
 .transaction-description-toast {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
   z-index: 70;
   display: grid;
   gap: 5px;
