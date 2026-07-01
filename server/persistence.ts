@@ -1,6 +1,16 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { Invoice, Provider, RevenuePartner, RevenueRun, StoredAiSettings, Team, TransactionTeamAssignment } from "../shared/types";
+import type {
+  Invoice,
+  Provider,
+  RevenuePartner,
+  RevenueRun,
+  StoredAiSettings,
+  Team,
+  Transaction,
+  TransactionTeamAssignment,
+  WiseStatementImport
+} from "../shared/types";
 
 const storePath = resolve(process.cwd(), ".local", "finance-dashboard-store.json");
 
@@ -10,6 +20,8 @@ export interface PersistedState {
   teams: Team[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  wiseStatementTransactions: Transaction[];
+  wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
   aiSettings?: StoredAiSettings;
 }

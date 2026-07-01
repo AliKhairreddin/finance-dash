@@ -1,4 +1,4 @@
-export type DataSource = "wise" | "slash" | "merit" | "manual" | "mock" | "tune";
+export type DataSource = "wise" | "revolut" | "slash" | "merit" | "manual" | "mock" | "tune";
 
 export type Direction = "in" | "out";
 
@@ -162,6 +162,17 @@ export interface Transaction {
   matchReason?: string;
 }
 
+export interface WiseStatementImport {
+  id: string;
+  balanceId: string;
+  currency: string;
+  periodStart: string;
+  periodEnd: string;
+  fileName: string;
+  transactionCount: number;
+  importedAt: string;
+}
+
 export interface IntegrationStatus {
   id: DataSource | "openrouter";
   label: string;
@@ -169,6 +180,7 @@ export interface IntegrationStatus {
   mode: "live" | "mock" | "partial";
   message: string;
   needs: string[];
+  issue?: string;
 }
 
 export interface Metrics {
@@ -207,9 +219,19 @@ export interface DashboardSnapshot {
   aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
+  wiseStatementImports: WiseStatementImport[];
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
   lastSync: string;
+}
+
+export interface ImportWiseStatementPayload {
+  balanceId: string;
+  currency: string;
+  periodStart: string;
+  periodEnd: string;
+  fileName: string;
+  transactions: Transaction[];
 }
 
 export interface CreateInvoicePayload {

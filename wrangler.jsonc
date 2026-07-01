@@ -17,6 +17,7 @@
   "vars": {
     "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",
+    "REVOLUT_ENVIRONMENT": "production",
     "SLASH_BASE_URL": "https://api.slash.com",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",

@@ -6,6 +6,7 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
+  ImportWiseStatementPayload,
   Invoice,
   MatchTransactionPayload,
   Provider,
@@ -17,12 +18,23 @@ import type {
   Team,
   Transaction,
   UpdateProviderPayload,
-  UpdateRevenuePartnerPayload
+  UpdateRevenuePartnerPayload,
+  WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
-import { createMeritInvoice, fetchMeritInvoices, fetchSlashActivity, fetchTuneRevenue, fetchWiseActivity, getIntegrationStatus } from "./integrations";
+import {
+  createMeritInvoice,
+  fetchMeritInvoices,
+  fetchRevolutActivity,
+  fetchSlashActivity,
+  fetchTuneRevenue,
+  fetchWiseActivity,
+  getIntegrationStatus,
+  summarizeWiseStatementIssues,
+  wiseStatementIssue
+} from "./integrations";
 import { enrichTransactions, learnAliases } from "./matching";
 import { loadPersistedState, savePersistedState } from "./persistence";
 
@@ -34,8 +46,11 @@ let revenueRuns: RevenueRun[] = [];
 let aiSettings: StoredAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let transactions: Transaction[] = [];
+let wiseStatementTransactions: Transaction[] = [];
+let wiseStatementImports: WiseStatementImport[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
+let wiseSyncIssue: string | undefined;
 
 function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] {
   const map = new Map(initial.map((item) => [item.id, item]));
@@ -64,10 +79,22 @@ export async function initializeStore(): Promise<void> {
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
+  wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
+  wiseStatementImports = persisted.wiseStatementImports ?? [];
 }
 
 async function persist(): Promise<void> {
-  await savePersistedState({ providers, invoices, teams, revenuePartners, transactionTeamAssignments, revenueRuns, aiSettings });
+  await savePersistedState({
+    providers,
+    invoices,
+    teams,
+    revenuePartners,
+    transactionTeamAssignments,
+    wiseStatementTransactions,
+    wiseStatementImports,
+    revenueRuns,
+    aiSettings
+  });
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
@@ -84,7 +111,7 @@ function applyTeamAssignments(rows: Transaction[]): Transaction[] {
 
 function getMatchedTransactions(): Transaction[] {
   const invoiceByTransaction = new Map(invoices.filter((invoice) => invoice.transactionId).map((invoice) => [invoice.transactionId, invoice]));
-  const withInvoiceMatches = transactions.map((transaction) => {
+  const withInvoiceMatches = mergeById(wiseStatementTransactions, transactions).map((transaction) => {
     const invoice = invoiceByTransaction.get(transaction.id);
     return invoice
       ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
@@ -110,10 +137,60 @@ export function getSnapshot(): DashboardSnapshot {
     aiSettings: publicAiSettings(aiSettings),
     transactions: getMatchedTransactions(),
     invoices,
-    integrationStatus: getIntegrationStatus(),
+    wiseStatementImports,
+    integrationStatus: getIntegrationStatus(wiseSyncIssue),
     metrics,
     lastSync
   };
+}
+
+function wiseImportId(payload: ImportWiseStatementPayload): string {
+  return `wise-import-${payload.balanceId}-${payload.currency}-${payload.periodStart}-${payload.periodEnd}`;
+}
+
+function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload): Transaction[] {
+  return payload.transactions
+    .filter((transaction) => transaction.id && transaction.date && Number.isFinite(transaction.amount))
+    .map((transaction) => ({
+      id: transaction.id,
+      source: "wise" as const,
+      accountName: transaction.accountName || `Wise ${payload.currency}`,
+      date: transaction.date,
+      description: transaction.description || transaction.counterparty || "Wise statement transaction",
+      rawName: transaction.rawName || transaction.counterparty || transaction.description || "Wise statement transaction",
+      counterparty: transaction.counterparty || transaction.rawName || transaction.description || "Wise statement transaction",
+      amount: Math.abs(transaction.amount),
+      currency: payload.currency,
+      direction: transaction.direction,
+      status: "posted" as const,
+      category: transaction.category || "Wise"
+    }));
+}
+
+export async function importWiseStatement(payload: ImportWiseStatementPayload): Promise<DashboardSnapshot> {
+  if (!payload.balanceId || !payload.currency || !payload.periodStart || !payload.periodEnd || !payload.fileName) {
+    throw new Error("balanceId, currency, periodStart, periodEnd, and fileName are required");
+  }
+
+  const importedTransactions = normalizeImportedWiseTransactions(payload);
+  const importedAt = new Date().toISOString();
+  const importRecord: WiseStatementImport = {
+    id: wiseImportId(payload),
+    balanceId: payload.balanceId,
+    currency: payload.currency,
+    periodStart: payload.periodStart,
+    periodEnd: payload.periodEnd,
+    fileName: payload.fileName,
+    transactionCount: importedTransactions.length,
+    importedAt
+  };
+
+  wiseStatementTransactions = mergeById(wiseStatementTransactions, importedTransactions).sort((left, right) => right.date.localeCompare(left.date));
+  wiseStatementImports = [importRecord, ...wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
+    right.importedAt.localeCompare(left.importedAt)
+  );
+  await persist();
+  return getSnapshot();
 }
 
 export async function assignTransactionTeam(payload: AssignTransactionTeamPayload): Promise<Transaction> {
@@ -376,17 +453,33 @@ export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, slash, merit] = await Promise.allSettled([fetchWiseActivity(), fetchSlashActivity(), fetchMeritInvoices()]);
+  const [wise, revolut, slash, merit] = await Promise.allSettled([
+    fetchWiseActivity(),
+    fetchRevolutActivity(),
+    fetchSlashActivity(),
+    fetchMeritInvoices()
+  ]);
   const liveTransactions: Transaction[] = [];
   const liveSources = new Set<Transaction["source"]>();
 
   if (wise.status === "fulfilled") {
+    wiseSyncIssue = summarizeWiseStatementIssues(wise.value.statementIssues);
     if (wise.value.accounts.length > 0) {
       accounts = [...accounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
       liveSources.add("wise");
     }
     if (wise.value.transactions.length > 0) liveSources.add("wise");
     liveTransactions.push(...wise.value.transactions);
+  } else {
+    wiseSyncIssue = wiseStatementIssue(wise.reason);
+  }
+  if (revolut.status === "fulfilled") {
+    if (revolut.value.accounts.length > 0) {
+      accounts = [...accounts.filter((account) => account.source !== "revolut"), ...revolut.value.accounts];
+      liveSources.add("revolut");
+    }
+    if (revolut.value.transactions.length > 0) liveSources.add("revolut");
+    liveTransactions.push(...revolut.value.transactions);
   }
   if (slash.status === "fulfilled") {
     if (slash.value.accounts.length > 0) {

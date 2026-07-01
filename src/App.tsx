@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Tags,
+  Upload,
   WalletCards,
   X
 } from "lucide-react";
@@ -33,6 +34,7 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
+  ImportWiseStatementPayload,
   Provider,
   ProviderType,
   RevenuePartner,
@@ -44,9 +46,11 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
+import { parseWiseStatementText } from "../shared/wiseStatements";
+import { extractPdfText } from "./pdfText";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "wise" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "wise" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
 
 const openRouterModelOptions = [
   { label: "OpenRouter auto", value: "openrouter/auto" },
@@ -126,6 +130,16 @@ function sourceLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (direction && row.direction !== direction) continue;
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
+  }
+  const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
+  return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+}
+
 function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
@@ -133,6 +147,7 @@ function App() {
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isImportingWise, setIsImportingWise] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -214,6 +229,11 @@ function App() {
     [filteredTransactions]
   );
 
+  const revolutTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.source === "revolut"),
+    [filteredTransactions]
+  );
+
   async function syncNow() {
     setIsSyncing(true);
     setNotice(null);
@@ -230,6 +250,44 @@ function App() {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
       setIsSyncing(false);
+    }
+  }
+
+  async function importWiseStatements(files: FileList | null) {
+    if (!files?.length) return;
+    setIsImportingWise(true);
+    setNotice(null);
+    setError(null);
+    try {
+      let nextDashboard: DashboardSnapshot | null = dashboard;
+      let importedFiles = 0;
+      let importedRows = 0;
+      for (const file of Array.from(files)) {
+        const text = await extractPdfText(file);
+        const parsed = parseWiseStatementText(text, file.name);
+        const payload: ImportWiseStatementPayload = {
+          ...parsed.metadata,
+          transactions: parsed.transactions
+        };
+        const response = await fetch(`${apiBase}/wise/import-statement`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const body = await response.json();
+          throw new Error(body.message || `${file.name} could not be imported`);
+        }
+        nextDashboard = (await response.json()) as DashboardSnapshot;
+        importedFiles += 1;
+        importedRows += parsed.transactions.length;
+      }
+      if (nextDashboard) setDashboard(nextDashboard);
+      setNotice(`Imported ${importedFiles} Wise statement PDF${importedFiles === 1 ? "" : "s"} with ${importedRows} transaction rows.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Wise statement import failed");
+    } finally {
+      setIsImportingWise(false);
     }
   }
 
@@ -419,6 +477,9 @@ function App() {
   const hasInvestments = dashboard.investments.length > 0;
   const hasProfit = dashboard.metrics.profit !== null;
   const hasTotalAssets = dashboard.metrics.totalAssets !== null;
+  const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
+  const wiseImportedRows = dashboard.wiseStatementImports.reduce((total, item) => total + item.transactionCount, 0);
+  const latestWiseImport = dashboard.wiseStatementImports[0];
 
   return (
     <main className="app-shell">
@@ -549,6 +610,20 @@ function App() {
                   ))}
                 </select>
               </label>
+              <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+                {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                Statements
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  multiple
+                  disabled={isImportingWise}
+                  onChange={(event) => {
+                    void importWiseStatements(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
             </div>
           </div>
           <div className="wise-summary-grid">
@@ -557,6 +632,21 @@ function App() {
             <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
             <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
           </div>
+          {dashboard.wiseStatementImports.length > 0 && (
+            <div className="statement-import-note">
+              <Upload size={15} />
+              <span>
+                {dashboard.wiseStatementImports.length} Wise statement import{dashboard.wiseStatementImports.length === 1 ? "" : "s"} loaded with{" "}
+                {wiseImportedRows} PDF row{wiseImportedRows === 1 ? "" : "s"}. Latest: {maybeDate(latestWiseImport?.importedAt)}.
+              </span>
+            </div>
+          )}
+          {wiseStatus?.issue && (
+            <div className="integration-alert">
+              <CircleAlert size={16} />
+              <span>{wiseStatus.issue}</span>
+            </div>
+          )}
           <TransactionTable
             rows={wiseTransactions}
             teams={dashboard.teams}
@@ -574,6 +664,10 @@ function App() {
 
       {activeTab === "revenue" && (
         <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} />
+      )}
+
+      {activeTab === "revolut" && (
+        <RevolutView dashboard={dashboard} rows={revolutTransactions} />
       )}
 
       {activeTab === "slash" && (
@@ -667,6 +761,7 @@ function Sidebar({
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "wise", label: "Wise", icon: <Link2 size={17} /> },
+    { id: "revolut", label: "Revolut", icon: <Banknote size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
@@ -1287,6 +1382,55 @@ function RevenueView({
   );
 }
 
+function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+  const revolutAccounts = dashboard.accounts.filter((account) => account.source === "revolut");
+
+  return (
+    <div className="split-view">
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Revolut balances</h2>
+          <span className="total-pill">{revolutAccounts.length > 0 ? `${revolutAccounts.length} accounts` : "—"}</span>
+        </div>
+        <SimpleMoneyTable
+          rows={revolutAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            amount: account.balance,
+            currency: account.currency,
+            source: sourceLabel(account.source)
+          }))}
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Revolut movement</h2>
+          <span className="total-pill">{rows.length} rows</span>
+        </div>
+        <div className="bridge">
+          <div className="bridge-row">
+            <span>Money in</span>
+            <strong className="good-text">{groupedTransactionMoney(rows, "in")}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Money out</span>
+            <strong className="danger-text">{groupedTransactionMoney(rows, "out")}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Revolut activity</h2>
+          <span className="total-pill">{rows.length} rows</span>
+        </div>
+        <BasicTransactionsTable rows={rows} />
+      </section>
+    </div>
+  );
+}
+
 function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
   const cashbackRows = rows.filter((row) => row.category.toLowerCase().includes("cashback"));
@@ -1746,13 +1890,19 @@ function SettingsView({
             <article className="integration-card" key={integration.id}>
               <div className="integration-head">
                 <strong>{integration.label}</strong>
-                <span className={`status-pill ${integration.configured ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
+                <span className={`status-pill ${integration.mode === "live" ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
                   {integration.mode}
                 </span>
               </div>
-              <p>{integration.message}</p>
+              <p className={integration.issue ? "integration-issue" : undefined}>{integration.message}</p>
               <div className="need-list">
-                {integration.needs.length > 0 ? integration.needs.map((need) => <code key={need}>{need}</code>) : <code>configured</code>}
+                {integration.needs.length > 0 ? (
+                  integration.needs.map((need) => <code key={need}>{need}</code>)
+                ) : integration.issue ? (
+                  <code className="warning-code">statement access</code>
+                ) : (
+                  <code>configured</code>
+                )}
               </div>
             </article>
           ))}
@@ -1761,8 +1911,8 @@ function SettingsView({
         <div className="docs-note">
           <strong>Integration shape</strong>
           <span>
-            Wise pulls balances and statements for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices. Slash has its own
-            card/cashback page. Marking paid here never marks paid in Merit.
+            Wise and Revolut pull balances plus transaction activity for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices.
+            Slash has its own card/cashback page. Marking paid here never marks paid in Merit.
           </span>
         </div>
       </section>

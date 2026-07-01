@@ -6,6 +6,7 @@ import type {
   AiPromptPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
+  ImportWiseStatementPayload,
   MatchTransactionPayload,
   SaveAiSettingsPayload,
   SyncRevenuePayload
@@ -16,6 +17,7 @@ import {
   createProvider,
   getSnapshot,
   initializeStore,
+  importWiseStatement,
   markInvoicePaidLocally,
   matchTransaction,
   runAiPrompt,
@@ -44,6 +46,14 @@ app.get("/api/dashboard", (_request, response) => {
 app.post("/api/sync", async (_request, response, next) => {
   try {
     response.json(await syncExternalActivity());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/wise/import-statement", async (request, response, next) => {
+  try {
+    response.json(await importWiseStatement(request.body as ImportWiseStatementPayload));
   } catch (error) {
     next(error);
   }

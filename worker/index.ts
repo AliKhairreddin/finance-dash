@@ -6,6 +6,7 @@ import type {
   CreateProviderPayload,
   DashboardSnapshot,
   DataSource,
+  ImportWiseStatementPayload,
   IntegrationStatus,
   Invoice,
   MatchTransactionPayload,
@@ -19,7 +20,8 @@ import type {
   TransactionTeamAssignment,
   Transaction,
   UpdateProviderPayload,
-  UpdateRevenuePartnerPayload
+  UpdateRevenuePartnerPayload,
+  WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
@@ -40,6 +42,9 @@ interface Env {
   WISE_PROFILE_ID?: string;
   WISE_BALANCE_IDS?: string;
   WISE_ENVIRONMENT?: string;
+  REVOLUT_REFRESH_TOKEN?: string;
+  REVOLUT_CLIENT_ASSERTION_JWT?: string;
+  REVOLUT_ENVIRONMENT?: string;
   SLASH_API_KEY?: string;
   SLASH_LEGAL_ENTITY_ID?: string;
   SLASH_BASE_URL?: string;
@@ -64,14 +69,27 @@ interface PersistedState {
   teams: Team[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  wiseStatementTransactions: Transaction[];
+  wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
   aiSettings?: StoredAiSettings;
+}
+
+interface WiseActivityResult {
+  accounts: AccountBalance[];
+  transactions: Transaction[];
+  statementIssues: string[];
 }
 
 const wiseBaseUrlByEnvironment = {
   production: "https://api.wise.com",
   sandbox: "https://api.wise-sandbox.com"
 };
+const revolutBaseUrlByEnvironment = {
+  production: "https://b2b.revolut.com/api/1.0",
+  sandbox: "https://sandbox-b2b.revolut.com/api/1.0"
+};
+const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
 const defaultSlashBaseUrl = "https://api.slash.com";
 const jsonHeaders = {
@@ -143,13 +161,39 @@ function wiseBaseUrl(env: Env): string {
   return env.WISE_ENVIRONMENT === "sandbox" ? wiseBaseUrlByEnvironment.sandbox : wiseBaseUrlByEnvironment.production;
 }
 
+function revolutBaseUrl(env: Env): string {
+  return env.REVOLUT_ENVIRONMENT === "sandbox" ? revolutBaseUrlByEnvironment.sandbox : revolutBaseUrlByEnvironment.production;
+}
+
 function parseStatementDate(value: string | undefined): string {
   return (value ?? new Date().toISOString()).slice(0, 10);
 }
 
-async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+function emptyWiseActivity(statementIssues: string[] = []): WiseActivityResult {
+  return { accounts: [], transactions: [], statementIssues };
+}
+
+function wiseStatementIssue(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown Wise statement error";
+  if (/^403\b/.test(message)) {
+    return "Wise denied live statement API access for this business profile. Upload Wise statement PDFs from Wise instead.";
+  }
+  if (/^401\b/.test(message)) {
+    return "Wise rejected the API token. Refresh the Wise token and update WISE_API_TOKEN.";
+  }
+  return `Wise statement fetch failed: ${message.replace(/\s+/g, " ").slice(0, 240)}`;
+}
+
+function summarizeWiseStatementIssues(issues: string[]): string | undefined {
+  if (issues.length === 0) return undefined;
+  const uniqueIssues = [...new Set(issues)];
+  const suffix = issues.length > 1 ? ` ${issues.length} configured balances were affected.` : "";
+  return `${uniqueIssues[0]}${suffix}`;
+}
+
+async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
   if (!env.WISE_API_TOKEN || !env.WISE_PROFILE_ID || !env.WISE_BALANCE_IDS) {
-    return { accounts: [], transactions: [] };
+    return emptyWiseActivity();
   }
 
   const balances = parseWiseBalancePairs(env.WISE_BALANCE_IDS);
@@ -186,6 +230,7 @@ async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]
     }));
 
   const transactions: Transaction[] = [];
+  const statementIssues: string[] = [];
   for (const balance of balances) {
     const params = new URLSearchParams({
       currency: balance.currency,
@@ -207,6 +252,7 @@ async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]
         "X-External-Correlation-Id": crypto.randomUUID()
       }
     }).catch((error: unknown) => {
+      statementIssues.push(wiseStatementIssue(error));
       console.warn(
         `Wise statement fetch failed for balance ${balance.id}: ${error instanceof Error ? error.message : "Unknown Wise statement error"}`
       );
@@ -229,6 +275,143 @@ async function fetchWiseActivity(env: Env): Promise<{ accounts: AccountBalance[]
         direction: value >= 0 ? "in" : "out",
         status: "posted",
         category: activity.type ?? "Wise"
+      });
+    }
+  }
+
+  return { accounts, transactions, statementIssues };
+}
+
+async function fetchRevolutAccessToken(env: Env): Promise<string | undefined> {
+  if (!env.REVOLUT_REFRESH_TOKEN || !env.REVOLUT_CLIENT_ASSERTION_JWT) return undefined;
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: env.REVOLUT_REFRESH_TOKEN,
+    client_assertion_type: revolutClientAssertionType,
+    client_assertion: env.REVOLUT_CLIENT_ASSERTION_JWT
+  });
+
+  const response = await fetchJson<{ access_token?: string }>(`${revolutBaseUrl(env)}/auth/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  if (!response.access_token) {
+    throw new Error("Revolut token response did not include access_token");
+  }
+  return response.access_token;
+}
+
+function revolutStatus(state: string | undefined): Transaction["status"] {
+  return state === "created" || state === "pending" ? "pending" : "posted";
+}
+
+function revolutCounterparty(
+  activity: {
+    type?: string;
+    request_id?: string;
+    reference?: string;
+    merchant?: { name?: string };
+    card?: { first_name?: string; last_name?: string };
+  },
+  leg: { counterparty?: { description?: string } }
+): string {
+  const cardholder = [activity.card?.first_name, activity.card?.last_name].filter(Boolean).join(" ").trim();
+  return (
+    activity.merchant?.name ||
+    leg.counterparty?.description ||
+    activity.reference ||
+    cardholder ||
+    activity.request_id ||
+    activity.type ||
+    "Revolut transaction"
+  );
+}
+
+async function fetchRevolutActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  const accessToken = await fetchRevolutAccessToken(env);
+  if (!accessToken) return { accounts: [], transactions: [] };
+
+  const baseUrl = revolutBaseUrl(env);
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json"
+  };
+  const intervalEnd = new Date().toISOString();
+  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
+  const params = new URLSearchParams({
+    from: intervalStart,
+    to: intervalEnd,
+    count: "1000"
+  });
+
+  const [revolutAccounts, revolutTransactions] = await Promise.all([
+    fetchJson<
+      Array<{
+        id: string;
+        name?: string;
+        balance: number;
+        currency: string;
+        state: string;
+        updated_at: string;
+        created_at: string;
+      }>
+    >(`${baseUrl}/accounts`, { headers }),
+    fetchJson<
+      Array<{
+        id: string;
+        type: string;
+        request_id?: string;
+        state: string;
+        created_at: string;
+        completed_at?: string;
+        reference?: string;
+        merchant?: { name?: string; category_code?: string };
+        card?: { first_name?: string; last_name?: string; card_number?: string };
+        legs: Array<{
+          leg_id?: string;
+          amount: number;
+          currency: string;
+          account_id: string;
+          counterparty?: { description?: string; account_type?: string };
+        }>;
+      }>
+    >(`${baseUrl}/transactions?${params.toString()}`, { headers })
+  ]);
+
+  const accountById = new Map(revolutAccounts.map((account) => [account.id, account]));
+  const accounts: AccountBalance[] = revolutAccounts.map((account) => ({
+    id: `revolut-${account.id}`,
+    name: account.name || `Revolut ${account.currency}`,
+    source: "revolut",
+    balance: account.balance,
+    currency: account.currency,
+    updatedAt: account.updated_at || account.created_at,
+    status: "live"
+  }));
+
+  const transactions: Transaction[] = [];
+  for (const activity of revolutTransactions) {
+    for (const [index, leg] of activity.legs.entries()) {
+      const account = accountById.get(leg.account_id);
+      const counterparty = revolutCounterparty(activity, leg);
+      transactions.push({
+        id: `revolut-${activity.id}-${leg.leg_id ?? index}`,
+        source: "revolut",
+        accountName: account?.name || `Revolut ${leg.currency}`,
+        date: parseStatementDate(activity.completed_at || activity.created_at),
+        description: activity.reference || activity.type || counterparty,
+        rawName: counterparty,
+        counterparty,
+        amount: Math.abs(leg.amount),
+        currency: leg.currency,
+        direction: leg.amount >= 0 ? "in" : "out",
+        status: revolutStatus(activity.state),
+        category: activity.merchant?.category_code || activity.type || "Revolut"
       });
     }
   }
@@ -296,8 +479,8 @@ async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[
   return { accounts, transactions };
 }
 
-function mergeLiveAccounts(liveWiseAccounts: AccountBalance[], liveSlashAccounts: AccountBalance[]): AccountBalance[] {
-  return [...liveWiseAccounts, ...liveSlashAccounts];
+function mergeLiveAccounts(...accountGroups: AccountBalance[][]): AccountBalance[] {
+  return accountGroups.flat();
 }
 
 async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<Invoice | undefined> {
@@ -305,11 +488,12 @@ async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<
 }
 
 async function fetchTransactionForUpdate(env: Env, transactionId: string): Promise<Transaction | undefined> {
-  const [wise, slash] = await Promise.all([
-    fetchWiseActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+  const [wise, revolut, slash] = await Promise.all([
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
+    fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
   ]);
-  return [...wise.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
+  return [...wise.transactions, ...revolut.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
 }
 
 async function fetchTransactionForMatch(env: Env, transactionId: string): Promise<Transaction | undefined> {
@@ -570,6 +754,8 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     teams: stored?.teams ?? [],
     revenuePartners: stored?.revenuePartners ?? [],
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
+    wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
+    wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: realRevenueRuns(stored?.revenueRuns),
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
@@ -583,10 +769,12 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   await convex.mutation(api.dashboard.saveState, state);
 }
 
-function integrationStatus(env: Env): IntegrationStatus[] {
+function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
+  const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
 
+  const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
@@ -597,12 +785,25 @@ function integrationStatus(env: Env): IntegrationStatus[] {
       id: "wise" as DataSource,
       label: "Wise",
       configured: wiseNeeds.length === 0,
-      mode: wiseNeeds.length === 0 ? "live" : "partial",
+      mode: wiseNeeds.length === 0 && !wiseIssue ? "live" : "partial",
       message:
-        wiseNeeds.length === 0
+        wiseIssue ??
+        (wiseNeeds.length === 0
           ? "Credentials are present. Live Wise sync can be enabled for statements."
-          : "Wise rows stay empty until API token, profile, and balance IDs are configured.",
-      needs: wiseNeeds
+          : "Wise rows stay empty until API token, profile, and balance IDs are configured."),
+      needs: wiseNeeds,
+      issue: wiseIssue
+    },
+    {
+      id: "revolut" as DataSource,
+      label: "Revolut",
+      configured: revolutNeeds.length === 0,
+      mode: revolutNeeds.length === 0 ? "live" : "partial",
+      message:
+        revolutNeeds.length === 0
+          ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
+          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured.",
+      needs: revolutNeeds
     },
     {
       id: "slash" as DataSource,
@@ -648,16 +849,68 @@ function applyTeamAssignments(rows: Transaction[], assignments: TransactionTeamA
   });
 }
 
+function wiseImportId(payload: ImportWiseStatementPayload): string {
+  return `wise-import-${payload.balanceId}-${payload.currency}-${payload.periodStart}-${payload.periodEnd}`;
+}
+
+function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload): Transaction[] {
+  return payload.transactions
+    .filter((transaction) => transaction.id && transaction.date && Number.isFinite(transaction.amount))
+    .map((transaction) => ({
+      id: transaction.id,
+      source: "wise" as const,
+      accountName: transaction.accountName || `Wise ${payload.currency}`,
+      date: transaction.date,
+      description: transaction.description || transaction.counterparty || "Wise statement transaction",
+      rawName: transaction.rawName || transaction.counterparty || transaction.description || "Wise statement transaction",
+      counterparty: transaction.counterparty || transaction.rawName || transaction.description || "Wise statement transaction",
+      amount: Math.abs(transaction.amount),
+      currency: payload.currency,
+      direction: transaction.direction,
+      status: "posted" as const,
+      category: transaction.category || "Wise"
+    }));
+}
+
+async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload): Promise<DashboardSnapshot> {
+  if (!payload.balanceId || !payload.currency || !payload.periodStart || !payload.periodEnd || !payload.fileName) {
+    throw new Error("balanceId, currency, periodStart, periodEnd, and fileName are required");
+  }
+  const state = await loadPersisted(env);
+  const importedTransactions = normalizeImportedWiseTransactions(payload);
+  const importedAt = new Date().toISOString();
+  const importRecord: WiseStatementImport = {
+    id: wiseImportId(payload),
+    balanceId: payload.balanceId,
+    currency: payload.currency,
+    periodStart: payload.periodStart,
+    periodEnd: payload.periodEnd,
+    fileName: payload.fileName,
+    transactionCount: importedTransactions.length,
+    importedAt
+  };
+
+  state.wiseStatementTransactions = mergeById(state.wiseStatementTransactions, importedTransactions).sort((left, right) =>
+    right.date.localeCompare(left.date)
+  );
+  state.wiseStatementImports = [importRecord, ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
+    right.importedAt.localeCompare(left.importedAt)
+  );
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const [wise, slash, liveMeritInvoices] = await Promise.all([
-    fetchWiseActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+  const [wise, revolut, slash, liveMeritInvoices] = await Promise.all([
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
+    fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchMeritInvoices(env).catch(() => [])
   ]);
-  const accounts = mergeLiveAccounts(wise.accounts, slash.accounts);
+  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts);
   const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
-  const rawTransactions = [...wise.transactions, ...slash.transactions];
+  const rawTransactions = mergeById(state.wiseStatementTransactions, [...wise.transactions, ...revolut.transactions, ...slash.transactions]);
   const transactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {
@@ -686,7 +939,8 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     aiSettings: publicAiSettings(state.aiSettings ?? { ...defaultAiSettings }),
     transactions,
     invoices,
-    integrationStatus: integrationStatus(env),
+    wiseStatementImports: state.wiseStatementImports,
+    integrationStatus: integrationStatus(env, wise),
     metrics: calculateMetrics(accounts, [], [], [], []),
     lastSync: new Date().toISOString()
   };
@@ -990,6 +1244,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
       return json(await getSnapshot(env));
+    }
+
+    if (url.pathname === "/api/wise/import-statement" && request.method === "POST") {
+      return json(await importWiseStatement(env, (await request.json()) as ImportWiseStatementPayload));
     }
 
     if (url.pathname === "/api/revenue/sync" && request.method === "POST") {

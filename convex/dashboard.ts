@@ -3,6 +3,7 @@ import { v } from "convex/values";
 
 const dataSource = v.union(
   v.literal("wise"),
+  v.literal("revolut"),
   v.literal("slash"),
   v.literal("merit"),
   v.literal("manual"),
@@ -61,6 +62,37 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const transaction = v.object({
+  id: v.string(),
+  source: dataSource,
+  accountName: v.string(),
+  date: v.string(),
+  description: v.string(),
+  rawName: v.string(),
+  counterparty: v.string(),
+  amount: v.number(),
+  currency: v.string(),
+  direction: v.union(v.literal("in"), v.literal("out")),
+  status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
+  category: v.string(),
+  matchedProviderId: v.optional(v.string()),
+  matchedInvoiceId: v.optional(v.string()),
+  teamId: v.optional(v.string()),
+  confidence: v.optional(v.number()),
+  matchReason: v.optional(v.string())
+});
+
+const wiseStatementImport = v.object({
+  id: v.string(),
+  balanceId: v.string(),
+  currency: v.string(),
+  periodStart: v.string(),
+  periodEnd: v.string(),
+  fileName: v.string(),
+  transactionCount: v.number(),
+  importedAt: v.string()
+});
+
 const revenueRun = v.object({
   id: v.string(),
   partnerId: v.string(),
@@ -115,6 +147,8 @@ export const getState = query({
       teams: v.array(team),
       revenuePartners: v.array(revenuePartner),
       transactionTeamAssignments: v.array(transactionTeamAssignment),
+      wiseStatementTransactions: v.array(transaction),
+      wiseStatementImports: v.array(wiseStatementImport),
       revenueRuns: v.array(revenueRun),
       aiSettings: v.optional(aiSettings),
       updatedAt: v.string()
@@ -134,6 +168,8 @@ export const getState = query({
       teams: state.teams ?? [],
       revenuePartners: state.revenuePartners ?? [],
       transactionTeamAssignments: state.transactionTeamAssignments ?? [],
+      wiseStatementTransactions: state.wiseStatementTransactions ?? [],
+      wiseStatementImports: state.wiseStatementImports ?? [],
       revenueRuns: state.revenueRuns ?? [],
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
@@ -148,6 +184,8 @@ export const saveState = mutation({
     teams: v.array(team),
     revenuePartners: v.array(revenuePartner),
     transactionTeamAssignments: v.array(transactionTeamAssignment),
+    wiseStatementTransactions: v.array(transaction),
+    wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
     aiSettings: v.optional(aiSettings)
   },
@@ -168,6 +206,8 @@ export const saveState = mutation({
         teams: args.teams,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseStatementTransactions: args.wiseStatementTransactions,
+        wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
         aiSettings: args.aiSettings,
         updatedAt
@@ -180,6 +220,8 @@ export const saveState = mutation({
         teams: args.teams,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseStatementTransactions: args.wiseStatementTransactions,
+        wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
         aiSettings: args.aiSettings,
         updatedAt

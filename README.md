@@ -50,8 +50,9 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partn
 
 - Shows cash in accounts, receivables, open balances, payables, profit, and total assets when live or saved data exists.
 - Keeps the overview focused on the six summary cards.
-- Includes separate Wise and Slash operating views.
+- Includes separate Wise, Revolut, and Slash operating views.
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
+- Imports manually downloaded Wise statement PDFs in the Wise tab and stores extracted rows for reconciliation.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
 - Lets saved TUNE/HasOffers revenue partners store the affiliate ID used by the network.
 - Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
@@ -72,12 +73,22 @@ The Cloudflare Worker uses `CONVEX_URL` to store provider aliases, revenue partn
 
 The server-side integration code is in `server/integrations.ts`.
 
-- Wise: prepared for profiles, balance statements, and transaction activity using `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`.
+- Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement PDFs when live balance statements are blocked by Wise.
+- Revolut: prepared for Business API accounts and transaction activity using `REVOLUT_REFRESH_TOKEN`, `REVOLUT_CLIENT_ASSERTION_JWT`, and `REVOLUT_ENVIRONMENT`.
 - Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
 - Partner revenue: prepared for Kissterra through the TUNE Affiliate API using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`.
 - Merit: prepared to list sales invoices and create sales invoices using `MERIT_API_ID`, `MERIT_API_KEY`, and default tax/item settings. The dashboard intentionally does not send Merit payment updates.
 
 Copy `.env.example` to `.env` and fill credentials when ready.
+
+## Wise Statement Imports
+
+Wise confirmed that live balance statement retrieval is not supported for the current Netherlands Wise Business profile. Use Wise statement PDFs instead:
+
+- Preferred cadence: upload one monthly statement PDF per currency balance after month end.
+- Faster cadence: upload custom weekly or daily statement PDFs when reconciliation needs to be fresher than month end.
+- Overlapping periods are safe because rows are deduplicated by Wise transaction id.
+- Upload the PDFs from the Wise page in the dashboard with the **Statements** button.
 
 ## Credentials Needed
 
@@ -86,6 +97,10 @@ WISE_API_TOKEN=
 WISE_PROFILE_ID=
 WISE_ENVIRONMENT=production
 WISE_BALANCE_IDS=
+
+REVOLUT_ENVIRONMENT=production
+REVOLUT_REFRESH_TOKEN=
+REVOLUT_CLIENT_ASSERTION_JWT=
 
 SLASH_API_KEY=
 SLASH_LEGAL_ENTITY_ID=
@@ -109,6 +124,9 @@ KISSTERRA_TUNE_API_BASE_URL=
 ## References
 
 - Wise Platform docs: https://docs.wise.com/
+- Revolut Business API docs: https://developer.revolut.com/docs/business/business-api
+- Revolut Business API accounts: https://developer.revolut.com/docs/business/get-accounts
+- Revolut Business API transactions: https://developer.revolut.com/docs/business/get-transactions
 - Slash API docs: https://docs.slash.com/
 - Merit API authentication: https://api.merit.ee/connecting-robots/reference-manual/authentication/
 - Merit sales invoice creation: https://api.merit.ee/connecting-robots/reference-manual/sales-invoices/create-sales-invoice/
