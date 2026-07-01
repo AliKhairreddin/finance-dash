@@ -3,6 +3,8 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   AssignTransactionTeamPayload,
+  AutoCategorizeTransactionsPayload,
+  AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
@@ -23,7 +25,7 @@ import type {
   UpdateRevenuePartnerPayload,
   WiseStatementImport
 } from "../shared/types";
-import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
+import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
 import {
@@ -37,7 +39,15 @@ import {
   summarizeWiseStatementIssues,
   wiseStatementIssue
 } from "./integrations";
-import { enrichTransactions, learnAliases } from "./matching";
+import {
+  enrichTransactions,
+  learnAliases,
+  mergeProviderDirectory,
+  mergeTeamDirectory,
+  semanticCategorizeTransaction,
+  semanticMatchThreshold,
+  transactionAliasCandidates
+} from "./matching";
 import { loadPersistedState, savePersistedState } from "./persistence";
 
 let providers: Provider[] = [];
@@ -123,9 +133,9 @@ function realRevenueRuns(rows?: RevenueRun[]): RevenueRun[] {
 
 export async function initializeStore(): Promise<void> {
   const persisted = await loadPersistedState();
-  providers = persisted.providers ?? [];
+  providers = mergeProviderDirectory(persisted.providers ?? []);
   invoices = realInvoices(persisted.invoices);
-  teams = persisted.teams ?? [];
+  teams = mergeTeamDirectory(persisted.teams ?? []);
   revenuePartners = persisted.revenuePartners ?? [];
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
@@ -149,7 +159,7 @@ async function persist(): Promise<void> {
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
-  return [transaction.rawName, transaction.counterparty].filter(Boolean);
+  return transactionAliasCandidates(transaction);
 }
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
@@ -169,6 +179,115 @@ function getMatchedTransactions(): Transaction[] {
       : transaction;
   });
   return enrichTransactions(applyTeamAssignments(withInvoiceMatches), providers);
+}
+
+function getKnownTransactions(): Transaction[] {
+  return mergeById(wiseStatementTransactions, transactions);
+}
+
+function findKnownTransaction(transactionId: string): Transaction | undefined {
+  return getKnownTransactions().find((transaction) => transaction.id === transactionId);
+}
+
+function updateStoredTransaction(updated: Transaction): boolean {
+  let stored = false;
+  wiseStatementTransactions = wiseStatementTransactions.map((transaction) => {
+    if (transaction.id !== updated.id) return transaction;
+    stored = true;
+    return { ...transaction, ...updated };
+  });
+  transactions = transactions.map((transaction) => {
+    if (transaction.id !== updated.id) return transaction;
+    stored = true;
+    return { ...transaction, ...updated };
+  });
+  return stored;
+}
+
+function transactionNeedsCategorization(transaction: Transaction): boolean {
+  return !transaction.matchedProviderId || (transaction.confidence ?? 0) < semanticMatchThreshold;
+}
+
+function applySemanticCategorization(transaction: Transaction): { transaction: Transaction; matched: boolean; categorizedOnly: boolean } {
+  const categorized = semanticCategorizeTransaction(transaction, providers);
+  return {
+    transaction: categorized,
+    matched: Boolean(categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId),
+    categorizedOnly: !categorized.matchedProviderId && categorized.category !== transaction.category
+  };
+}
+
+function applyAiCategorization(
+  transaction: Transaction,
+  match: { providerId?: string; category?: string; confidence: number; reason: string }
+): Transaction {
+  const provider = match.providerId ? providers.find((item) => item.id === match.providerId) : undefined;
+  return {
+    ...transaction,
+    matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+    category: provider?.category ?? match.category ?? transaction.category,
+    confidence: match.confidence,
+    matchReason: `AI: ${match.reason}`
+  };
+}
+
+export async function autoCategorizeTransactions(
+  payload: AutoCategorizeTransactionsPayload = {}
+): Promise<AutoCategorizeTransactionsResult> {
+  providers = mergeProviderDirectory(providers);
+  const targetIds = payload.transactionIds?.length ? new Set(payload.transactionIds) : undefined;
+  let semanticMatches = 0;
+  let categorizedOnly = 0;
+  let reviewed = 0;
+
+  const categorizeRow = (transaction: Transaction): Transaction => {
+    if (targetIds && !targetIds.has(transaction.id)) return transaction;
+    if (!transactionNeedsCategorization(transaction)) return transaction;
+    reviewed += 1;
+    const result = applySemanticCategorization(transaction);
+    if (result.matched) semanticMatches += 1;
+    if (result.categorizedOnly) categorizedOnly += 1;
+    return result.transaction;
+  };
+
+  wiseStatementTransactions = wiseStatementTransactions.map(categorizeRow);
+  transactions = transactions.map(categorizeRow);
+
+  let aiMatches = 0;
+  const shouldUseAi = payload.useAi !== false && Boolean(aiSettings.openRouterApiKey?.trim());
+  const remaining = getKnownTransactions().filter((transaction) => {
+    if (targetIds && !targetIds.has(transaction.id)) return false;
+    return transactionNeedsCategorization(transaction);
+  });
+
+  if (shouldUseAi && remaining.length > 0) {
+    const aiResults = await runOpenRouterTransactionCategorization(aiSettings, remaining, providers, process.env.PUBLIC_APP_URL);
+    for (const aiResult of aiResults) {
+      if (aiResult.confidence < 0.72) continue;
+      const transaction = findKnownTransaction(aiResult.transactionId);
+      if (!transaction) continue;
+      const updated = applyAiCategorization(transaction, aiResult);
+      if (!updateStoredTransaction(updated)) continue;
+      if (updated.matchedProviderId) {
+        aiMatches += 1;
+        const provider = providers.find((item) => item.id === updated.matchedProviderId);
+        if (provider) {
+          providers = providers.map((item) => (item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item));
+        }
+      } else {
+        categorizedOnly += 1;
+      }
+    }
+  }
+
+  await persist();
+  return {
+    dashboard: getSnapshot(),
+    semanticMatches,
+    aiMatches,
+    categorizedOnly,
+    reviewed
+  };
 }
 
 export function getSnapshot(): DashboardSnapshot {
@@ -243,15 +362,18 @@ export async function importWiseStatement(payload: ImportWiseStatementPayload): 
   wiseStatementImports = [importRecord, ...wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
     right.importedAt.localeCompare(left.importedAt)
   );
-  await persist();
+  const categorization = await autoCategorizeTransactions({
+    transactionIds: importedTransactions.map((transaction) => transaction.id),
+    useAi: true
+  });
   return {
-    dashboard: getSnapshot(),
+    dashboard: categorization.dashboard,
     summary
   };
 }
 
 export async function assignTransactionTeam(payload: AssignTransactionTeamPayload): Promise<Transaction> {
-  const transaction = transactions.find((item) => item.id === payload.transactionId);
+  const transaction = findKnownTransaction(payload.transactionId);
   if (!transaction) {
     throw new Error("Transaction not found");
   }
@@ -281,7 +403,7 @@ export async function createProvider(payload: CreateProviderPayload): Promise<Pr
     source: "manual",
     createdAt: new Date().toISOString()
   };
-  providers = [...providers, provider];
+  providers = mergeProviderDirectory([...providers, provider]);
   await persist();
   return provider;
 }
@@ -301,6 +423,7 @@ export async function updateProvider(providerId: string, payload: UpdateProvider
     return updated;
   });
   if (!updated) throw new Error("Provider not found");
+  providers = mergeProviderDirectory(providers);
   await persist();
   return updated;
 }
@@ -352,29 +475,27 @@ export async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptRes
 
 export async function matchTransaction(payload: MatchTransactionPayload): Promise<Transaction> {
   const provider = providers.find((item) => item.id === payload.providerId);
-  const transaction = transactions.find((item) => item.id === payload.transactionId);
+  const transaction = findKnownTransaction(payload.transactionId);
   if (!provider || !transaction) {
     throw new Error("Provider or transaction not found");
   }
 
-  transactions = transactions.map((item) =>
-    item.id === payload.transactionId
-      ? {
-          ...item,
-          matchedProviderId: payload.providerId,
-          matchedInvoiceId: payload.invoiceId,
-          confidence: 1,
-          matchReason: "Manual match"
-        }
-      : item
-  );
+  const matchedTransaction: Transaction = {
+    ...transaction,
+    matchedProviderId: payload.providerId,
+    matchedInvoiceId: payload.invoiceId,
+    category: provider.category,
+    confidence: 1,
+    matchReason: "Approved match"
+  };
+  updateStoredTransaction(matchedTransaction);
 
   if (payload.rememberAlias) {
     providers = providers.map((item) => (item.id === payload.providerId ? learnAliases(item, bankAliasNames(transaction)) : item));
   }
 
   await persist();
-  return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
+  return enrichTransactions([matchedTransaction], providers)[0];
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
@@ -386,17 +507,23 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
 
   invoices = [invoice, ...invoices];
   if (payload.transactionId && payload.providerId) {
-    const sourceTransaction = transactions.find((transaction) => transaction.id === payload.transactionId);
+    const sourceTransaction = findKnownTransaction(payload.transactionId);
     if (sourceTransaction) {
       providers = providers.map((provider) =>
         provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(sourceTransaction)) : provider
       );
+      const provider = providers.find((item) => item.id === payload.providerId);
+      if (provider) {
+        updateStoredTransaction({
+          ...sourceTransaction,
+          matchedProviderId: payload.providerId,
+          matchedInvoiceId: invoice.id,
+          category: provider.category,
+          confidence: 1,
+          matchReason: "Invoice created"
+        });
+      }
     }
-    transactions = transactions.map((transaction) =>
-      transaction.id === payload.transactionId
-        ? { ...transaction, matchedProviderId: payload.providerId, matchedInvoiceId: invoice.id, confidence: 1, matchReason: "Invoice created" }
-        : transaction
-    );
   }
   await persist();
   return invoice;

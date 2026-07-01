@@ -15,6 +15,7 @@ import {
   Loader2,
   Moon,
   Pencil,
+  PieChart,
   Plus,
   RefreshCw,
   Save,
@@ -33,6 +34,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type {
   AiPromptPayload,
   AiPromptResult,
+  AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
@@ -52,7 +54,7 @@ import type {
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "wise" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
 type ThemeMode = "light" | "dark";
 const themeStorageKey = "finance-dash-theme";
 
@@ -126,6 +128,44 @@ function providerTypeLabel(type: ProviderType): string {
   return labels[type];
 }
 
+function providerGroupLabel(provider: Provider): string {
+  if (provider.category === "Ad account provider") return "Ad account providers";
+  if (provider.category === "Ad platform") return "Ad platforms";
+  if (provider.category === "Subscription") return "Subscriptions";
+  if (provider.type === "partner") return "Partners";
+  if (provider.type === "internal") return "Internal";
+  return `${providerTypeLabel(provider.type)} · ${provider.category}`;
+}
+
+function providerGroupRank(label: string): number {
+  const order = ["Ad account providers", "Ad platforms", "Subscriptions", "Partners", "Provider · Card", "Internal"];
+  const index = order.indexOf(label);
+  return index >= 0 ? index : 50;
+}
+
+function providerOptionGroups(providers: Provider[]): Array<{ label: string; providers: Provider[] }> {
+  const groups = new Map<string, Provider[]>();
+  for (const provider of providers) {
+    const label = providerGroupLabel(provider);
+    groups.set(label, [...(groups.get(label) ?? []), provider]);
+  }
+  return [...groups.entries()]
+    .map(([label, rows]) => ({
+      label,
+      providers: rows.sort((left, right) => left.name.localeCompare(right.name))
+    }))
+    .sort((left, right) => providerGroupRank(left.label) - providerGroupRank(right.label) || left.label.localeCompare(right.label));
+}
+
+function effectiveCategory(transaction: Transaction, providersById: Map<string, Provider>): string {
+  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+  return provider?.category || transaction.category || "Uncategorized";
+}
+
+function formatTransactionGroups(rows: Transaction[]): string {
+  return groupedTransactionMoney(rows) || "—";
+}
+
 function bankInvoiceName(transaction: Transaction): string {
   return transaction.counterparty || transaction.rawName;
 }
@@ -155,6 +195,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isImportingWise, setIsImportingWise] = useState(false);
+  const [isCategorizing, setIsCategorizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -441,6 +482,32 @@ function App() {
     return (await response.json()) as AiPromptResult;
   }
 
+  async function autoCategorizeTransactions(transactionIds?: string[]) {
+    setIsCategorizing(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/transactions/auto-categorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transactionIds, useAi: true })
+      });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.message || "Auto-categorization failed");
+      }
+      const result = (await response.json()) as AutoCategorizeTransactionsResult;
+      setDashboard(result.dashboard);
+      setNotice(
+        `Reviewed ${result.reviewed} row${result.reviewed === 1 ? "" : "s"}: ${result.semanticMatches} semantic, ${result.aiMatches} AI, ${result.categorizedOnly} category-only.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auto-categorization failed");
+    } finally {
+      setIsCategorizing(false);
+    }
+  }
+
   async function submitInvoice(payload: CreateInvoicePayload) {
     const response = await fetch(`${apiBase}/invoices`, {
       method: "POST",
@@ -642,6 +709,14 @@ function App() {
                   ))}
                 </select>
               </label>
+              <button
+                className="secondary-button"
+                onClick={() => void autoCategorizeTransactions(wiseTransactions.map((transaction) => transaction.id))}
+                disabled={isCategorizing || wiseTransactions.length === 0}
+              >
+                {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+                Auto
+              </button>
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
                 {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
                 CSV
@@ -683,6 +758,15 @@ function App() {
             onOpenInvoice={setInvoiceTransaction}
           />
         </section>
+      )}
+
+      {activeTab === "categories" && (
+        <CategorizationView
+          dashboard={dashboard}
+          providersById={providersById}
+          isCategorizing={isCategorizing}
+          onAutoCategorize={() => void autoCategorizeTransactions()}
+        />
       )}
 
       {activeTab === "revenue" && (
@@ -808,6 +892,7 @@ function Sidebar({
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "wise", label: "Wise", icon: <Link2 size={17} /> },
+    { id: "categories", label: "Categories", icon: <PieChart size={17} /> },
     { id: "revolut", label: "Revolut", icon: <Banknote size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
@@ -1072,6 +1157,209 @@ function Overview({
   );
 }
 
+function CategorizationView({
+  dashboard,
+  providersById,
+  isCategorizing,
+  onAutoCategorize
+}: {
+  dashboard: DashboardSnapshot;
+  providersById: Map<string, Provider>;
+  isCategorizing: boolean;
+  onAutoCategorize: () => void;
+}) {
+  const rows = dashboard.transactions;
+  const needsReview = rows.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86);
+
+  const categoryRows = [...rows.reduce((map, transaction) => {
+    const category = effectiveCategory(transaction, providersById);
+    map.set(category, [...(map.get(category) ?? []), transaction]);
+    return map;
+  }, new Map<string, Transaction[]>())]
+    .map(([category, transactions]) => ({
+      category,
+      transactions,
+      matched: transactions.filter((transaction) => transaction.matchedProviderId).length,
+      companies: [
+        ...new Set(
+          transactions
+            .map((transaction) => (transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name : undefined))
+            .filter(Boolean)
+        )
+      ] as string[]
+    }))
+    .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
+
+  const typeRows = [...rows.reduce((map, transaction) => {
+    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+    const label = provider ? providerTypeLabel(provider.type) : "Unmatched";
+    map.set(label, [...(map.get(label) ?? []), transaction]);
+    return map;
+  }, new Map<string, Transaction[]>())].sort(([left], [right]) => left.localeCompare(right));
+
+  const companyRows = [...rows.reduce((map, transaction) => {
+    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+    const category = effectiveCategory(transaction, providersById);
+    const key = provider?.id ?? `unmatched-${category}`;
+    const existing = map.get(key) ?? {
+      id: key,
+      name: provider?.name ?? "Unmatched",
+      type: provider ? providerTypeLabel(provider.type) : "Needs review",
+      category,
+      transactions: [] as Transaction[]
+    };
+    existing.transactions.push(transaction);
+    map.set(key, existing);
+    return map;
+  }, new Map<string, { id: string; name: string; type: string; category: string; transactions: Transaction[] }>())]
+    .map(([, value]) => value)
+    .sort((left, right) => right.transactions.length - left.transactions.length || left.name.localeCompare(right.name));
+
+  return (
+    <div className="categorization-layout">
+      <section className="panel wide-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Categorization</p>
+            <h2>Money in, money out, providers, platforms, and review load</h2>
+          </div>
+          <button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || rows.length === 0}>
+            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            Auto
+          </button>
+        </div>
+        <div className="wise-summary-grid categorization-summary">
+          <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
+          <SummaryTile label="Money out" value={groupedTransactionMoney(rows, "out")} />
+          <SummaryTile label="Categories" value={String(categoryRows.length)} />
+          <SummaryTile label="Needs review" value={String(needsReview.length)} />
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>By category</h2>
+          <span className="total-pill">{categoryRows.length} buckets</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table category-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Rows</th>
+                <th>Matched</th>
+                <th>Money in</th>
+                <th>Money out</th>
+                <th>Companies</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categoryRows.length > 0 ? (
+                categoryRows.map((row) => (
+                  <tr key={row.category}>
+                    <td>
+                      <strong>{row.category}</strong>
+                    </td>
+                    <td>{row.transactions.length}</td>
+                    <td>{row.matched}</td>
+                    <td className="amount good-text">{formatTransactionGroups(row.transactions.filter((transaction) => transaction.direction === "in"))}</td>
+                    <td className="amount danger-text">{formatTransactionGroups(row.transactions.filter((transaction) => transaction.direction === "out"))}</td>
+                    <td className="company-list-cell">{row.companies.slice(0, 5).join(" · ") || "Unmatched"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6}>No categorized transactions yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>By directory type</h2>
+          <span className="total-pill">{typeRows.length} types</span>
+        </div>
+        <div className="bridge categorization-bridge">
+          {typeRows.map(([type, transactions]) => (
+            <div className="bridge-row" key={type}>
+              <span>{type}</span>
+              <strong>{transactions.length}</strong>
+              <small>In {groupedTransactionMoney(transactions, "in")} · Out {groupedTransactionMoney(transactions, "out")}</small>
+            </div>
+          ))}
+          {typeRows.length === 0 && <div className="money-empty">No transaction types yet</div>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Needs review</h2>
+          <span className="total-pill warning">{needsReview.length} rows</span>
+        </div>
+        <div className="review-list compact-review-list">
+          {needsReview.slice(0, 8).map((transaction) => (
+            <article className="review-row" key={transaction.id}>
+              <div className={`direction-badge ${transaction.direction}`}>
+                {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+              </div>
+              <div>
+                <strong>{transaction.counterparty}</strong>
+                <span>{effectiveCategory(transaction, providersById)} · {transaction.matchReason ?? "Needs review"}</span>
+              </div>
+              <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
+            </article>
+          ))}
+          {needsReview.length === 0 && <div className="empty-state">No transaction rows need review</div>}
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Company rollup</h2>
+          <span className="total-pill">{companyRows.length} rows</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table rollup-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Type</th>
+                <th>Category</th>
+                <th>Transactions</th>
+                <th>Money in</th>
+                <th>Money out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {companyRows.length > 0 ? (
+                companyRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.name}</strong>
+                    </td>
+                    <td>{row.type}</td>
+                    <td>{row.category}</td>
+                    <td>{row.transactions.length}</td>
+                    <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
+                    <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6}>No company rollup yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SimpleMoneyTable({
   rows,
   dense,
@@ -1161,6 +1449,8 @@ function TransactionTable({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
+  const providerGroups = providerOptionGroups(providers);
+
   return (
     <div className="table-wrap">
       <table className="data-table activity-table">
@@ -1172,6 +1462,7 @@ function TransactionTable({
             <th>Amount</th>
             <th>Team</th>
             <th>Suggested provider</th>
+            <th>Category</th>
             <th>Invoice</th>
             <th>Actions</th>
           </tr>
@@ -1218,16 +1509,23 @@ function TransactionTable({
                         }
                       >
                         <option value="">Choose provider</option>
-                        {providers.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name}
-                          </option>
+                        {providerGroups.map((group) => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.providers.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                              </option>
+                            ))}
+                          </optgroup>
                         ))}
                       </select>
                       <small className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}>
-                        {providerLabel(provider)} · {(confidence * 100).toFixed(0)}%
+                        {providerLabel(provider)} · {(confidence * 100).toFixed(0)}% · {transaction.matchReason ?? "Needs review"}
                       </small>
                     </div>
+                  </td>
+                  <td>
+                    <span className="status-pill category-pill">{provider?.category ?? transaction.category}</span>
                   </td>
                   <td>
                     {transaction.matchedInvoiceId ? (
@@ -1251,7 +1549,7 @@ function TransactionTable({
             })
           ) : (
             <tr>
-              <td colSpan={8}>No live transactions</td>
+              <td colSpan={9}>No live transactions</td>
             </tr>
           )}
         </tbody>

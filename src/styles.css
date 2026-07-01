@@ -675,6 +675,7 @@ textarea:focus-visible {
 }
 
 .total-pill.danger,
+.total-pill.warning,
 .status-pill.warning {
   color: var(--red);
   background: var(--red-soft);
@@ -716,6 +717,12 @@ textarea:focus-visible {
   padding: 0 8px;
   color: var(--muted);
   font-size: 0.74rem;
+}
+
+.category-pill {
+  color: var(--info-text);
+  background: var(--blue-soft);
+  border-color: var(--info-border);
 }
 
 .table-wrap {
@@ -848,11 +855,16 @@ textarea:focus-visible {
 }
 
 .activity-table {
-  min-width: 1060px;
+  min-width: 1190px;
 }
 
 .invoice-table {
   min-width: 1040px;
+}
+
+.category-table,
+.rollup-table {
+  min-width: 900px;
 }
 
 .counterparty-cell {
@@ -1279,8 +1291,41 @@ textarea:focus-visible {
   align-items: start;
 }
 
+.categorization-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(340px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+
 .wide-panel {
   grid-column: 1 / -1;
+}
+
+.categorization-summary {
+  border-bottom: 0;
+}
+
+.company-list-cell {
+  min-width: 240px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.categorization-bridge .bridge-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.categorization-bridge .bridge-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.compact-review-list .review-row {
+  grid-template-columns: 38px minmax(170px, 1fr) 130px;
 }
 
 .provider-card,
@@ -1579,7 +1624,8 @@ textarea:focus-visible {
 
   .provider-grid,
   .integration-grid,
-  .split-view {
+  .split-view,
+  .categorization-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1649,6 +1695,7 @@ textarea:focus-visible {
   .provider-grid,
   .integration-grid,
   .split-view,
+  .categorization-layout,
   .wise-summary-grid,
   .revenue-controls,
   .form-grid {

@@ -4,6 +4,7 @@ import express from "express";
 import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
+  AutoCategorizeTransactionsPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
   ImportWiseStatementPayload,
@@ -13,6 +14,7 @@ import type {
 } from "../shared/types";
 import {
   assignTransactionTeam,
+  autoCategorizeTransactions,
   createInvoice,
   createProvider,
   getSnapshot,
@@ -135,6 +137,14 @@ app.post("/api/matches", async (request, response, next) => {
       return;
     }
     response.json(await matchTransaction(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/transactions/auto-categorize", async (request, response, next) => {
+  try {
+    response.json(await autoCategorizeTransactions((request.body ?? {}) as AutoCategorizeTransactionsPayload));
   } catch (error) {
     next(error);
   }

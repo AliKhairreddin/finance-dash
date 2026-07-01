@@ -2,6 +2,8 @@ import type {
   AccountBalance,
   AiPromptPayload,
   AssignTransactionTeamPayload,
+  AutoCategorizeTransactionsPayload,
+  AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
   DashboardSnapshot,
@@ -25,13 +27,21 @@ import type {
   UpdateRevenuePartnerPayload,
   WiseStatementImport
 } from "../shared/types";
-import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt } from "../shared/ai";
+import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
-import { enrichTransactions, learnAliases } from "../server/matching";
+import {
+  enrichTransactions,
+  learnAliases,
+  mergeProviderDirectory,
+  mergeTeamDirectory,
+  semanticCategorizeTransaction,
+  semanticMatchThreshold,
+  transactionAliasCandidates
+} from "../server/matching";
 
 interface Fetcher {
   fetch(request: Request): Promise<Response>;
@@ -177,7 +187,7 @@ function realRevenueRuns(runs?: RevenueRun[]): RevenueRun[] {
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
-  return [transaction.rawName, transaction.counterparty].filter(Boolean);
+  return transactionAliasCandidates(transaction);
 }
 
 function getConvexClient(env: Env): ConvexHttpClient | null {
@@ -538,7 +548,26 @@ async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<
   return (await fetchMeritInvoices(env).catch(() => [])).find((invoice) => invoice.id === invoiceId);
 }
 
-async function fetchTransactionForUpdate(env: Env, transactionId: string): Promise<Transaction | undefined> {
+function findPersistedTransaction(state: PersistedState, transactionId: string): Transaction | undefined {
+  return state.wiseStatementTransactions.find((transaction) => transaction.id === transactionId);
+}
+
+function updatePersistedTransaction(state: PersistedState, updated: Transaction): boolean {
+  let stored = false;
+  state.wiseStatementTransactions = state.wiseStatementTransactions.map((transaction) => {
+    if (transaction.id !== updated.id) return transaction;
+    stored = true;
+    return { ...transaction, ...updated };
+  });
+  return stored;
+}
+
+async function fetchTransactionForUpdate(env: Env, transactionId: string, state?: PersistedState): Promise<Transaction | undefined> {
+  if (state) {
+    const persisted = findPersistedTransaction(state, transactionId);
+    if (persisted) return persisted;
+  }
+
   const [wise, revolut, slash] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
@@ -547,8 +576,8 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string): Promi
   return [...wise.transactions, ...revolut.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
 }
 
-async function fetchTransactionForMatch(env: Env, transactionId: string): Promise<Transaction | undefined> {
-  return fetchTransactionForUpdate(env, transactionId);
+async function fetchTransactionForMatch(env: Env, transactionId: string, state: PersistedState): Promise<Transaction | undefined> {
+  return fetchTransactionForUpdate(env, transactionId, state);
 }
 
 function meritTimestamp(): string {
@@ -800,9 +829,9 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
   const stored = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
 
   return {
-    providers: stored?.providers ?? [],
+    providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: realInvoices(stored?.invoices),
-    teams: stored?.teams ?? [],
+    teams: mergeTeamDirectory(stored?.teams ?? []),
     revenuePartners: stored?.revenuePartners ?? [],
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
@@ -948,6 +977,10 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
   state.wiseStatementImports = [importRecord, ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
     right.importedAt.localeCompare(left.importedAt)
   );
+  await autoCategorizeState(env, state, {
+    transactionIds: importedTransactions.map((transaction) => transaction.id),
+    useAi: true
+  });
   await savePersisted(env, state);
   return {
     dashboard: await getSnapshot(env),
@@ -1015,7 +1048,7 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
     source: "manual",
     createdAt: new Date().toISOString()
   };
-  state.providers = [...state.providers, provider];
+  state.providers = mergeProviderDirectory([...state.providers, provider]);
   await savePersisted(env, state);
   return provider;
 }
@@ -1039,6 +1072,7 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
     return updated;
   });
   if (!updated) throw new Error("Provider not found");
+  state.providers = mergeProviderDirectory(state.providers);
   await savePersisted(env, state);
   return updated;
 }
@@ -1094,32 +1128,122 @@ async function runAiPrompt(env: Env, payload: AiPromptPayload) {
   return runOpenRouterPrompt(state.aiSettings ?? { ...defaultAiSettings }, payload, env.PUBLIC_APP_URL);
 }
 
+function transactionNeedsCategorization(transaction: Transaction): boolean {
+  return !transaction.matchedProviderId || (transaction.confidence ?? 0) < semanticMatchThreshold;
+}
+
+async function autoCategorizeState(
+  env: Env,
+  state: PersistedState,
+  payload: AutoCategorizeTransactionsPayload = {}
+): Promise<Omit<AutoCategorizeTransactionsResult, "dashboard">> {
+  state.providers = mergeProviderDirectory(state.providers);
+  const targetIds = payload.transactionIds?.length ? new Set(payload.transactionIds) : undefined;
+  let semanticMatches = 0;
+  let categorizedOnly = 0;
+  let reviewed = 0;
+
+  state.wiseStatementTransactions = state.wiseStatementTransactions.map((transaction) => {
+    if (targetIds && !targetIds.has(transaction.id)) return transaction;
+    if (!transactionNeedsCategorization(transaction)) return transaction;
+    reviewed += 1;
+    const categorized = semanticCategorizeTransaction(transaction, state.providers);
+    if (categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId) {
+      semanticMatches += 1;
+    }
+    if (!categorized.matchedProviderId && categorized.category !== transaction.category) {
+      categorizedOnly += 1;
+    }
+    return categorized;
+  });
+
+  let aiMatches = 0;
+  const shouldUseAi = payload.useAi !== false && Boolean(state.aiSettings?.openRouterApiKey?.trim());
+  const remaining = state.wiseStatementTransactions.filter((transaction) => {
+    if (targetIds && !targetIds.has(transaction.id)) return false;
+    return transactionNeedsCategorization(transaction);
+  });
+
+  if (shouldUseAi && remaining.length > 0) {
+    const aiResults = await runOpenRouterTransactionCategorization(
+      state.aiSettings ?? { ...defaultAiSettings },
+      remaining,
+      state.providers,
+      env.PUBLIC_APP_URL
+    );
+    for (const aiResult of aiResults) {
+      if (aiResult.confidence < 0.72) continue;
+      const transaction = findPersistedTransaction(state, aiResult.transactionId);
+      if (!transaction) continue;
+      const provider = aiResult.providerId ? state.providers.find((item) => item.id === aiResult.providerId) : undefined;
+      const updated: Transaction = {
+        ...transaction,
+        matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+        category: provider?.category ?? aiResult.category ?? transaction.category,
+        confidence: aiResult.confidence,
+        matchReason: `AI: ${aiResult.reason}`
+      };
+      if (!updatePersistedTransaction(state, updated)) continue;
+      if (updated.matchedProviderId) {
+        aiMatches += 1;
+        state.providers = state.providers.map((item) =>
+          item.id === updated.matchedProviderId ? learnAliases(item, bankAliasNames(transaction)) : item
+        );
+      } else {
+        categorizedOnly += 1;
+      }
+    }
+  }
+
+  return { semanticMatches, aiMatches, categorizedOnly, reviewed };
+}
+
+async function autoCategorizeTransactions(
+  env: Env,
+  payload: AutoCategorizeTransactionsPayload = {}
+): Promise<AutoCategorizeTransactionsResult> {
+  const state = await loadPersisted(env);
+  const summary = await autoCategorizeState(env, state, payload);
+  await savePersisted(env, state);
+  return {
+    dashboard: await getSnapshot(env),
+    ...summary
+  };
+}
+
 async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const state = await loadPersisted(env);
-  const transaction = await fetchTransactionForMatch(env, payload.transactionId);
+  const transaction = await fetchTransactionForMatch(env, payload.transactionId, state);
   const provider = state.providers.find((item) => item.id === payload.providerId);
   if (!transaction || !provider) {
     throw new Error("Provider or transaction not found");
   }
+  const matchedTransaction: Transaction = {
+    ...transaction,
+    matchedProviderId: payload.providerId,
+    matchedInvoiceId: payload.invoiceId,
+    category: provider.category,
+    confidence: 1,
+    matchReason: "Approved match"
+  };
   if (payload.rememberAlias) {
     state.providers = state.providers.map((item) =>
       item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
     );
-    await savePersisted(env, state);
   }
-  return {
-    ...transaction,
-    teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
-    matchedProviderId: payload.providerId,
-    matchedInvoiceId: payload.invoiceId,
-    confidence: 1,
-    matchReason: "Manual match"
-  };
+  updatePersistedTransaction(state, matchedTransaction);
+  await savePersisted(env, state);
+  return enrichTransactions([
+    {
+      ...matchedTransaction,
+      teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
+    }
+  ], state.providers)[0];
 }
 
 async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
   const state = await loadPersisted(env);
-  const transaction = await fetchTransactionForUpdate(env, payload.transactionId);
+  const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
   if (!transaction) {
     throw new Error("Transaction not found");
   }
@@ -1154,11 +1278,22 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     throw new Error("Merit API credentials are not configured; invoice was not created.");
   }
   if (payload.transactionId && payload.providerId) {
-    const transaction = await fetchTransactionForUpdate(env, payload.transactionId);
+    const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
     if (transaction) {
       state.providers = state.providers.map((provider) =>
         provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
       );
+      const provider = state.providers.find((item) => item.id === payload.providerId);
+      if (provider) {
+        updatePersistedTransaction(state, {
+          ...transaction,
+          matchedProviderId: payload.providerId,
+          matchedInvoiceId: invoice.id,
+          category: provider.category,
+          confidence: 1,
+          matchReason: "Invoice created"
+        });
+      }
     }
   }
   state.invoices = [invoice, ...state.invoices];
@@ -1333,6 +1468,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/matches" && request.method === "POST") {
       return json(await matchTransaction(env, (await request.json()) as MatchTransactionPayload));
+    }
+
+    if (url.pathname === "/api/transactions/auto-categorize" && request.method === "POST") {
+      return json(await autoCategorizeTransactions(env, ((await request.json()) ?? {}) as AutoCategorizeTransactionsPayload));
     }
 
     const teamMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/team$/);

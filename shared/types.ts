@@ -318,3 +318,24 @@ export interface AiPromptResult {
   model: string;
   createdAt: string;
 }
+
+export interface AiTransactionCategorization {
+  transactionId: string;
+  providerId?: string;
+  category?: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface AutoCategorizeTransactionsPayload {
+  transactionIds?: string[];
+  useAi?: boolean;
+}
+
+export interface AutoCategorizeTransactionsResult {
+  dashboard: DashboardSnapshot;
+  semanticMatches: number;
+  aiMatches: number;
+  categorizedOnly: number;
+  reviewed: number;
+}
