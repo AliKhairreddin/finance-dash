@@ -31,7 +31,17 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import type {
   AiPromptPayload,
   AiPromptResult,
@@ -75,6 +85,12 @@ type TransactionDetailPopover = {
   description: string;
   left: number;
   top: number;
+  placement: "above" | "below";
+};
+type CategorySearchMenuPosition = {
+  left: number;
+  top: number;
+  width: number;
   placement: "above" | "below";
 };
 const themeStorageKey = "finance-dash-theme";
@@ -449,6 +465,22 @@ function detailPopoverPosition(anchor: DOMRect): Pick<TransactionDetailPopover, 
   const top = placement === "below" ? anchor.bottom + gap : anchor.top - gap;
 
   return { left, top, placement };
+}
+
+function categorySearchMenuPosition(anchor: DOMRect, visibleOptions: number): CategorySearchMenuPosition {
+  const viewportPadding = 12;
+  const gap = 4;
+  const width = Math.min(Math.max(anchor.width, 244), window.innerWidth - viewportPadding * 2);
+  const optionRows = Math.max(1, Math.min(visibleOptions, 6));
+  const estimatedHeight = 58 + optionRows * 34;
+  const placement = anchor.bottom + gap + estimatedHeight <= window.innerHeight - viewportPadding ? "below" : "above";
+  const left = Math.min(
+    Math.max(viewportPadding, anchor.left),
+    Math.max(viewportPadding, window.innerWidth - viewportPadding - width)
+  );
+  const top = placement === "below" ? anchor.bottom + gap : anchor.top - gap;
+
+  return { left, top, width, placement };
 }
 
 function App() {
@@ -2001,6 +2033,204 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+function CategorySearchSelect({
+  value,
+  options,
+  onChange,
+  label
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  const listboxId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [menuPosition, setMenuPosition] = useState<CategorySearchMenuPosition | null>(null);
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return options;
+    return options.filter((option) => option.toLowerCase().includes(normalizedQuery));
+  }, [options, query]);
+  const activeOptionId = isOpen && filteredOptions[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined;
+
+  function updateMenuPosition(visibleOptions = filteredOptions.length) {
+    const anchor = triggerRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    setMenuPosition(categorySearchMenuPosition(anchor, visibleOptions));
+  }
+
+  function openMenu(nextQuery = "") {
+    setQuery(nextQuery);
+    setIsOpen(true);
+    updateMenuPosition(nextQuery ? options.filter((option) => option.toLowerCase().includes(nextQuery.toLowerCase())).length : options.length);
+  }
+
+  function closeMenu() {
+    setIsOpen(false);
+    setQuery("");
+    setActiveIndex(0);
+    setMenuPosition(null);
+  }
+
+  function selectCategory(category: string) {
+    if (category !== value) onChange(category);
+    closeMenu();
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updateMenuPosition(filteredOptions.length);
+    const selectedIndex = filteredOptions.findIndex((option) => option === value);
+    setActiveIndex(query.trim() ? 0 : Math.max(selectedIndex, 0));
+  }, [filteredOptions, isOpen, query, value]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    requestAnimationFrame(() => inputRef.current?.focus());
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!(event.target instanceof Node) || rootRef.current?.contains(event.target)) return;
+      closeMenu();
+    }
+
+    function closeOnViewportChange() {
+      closeMenu();
+    }
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [isOpen]);
+
+  function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openMenu();
+      return;
+    }
+
+    if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      openMenu(event.key);
+    }
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.min(current + 1, Math.max(filteredOptions.length - 1, 0)));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const category = filteredOptions[activeIndex];
+      if (category) selectCategory(category);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      requestAnimationFrame(() => triggerRef.current?.focus());
+      return;
+    }
+
+    if (event.key === "Tab") closeMenu();
+  }
+
+  return (
+    <div className="category-combobox" ref={rootRef}>
+      <button
+        type="button"
+        className="category-combobox-trigger"
+        aria-label={label}
+        aria-controls={isOpen ? listboxId : undefined}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        onClick={() => (isOpen ? closeMenu() : openMenu())}
+        onKeyDown={handleTriggerKeyDown}
+        ref={triggerRef}
+      >
+        <span title={value}>{value}</span>
+        <Search size={14} />
+      </button>
+      {isOpen && menuPosition && (
+        <div
+          className={`category-combobox-menu ${menuPosition.placement}`}
+          style={{ left: menuPosition.left, top: menuPosition.top, width: menuPosition.width }}
+        >
+          <div className="category-combobox-search">
+            <Search size={14} />
+            <input
+              ref={inputRef}
+              value={query}
+              placeholder="Search category"
+              role="combobox"
+              aria-controls={listboxId}
+              aria-expanded={isOpen}
+              aria-activedescendant={activeOptionId}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {query && (
+              <button
+                type="button"
+                className="category-combobox-clear"
+                aria-label="Clear category search"
+                onClick={() => setQuery("")}
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          <div className="category-combobox-options" id={listboxId} role="listbox" aria-label={label}>
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((category, index) => (
+                <button
+                  type="button"
+                  className={`category-combobox-option ${index === activeIndex ? "active" : ""}`}
+                  id={`${listboxId}-option-${index}`}
+                  key={category}
+                  role="option"
+                  aria-selected={category === value}
+                  onClick={() => selectCategory(category)}
+                  onMouseEnter={() => setActiveIndex(index)}
+                >
+                  <span>{category}</span>
+                  {category === value && <Check size={14} />}
+                </button>
+              ))
+            ) : (
+              <div className="category-combobox-empty">No categories found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TransactionTable({
   rows,
   teams,
@@ -2184,16 +2414,12 @@ function TransactionTable({
                   <td>
                     <div className="category-select">
                       <div className="category-control-row">
-                        <select
+                        <CategorySearchSelect
                           value={displayCategory}
-                          onChange={(event) => onUpdateCategory(transaction, event.target.value)}
-                        >
-                          {transactionCategoryChoices(displayCategory, transaction.direction).map((category) => (
-                            <option key={category} value={category}>
-                              {category}
-                            </option>
-                          ))}
-                        </select>
+                          options={transactionCategoryChoices(displayCategory, transaction.direction)}
+                          label={`Search category for ${transaction.counterparty}`}
+                          onChange={(category) => onUpdateCategory(transaction, category)}
+                        />
                         <button
                           className="icon-button"
                           title={categoryActionTitle}
