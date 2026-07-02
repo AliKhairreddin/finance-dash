@@ -31,8 +31,18 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
-import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  isReviewOnlyTransactionCategory,
+  isTransactionCategoryForDirection,
+  transactionBusinessCategory
+} from "../shared/categories";
+import {
+  calculateInvoiceDueDate,
+  calculateRevenueMetrics,
+  calculateTuneHourOffset,
+  mergeRevenuePartnerDirectory,
+  resolveRevenuePeriod
+} from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
@@ -829,6 +839,10 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
     partnerId: partner.id,
     partnerName: partner.name,
+    providerId: partner.providerId,
+    teamId: partner.teamId,
+    teamName: partner.teamId,
+    revenueCategory: partner.revenueCategory,
     source: "tune",
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
@@ -877,7 +891,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     invoices: realInvoices(stored?.invoices),
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
-    revenuePartners: stored?.revenuePartners ?? [],
+    revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
     transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
@@ -894,7 +908,16 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   await convex.mutation(api.dashboard.saveState, state);
 }
 
-function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): IntegrationStatus[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+  const names = new Set<string>();
+  for (const partner of revenuePartners.filter((item) => item.enabled)) {
+    names.add(partner.networkIdEnv);
+    names.add(partner.apiKeyEnv);
+  }
+  return [...names].filter(Boolean).sort();
+}
+
+function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
@@ -903,7 +926,9 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): Integra
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
-  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
+  const tuneNeeds = revenueEnvNames.filter((name) => !envString(env, name));
+  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
 
   return [
     {
@@ -955,12 +980,14 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): Integra
     {
       id: "tune" as DataSource,
       label: "Partner revenue",
-      configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "partial",
+      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
+      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        tuneNeeds.length === 0
-          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
+        enabledRevenuePartnerCount === 0
+          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          : tuneNeeds.length === 0
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
   ];
@@ -1075,7 +1102,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     invoices,
     transactionCategoryRules: state.transactionCategoryRules,
     wiseStatementImports: state.wiseStatementImports,
-    integrationStatus: integrationStatus(env, wise),
+    integrationStatus: integrationStatus(env, wise, state.revenuePartners),
     metrics: calculateMetrics(accounts, [], [], [], []),
     lastSync: new Date().toISOString()
   };
@@ -1126,16 +1153,36 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
 }
 
 async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
-  if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
-    throw new Error("name, networkIdEnv, and apiKeyEnv are required");
+  if (
+    !payload.name?.trim() ||
+    !payload.providerId?.trim() ||
+    !payload.teamId?.trim() ||
+    !payload.revenueCategory?.trim() ||
+    !payload.networkIdEnv?.trim() ||
+    !payload.apiKeyEnv?.trim()
+  ) {
+    throw new Error("name, providerId, teamId, revenueCategory, networkIdEnv, and apiKeyEnv are required");
   }
   const state = await loadPersisted(env);
+  if (!state.providers.some((provider) => provider.id === payload.providerId)) {
+    throw new Error("Revenue partner company not found");
+  }
+  if (!state.teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Revenue partner team not found");
+  }
+  const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
+  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+    throw new Error(`Category "${revenueCategory}" is not valid for money in`);
+  }
   let updated: RevenuePartner | undefined;
   state.revenuePartners = state.revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
     updated = {
       ...partner,
       name: payload.name.trim(),
+      providerId: payload.providerId,
+      teamId: payload.teamId,
+      revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
       currency: payload.currency.trim() || "USD",
@@ -1151,6 +1198,7 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
+  state.revenuePartners = mergeRevenuePartnerDirectory(state.revenuePartners);
   await savePersisted(env, state);
   return updated;
 }
@@ -1307,6 +1355,9 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
   }
 
   const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+    throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
+  }
   const updated: Transaction = {
     ...transaction,
     category,
@@ -1422,7 +1473,12 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
 
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const selectedPartners = state.revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  const selectedPartners = state.revenuePartners.filter(
+    (partner) =>
+      partner.enabled &&
+      (!payload.partnerId || partner.id === payload.partnerId) &&
+      (!payload.teamId || partner.teamId === payload.teamId)
+  );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
   }
@@ -1444,7 +1500,10 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
     );
 
     try {
-      let run = await fetchTuneRevenue(env, partner, period);
+      let run = {
+        ...(await fetchTuneRevenue(env, partner, period)),
+        teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+      };
       if (payload.createInvoices && existingInvoicedRun) {
         run = {
           ...run,
@@ -1456,11 +1515,12 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
       } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const invoice = await createMeritInvoice(env, {
           documentType: "sales_invoice",
+          providerId: partner.providerId,
           customerName: partner.meritCustomerName || partner.name,
           amount: run.revenue,
           currency: run.currency,
           dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+          description: `${partner.revenueCategory} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
         });
 
         if (invoice) {
@@ -1485,6 +1545,10 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
         partnerId: partner.id,
         partnerName: partner.name,
+        providerId: partner.providerId,
+        teamId: partner.teamId,
+        teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId,
+        revenueCategory: partner.revenueCategory,
         source: "tune",
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,

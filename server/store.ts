@@ -29,8 +29,12 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
-import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  isReviewOnlyTransactionCategory,
+  isTransactionCategoryForDirection,
+  transactionBusinessCategory
+} from "../shared/categories";
+import { calculateInvoiceDueDate, calculateRevenueMetrics, mergeRevenuePartnerDirectory, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
 import {
   createMeritInvoice,
@@ -144,7 +148,7 @@ export async function initializeStore(): Promise<void> {
   invoices = realInvoices(persisted.invoices);
   teams = mergeTeamDirectory(persisted.teams ?? []);
   transactionCategoryRules = persisted.transactionCategoryRules ?? [];
-  revenuePartners = persisted.revenuePartners ?? [];
+  revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
@@ -360,7 +364,7 @@ export function getSnapshot(): DashboardSnapshot {
     invoices,
     transactionCategoryRules,
     wiseStatementImports,
-    integrationStatus: getIntegrationStatus(wiseSyncIssue),
+    integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners),
     metrics,
     lastSync
   };
@@ -501,12 +505,26 @@ export async function updateProvider(providerId: string, payload: UpdateProvider
 }
 
 export async function updateRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
+  if (!providers.some((provider) => provider.id === payload.providerId)) {
+    throw new Error("Revenue partner company not found");
+  }
+  if (!teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Revenue partner team not found");
+  }
+  const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
+  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+    throw new Error(`Category "${revenueCategory}" is not valid for money in`);
+  }
+
   let updated: RevenuePartner | undefined;
   revenuePartners = revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
     updated = {
       ...partner,
       name: payload.name.trim(),
+      providerId: payload.providerId,
+      teamId: payload.teamId,
+      revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
       currency: payload.currency.trim() || "USD",
@@ -522,6 +540,7 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
+  revenuePartners = mergeRevenuePartnerDirectory(revenuePartners);
   await persist();
   return updated;
 }
@@ -576,6 +595,9 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
   }
 
   const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+    throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
+  }
   const updated: Transaction = {
     ...transaction,
     category,
@@ -634,7 +656,12 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
 }
 
 export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
-  const selectedPartners = revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  const selectedPartners = revenuePartners.filter(
+    (partner) =>
+      partner.enabled &&
+      (!payload.partnerId || partner.id === payload.partnerId) &&
+      (!payload.teamId || partner.teamId === payload.teamId)
+  );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
   }
@@ -656,7 +683,10 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     );
 
     try {
-      let run = await fetchTuneRevenue(partner, period);
+      let run = {
+        ...(await fetchTuneRevenue(partner, period)),
+        teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+      };
       if (payload.createInvoices && existingInvoicedRun) {
         run = {
           ...run,
@@ -668,11 +698,12 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
       } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const invoice = await createMeritInvoice({
           documentType: "sales_invoice",
+          providerId: partner.providerId,
           customerName: partner.meritCustomerName || partner.name,
           amount: run.revenue,
           currency: run.currency,
           dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+          description: `${partner.revenueCategory} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
         });
 
         if (invoice) {
@@ -697,6 +728,10 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
         partnerId: partner.id,
         partnerName: partner.name,
+        providerId: partner.providerId,
+        teamId: partner.teamId,
+        teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId,
+        revenueCategory: partner.revenueCategory,
         source: "tune",
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,

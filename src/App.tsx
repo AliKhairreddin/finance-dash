@@ -53,7 +53,13 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory, transactionCategoryOptions } from "../shared/categories";
+import {
+  isReviewOnlyTransactionCategory,
+  moneyInCategoryOptions,
+  transactionBusinessCategory,
+  transactionCategoryOptionsForDirection
+} from "../shared/categories";
+import { calculateRevenueMetrics } from "../shared/revenue";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
@@ -181,11 +187,10 @@ function companyRollupStatusClass(status: string): "good" | "warning" | "" {
   return "";
 }
 
-function transactionCategoryChoices(currentCategory: string): string[] {
+function transactionCategoryChoices(currentCategory: string, direction: Transaction["direction"]): string[] {
   const current = transactionBusinessCategory(currentCategory);
-  return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
-    ? [...transactionCategoryOptions]
-    : [current, ...transactionCategoryOptions];
+  const options = transactionCategoryOptionsForDirection(direction);
+  return options.includes(current) ? [...options] : [current, ...options];
 }
 
 function formatTransactionGroups(rows: Transaction[]): string {
@@ -198,6 +203,11 @@ function bankInvoiceName(transaction: Transaction): string {
 
 function sourceLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function revenuePartnerLabel(partner: RevenuePartner, teamsById: Map<string, Team>): string {
+  const teamName = teamsById.get(partner.teamId)?.name ?? partner.teamId;
+  return `${teamName} / ${partner.name}`;
 }
 
 function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
@@ -244,12 +254,32 @@ function categoryChartColor(category: string): string {
   return categoryChartPalette[Math.abs(hash) % categoryChartPalette.length];
 }
 
-function categoryPieGroups(rows: Transaction[], direction: Transaction["direction"]): CategoryPieGroup[] {
+function revenueAttributionLabel(
+  transaction: Transaction,
+  providersById: Map<string, Provider>,
+  teamsById: Map<string, Team>
+): string {
+  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
+  const category = effectiveCategory(transaction);
+  const source = provider?.name ?? (category === "Media buying direct" ? "Direct revenue" : category);
+
+  if (team && provider) return `${team.name} / ${provider.name}`;
+  if (team) return `${team.name} / ${source}`;
+  if (provider) return `Unassigned / ${provider.name}`;
+  return category === "Uncategorized" ? "Unmatched revenue" : category;
+}
+
+function categoryPieGroups(
+  rows: Transaction[],
+  direction: Transaction["direction"],
+  categoryForTransaction: (transaction: Transaction) => string = effectiveCategory
+): CategoryPieGroup[] {
   const totals = new Map<string, Map<string, { amount: number; count: number }>>();
 
   for (const transaction of rows) {
     if (transaction.direction !== direction) continue;
-    const category = effectiveCategory(transaction);
+    const category = categoryForTransaction(transaction);
     const currencyTotals = totals.get(transaction.currency) ?? new Map<string, { amount: number; count: number }>();
     const current = currencyTotals.get(category) ?? { amount: 0, count: 0 };
     currencyTotals.set(category, {
@@ -962,6 +992,7 @@ function App() {
         <CategorizationView
           dashboard={dashboard}
           providersById={providersById}
+          teamsById={teamsById}
           isCategorizing={isCategorizing}
           onAutoCategorize={() => void autoCategorizeTransactions()}
         />
@@ -992,6 +1023,7 @@ function App() {
         <ProvidersView
           providers={dashboard.providers}
           revenuePartners={dashboard.revenuePartners}
+          teamsById={teamsById}
           onAdd={() => {
             setEditingProvider(null);
             setProviderModalOpen(true);
@@ -1043,6 +1075,8 @@ function App() {
       {editingRevenuePartner && (
         <RevenuePartnerModal
           partner={editingRevenuePartner}
+          providers={dashboard.providers}
+          teams={dashboard.teams}
           onClose={() => setEditingRevenuePartner(null)}
           onSubmit={async (payload) => {
             await saveRevenuePartner(editingRevenuePartner.id, payload);
@@ -1358,11 +1392,13 @@ function Overview({
 function CategorizationView({
   dashboard,
   providersById,
+  teamsById,
   isCategorizing,
   onAutoCategorize
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
+  teamsById: Map<string, Team>;
   isCategorizing: boolean;
   onAutoCategorize: () => void;
 }) {
@@ -1389,7 +1425,9 @@ function CategorizationView({
     .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
 
   const spendPieGroups = categoryPieGroups(rows, "out");
-  const revenuePieGroups = categoryPieGroups(rows, "in");
+  const revenuePieGroups = categoryPieGroups(rows, "in", (transaction) =>
+    revenueAttributionLabel(transaction, providersById, teamsById)
+  );
 
   const relationshipRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -1441,7 +1479,7 @@ function CategorizationView({
       </section>
 
       <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} emptyLabel="No spend transactions yet" />
-      <CategoryPiePanel title="Revenue pie" tone="good" groups={revenuePieGroups} emptyLabel="No revenue transactions yet" />
+      <CategoryPiePanel title="Revenue by team and partner" tone="good" groups={revenuePieGroups} emptyLabel="No revenue transactions yet" />
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -1907,7 +1945,7 @@ function TransactionTable({
                           value={displayCategory}
                           onChange={(event) => onUpdateCategory(transaction, event.target.value)}
                         >
-                          {transactionCategoryChoices(displayCategory).map((category) => (
+                          {transactionCategoryChoices(displayCategory, transaction.direction).map((category) => (
                             <option key={category} value={category}>
                               {category}
                             </option>
@@ -1991,21 +2029,32 @@ function RevenueView({
 }) {
   const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
   const [partnerId, setPartnerId] = useState("all");
+  const [revenueTeamId, setRevenueTeamId] = useState("all");
   const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "UTC");
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [createInvoices, setCreateInvoices] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
+  const teamsById = useMemo(() => {
+    const map = new Map<string, Team>();
+    for (const team of dashboard.teams) map.set(team.id, team);
+    return map;
+  }, [dashboard.teams]);
+  const visibleRuns = dashboard.revenueRuns.filter(
+    (run) => (partnerId === "all" || run.partnerId === partnerId) && (revenueTeamId === "all" || run.teamId === revenueTeamId)
+  );
   const latestRun = visibleRuns[0];
   const hasPulledRevenue = visibleRuns.some((run) => run.status === "pulled" || run.status === "invoiced");
+  const visibleMetrics = calculateRevenueMetrics(dashboard.revenuePartners, visibleRuns);
   const revenuePartnersById = useMemo(() => {
     const map = new Map<string, RevenuePartner>();
     for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
     return map;
   }, [dashboard.revenuePartners]);
-  const visiblePartners = dashboard.revenuePartners.filter((partner) => partnerId === "all" || partner.id === partnerId);
+  const visiblePartners = dashboard.revenuePartners.filter(
+    (partner) => (partnerId === "all" || partner.id === partnerId) && (revenueTeamId === "all" || partner.teamId === revenueTeamId)
+  );
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -2014,6 +2063,7 @@ function RevenueView({
     try {
       await onSyncRevenue({
         partnerId: partnerId === "all" ? undefined : partnerId,
+        teamId: revenueTeamId === "all" ? undefined : revenueTeamId,
         periodPreset,
         periodStart: periodPreset === "custom" ? periodStart : undefined,
         periodEnd: periodPreset === "custom" ? periodEnd : undefined,
@@ -2044,8 +2094,19 @@ function RevenueView({
             <option value="all">All partners</option>
             {dashboard.revenuePartners.map((partner) => (
               <option key={partner.id} value={partner.id}>
-                {partner.name}
+                {revenuePartnerLabel(partner, teamsById)}
                 {partner.affiliateId ? ` · ${partner.affiliateId}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Team
+          <select value={revenueTeamId} onChange={(event) => setRevenueTeamId(event.target.value)}>
+            <option value="all">All teams</option>
+            {dashboard.teams.map((team) => (
+              <option key={team.id} value={team.id}>
+                {team.name}
               </option>
             ))}
           </select>
@@ -2094,8 +2155,8 @@ function RevenueView({
       <div className="revenue-partner-strip">
         {visiblePartners.map((partner) => (
           <div className="revenue-partner-chip" key={partner.id}>
-            <strong>{partner.name}</strong>
-            <span>Affiliate ID {partner.affiliateId || "Not set"}</span>
+            <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
+            <span>{partner.revenueCategory} · Affiliate ID {partner.affiliateId || "Not set"}</span>
           </div>
         ))}
       </div>
@@ -2103,9 +2164,9 @@ function RevenueView({
       {error && <div className="inline-error revenue-error">{error}</div>}
 
       <div className="wise-summary-grid revenue-summary">
-        <SummaryTile label="Revenue" value={maybeMoney(hasPulledRevenue, dashboard.revenueMetrics.totalRevenue ?? 0)} />
-        <SummaryTile label="Invoiced" value={maybeMoney(dashboard.revenueMetrics.invoicedRevenue !== null, dashboard.revenueMetrics.invoicedRevenue ?? 0)} />
-        <SummaryTile label="Pending" value={maybeMoney(dashboard.revenueMetrics.pendingRevenue !== null, dashboard.revenueMetrics.pendingRevenue ?? 0)} />
+        <SummaryTile label="Revenue" value={maybeMoney(hasPulledRevenue, visibleMetrics.totalRevenue ?? 0)} />
+        <SummaryTile label="Invoiced" value={maybeMoney(visibleMetrics.invoicedRevenue !== null, visibleMetrics.invoicedRevenue ?? 0)} />
+        <SummaryTile label="Pending" value={maybeMoney(visibleMetrics.pendingRevenue !== null, visibleMetrics.pendingRevenue ?? 0)} />
         <SummaryTile label="Last run" value={latestRun ? dateLabel(latestRun.createdAt) : "None"} />
       </div>
 
@@ -2114,6 +2175,8 @@ function RevenueView({
           <thead>
             <tr>
               <th>Partner</th>
+              <th>Team</th>
+              <th>Category</th>
               <th>Period</th>
               <th>Timezone</th>
               <th>Revenue</th>
@@ -2130,6 +2193,8 @@ function RevenueView({
                     <strong>{run.partnerName}</strong>
                     <small>TUNE · Affiliate ID {revenuePartnersById.get(run.partnerId)?.affiliateId || "Not set"}</small>
                   </td>
+                  <td>{run.teamName || teamsById.get(run.teamId)?.name || run.teamId}</td>
+                  <td>{run.revenueCategory}</td>
                   <td>
                     {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
                   </td>
@@ -2147,7 +2212,7 @@ function RevenueView({
               ))
             ) : (
               <tr>
-                <td colSpan={7}>No revenue runs yet</td>
+                <td colSpan={9}>No revenue runs yet</td>
               </tr>
             )}
           </tbody>
@@ -2412,12 +2477,14 @@ function InvoicesView({
 function ProvidersView({
   providers,
   revenuePartners,
+  teamsById,
   onAdd,
   onEditProvider,
   onEditRevenuePartner
 }: {
   providers: Provider[];
   revenuePartners: RevenuePartner[];
+  teamsById: Map<string, Team>;
   onAdd: () => void;
   onEditProvider: (provider: Provider) => void;
   onEditRevenuePartner: (partner: RevenuePartner) => void;
@@ -2493,8 +2560,8 @@ function ProvidersView({
                   <BarChart3 size={18} />
                 </div>
                 <div>
-                  <strong>{partner.name}</strong>
-                  <span>TUNE · Affiliate ID {partner.affiliateId || "Not set"}</span>
+                  <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
+                  <span>{partner.revenueCategory} · Affiliate ID {partner.affiliateId || "Not set"}</span>
                 </div>
                 <button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
                   <Pencil size={15} />
@@ -2505,6 +2572,7 @@ function ProvidersView({
                 <span>{partner.timezone}</span>
                 <span>{partner.enabled ? "Enabled" : "Disabled"}</span>
                 <span>{partner.networkIdEnv}</span>
+                <span>{partner.apiKeyEnv}</span>
               </div>
             </article>
           ))}
@@ -3021,14 +3089,21 @@ function ProviderModal({
 
 function RevenuePartnerModal({
   partner,
+  providers,
+  teams,
   onClose,
   onSubmit
 }: {
   partner: RevenuePartner;
+  providers: Provider[];
+  teams: Team[];
   onClose: () => void;
   onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
 }) {
   const [name, setName] = useState(partner.name);
+  const [providerId, setProviderId] = useState(partner.providerId);
+  const [teamId, setTeamId] = useState(partner.teamId);
+  const [revenueCategory, setRevenueCategory] = useState(partner.revenueCategory);
   const [affiliateId, setAffiliateId] = useState(partner.affiliateId);
   const [externalId, setExternalId] = useState(partner.externalId ?? "");
   const [currency, setCurrency] = useState(partner.currency);
@@ -3050,6 +3125,9 @@ function RevenuePartnerModal({
     try {
       await onSubmit({
         name,
+        providerId,
+        teamId,
+        revenueCategory,
         affiliateId,
         externalId: externalId.trim() || undefined,
         currency,
@@ -3092,6 +3170,40 @@ function RevenuePartnerModal({
             <input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
           </label>
         </div>
+        <div className="form-grid">
+          <label>
+            Company
+            <select value={providerId} onChange={(event) => setProviderId(event.target.value)}>
+              {providers
+                .filter((provider) => provider.type === "partner")
+                .map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Team
+            <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label>
+          Money in category
+          <select value={revenueCategory} onChange={(event) => setRevenueCategory(event.target.value)}>
+            {moneyInCategoryOptions.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="form-grid">
           <label>
             External ID

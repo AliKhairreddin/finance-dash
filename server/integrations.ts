@@ -62,7 +62,16 @@ export function summarizeWiseStatementIssues(issues: string[]): string | undefin
   return `${uniqueIssues[0]}${suffix}`;
 }
 
-export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+  const names = new Set<string>();
+  for (const partner of revenuePartners.filter((item) => item.enabled)) {
+    names.add(partner.networkIdEnv);
+    names.add(partner.apiKeyEnv);
+  }
+  return [...names].filter(Boolean).sort();
+}
+
+export function getIntegrationStatus(wiseIssue?: string, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !process.env[name]);
   if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
@@ -70,7 +79,9 @@ export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !process.env[name]);
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
-  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !process.env[name]);
+  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
+  const tuneNeeds = revenueEnvNames.filter((name) => !process.env[name]);
+  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
 
   return [
     {
@@ -122,12 +133,14 @@ export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
     {
       id: "tune",
       label: "Partner revenue",
-      configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "partial",
+      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
+      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        tuneNeeds.length === 0
-          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
+        enabledRevenuePartnerCount === 0
+          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          : tuneNeeds.length === 0
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
   ];
@@ -619,6 +632,10 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
     partnerId: partner.id,
     partnerName: partner.name,
+    providerId: partner.providerId,
+    teamId: partner.teamId,
+    teamName: partner.teamId,
+    revenueCategory: partner.revenueCategory,
     source: "tune",
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,

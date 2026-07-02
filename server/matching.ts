@@ -1,8 +1,14 @@
 import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
+import {
+  canonicalCreatedAt,
+  cognitiveTeamId,
+  kissterraProviderId,
+  leadEconomyProviderId,
+  wagnerTeamId
+} from "../shared/business";
 import { transactionBusinessCategory } from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
-const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
 
 type ProviderDraft = Omit<Provider, "source" | "createdAt">;
 
@@ -111,6 +117,20 @@ const canonicalProviderDrafts: ProviderDraft[] = [
     type: "internal",
     category: "Bank fees",
     aliases: ["wise fee", "wise fees", "transfer fee"]
+  },
+  {
+    id: kissterraProviderId,
+    name: "Kissterra",
+    type: "partner",
+    category: "Revenue partner",
+    aliases: ["kissterra", "kisterra", "tune kissterra", "hasoffers kissterra"]
+  },
+  {
+    id: leadEconomyProviderId,
+    name: "Lead Economy",
+    type: "partner",
+    category: "Revenue partner",
+    aliases: ["lead economy", "leadeconomy", "lead-economy", "tune lead economy", "hasoffers lead economy"]
   }
 ];
 
@@ -122,22 +142,32 @@ export const canonicalProviders: Provider[] = canonicalProviderDrafts.map((provi
 
 export const canonicalTeams: Team[] = [
   {
-    id: "team-general",
-    name: "General",
+    id: cognitiveTeamId,
+    name: "Cognitive Pixel",
     createdAt: canonicalCreatedAt
   },
   {
-    id: "team-acp",
-    name: "ACP",
+    id: wagnerTeamId,
+    name: "Wagner",
     createdAt: canonicalCreatedAt
   }
 ];
 
 const categoryRules: Array<{ category: string; phrases: string[]; direction?: Transaction["direction"] }> = [
   {
-    category: "Revenue",
+    category: "Media buying direct",
     direction: "in",
-    phrases: ["invoice payment", "customer payment", "client payment", "payout", "settlement", "hasoffers", "tune revenue", "affiliate revenue"]
+    phrases: ["invoice payment", "customer payment", "client payment", "media buying direct", "direct media buying"]
+  },
+  {
+    category: "Partner network revenue",
+    direction: "in",
+    phrases: ["payout", "settlement", "hasoffers", "tune revenue", "partner revenue", "kissterra", "lead economy"]
+  },
+  {
+    category: "Affiliate team revenue",
+    direction: "in",
+    phrases: ["affiliate revenue", "affiliate payout", "affiliate earnings", "wagner revenue"]
   },
   {
     category: "Refunds and chargebacks",
@@ -158,6 +188,16 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
     phrases: ["ads", "advertising", "campaign", "media buying", "ad manager", "business manager"]
   },
   {
+    category: "Affiliate payout",
+    direction: "out",
+    phrases: ["affiliate payout", "affiliate payment", "wagner payout", "wagner payment"]
+  },
+  {
+    category: "Creative production",
+    direction: "out",
+    phrases: ["creative", "creative production", "video editor", "designer", "ugc"]
+  },
+  {
     category: "Software subscription",
     direction: "out",
     phrases: ["subscription", "software", "saas", "cursor", "namecheap", "openai", "github", "cloudflare", "vercel", "notion", "slack", "zoom"]
@@ -166,6 +206,11 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
     category: "Cloud and hosting",
     direction: "out",
     phrases: ["aws", "amazon web services", "google cloud", "digitalocean", "netlify", "hosting", "server", "domain", "dns"]
+  },
+  {
+    category: "Tracking and analytics",
+    direction: "out",
+    phrases: ["voluum", "redtrack", "keitaro", "tracking", "analytics", "attribution", "postback"]
   },
   {
     category: "Food and meals",
@@ -339,8 +384,8 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
     next.push(canonical);
   }
   return next.sort((left, right) => {
-    if (normalizeName(left.name) === "general") return -1;
-    if (normalizeName(right.name) === "general") return 1;
+    if (left.id === cognitiveTeamId) return -1;
+    if (right.id === cognitiveTeamId) return 1;
     return left.name.localeCompare(right.name);
   });
 }
@@ -348,8 +393,8 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
 function providerCategoryOrder(provider: Provider): number {
   if (provider.category === "Ad account provider") return 0;
   if (provider.category === "Ad platform") return 1;
-  if (provider.category === "Subscription") return 2;
-  if (provider.type === "partner") return 3;
+  if (provider.type === "partner") return 2;
+  if (provider.category === "Subscription") return 3;
   if (provider.type === "internal") return 5;
   return 4;
 }
@@ -425,6 +470,12 @@ function hardTypedReason(transaction: Transaction, provider: Provider): string |
   }
   if (providerName === "wise fees" && ["wise fee", "wise fees", "transfer fee"].some((phrase) => hasPhrase(haystack, phrase))) {
     return "Bank fee: Wise";
+  }
+  if (providerName === "kissterra" && ["kissterra", "kisterra"].some((phrase) => hasPhrase(haystack, phrase))) {
+    return "Revenue partner: Kissterra";
+  }
+  if (providerName === "lead economy" && ["lead economy", "leadeconomy"].some((phrase) => hasPhrase(haystack, phrase))) {
+    return "Revenue partner: Lead Economy";
   }
 
   return undefined;

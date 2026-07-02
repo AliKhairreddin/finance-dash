@@ -1,4 +1,11 @@
 import type { RevenueMetrics, RevenuePartner, RevenuePeriodPreset, RevenueRun } from "./types";
+import {
+  canonicalCreatedAt,
+  cognitiveTeamId,
+  kissterraProviderId,
+  leadEconomyProviderId,
+  wagnerTeamId
+} from "./business";
 
 const dayMs = 24 * 60 * 60 * 1000;
 
@@ -17,6 +24,105 @@ export interface RevenuePeriod {
   periodStart: string;
   periodEnd: string;
   timezone: string;
+}
+
+export const canonicalRevenuePartners: RevenuePartner[] = [
+  {
+    id: "revenue-cognitive-kissterra",
+    name: "Kissterra",
+    providerId: kissterraProviderId,
+    teamId: cognitiveTeamId,
+    revenueCategory: "Partner network revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "KISSTERRA_TUNE_NETWORK_ID",
+    apiKeyEnv: "KISSTERRA_TUNE_API_KEY",
+    apiBaseUrlEnv: "KISSTERRA_TUNE_API_BASE_URL",
+    meritCustomerName: "Kissterra",
+    invoiceDueDays: 7,
+    enabled: true,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: "revenue-wagner-kissterra",
+    name: "Kissterra",
+    providerId: kissterraProviderId,
+    teamId: wagnerTeamId,
+    revenueCategory: "Affiliate team revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "KISSTERRA_WAGNER_TUNE_NETWORK_ID",
+    apiKeyEnv: "KISSTERRA_WAGNER_TUNE_API_KEY",
+    apiBaseUrlEnv: "KISSTERRA_WAGNER_TUNE_API_BASE_URL",
+    meritCustomerName: "Kissterra",
+    invoiceDueDays: 7,
+    enabled: false,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: "revenue-cognitive-lead-economy",
+    name: "Lead Economy",
+    providerId: leadEconomyProviderId,
+    teamId: cognitiveTeamId,
+    revenueCategory: "Partner network revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_NETWORK_ID",
+    apiKeyEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_API_KEY",
+    apiBaseUrlEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_API_BASE_URL",
+    meritCustomerName: "Lead Economy",
+    invoiceDueDays: 7,
+    enabled: false,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: "revenue-wagner-lead-economy",
+    name: "Lead Economy",
+    providerId: leadEconomyProviderId,
+    teamId: wagnerTeamId,
+    revenueCategory: "Affiliate team revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "LEAD_ECONOMY_WAGNER_TUNE_NETWORK_ID",
+    apiKeyEnv: "LEAD_ECONOMY_WAGNER_TUNE_API_KEY",
+    apiBaseUrlEnv: "LEAD_ECONOMY_WAGNER_TUNE_API_BASE_URL",
+    meritCustomerName: "Lead Economy",
+    invoiceDueDays: 7,
+    enabled: false,
+    createdAt: canonicalCreatedAt
+  }
+];
+
+export function mergeRevenuePartnerDirectory(partners: RevenuePartner[]): RevenuePartner[] {
+  const next = [...partners];
+  for (const canonical of canonicalRevenuePartners) {
+    const index = next.findIndex((partner) => partner.id === canonical.id);
+    if (index >= 0) {
+      next[index] = {
+        ...canonical,
+        ...next[index]
+      };
+    } else {
+      next.push(canonical);
+    }
+  }
+
+  return next.sort((left, right) => {
+    const teamOrder = left.teamId.localeCompare(right.teamId);
+    return teamOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
+  });
 }
 
 export function resolveRevenuePeriod({

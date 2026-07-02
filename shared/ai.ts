@@ -7,7 +7,13 @@ import type {
   StoredAiSettings,
   Transaction
 } from "./types";
-import { isReviewOnlyTransactionCategory } from "./categories";
+import {
+  isReviewOnlyTransactionCategory,
+  isTransactionCategoryForDirection,
+  moneyInCategoryOptions,
+  moneyOutCategoryOptions,
+  transactionBusinessCategory
+} from "./categories";
 
 interface OpenRouterChatResponse {
   choices?: Array<{
@@ -129,17 +135,28 @@ function chunk<T>(rows: T[], size: number): T[][] {
   return chunks;
 }
 
-function validAiCategorization(value: unknown, providerIds: Set<string>, transactionIds: Set<string>): AiTransactionCategorization | undefined {
+function validAiCategorization(
+  value: unknown,
+  providerIds: Set<string>,
+  transactionsById: Map<string, Transaction>
+): AiTransactionCategorization | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   const transactionId = typeof row.transactionId === "string" ? row.transactionId : undefined;
+  const transaction = transactionId ? transactionsById.get(transactionId) : undefined;
   const providerId = typeof row.providerId === "string" && providerIds.has(row.providerId) ? row.providerId : undefined;
+  const categoryValue = typeof row.category === "string" ? transactionBusinessCategory(row.category) : undefined;
   const category =
-    typeof row.category === "string" && !isReviewOnlyTransactionCategory(row.category) ? row.category.trim() : undefined;
+    categoryValue &&
+    transaction &&
+    !isReviewOnlyTransactionCategory(categoryValue) &&
+    isTransactionCategoryForDirection(categoryValue, transaction.direction)
+      ? categoryValue
+      : undefined;
   const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : 0;
   const reason = typeof row.reason === "string" ? row.reason.trim() : "AI categorization";
 
-  if (!transactionId || !transactionIds.has(transactionId)) return undefined;
+  if (!transactionId || !transaction) return undefined;
   if (!providerId && !category) return undefined;
 
   return {
@@ -163,7 +180,7 @@ export async function runOpenRouterTransactionCategorization(
   const allMatches: AiTransactionCategorization[] = [];
 
   for (const transactionBatch of chunk(transactions, 24)) {
-    const transactionIds = new Set(transactionBatch.map((transaction) => transaction.id));
+    const transactionsById = new Map(transactionBatch.map((transaction) => [transaction.id, transaction]));
     const result = await runOpenRouterPrompt(
       settings,
       {
@@ -172,12 +189,15 @@ export async function runOpenRouterTransactionCategorization(
           "Use only providerId values present in provider_directory. Do not invent companies.",
           "provider_directory.category is company metadata; transaction category should describe what the money is for.",
           "Never use DEBIT, CREDIT, card, transfer, source names, or money-in/money-out direction as transaction categories.",
+          "Use money_in_categories only for direction=in and money_out_categories only for direction=out.",
           "Return only JSON with this shape: {\"matches\":[{\"transactionId\":\"...\",\"providerId\":\"... or null\",\"category\":\"...\",\"confidence\":0.0,\"reason\":\"short reason\"}]}",
-          "Taxonomy: P2W, Rezono, and Position2 are Ad account provider. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are Ad platform. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are Subscription.",
+          "Taxonomy: Cognitive Pixel is the internal media buying team. Wagner is an affiliate team. Kissterra and Lead Economy are revenue partners. P2W, Rezono, and Position2 are ad account providers. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are ad platforms. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are subscriptions.",
           "If the row is not clearly matchable, omit it from matches."
         ].join(" "),
         prompt: JSON.stringify(
           {
+            money_in_categories: moneyInCategoryOptions,
+            money_out_categories: moneyOutCategoryOptions,
             provider_directory: providers.map((provider) => ({
               id: provider.id,
               name: provider.name,
@@ -213,7 +233,7 @@ export async function runOpenRouterTransactionCategorization(
     }
 
     for (const match of matches) {
-      const valid = validAiCategorization(match, providerIds, transactionIds);
+      const valid = validAiCategorization(match, providerIds, transactionsById);
       if (valid) allMatches.push(valid);
     }
   }

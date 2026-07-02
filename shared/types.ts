@@ -79,6 +79,9 @@ export interface Team {
 export interface RevenuePartner {
   id: string;
   name: string;
+  providerId: string;
+  teamId: string;
+  revenueCategory: string;
   source: "tune";
   affiliateId: string;
   externalId?: string;
@@ -113,6 +116,10 @@ export interface RevenueRun {
   id: string;
   partnerId: string;
   partnerName: string;
+  providerId: string;
+  teamId: string;
+  teamName: string;
+  revenueCategory: string;
   source: "tune";
   periodStart: string;
   periodEnd: string;
@@ -321,6 +328,9 @@ export interface UpdateProviderPayload extends CreateProviderPayload {}
 
 export interface UpdateRevenuePartnerPayload {
   name: string;
+  providerId: string;
+  teamId: string;
+  revenueCategory: string;
   affiliateId: string;
   externalId?: string;
   currency: string;
@@ -336,6 +346,7 @@ export interface UpdateRevenuePartnerPayload {
 
 export interface SyncRevenuePayload {
   partnerId?: string;
+  teamId?: string;
   periodPreset?: RevenuePeriodPreset;
   periodStart?: string;
   periodEnd?: string;

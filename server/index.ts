@@ -102,8 +102,15 @@ app.put("/api/providers/:providerId", async (request, response, next) => {
 app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
   try {
     const payload = request.body;
-    if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
-      response.status(400).json({ message: "name, networkIdEnv, and apiKeyEnv are required" });
+    if (
+      !payload.name?.trim() ||
+      !payload.providerId?.trim() ||
+      !payload.teamId?.trim() ||
+      !payload.revenueCategory?.trim() ||
+      !payload.networkIdEnv?.trim() ||
+      !payload.apiKeyEnv?.trim()
+    ) {
+      response.status(400).json({ message: "name, providerId, teamId, revenueCategory, networkIdEnv, and apiKeyEnv are required" });
       return;
     }
     response.json(await updateRevenuePartner(request.params.partnerId, payload));
