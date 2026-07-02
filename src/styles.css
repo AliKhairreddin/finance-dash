@@ -839,7 +839,7 @@ textarea:focus-visible {
 }
 
 .amount {
-  text-align: right !important;
+  text-align: center !important;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
