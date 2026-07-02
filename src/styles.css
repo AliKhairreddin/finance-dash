@@ -756,6 +756,12 @@ textarea:focus-visible {
   letter-spacing: 0;
 }
 
+.column-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .data-table tbody tr {
   transition: background-color 0.14s ease;
 }
@@ -944,7 +950,6 @@ textarea:focus-visible {
 .transaction-table .counterparty-cell strong,
 .transaction-table .counterparty-cell small,
 .transaction-table .category-select small,
-.transaction-table .team-select small,
 .transaction-table .status-pill {
   min-width: 0;
   overflow: hidden;
@@ -1182,8 +1187,7 @@ textarea:focus-visible {
   margin: 12px 14px 0;
 }
 
-.category-select small,
-.team-select small {
+.category-select small {
   color: var(--muted);
   font-size: 0.74rem;
 }

@@ -949,7 +949,6 @@ function App() {
           <TransactionTable
             rows={wiseTransactions}
             teams={dashboard.teams}
-            teamsById={teamsById}
             providersById={providersById}
             onMatch={matchTransaction}
             onAssignTeam={assignTransactionTeam}
@@ -1729,7 +1728,6 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
 function TransactionTable({
   rows,
   teams,
-  teamsById,
   providersById,
   onMatch,
   onAssignTeam,
@@ -1738,7 +1736,6 @@ function TransactionTable({
 }: {
   rows: Transaction[];
   teams: Team[];
-  teamsById: Map<string, Team>;
   providersById: Map<string, Provider>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
@@ -1844,7 +1841,9 @@ function TransactionTable({
             <th>Counterparty</th>
             <th>Direction</th>
             <th>Amount</th>
-            <th>Team</th>
+            <th>
+              Team <span className="column-note">Optional</span>
+            </th>
             <th>Category</th>
             <th>Company</th>
             <th>Document</th>
@@ -1899,7 +1898,6 @@ function TransactionTable({
                           </option>
                         ))}
                       </select>
-                      <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
                     </div>
                   </td>
                   <td>
