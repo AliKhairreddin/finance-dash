@@ -4,6 +4,7 @@ import {
   canonicalTeamId,
   canonicalTeamName,
   cognitiveTeamId,
+  distributionTeamId,
   kissterraProviderId,
   leadEconomyProviderId,
   wagnerTeamId,
@@ -147,6 +148,11 @@ export const canonicalTeams: Team[] = [
   {
     id: cognitiveTeamId,
     name: "Cognitive Pixel",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: distributionTeamId,
+    name: "Distribution",
     createdAt: canonicalCreatedAt
   },
   {

@@ -1,6 +1,7 @@
 export const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
 
 export const cognitiveTeamId = "team-cognitive-pixel";
+export const distributionTeamId = "team-distribution";
 export const wagnerTeamId = "team-wagner";
 export const wagnerTeamName = "Wagner";
 export const wagnerTeamAliasIds = ["team-wgnr"];
