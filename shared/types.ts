@@ -239,6 +239,69 @@ export interface RevenueMetrics {
   lastRunAt?: string;
 }
 
+export type ProfitDistributionPartnerId = "ishan" | "ben" | "sanjan" | "amin";
+
+export type ProfitDistributionBucket = "profit-share" | "salary" | "distribution";
+
+export interface ProfitDistributionAdjustment {
+  id: string;
+  month: string;
+  currency: string;
+  partnerId: ProfitDistributionPartnerId;
+  bucket: ProfitDistributionBucket;
+  waived: boolean;
+  deferred: boolean;
+  overrideAmount?: number;
+  note?: string;
+  updatedAt: string;
+}
+
+export interface ProfitDistributionPartnerLedger {
+  partnerId: ProfitDistributionPartnerId;
+  partnerName: string;
+  entityName?: string;
+  currency: string;
+  profitSharePayable: number;
+  salaryPayable: number;
+  distributionPayable: number;
+  totalPayable: number;
+  profitSharePaid: number;
+  salaryPaid: number;
+  distributionPaid: number;
+  totalPaid: number;
+  remaining: number;
+  hasAdjustment: boolean;
+  hasDeferred: boolean;
+}
+
+export interface ProfitDistributionMonthLedger {
+  id: string;
+  month: string;
+  currency: string;
+  revenue: number;
+  generalCosts: number;
+  netProfitAfterGeneralCosts: number;
+  ishanProfitShare: number;
+  salaryDeductions: number;
+  profitAvailableForDistribution: number;
+  distributionPool: number;
+  partners: ProfitDistributionPartnerLedger[];
+}
+
+export interface ProfitDistributionCurrencySummary {
+  currency: string;
+  totalPayable: number;
+  totalPaid: number;
+  remaining: number;
+}
+
+export interface ProfitDistributionSnapshot {
+  partners: ProfitDistributionPartnerLedger[];
+  months: ProfitDistributionMonthLedger[];
+  currencies: ProfitDistributionCurrencySummary[];
+  adjustments: ProfitDistributionAdjustment[];
+}
+
 export interface DashboardSnapshot {
   asOf: string;
   accounts: AccountBalance[];
@@ -259,6 +322,7 @@ export interface DashboardSnapshot {
   wiseStatementImports: WiseStatementImport[];
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
+  profitDistribution: ProfitDistributionSnapshot;
   lastSync: string;
 }
 
@@ -318,6 +382,17 @@ export interface UpdateTransactionCategoryPayload {
   transactionId: string;
   category: string;
   rememberAlias: boolean;
+}
+
+export interface SaveProfitDistributionAdjustmentPayload {
+  month: string;
+  currency: string;
+  partnerId: ProfitDistributionPartnerId;
+  bucket: ProfitDistributionBucket;
+  waived?: boolean;
+  deferred?: boolean;
+  overrideAmount?: number | null;
+  note?: string;
 }
 
 export interface CreateProviderPayload {

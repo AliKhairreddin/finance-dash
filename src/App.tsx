@@ -54,10 +54,15 @@ import type {
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
+  ProfitDistributionAdjustment,
+  ProfitDistributionBucket,
+  ProfitDistributionPartnerId,
+  ProfitDistributionPartnerLedger,
   Provider,
   ProviderType,
   RevenuePartner,
   RevenuePeriodPreset,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   SyncRevenuePayload,
   Team,
@@ -72,11 +77,16 @@ import {
   transactionBusinessCategory,
   transactionCategoryOptionsForDirection
 } from "../shared/categories";
+import {
+  profitDistributionAdjustmentId,
+  profitDistributionBucketLabels,
+  profitDistributionPartners
+} from "../shared/distribution";
 import { calculateRevenueMetrics } from "../shared/revenue";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "banks" | "analytics" | "revenue" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
@@ -151,6 +161,10 @@ function dateLabel(value: string): string {
     day: "numeric",
     year: "numeric"
   }).format(date);
+}
+
+function monthLabel(value: string): string {
+  return dateLabel(`${value}-01`);
 }
 
 function normalizeLookupName(value: string): string {
@@ -741,6 +755,21 @@ function App() {
     setNotice(`Saved ${category} for ${transaction.counterparty}. Future similar rows can auto-categorize.`);
   }
 
+  async function saveProfitDistributionAdjustment(payload: SaveProfitDistributionAdjustmentPayload) {
+    setError(null);
+    const response = await fetch(`${apiBase}/distribution/adjustments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Distribution adjustment could not be saved");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice("Distribution adjustment saved.");
+  }
+
   async function assignTransactionTeam(transaction: Transaction, teamId?: string) {
     setError(null);
     const response = await fetch(`${apiBase}/transactions/${transaction.id}/team`, {
@@ -1078,6 +1107,10 @@ function App() {
         />
       )}
 
+      {activeTab === "distribution" && (
+        <DistributionView dashboard={dashboard} onSaveAdjustment={saveProfitDistributionAdjustment} />
+      )}
+
       {activeTab === "revenue" && (
         <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} />
       )}
@@ -1203,6 +1236,7 @@ function Sidebar({
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
+    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
@@ -2376,11 +2410,23 @@ function SimpleMoneyTable({
   );
 }
 
-function BridgeRow({ label, value, danger, good }: { label: string; value?: number | null; danger?: boolean; good?: boolean }) {
+function BridgeRow({
+  label,
+  value,
+  danger,
+  good,
+  currency = "USD"
+}: {
+  label: string;
+  value?: number | null;
+  danger?: boolean;
+  good?: boolean;
+  currency?: string;
+}) {
   return (
     <div className="bridge-row">
       <span>{label}</span>
-      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{optionalMoney(value)}</strong>
+      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{optionalMoney(value, currency)}</strong>
     </div>
   );
 }
@@ -2862,6 +2908,489 @@ function TransactionTable({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+type DistributionAdjustmentTarget = {
+  month: string;
+  currency: string;
+  partnerId: ProfitDistributionPartnerId;
+  partnerName: string;
+  bucket: ProfitDistributionBucket;
+  currentAmount: number;
+  adjustment?: ProfitDistributionAdjustment;
+};
+
+function distributionAdjustmentFor(
+  adjustments: ProfitDistributionAdjustment[],
+  month: string,
+  currency: string,
+  partnerId: ProfitDistributionPartnerId,
+  bucket: ProfitDistributionBucket
+): ProfitDistributionAdjustment | undefined {
+  const id = profitDistributionAdjustmentId({ month, currency, partnerId, bucket });
+  return adjustments.find((adjustment) => adjustment.id === id);
+}
+
+function distributionBucketAmount(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket): number {
+  if (bucket === "profit-share") return row.profitSharePayable;
+  if (bucket === "salary") return row.salaryPayable;
+  return row.distributionPayable;
+}
+
+function DistributionAmountButton({
+  value,
+  currency,
+  disabled,
+  adjusted,
+  title,
+  onClick
+}: {
+  value: number;
+  currency: string;
+  disabled: boolean;
+  adjusted: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  if (disabled) return <span className="muted-cell">—</span>;
+
+  return (
+    <button
+      className={`amount-adjust-button ${adjusted ? "adjusted" : ""}`}
+      title={title}
+      type="button"
+      onClick={onClick}
+    >
+      <span>{money(value, currency)}</span>
+      <Pencil size={13} />
+    </button>
+  );
+}
+
+function DistributionView({
+  dashboard,
+  onSaveAdjustment
+}: {
+  dashboard: DashboardSnapshot;
+  onSaveAdjustment: (payload: SaveProfitDistributionAdjustmentPayload) => Promise<void>;
+}) {
+  const distribution = dashboard.profitDistribution;
+  const monthOptions = useMemo(
+    () => [...new Set(distribution.months.map((month) => month.month))].sort((left, right) => right.localeCompare(left)),
+    [distribution.months]
+  );
+  const currencyOptions = useMemo(() => distribution.currencies.map((currency) => currency.currency), [distribution.currencies]);
+  const [selectedMonth, setSelectedMonth] = useState(monthOptions[0] ?? new Date().toISOString().slice(0, 7));
+  const [selectedCurrency, setSelectedCurrency] = useState(
+    currencyOptions.includes("EUR") ? "EUR" : currencyOptions[0] ?? "EUR"
+  );
+  const [editingAdjustment, setEditingAdjustment] = useState<DistributionAdjustmentTarget | null>(null);
+  const monthOptionsKey = monthOptions.join("|");
+  const currencyOptionsKey = currencyOptions.join("|");
+  const selectedMonthCurrencies = useMemo(
+    () => distribution.months.filter((month) => month.month === selectedMonth).map((month) => month.currency),
+    [distribution.months, selectedMonth]
+  );
+  const selectedMonthCurrenciesKey = selectedMonthCurrencies.join("|");
+
+  useEffect(() => {
+    if (monthOptions.length > 0 && !monthOptions.includes(selectedMonth)) {
+      setSelectedMonth(monthOptions[0]);
+    }
+  }, [monthOptions, monthOptionsKey, selectedMonth]);
+
+  useEffect(() => {
+    if (currencyOptions.length === 0) return;
+    const allowedCurrencies = selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions;
+    if (!allowedCurrencies.includes(selectedCurrency)) {
+      setSelectedCurrency(allowedCurrencies.includes("EUR") ? "EUR" : allowedCurrencies[0]);
+    }
+  }, [currencyOptions, currencyOptionsKey, selectedCurrency, selectedMonthCurrencies, selectedMonthCurrenciesKey]);
+
+  const selectedLedger =
+    distribution.months.find((month) => month.month === selectedMonth && month.currency === selectedCurrency) ??
+    distribution.months[0];
+  const currencySummary = distribution.currencies.find((currency) => currency.currency === selectedCurrency);
+  const balanceRows = distribution.partners.filter((partner) => partner.currency === selectedCurrency);
+  const partnerOrder = new Map(profitDistributionPartners.map((partner, index) => [partner.id, index]));
+  const selectedPartners = selectedLedger
+    ? [...selectedLedger.partners].sort(
+        (left, right) => (partnerOrder.get(left.partnerId) ?? 0) - (partnerOrder.get(right.partnerId) ?? 0)
+      )
+    : [];
+  const sortedBalanceRows = [...balanceRows].sort(
+    (left, right) => (partnerOrder.get(left.partnerId) ?? 0) - (partnerOrder.get(right.partnerId) ?? 0)
+  );
+
+  function openAdjustment(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket) {
+    if (!selectedLedger) return;
+    setEditingAdjustment({
+      month: selectedLedger.month,
+      currency: selectedLedger.currency,
+      partnerId: row.partnerId,
+      partnerName: row.entityName ? `${row.partnerName} / ${row.entityName}` : row.partnerName,
+      bucket,
+      currentAmount: distributionBucketAmount(row, bucket),
+      adjustment: distributionAdjustmentFor(
+        distribution.adjustments,
+        selectedLedger.month,
+        selectedLedger.currency,
+        row.partnerId,
+        bucket
+      )
+    });
+  }
+
+  function bucketCanAdjust(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket): boolean {
+    const existing = selectedLedger
+      ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, bucket)
+      : undefined;
+    if (existing) return true;
+    if (bucket === "profit-share") return row.partnerId === "ishan";
+    if (bucket === "salary") return row.salaryPayable > 0;
+    return true;
+  }
+
+  return (
+    <div className="distribution-layout">
+      <section className="panel wide-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Distribution</p>
+            <h2>Partner payables, paid amounts, and remaining balances</h2>
+          </div>
+          <span className="total-pill">{currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} remaining</span>
+        </div>
+        <div className="revenue-controls distribution-controls">
+          <label>
+            Month
+            <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
+              {monthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {monthLabel(month)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Currency
+            <select value={selectedCurrency} onChange={(event) => setSelectedCurrency(event.target.value)}>
+              {(selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions).map((currency) => (
+                <option key={currency} value={currency}>
+                  {currency}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="wise-summary-grid distribution-summary">
+          <SummaryTile label="Payable" value={currencySummary ? money(currencySummary.totalPayable, currencySummary.currency) : "—"} />
+          <SummaryTile label="Paid" value={currencySummary ? money(currencySummary.totalPaid, currencySummary.currency) : "—"} />
+          <SummaryTile label="Remaining" value={currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} />
+          <SummaryTile label="Adjustments" value={String(distribution.adjustments.length)} />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Calculation bridge</h2>
+          <span className="total-pill">{selectedLedger ? monthLabel(selectedLedger.month) : "—"}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Revenue" value={selectedLedger?.revenue} currency={selectedCurrency} good />
+          <BridgeRow label="General costs" value={selectedLedger ? -selectedLedger.generalCosts : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Net profit after general costs" value={selectedLedger?.netProfitAfterGeneralCosts} currency={selectedCurrency} />
+          <BridgeRow label="Ishan 25% share" value={selectedLedger ? -selectedLedger.ishanProfitShare : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Fixed salaries" value={selectedLedger ? -selectedLedger.salaryDeductions : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Profit available for distribution" value={selectedLedger?.profitAvailableForDistribution} currency={selectedCurrency} good />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Currency balance</h2>
+          <span className="total-pill">{selectedCurrency}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Total payable" value={currencySummary?.totalPayable} currency={selectedCurrency} />
+          <BridgeRow label="Total paid" value={currencySummary?.totalPaid} currency={selectedCurrency} good />
+          <BridgeRow label="Remaining" value={currencySummary?.remaining} currency={selectedCurrency} />
+          <BridgeRow label="Distribution pool" value={selectedLedger?.distributionPool} currency={selectedCurrency} />
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Accumulated partner balances</h2>
+          <span className="total-pill">{sortedBalanceRows.length} rows</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table distribution-table">
+            <thead>
+              <tr>
+                <th>Partner</th>
+                <th>Profit share</th>
+                <th>Salary</th>
+                <th>Distribution</th>
+                <th>Payable</th>
+                <th>Paid</th>
+                <th>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedBalanceRows.length > 0 ? (
+                sortedBalanceRows.map((row) => (
+                  <tr key={`${row.partnerId}-${row.currency}`}>
+                    <td>
+                      <strong>{row.partnerName}</strong>
+                      <small>{row.entityName ?? row.currency}</small>
+                    </td>
+                    <td className="amount">{money(row.profitSharePayable, row.currency)}</td>
+                    <td className="amount">{money(row.salaryPayable, row.currency)}</td>
+                    <td className="amount">{money(row.distributionPayable, row.currency)}</td>
+                    <td className="amount">{money(row.totalPayable, row.currency)}</td>
+                    <td className="amount good-text">{money(row.totalPaid, row.currency)}</td>
+                    <td className={`amount ${row.remaining <= 0 ? "good-text" : ""}`}>{money(row.remaining, row.currency)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7}>No distribution balances yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Selected month payables</h2>
+          <span className="total-pill">{selectedLedger ? `${selectedLedger.month} ${selectedLedger.currency}` : "—"}</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table distribution-table">
+            <thead>
+              <tr>
+                <th>Partner</th>
+                <th>Profit share</th>
+                <th>Salary</th>
+                <th>Distribution</th>
+                <th>Paid</th>
+                <th>Remaining</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedPartners.length > 0 ? (
+                selectedPartners.map((row) => {
+                  const profitShareAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "profit-share")
+                    : undefined;
+                  const salaryAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "salary")
+                    : undefined;
+                  const distributionAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "distribution")
+                    : undefined;
+                  return (
+                    <tr key={`${selectedLedger?.id}-${row.partnerId}`}>
+                      <td>
+                        <strong>{row.partnerName}</strong>
+                        <small>{row.entityName ?? row.currency}</small>
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.profitSharePayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "profit-share")}
+                          adjusted={Boolean(profitShareAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels["profit-share"]} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "profit-share")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.salaryPayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "salary")}
+                          adjusted={Boolean(salaryAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels.salary} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "salary")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.distributionPayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "distribution")}
+                          adjusted={Boolean(distributionAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels.distribution} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "distribution")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <strong className="good-text">{money(row.totalPaid, row.currency)}</strong>
+                        <small>
+                          Salary {money(row.salaryPaid, row.currency)} · Dist. {money(row.profitSharePaid + row.distributionPaid, row.currency)}
+                        </small>
+                      </td>
+                      <td className={`amount ${row.remaining <= 0 ? "good-text" : ""}`}>{money(row.remaining, row.currency)}</td>
+                      <td>
+                        <div className="status-chip-list">
+                          {row.hasAdjustment && <span className="status-pill warning">Adjusted</span>}
+                          {row.hasDeferred && <span className="status-pill">Deferred</span>}
+                          {!row.hasAdjustment && !row.hasDeferred && <span className="status-pill good">Calculated</span>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7}>No selected month ledger</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {editingAdjustment && (
+        <DistributionAdjustmentModal
+          target={editingAdjustment}
+          onClose={() => setEditingAdjustment(null)}
+          onSubmit={async (payload) => {
+            await onSaveAdjustment(payload);
+            setEditingAdjustment(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function DistributionAdjustmentModal({
+  target,
+  onClose,
+  onSubmit
+}: {
+  target: DistributionAdjustmentTarget;
+  onClose: () => void;
+  onSubmit: (payload: SaveProfitDistributionAdjustmentPayload) => Promise<void>;
+}) {
+  const isSalary = target.bucket === "salary";
+  const [overrideAmount, setOverrideAmount] = useState(
+    target.adjustment?.overrideAmount === undefined ? "" : String(target.adjustment.overrideAmount)
+  );
+  const [waived, setWaived] = useState(Boolean(target.adjustment?.waived));
+  const [deferred, setDeferred] = useState(Boolean(target.adjustment?.deferred));
+  const [note, setNote] = useState(target.adjustment?.note ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function saveAdjustment(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        month: target.month,
+        currency: target.currency,
+        partnerId: target.partnerId,
+        bucket: target.bucket,
+        waived: isSalary ? waived : false,
+        deferred: isSalary ? false : deferred,
+        overrideAmount: overrideAmount.trim() ? Number(overrideAmount) : null,
+        note
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Distribution adjustment could not be saved");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function clearAdjustment() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        month: target.month,
+        currency: target.currency,
+        partnerId: target.partnerId,
+        bucket: target.bucket,
+        waived: false,
+        deferred: false,
+        overrideAmount: null,
+        note: ""
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Distribution adjustment could not be cleared");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal" onSubmit={saveAdjustment}>
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Distribution adjustment</p>
+            <h2>{profitDistributionBucketLabels[target.bucket]} for {target.partnerName}</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="transaction-summary">
+          <span>{monthLabel(target.month)} · {target.currency}</span>
+          <strong>{money(target.currentAmount, target.currency)}</strong>
+          <small>Current payable</small>
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="form-grid">
+          <label>
+            Override amount
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={overrideAmount}
+              onChange={(event) => setOverrideAmount(event.target.value)}
+              placeholder={money(target.currentAmount, target.currency)}
+            />
+          </label>
+          <label className="check-row modal-check-row distribution-check-row">
+            <input
+              type="checkbox"
+              checked={isSalary ? waived : deferred}
+              onChange={(event) => (isSalary ? setWaived(event.target.checked) : setDeferred(event.target.checked))}
+            />
+            {isSalary ? "Salary waived" : "Payment deferred"}
+          </label>
+        </div>
+        <label>
+          Note
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} />
+        </label>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="secondary-button" onClick={() => void clearAdjustment()} disabled={submitting || !target.adjustment}>
+            <RefreshCw size={16} />
+            Clear
+          </button>
+          <button type="submit" className="primary-button" disabled={submitting}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+            Save
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

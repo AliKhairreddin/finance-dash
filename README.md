@@ -55,6 +55,7 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
 - Imports manually downloaded Wise statement CSVs in the Banks > Wise tab and stores rows for reconciliation.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
+- Adds a Distribution page for partner profit-share, salary, distribution payables, paid amounts, remaining balances, and manual monthly adjustments.
 - Treats each TUNE/HasOffers revenue stream as either partner-level or earning-team plus paying-partner, so a single Kissterra payment can stay as Kissterra while Cognitive Pixel and Wagner can still be split when the allocation is known.
 - Lets saved TUNE/HasOffers revenue streams store the affiliate ID used by the network.
 - Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.

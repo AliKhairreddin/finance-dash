@@ -1355,6 +1355,75 @@ textarea:focus-visible {
   min-width: 840px;
 }
 
+.distribution-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(300px, 0.9fr) minmax(430px, 1.2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.distribution-controls {
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.5fr);
+}
+
+.distribution-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.distribution-table {
+  min-width: 980px;
+}
+
+.amount-adjust-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0 8px;
+  color: var(--ink);
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.amount-adjust-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.amount-adjust-button svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.amount-adjust-button:hover,
+.amount-adjust-button.adjusted {
+  color: var(--ink);
+  background: var(--control-hover-bg);
+  border-color: var(--control-border-hover);
+  transform: none;
+}
+
+.amount-adjust-button.adjusted {
+  box-shadow: 0 0 0 2px var(--focus-ring-strong);
+}
+
+.status-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.distribution-check-row {
+  align-self: end;
+  min-height: 36px;
+}
+
 .revenue-error {
   margin: 12px 14px 0;
 }
@@ -2210,7 +2279,8 @@ textarea:focus-visible {
   .provider-grid,
   .integration-grid,
   .split-view,
-  .categorization-layout {
+  .categorization-layout,
+  .distribution-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2281,6 +2351,7 @@ textarea:focus-visible {
   .integration-grid,
   .split-view,
   .categorization-layout,
+  .distribution-layout,
   .wise-summary-grid,
   .revenue-controls,
   .card-holder-rule,

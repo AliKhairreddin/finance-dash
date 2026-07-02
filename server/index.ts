@@ -11,6 +11,7 @@ import type {
   AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   SyncRevenuePayload,
   UpdateTransactionCategoryPayload
@@ -29,6 +30,7 @@ import {
   matchTransaction,
   runAiPrompt,
   saveAiSettings,
+  saveProfitDistributionAdjustment,
   setInvoiceApproval,
   syncExternalActivity,
   syncRevenue,
@@ -199,6 +201,14 @@ app.post("/api/transactions/:transactionId/category", async (request, response, 
       return;
     }
     response.json(await updateTransactionCategory(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/distribution/adjustments", async (request, response, next) => {
+  try {
+    response.json(await saveProfitDistributionAdjustment(request.body as SaveProfitDistributionAdjustmentPayload));
   } catch (error) {
     next(error);
   }

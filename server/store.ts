@@ -15,9 +15,11 @@ import type {
   ImportWiseStatementSummary,
   Invoice,
   MatchTransactionPayload,
+  ProfitDistributionAdjustment,
   Provider,
   RevenuePartner,
   RevenueRun,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   StoredAiSettings,
   SyncRevenuePayload,
@@ -39,6 +41,11 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, mergeRevenuePartnerDirectory, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  calculateProfitDistribution,
+  profitDistributionAdjustmentFromPayload,
+  shouldKeepProfitDistributionAdjustment
+} from "../shared/distribution";
 import { calculateMetrics } from "./calculations";
 import {
   createMeritInvoice,
@@ -79,6 +86,7 @@ let wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [];
 let transactions: Transaction[] = [];
 let wiseStatementTransactions: Transaction[] = [];
 let wiseStatementImports: WiseStatementImport[] = [];
+let profitDistributionAdjustments: ProfitDistributionAdjustment[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseSyncIssue: string | undefined;
@@ -170,6 +178,7 @@ export async function initializeStore(): Promise<void> {
   wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
   wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
   wiseStatementImports = persisted.wiseStatementImports ?? [];
+  profitDistributionAdjustments = persisted.profitDistributionAdjustments ?? [];
 }
 
 async function persist(): Promise<void> {
@@ -183,6 +192,7 @@ async function persist(): Promise<void> {
     wiseCardHolderTeamAssignments,
     wiseStatementTransactions,
     wiseStatementImports,
+    profitDistributionAdjustments,
     revenueRuns,
     aiSettings
   });
@@ -370,6 +380,7 @@ export async function autoCategorizeTransactions(
 
 export function getSnapshot(): DashboardSnapshot {
   const metrics = calculateMetrics(accounts, [], [], [], []);
+  const matchedTransactions = getMatchedTransactions();
   return {
     asOf: new Date().toISOString(),
     accounts,
@@ -383,13 +394,14 @@ export function getSnapshot(): DashboardSnapshot {
     revenueRuns,
     revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
     aiSettings: publicAiSettings(aiSettings),
-    transactions: getMatchedTransactions(),
+    transactions: matchedTransactions,
     invoices,
     transactionCategoryRules,
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
     integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners),
     metrics,
+    profitDistribution: calculateProfitDistribution(matchedTransactions, profitDistributionAdjustments),
     lastSync
   };
 }
@@ -663,6 +675,18 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
 
   await persist();
   return enrichTransactions([updated], providers, transactionCategoryRules)[0];
+}
+
+export async function saveProfitDistributionAdjustment(
+  payload: SaveProfitDistributionAdjustmentPayload
+): Promise<DashboardSnapshot> {
+  const adjustment = profitDistributionAdjustmentFromPayload(payload, new Date().toISOString());
+  profitDistributionAdjustments = profitDistributionAdjustments.filter((item) => item.id !== adjustment.id);
+  if (shouldKeepProfitDistributionAdjustment(adjustment)) {
+    profitDistributionAdjustments = [adjustment, ...profitDistributionAdjustments];
+  }
+  await persist();
+  return getSnapshot();
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {

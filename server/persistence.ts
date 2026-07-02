@@ -5,6 +5,7 @@ import type {
   Provider,
   RevenuePartner,
   RevenueRun,
+  ProfitDistributionAdjustment,
   StoredAiSettings,
   Team,
   Transaction,
@@ -27,6 +28,7 @@ export interface PersistedState {
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: StoredAiSettings;
 }
 

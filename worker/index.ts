@@ -16,9 +16,11 @@ import type {
   IntegrationStatus,
   Invoice,
   MatchTransactionPayload,
+  ProfitDistributionAdjustment,
   Provider,
   RevenuePartner,
   RevenueRun,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   StoredAiSettings,
   SyncRevenuePayload,
@@ -47,6 +49,11 @@ import {
   resolveRevenuePeriod
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import {
+  calculateProfitDistribution,
+  profitDistributionAdjustmentFromPayload,
+  shouldKeepProfitDistributionAdjustment
+} from "../shared/distribution";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
@@ -115,6 +122,7 @@ interface PersistedState {
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: StoredAiSettings;
 }
 
@@ -1101,6 +1109,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: realRevenueRuns(stored?.revenueRuns),
+    profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
 }
@@ -1349,6 +1358,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     wiseStatementImports: state.wiseStatementImports,
     integrationStatus: integrationStatus(env, wise, state.revenuePartners),
     metrics: calculateMetrics(accounts, [], [], [], []),
+    profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()
   };
 }
@@ -1620,6 +1630,20 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
 
   await savePersisted(env, state);
   return enrichTransactions([updated], state.providers, state.transactionCategoryRules)[0];
+}
+
+async function saveProfitDistributionAdjustment(
+  env: Env,
+  payload: SaveProfitDistributionAdjustmentPayload
+): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const adjustment = profitDistributionAdjustmentFromPayload(payload, new Date().toISOString());
+  state.profitDistributionAdjustments = state.profitDistributionAdjustments.filter((item) => item.id !== adjustment.id);
+  if (shouldKeepProfitDistributionAdjustment(adjustment)) {
+    state.profitDistributionAdjustments = [adjustment, ...state.profitDistributionAdjustments];
+  }
+  await savePersisted(env, state);
+  return getSnapshot(env);
 }
 
 async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
@@ -1959,6 +1983,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
           rememberAlias: body.rememberAlias !== false
         })
       );
+    }
+
+    if (url.pathname === "/api/distribution/adjustments" && request.method === "POST") {
+      return json(await saveProfitDistributionAdjustment(env, (await request.json()) as SaveProfitDistributionAdjustmentPayload));
     }
 
     if (url.pathname === "/api/teams" && request.method === "POST") {

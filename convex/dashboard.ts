@@ -173,6 +173,32 @@ const aiSettings = v.object({
   updatedAt: v.optional(v.string())
 });
 
+const profitDistributionPartnerId = v.union(
+  v.literal("ishan"),
+  v.literal("ben"),
+  v.literal("sanjan"),
+  v.literal("amin")
+);
+
+const profitDistributionBucket = v.union(
+  v.literal("profit-share"),
+  v.literal("salary"),
+  v.literal("distribution")
+);
+
+const profitDistributionAdjustment = v.object({
+  id: v.string(),
+  month: v.string(),
+  currency: v.string(),
+  partnerId: profitDistributionPartnerId,
+  bucket: profitDistributionBucket,
+  waived: v.boolean(),
+  deferred: v.boolean(),
+  overrideAmount: v.optional(v.number()),
+  note: v.optional(v.string()),
+  updatedAt: v.string()
+});
+
 export const getState = query({
   args: {},
   returns: v.union(
@@ -188,6 +214,7 @@ export const getState = query({
       wiseStatementTransactions: v.array(transaction),
       wiseStatementImports: v.array(wiseStatementImport),
       revenueRuns: v.array(revenueRun),
+      profitDistributionAdjustments: v.array(profitDistributionAdjustment),
       aiSettings: v.optional(aiSettings),
       updatedAt: v.string()
     })
@@ -211,6 +238,7 @@ export const getState = query({
       wiseStatementTransactions: state.wiseStatementTransactions ?? [],
       wiseStatementImports: state.wiseStatementImports ?? [],
       revenueRuns: state.revenueRuns ?? [],
+      profitDistributionAdjustments: state.profitDistributionAdjustments ?? [],
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
     };
@@ -229,6 +257,7 @@ export const saveState = mutation({
     wiseStatementTransactions: v.array(transaction),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
+    profitDistributionAdjustments: v.array(profitDistributionAdjustment),
     aiSettings: v.optional(aiSettings)
   },
   returns: v.object({
@@ -253,6 +282,7 @@ export const saveState = mutation({
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
+        profitDistributionAdjustments: args.profitDistributionAdjustments,
         aiSettings: args.aiSettings,
         updatedAt
       });
@@ -269,6 +299,7 @@ export const saveState = mutation({
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
+        profitDistributionAdjustments: args.profitDistributionAdjustments,
         aiSettings: args.aiSettings,
         updatedAt
       });

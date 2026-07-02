@@ -173,6 +173,32 @@ const aiSettings = v.object({
   updatedAt: v.optional(v.string())
 });
 
+const profitDistributionPartnerId = v.union(
+  v.literal("ishan"),
+  v.literal("ben"),
+  v.literal("sanjan"),
+  v.literal("amin")
+);
+
+const profitDistributionBucket = v.union(
+  v.literal("profit-share"),
+  v.literal("salary"),
+  v.literal("distribution")
+);
+
+const profitDistributionAdjustment = v.object({
+  id: v.string(),
+  month: v.string(),
+  currency: v.string(),
+  partnerId: profitDistributionPartnerId,
+  bucket: profitDistributionBucket,
+  waived: v.boolean(),
+  deferred: v.boolean(),
+  overrideAmount: v.optional(v.number()),
+  note: v.optional(v.string()),
+  updatedAt: v.string()
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
@@ -186,6 +212,7 @@ export default defineSchema({
     wiseStatementTransactions: v.optional(v.array(transaction)),
     wiseStatementImports: v.optional(v.array(wiseStatementImport)),
     revenueRuns: v.optional(v.array(revenueRun)),
+    profitDistributionAdjustments: v.optional(v.array(profitDistributionAdjustment)),
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"])
