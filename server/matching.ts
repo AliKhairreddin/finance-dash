@@ -1,10 +1,13 @@
 import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
 import {
   canonicalCreatedAt,
+  canonicalTeamId,
+  canonicalTeamName,
   cognitiveTeamId,
   kissterraProviderId,
   leadEconomyProviderId,
-  wagnerTeamId
+  wagnerTeamId,
+  wagnerTeamName
 } from "../shared/business";
 import { transactionBusinessCategory } from "../shared/categories";
 
@@ -148,7 +151,7 @@ export const canonicalTeams: Team[] = [
   },
   {
     id: wagnerTeamId,
-    name: "Wagner",
+    name: wagnerTeamName,
     createdAt: canonicalCreatedAt
   }
 ];
@@ -167,7 +170,7 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
   {
     category: "Affiliate team revenue",
     direction: "in",
-    phrases: ["affiliate revenue", "affiliate payout", "affiliate earnings", "wagner revenue"]
+    phrases: ["affiliate revenue", "affiliate payout", "affiliate earnings", "wagner revenue", "wgnr revenue"]
   },
   {
     category: "Refunds and chargebacks",
@@ -190,7 +193,7 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
   {
     category: "Affiliate payout",
     direction: "out",
-    phrases: ["affiliate payout", "affiliate payment", "wagner payout", "wagner payment"]
+    phrases: ["affiliate payout", "affiliate payment", "wagner payout", "wagner payment", "wgnr payout", "wgnr payment"]
   },
   {
     category: "Creative production",
@@ -378,9 +381,20 @@ export function mergeProviderDirectory(providers: Provider[]): Provider[] {
 }
 
 export function mergeTeamDirectory(teams: Team[]): Team[] {
-  const next = [...teams];
+  const byId = new Map<string, Team>();
+  for (const team of teams) {
+    const normalizedTeam = {
+      ...team,
+      id: canonicalTeamId(team.id),
+      name: canonicalTeamName(team.name)
+    };
+    if (!byId.has(normalizedTeam.id)) {
+      byId.set(normalizedTeam.id, normalizedTeam);
+    }
+  }
+  const next = [...byId.values()];
   for (const canonical of canonicalTeams) {
-    if (next.some((team) => normalizeName(team.name) === normalizeName(canonical.name))) continue;
+    if (next.some((team) => team.id === canonical.id || normalizeName(team.name) === normalizeName(canonical.name))) continue;
     next.push(canonical);
   }
   return next.sort((left, right) => {

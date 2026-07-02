@@ -31,6 +31,7 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
@@ -236,6 +237,13 @@ function realInvoices(invoices?: Invoice[]): Invoice[] {
 
 function realRevenueRuns(runs?: RevenueRun[]): RevenueRun[] {
   return (runs ?? []).filter((run) => run.status !== "mock");
+}
+
+function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
+  return (rows ?? []).map((assignment) => ({
+    ...assignment,
+    teamId: canonicalTeamId(assignment.teamId)
+  }));
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
@@ -891,7 +899,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
-    transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
+    transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: realRevenueRuns(stored?.revenueRuns),
@@ -1379,19 +1387,20 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
 async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
   const state = await loadPersisted(env);
   const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
+  const teamId = payload.teamId ? canonicalTeamId(payload.teamId) : undefined;
   if (!transaction) {
     throw new Error("Transaction not found");
   }
-  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+  if (teamId && !state.teams.some((team) => team.id === teamId)) {
     throw new Error("Team not found");
   }
 
   state.transactionTeamAssignments = state.transactionTeamAssignments.filter(
     (assignment) => assignment.transactionId !== payload.transactionId
   );
-  if (payload.teamId) {
+  if (teamId) {
     state.transactionTeamAssignments = [
-      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      { transactionId: payload.transactionId, teamId, updatedAt: new Date().toISOString() },
       ...state.transactionTeamAssignments
     ];
   }
@@ -1399,12 +1408,12 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
   await savePersisted(env, state);
   return {
     ...transaction,
-    teamId: payload.teamId
+    teamId
   };
 }
 
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
-  const name = payload.name.trim();
+  const name = canonicalTeamName(payload.name.trim());
   if (!name) {
     throw new Error("Team name is required");
   }

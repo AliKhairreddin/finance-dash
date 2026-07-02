@@ -23,12 +23,14 @@ import type {
   Team,
   Transaction,
   TransactionCategoryRule,
+  TransactionTeamAssignment,
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
@@ -142,6 +144,13 @@ function realRevenueRuns(rows?: RevenueRun[]): RevenueRun[] {
   return (rows ?? []).filter((run) => run.status !== "mock");
 }
 
+function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
+  return (rows ?? []).map((assignment) => ({
+    ...assignment,
+    teamId: canonicalTeamId(assignment.teamId)
+  }));
+}
+
 export async function initializeStore(): Promise<void> {
   const persisted = await loadPersistedState();
   providers = mergeProviderDirectory(persisted.providers ?? []);
@@ -151,7 +160,7 @@ export async function initializeStore(): Promise<void> {
   revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
-  transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
+  transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
   wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
   wiseStatementImports = persisted.wiseStatementImports ?? [];
 }
@@ -430,17 +439,18 @@ export async function importWiseStatement(payload: ImportWiseStatementPayload): 
 
 export async function assignTransactionTeam(payload: AssignTransactionTeamPayload): Promise<Transaction> {
   const transaction = findKnownTransaction(payload.transactionId);
+  const teamId = payload.teamId ? canonicalTeamId(payload.teamId) : undefined;
   if (!transaction) {
     throw new Error("Transaction not found");
   }
-  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
+  if (teamId && !teams.some((team) => team.id === teamId)) {
     throw new Error("Team not found");
   }
 
   transactionTeamAssignments = transactionTeamAssignments.filter((assignment) => assignment.transactionId !== payload.transactionId);
-  if (payload.teamId) {
+  if (teamId) {
     transactionTeamAssignments = [
-      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      { transactionId: payload.transactionId, teamId, updatedAt: new Date().toISOString() },
       ...transactionTeamAssignments
     ];
   }
@@ -450,7 +460,7 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
 }
 
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
-  const name = payload.name.trim();
+  const name = canonicalTeamName(payload.name.trim());
   if (!name) {
     throw new Error("Team name is required");
   }
