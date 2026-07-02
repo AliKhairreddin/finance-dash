@@ -8,11 +8,11 @@ import {
   Check,
   CircleAlert,
   CircleDollarSign,
+  CreditCard,
   FilePlus2,
   Filter,
   Info,
   KeyRound,
-  Link2,
   Loader2,
   Moon,
   Pencil,
@@ -50,6 +50,7 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   CreateTeamPayload,
+  DataSource,
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
@@ -64,6 +65,7 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
+import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
   isReviewOnlyTransactionCategory,
   moneyInCategoryOptions,
@@ -74,7 +76,7 @@ import { calculateRevenueMetrics } from "../shared/revenue";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "banks" | "analytics" | "revenue" | "invoices" | "providers" | "settings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
@@ -229,8 +231,8 @@ function bankInvoiceName(transaction: Transaction): string {
   return transaction.counterparty || transaction.rawName;
 }
 
-function sourceLabel(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+function sourceLabel(value: DataSource | string): string {
+  return bankSourceLabel(value as DataSource);
 }
 
 function revenuePartnerLabel(partner: RevenuePartner, teamsById: Map<string, Team>): string {
@@ -249,6 +251,15 @@ function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["d
   for (const row of rows) {
     if (direction && row.direction !== direction) continue;
     totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
+  }
+  const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
+  return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+}
+
+function groupedAccountMoney(rows: DashboardSnapshot["accounts"]): string {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.balance);
   }
   const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
@@ -489,6 +500,7 @@ function App() {
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const [bankTab, setBankTab] = useState<BankSource>("wise");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
@@ -595,6 +607,11 @@ function App() {
 
   const revolutTransactions = useMemo(
     () => filteredTransactions.filter((transaction) => transaction.source === "revolut"),
+    [filteredTransactions]
+  );
+
+  const amexTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.source === "amex"),
     [filteredTransactions]
   );
 
@@ -928,7 +945,6 @@ function App() {
   const hasInvestments = dashboard.investments.length > 0;
   const hasProfit = dashboard.metrics.profit !== null;
   const hasTotalAssets = dashboard.metrics.totalAssets !== null;
-  const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
 
   return (
     <main className="app-shell">
@@ -1018,116 +1034,42 @@ function App() {
         </>
       )}
 
-      {activeTab === "wise" && (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Wise reconciliation</p>
-              <h2>Match incoming payments and outgoing spend</h2>
-            </div>
-            <div className="filters">
-              <div className="segmented-control" aria-label="Wise transaction direction">
-                <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
-                  <ArrowUpRight size={15} />
-                  In
-                </button>
-                <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
-                  <ArrowDownRight size={15} />
-                  Out
-                </button>
-              </div>
-              <label className="search-box">
-                <Search size={15} />
-                <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
-              </label>
-              <label>
-                <Filter size={15} />
-                <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
-                  <option value="needs-review">Needs review</option>
-                  <option value="matched">Matched</option>
-                  <option value="all">All rows</option>
-                </select>
-              </label>
-              <label>
-                <SlidersHorizontal size={15} />
-                <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
-                  <option value="match">% match</option>
-                  <option value="date">Date</option>
-                  <option value="period">Period</option>
-                  <option value="amount">Amount</option>
-                  <option value="category">Category</option>
-                  <option value="counterparty">Counterparty</option>
-                </select>
-              </label>
-              <label>
-                Order
-                <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
-                  <option value="desc">Descending</option>
-                  <option value="asc">Ascending</option>
-                </select>
-              </label>
-              <label>
-                Team
-                <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-                  <option value="all">All teams</option>
-                  <option value="unassigned">Unassigned</option>
-                  {dashboard.teams.map((team) => (
-                    <option key={team.id} value={team.id}>
-                      {team.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className="secondary-button"
-                onClick={() => void autoCategorizeTransactions(wiseTransactions.map((transaction) => transaction.id))}
-                disabled={isCategorizing || wiseTransactions.length === 0}
-              >
-                {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-                Auto
-              </button>
-              <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-                {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                CSV
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  multiple
-                  disabled={isImportingWise}
-                  onChange={(event) => {
-                    void importWiseStatements(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-          <div className="wise-summary-grid">
-            <SummaryTile label="Visible volume" value={maybeMoney(wiseTransactions.length > 0, wiseTeamSummary.total)} />
-            <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
-            <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
-            <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
-          </div>
-          {wiseStatus?.issue && (
-            <div className="integration-alert">
-              <CircleAlert size={16} />
-              <span>{wiseStatus.issue}</span>
-            </div>
-          )}
-          <TransactionTable
-            rows={wiseTransactions}
-            teams={dashboard.teams}
-            providersById={providersById}
-            onMatch={matchTransaction}
-            onAssignTeam={assignTransactionTeam}
-            onUpdateCategory={updateTransactionCategory}
-            onOpenInvoice={setInvoiceTransaction}
-          />
-        </section>
+      {activeTab === "banks" && (
+        <BanksView
+          dashboard={dashboard}
+          activeBank={bankTab}
+          setActiveBank={setBankTab}
+          wiseDirection={wiseDirection}
+          setWiseDirection={setWiseDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          wiseTransactions={wiseTransactions}
+          wiseTeamSummary={wiseTeamSummary}
+          revolutTransactions={revolutTransactions}
+          slashTransactions={slashTransactions}
+          amexTransactions={amexTransactions}
+          providersById={providersById}
+          isCategorizing={isCategorizing}
+          isImportingWise={isImportingWise}
+          onAutoCategorize={autoCategorizeTransactions}
+          onImportWiseStatements={importWiseStatements}
+          onMatch={matchTransaction}
+          onAssignTeam={assignTransactionTeam}
+          onUpdateCategory={updateTransactionCategory}
+          onOpenInvoice={setInvoiceTransaction}
+        />
       )}
 
-      {activeTab === "categories" && (
-        <CategorizationView
+      {activeTab === "analytics" && (
+        <AnalyticsView
           dashboard={dashboard}
           providersById={providersById}
           teamsById={teamsById}
@@ -1138,14 +1080,6 @@ function App() {
 
       {activeTab === "revenue" && (
         <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} />
-      )}
-
-      {activeTab === "revolut" && (
-        <RevolutView dashboard={dashboard} rows={revolutTransactions} />
-      )}
-
-      {activeTab === "slash" && (
-        <SlashView dashboard={dashboard} rows={slashTransactions} />
       )}
 
       {activeTab === "invoices" && (
@@ -1267,11 +1201,9 @@ function Sidebar({
 }) {
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
-    { id: "wise", label: "Wise", icon: <Link2 size={17} /> },
-    { id: "categories", label: "Categories", icon: <PieChart size={17} /> },
-    { id: "revolut", label: "Revolut", icon: <Banknote size={17} /> },
+    { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
+    { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
-    { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
@@ -1533,7 +1465,322 @@ function Overview({
   );
 }
 
-function CategorizationView({
+function BanksView({
+  dashboard,
+  activeBank,
+  setActiveBank,
+  wiseDirection,
+  setWiseDirection,
+  teamFilter,
+  setTeamFilter,
+  searchTerm,
+  setSearchTerm,
+  matchFilter,
+  setMatchFilter,
+  transactionSortKey,
+  setTransactionSortKey,
+  transactionSortDirection,
+  setTransactionSortDirection,
+  wiseTransactions,
+  wiseTeamSummary,
+  revolutTransactions,
+  slashTransactions,
+  amexTransactions,
+  providersById,
+  isCategorizing,
+  isImportingWise,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onAssignTeam,
+  onUpdateCategory,
+  onOpenInvoice
+}: {
+  dashboard: DashboardSnapshot;
+  activeBank: BankSource;
+  setActiveBank: (source: BankSource) => void;
+  wiseDirection: "in" | "out";
+  setWiseDirection: (direction: "in" | "out") => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  matchFilter: string;
+  setMatchFilter: (value: string) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: SortDirection;
+  setTransactionSortDirection: (value: SortDirection) => void;
+  wiseTransactions: Transaction[];
+  wiseTeamSummary: { total: number; count: number; matched: number; unassigned: number };
+  revolutTransactions: Transaction[];
+  slashTransactions: Transaction[];
+  amexTransactions: Transaction[];
+  providersById: Map<string, Provider>;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onOpenInvoice: (transaction: Transaction) => void;
+}) {
+  const rowsBySource = new Map<BankSource, Transaction[]>();
+  const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
+  const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
+  for (const status of dashboard.integrationStatus) {
+    if (status.id !== "openrouter" && isBankSource(status.id)) {
+      statusBySource.set(status.id, status);
+    }
+  }
+  for (const source of bankSources) {
+    rowsBySource.set(
+      source.id,
+      dashboard.transactions.filter((transaction) => transaction.source === source.id)
+    );
+    accountsBySource.set(
+      source.id,
+      dashboard.accounts.filter((account) => account.source === source.id)
+    );
+  }
+
+  return (
+    <div className="banks-layout">
+      <section className="panel wide-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Banks</p>
+            <h2>Connected bank, card, and reconciliation activity</h2>
+          </div>
+          <div className="segmented-control bank-tabs" aria-label="Bank source">
+            {bankSources.map((source) => (
+              <button
+                className={activeBank === source.id ? "active" : ""}
+                key={source.id}
+                onClick={() => setActiveBank(source.id)}
+                type="button"
+              >
+                {source.id === "amex" ? <CreditCard size={15} /> : <Banknote size={15} />}
+                {source.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="wise-summary-grid bank-source-summary">
+          {bankSources.map((source) => {
+            const accounts = accountsBySource.get(source.id) ?? [];
+            const rows = rowsBySource.get(source.id) ?? [];
+            const status = statusBySource.get(source.id);
+            return (
+              <SummaryTile
+                key={source.id}
+                label={`${source.label} ${status?.mode ?? "partial"}`}
+                value={accounts.length > 0 ? groupedAccountMoney(accounts) : `${rows.length} rows`}
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      {activeBank === "wise" && (
+        <WiseBankView
+          dashboard={dashboard}
+          rows={wiseTransactions}
+          summary={wiseTeamSummary}
+          providersById={providersById}
+          wiseDirection={wiseDirection}
+          setWiseDirection={setWiseDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          isCategorizing={isCategorizing}
+          isImportingWise={isImportingWise}
+          onAutoCategorize={onAutoCategorize}
+          onImportWiseStatements={onImportWiseStatements}
+          onMatch={onMatch}
+          onAssignTeam={onAssignTeam}
+          onUpdateCategory={onUpdateCategory}
+          onOpenInvoice={onOpenInvoice}
+        />
+      )}
+      {activeBank === "revolut" && <RevolutView dashboard={dashboard} rows={revolutTransactions} />}
+      {activeBank === "slash" && <SlashView dashboard={dashboard} rows={slashTransactions} />}
+      {activeBank === "amex" && <AmexView dashboard={dashboard} rows={amexTransactions} />}
+    </div>
+  );
+}
+
+function WiseBankView({
+  dashboard,
+  rows,
+  summary,
+  providersById,
+  wiseDirection,
+  setWiseDirection,
+  teamFilter,
+  setTeamFilter,
+  searchTerm,
+  setSearchTerm,
+  matchFilter,
+  setMatchFilter,
+  transactionSortKey,
+  setTransactionSortKey,
+  transactionSortDirection,
+  setTransactionSortDirection,
+  isCategorizing,
+  isImportingWise,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onAssignTeam,
+  onUpdateCategory,
+  onOpenInvoice
+}: {
+  dashboard: DashboardSnapshot;
+  rows: Transaction[];
+  summary: { total: number; count: number; matched: number; unassigned: number };
+  providersById: Map<string, Provider>;
+  wiseDirection: "in" | "out";
+  setWiseDirection: (direction: "in" | "out") => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  matchFilter: string;
+  setMatchFilter: (value: string) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: SortDirection;
+  setTransactionSortDirection: (value: SortDirection) => void;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onOpenInvoice: (transaction: Transaction) => void;
+}) {
+  const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Wise reconciliation</p>
+          <h2>Match incoming payments and outgoing spend</h2>
+        </div>
+        <div className="filters">
+          <div className="segmented-control" aria-label="Wise transaction direction">
+            <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
+              <ArrowUpRight size={15} />
+              In
+            </button>
+            <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
+              <ArrowDownRight size={15} />
+              Out
+            </button>
+          </div>
+          <label className="search-box">
+            <Search size={15} />
+            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
+          </label>
+          <label>
+            <Filter size={15} />
+            <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
+              <option value="needs-review">Needs review</option>
+              <option value="matched">Matched</option>
+              <option value="all">All rows</option>
+            </select>
+          </label>
+          <label>
+            <SlidersHorizontal size={15} />
+            <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
+              <option value="match">% match</option>
+              <option value="date">Date</option>
+              <option value="period">Period</option>
+              <option value="amount">Amount</option>
+              <option value="category">Category</option>
+              <option value="counterparty">Counterparty</option>
+            </select>
+          </label>
+          <label>
+            Order
+            <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </label>
+          <label>
+            Team
+            <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
+              <option value="all">All teams</option>
+              <option value="unassigned">Unassigned</option>
+              {dashboard.teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="secondary-button"
+            onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
+            disabled={isCategorizing || rows.length === 0}
+          >
+            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            Auto
+          </button>
+          <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+            {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+            CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+              disabled={isImportingWise}
+              onChange={(event) => {
+                void onImportWiseStatements(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="wise-summary-grid">
+        <SummaryTile label="Visible volume" value={maybeMoney(rows.length > 0, summary.total)} />
+        <SummaryTile label="Transactions" value={String(summary.count)} />
+        <SummaryTile label="Matched rows" value={String(summary.matched)} />
+        <SummaryTile label="No team" value={String(summary.unassigned)} />
+      </div>
+      {wiseStatus?.issue && (
+        <div className="integration-alert">
+          <CircleAlert size={16} />
+          <span>{wiseStatus.issue}</span>
+        </div>
+      )}
+      <TransactionTable
+        rows={rows}
+        teams={dashboard.teams}
+        providersById={providersById}
+        onMatch={onMatch}
+        onAssignTeam={onAssignTeam}
+        onUpdateCategory={onUpdateCategory}
+        onOpenInvoice={onOpenInvoice}
+      />
+    </section>
+  );
+}
+
+function AnalyticsView({
   dashboard,
   providersById,
   teamsById,
@@ -1556,12 +1803,8 @@ function CategorizationView({
   const revenueRows = rows.filter((transaction) => transaction.direction === "in");
   const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
   const revenueTeamOptions = [
-    ...revenueRows.reduce((map, transaction) => {
-      const key = transaction.teamId ?? "unassigned";
-      const label = transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? transaction.teamId : "Unassigned team";
-      map.set(key, label);
-      return map;
-    }, new Map<string, string>())
+    ...dashboard.teams.map((team) => [team.id, team.name] as [string, string]),
+    ...(revenueRows.some((transaction) => !transaction.teamId) ? [["unassigned", "Unassigned team"] as [string, string]] : [])
   ].sort(([, left], [, right]) => left.localeCompare(right));
   const revenuePartnerOptions = [
     ...revenueRows.reduce((map, transaction) => {
@@ -1718,13 +1961,55 @@ function CategorizationView({
     }))
     .sort((left, right) => right.transactions.length - left.transactions.length || left.name.localeCompare(right.name));
 
+  const teamRows = [
+    ...dashboard.teams.map((team) => {
+      const transactions = rows.filter((transaction) => transaction.teamId === team.id);
+      const partners = dashboard.revenuePartners.filter((partner) => partner.teamId === team.id);
+      return {
+        id: team.id,
+        name: team.name,
+        transactions,
+        partners,
+        enabledPartners: partners.filter((partner) => partner.enabled).length
+      };
+    }),
+    ...(rows.some((transaction) => !transaction.teamId) || dashboard.revenuePartners.some((partner) => !partner.teamId)
+      ? [
+          {
+            id: "unassigned",
+            name: "Unassigned",
+            transactions: rows.filter((transaction) => !transaction.teamId),
+            partners: dashboard.revenuePartners.filter((partner) => !partner.teamId),
+            enabledPartners: dashboard.revenuePartners.filter((partner) => !partner.teamId && partner.enabled).length
+          }
+        ]
+      : [])
+  ];
+
+  const sourceIds = new Set<DataSource>();
+  for (const transaction of rows) sourceIds.add(transaction.source);
+  for (const account of dashboard.accounts) sourceIds.add(account.source);
+  for (const invoice of dashboard.invoices) sourceIds.add(invoice.source);
+  for (const status of dashboard.integrationStatus) {
+    if (status.id !== "openrouter") sourceIds.add(status.id);
+  }
+  const sourceRows = [...sourceIds]
+    .map((source) => {
+      const transactions = rows.filter((transaction) => transaction.source === source);
+      const accounts = dashboard.accounts.filter((account) => account.source === source);
+      const invoices = dashboard.invoices.filter((invoice) => invoice.source === source);
+      const status = dashboard.integrationStatus.find((integration) => integration.id === source);
+      return { source, transactions, accounts, invoices, status };
+    })
+    .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
+
   return (
     <div className="categorization-layout">
       <section className="panel wide-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Categorization</p>
-            <h2>Money in, money out, providers, platforms, and review load</h2>
+            <p className="eyebrow">Analytics</p>
+            <h2>Money flow, teams, sources, companies, and review load</h2>
           </div>
           <button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || rows.length === 0}>
             {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
@@ -1734,7 +2019,8 @@ function CategorizationView({
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
           <SummaryTile label="Money out" value={groupedTransactionMoney(rows, "out")} />
-          <SummaryTile label="Categories" value={String(categoryRows.length)} />
+          <SummaryTile label="Teams" value={String(dashboard.teams.length)} />
+          <SummaryTile label="Sources" value={String(sourceRows.length)} />
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
       </section>
@@ -1747,6 +2033,92 @@ function CategorizationView({
         emptyLabel={revenuePieFilterActive ? "No revenue rows match these filters" : "No revenue transactions yet"}
         controls={revenuePieControls}
       />
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>By team</h2>
+          <span className="total-pill">{teamRows.length} teams</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table analytics-table">
+            <thead>
+              <tr>
+                <th>Team</th>
+                <th>Transactions</th>
+                <th>Revenue streams</th>
+                <th>Money in</th>
+                <th>Money out</th>
+                <th>Needs review</th>
+              </tr>
+            </thead>
+            <tbody>
+              {teamRows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <strong>{row.name}</strong>
+                  </td>
+                  <td>{row.transactions.length}</td>
+                  <td>{row.partners.length > 0 ? `${row.enabledPartners}/${row.partners.length} enabled` : "—"}</td>
+                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
+                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                  <td>{row.transactions.filter(transactionNeedsReview).length}</td>
+                </tr>
+              ))}
+              {teamRows.length === 0 && (
+                <tr>
+                  <td colSpan={6}>No teams yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>By source</h2>
+          <span className="total-pill">{sourceRows.length} sources</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table analytics-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Accounts</th>
+                <th>Transactions</th>
+                <th>Invoices</th>
+                <th>Money in</th>
+                <th>Money out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceRows.map((row) => (
+                <tr key={row.source}>
+                  <td>
+                    <span className={`source-pill ${row.source}`}>{sourceLabel(row.source)}</span>
+                  </td>
+                  <td>
+                    <span className={`status-pill ${row.status?.mode === "live" ? "good" : row.status?.mode === "partial" ? "warning" : ""}`}>
+                      {row.status?.mode ?? "saved"}
+                    </span>
+                  </td>
+                  <td>{row.accounts.length > 0 ? groupedAccountMoney(row.accounts) : "—"}</td>
+                  <td>{row.transactions.length}</td>
+                  <td>{row.invoices.length}</td>
+                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
+                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                </tr>
+              ))}
+              {sourceRows.length === 0 && (
+                <tr>
+                  <td colSpan={7}>No sources yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -2104,14 +2476,19 @@ function CategorySearchSelect({
       closeMenu();
     }
 
+    function closeOnOutsideScroll(event: Event) {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      closeMenu();
+    }
+
     document.addEventListener("pointerdown", closeOnPointerDown);
     window.addEventListener("resize", closeOnViewportChange);
-    window.addEventListener("scroll", closeOnViewportChange, true);
+    window.addEventListener("scroll", closeOnOutsideScroll, true);
 
     return () => {
       document.removeEventListener("pointerdown", closeOnPointerDown);
       window.removeEventListener("resize", closeOnViewportChange);
-      window.removeEventListener("scroll", closeOnViewportChange, true);
+      window.removeEventListener("scroll", closeOnOutsideScroll, true);
     };
   }, [isOpen]);
 
@@ -2798,6 +3175,65 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
   );
 }
 
+function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+  const amexAccounts = dashboard.accounts.filter((account) => account.source === "amex");
+  const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
+  const balance = amexAccounts.reduce((total, account) => total + account.balance, 0);
+
+  return (
+    <div className="split-view">
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Amex cards</h2>
+          <span className={`total-pill ${balance < 0 ? "warning" : ""}`}>{maybeMoney(amexAccounts.length > 0, balance)}</span>
+        </div>
+        <SimpleMoneyTable
+          rows={amexAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            amount: account.balance,
+            currency: account.currency,
+            source: sourceLabel(account.source)
+          }))}
+          emptyLabel="No live Amex cards"
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Amex readiness</h2>
+          <span className={`status-pill ${amexStatus?.mode === "live" ? "good" : "warning"}`}>{amexStatus?.mode ?? "partial"}</span>
+        </div>
+        <div className="bridge">
+          <div className="bridge-row">
+            <span>Money out</span>
+            <strong className="danger-text">{groupedTransactionMoney(rows, "out")}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Credits</span>
+            <strong className="good-text">{groupedTransactionMoney(rows, "in")}</strong>
+          </div>
+        </div>
+        {amexStatus && amexStatus.needs.length > 0 && (
+          <div className="need-list bank-need-list">
+            {amexStatus.needs.map((need) => (
+              <code key={need}>{need}</code>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Amex activity</h2>
+          <span className="total-pill">{rows.length} rows</span>
+        </div>
+        <BasicTransactionsTable rows={rows} />
+      </section>
+    </div>
+  );
+}
+
 function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
   return (
     <div className="table-wrap">
@@ -3385,8 +3821,8 @@ function SettingsView({
         <div className="docs-note">
           <strong>Integration shape</strong>
           <span>
-            Wise and Revolut pull balances plus transaction activity for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices.
-            Slash has its own card/cashback page. Marking paid here never marks paid in Merit.
+            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE and creates Merit invoices. Marking paid
+            here never marks paid in Merit.
           </span>
         </div>
       </section>

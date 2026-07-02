@@ -81,6 +81,14 @@ interface Env {
   SLASH_API_KEY?: string;
   SLASH_LEGAL_ENTITY_ID?: string;
   SLASH_BASE_URL?: string;
+  AMEX_TOKEN_URL?: string;
+  AMEX_API_BASE_URL?: string;
+  AMEX_CLIENT_ID?: string;
+  AMEX_CLIENT_SECRET?: string;
+  AMEX_REFRESH_TOKEN?: string;
+  AMEX_ACCOUNT_IDS?: string;
+  AMEX_ACCOUNT_PATH_TEMPLATE?: string;
+  AMEX_TRANSACTIONS_PATH_TEMPLATE?: string;
   MERIT_API_ID?: string;
   MERIT_API_BASE_URL?: string;
   MERIT_GET_INVOICES_PATH?: string;
@@ -605,6 +613,187 @@ async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[
   return { accounts, transactions };
 }
 
+type AmexAccountConfig = {
+  id: string;
+  name: string;
+  currency: string;
+};
+
+function parseAmexAccountConfigs(value?: string): AmexAccountConfig[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => {
+      const [id, name, currency = "USD"] = item.trim().split(":");
+      const accountId = id?.trim();
+      return accountId
+        ? {
+            id: accountId,
+            name: name?.trim() || `Amex ${accountId}`,
+            currency: currency.trim() || "USD"
+          }
+        : undefined;
+    })
+    .filter((item): item is AmexAccountConfig => Boolean(item));
+}
+
+async function fetchAmexAccessToken(env: Env): Promise<string | undefined> {
+  if (!env.AMEX_TOKEN_URL || !env.AMEX_CLIENT_ID || !env.AMEX_CLIENT_SECRET || !env.AMEX_REFRESH_TOKEN) return undefined;
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: env.AMEX_REFRESH_TOKEN,
+    client_id: env.AMEX_CLIENT_ID,
+    client_secret: env.AMEX_CLIENT_SECRET
+  });
+
+  const response = await fetchJson<{ access_token?: string }>(env.AMEX_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json"
+    },
+    body
+  });
+
+  if (!response.access_token) {
+    throw new Error("Amex token response did not include access_token");
+  }
+  return response.access_token;
+}
+
+function amexEndpoint(env: Env, template: string, accountId: string, query?: URLSearchParams): string {
+  if (!env.AMEX_API_BASE_URL) throw new Error("AMEX_API_BASE_URL is not configured");
+  const path = template.replaceAll("{accountId}", encodeURIComponent(accountId));
+  const separator = path.startsWith("/") ? "" : "/";
+  const suffix = query ? `?${query.toString()}` : "";
+  return `${env.AMEX_API_BASE_URL.replace(/\/+$/, "")}${separator}${path}${suffix}`;
+}
+
+function amexString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function amexMoneyValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (isRecord(value)) {
+    return amexMoneyValue(value.value ?? value.amount ?? value.amountValue);
+  }
+  return undefined;
+}
+
+function amexCurrency(value: unknown, fallback: string): string {
+  if (isRecord(value)) {
+    return amexString(value.currency, value.currencyCode, value.isoCurrencyCode) ?? fallback;
+  }
+  return fallback;
+}
+
+function amexRecords(payload: unknown, primaryKey: string): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter(isRecord);
+  if (!isRecord(payload)) return [];
+  const rows = payload[primaryKey] ?? payload.items ?? payload.data;
+  return Array.isArray(rows) ? rows.filter(isRecord) : [];
+}
+
+function amexStatus(value: unknown): Transaction["status"] {
+  const status = amexString(value)?.toLowerCase();
+  return status === "pending" || status === "authorized" || status === "authorization" ? "pending" : "posted";
+}
+
+function normalizeAmexAccount(payload: unknown, config: AmexAccountConfig): AccountBalance {
+  const account = isRecord(payload) ? payload : {};
+  const balanceValue = amexMoneyValue(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance) ?? 0;
+  const currency = amexCurrency(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance, config.currency);
+  const name = amexString(account.name, account.displayName, account.productName, account.lastFive, account.last4) ?? config.name;
+  return {
+    id: `amex-${config.id}`,
+    name,
+    source: "amex",
+    balance: balanceValue === 0 ? 0 : -Math.abs(balanceValue),
+    currency,
+    updatedAt: amexString(account.updatedAt, account.lastUpdatedAt, account.asOfDate) ?? new Date().toISOString(),
+    status: "live"
+  };
+}
+
+function normalizeAmexTransactions(payload: unknown, config: AmexAccountConfig): Transaction[] {
+  return amexRecords(payload, "transactions").map((item, index) => {
+    const rawAmount = amexMoneyValue(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount) ?? 0;
+    const status = amexStatus(item.status ?? item.transactionStatus);
+    const category = amexString(item.category, item.categoryCode, item.industry, item.merchantCategory) ?? "Amex";
+    const type = amexString(item.type, item.transactionType, item.kind)?.toLowerCase() ?? "";
+    const merchant = isRecord(item.merchant) ? item.merchant : {};
+    const counterparty =
+      amexString(merchant.name, item.merchantName, item.description, item.memo, item.reference) ?? "Amex transaction";
+    const transactionId = amexString(item.id, item.transactionId, item.reference, item.authorizationCode) ?? `${config.id}-${index}`;
+    const cardHolderName = amexString(item.cardHolderName, item.cardMemberName, item.employeeName);
+    const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
+    return {
+      id: `amex-${config.id}-${transactionId}`,
+      source: "amex",
+      accountName: config.name,
+      date: (amexString(item.postedDate, item.transactionDate, item.date, item.authorizationDate) ?? new Date().toISOString()).slice(0, 10),
+      description: amexString(item.description, item.memo, item.reference, counterparty) ?? counterparty,
+      rawName: counterparty,
+      counterparty,
+      amount: Math.abs(rawAmount),
+      currency: amexCurrency(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount, config.currency),
+      direction: isCredit ? "in" : "out",
+      status,
+      category,
+      ...(cardHolderName ? { cardHolderName } : {})
+    };
+  });
+}
+
+async function fetchAmexActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  const accountConfigs = parseAmexAccountConfigs(env.AMEX_ACCOUNT_IDS);
+  const accessToken = await fetchAmexAccessToken(env);
+  if (
+    !accessToken ||
+    !env.AMEX_API_BASE_URL ||
+    !env.AMEX_ACCOUNT_PATH_TEMPLATE ||
+    !env.AMEX_TRANSACTIONS_PATH_TEMPLATE ||
+    accountConfigs.length === 0
+  ) {
+    return { accounts: [], transactions: [] };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json"
+  };
+  const intervalEnd = new Date().toISOString().slice(0, 10);
+  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString().slice(0, 10);
+  const accountResults = await Promise.all(
+    accountConfigs.map(async (config) => {
+      const transactionParams = new URLSearchParams({ from: intervalStart, to: intervalEnd });
+      const [account, transactions] = await Promise.all([
+        fetchJson<unknown>(amexEndpoint(env, env.AMEX_ACCOUNT_PATH_TEMPLATE!, config.id), { headers }),
+        fetchJson<unknown>(amexEndpoint(env, env.AMEX_TRANSACTIONS_PATH_TEMPLATE!, config.id, transactionParams), { headers })
+      ]);
+      return {
+        account: normalizeAmexAccount(account, config),
+        transactions: normalizeAmexTransactions(transactions, config)
+      };
+    })
+  );
+
+  return {
+    accounts: accountResults.map((result) => result.account),
+    transactions: accountResults.flatMap((result) => result.transactions)
+  };
+}
+
 function mergeLiveAccounts(...accountGroups: AccountBalance[][]): AccountBalance[] {
   return accountGroups.flat();
 }
@@ -633,12 +822,15 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
     if (persisted) return persisted;
   }
 
-  const [wise, revolut, slash] = await Promise.all([
+  const [wise, revolut, slash, amex] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
+    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
   ]);
-  return [...wise.transactions, ...revolut.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
+  return [...wise.transactions, ...revolut.transactions, ...slash.transactions, ...amex.transactions].find(
+    (transaction) => transaction.id === transactionId
+  );
 }
 
 async function fetchTransactionForMatch(env: Env, transactionId: string, state: PersistedState): Promise<Transaction | undefined> {
@@ -937,6 +1129,16 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const amexNeeds = [
+    "AMEX_TOKEN_URL",
+    "AMEX_API_BASE_URL",
+    "AMEX_CLIENT_ID",
+    "AMEX_CLIENT_SECRET",
+    "AMEX_REFRESH_TOKEN",
+    "AMEX_ACCOUNT_IDS",
+    "AMEX_ACCOUNT_PATH_TEMPLATE",
+    "AMEX_TRANSACTIONS_PATH_TEMPLATE"
+  ].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
   const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
@@ -978,6 +1180,17 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
           ? "Slash API key is present."
           : "Slash rows stay empty until API access is configured.",
       needs: slashNeeds
+    },
+    {
+      id: "amex" as DataSource,
+      label: "Amex",
+      configured: amexNeeds.length === 0,
+      mode: amexNeeds.length === 0 ? "live" : "partial",
+      message:
+        amexNeeds.length === 0
+          ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
+          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured.",
+      needs: amexNeeds
     },
     {
       id: "merit" as DataSource,
@@ -1086,15 +1299,21 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const [wise, revolut, slash, liveMeritInvoices] = await Promise.all([
+  const [wise, revolut, slash, amex, liveMeritInvoices] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchMeritInvoices(env).catch(() => [])
   ]);
-  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts);
+  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
-  const rawTransactions = mergeById(state.wiseStatementTransactions, [...wise.transactions, ...revolut.transactions, ...slash.transactions]);
+  const rawTransactions = mergeById(state.wiseStatementTransactions, [
+    ...wise.transactions,
+    ...revolut.transactions,
+    ...slash.transactions,
+    ...amex.transactions
+  ]);
   const transactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {

@@ -48,6 +48,7 @@ const reviewOnlyTransactionCategories = new Set([
   "wise",
   "revolut",
   "slash",
+  "amex",
   "debit",
   "credit",
   "card",

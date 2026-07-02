@@ -711,6 +711,11 @@ textarea:focus-visible {
   background: var(--violet-soft);
 }
 
+.source-pill.amex {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
 .status-pill {
   min-width: 60px;
   min-height: 25px;
@@ -1697,6 +1702,21 @@ textarea:focus-visible {
   align-items: start;
 }
 
+.banks-layout {
+  display: grid;
+  gap: 14px;
+  align-items: start;
+}
+
+.bank-tabs {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.bank-source-summary {
+  border-bottom: 0;
+}
+
 .categorization-layout {
   display: grid;
   grid-template-columns: minmax(360px, 1fr) minmax(340px, 0.75fr);
@@ -1710,6 +1730,7 @@ textarea:focus-visible {
 
 .categorization-summary {
   border-bottom: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .category-chart-body {
@@ -1986,6 +2007,11 @@ textarea:focus-visible {
   color: var(--red);
   background: var(--red-soft);
   border-color: var(--red-border);
+}
+
+.bank-need-list {
+  margin: 0;
+  padding: 0 14px 14px;
 }
 
 .empty-state {

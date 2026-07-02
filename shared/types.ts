@@ -1,4 +1,4 @@
-export type DataSource = "wise" | "revolut" | "slash" | "merit" | "manual" | "mock" | "tune";
+export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "mock" | "tune";
 
 export type Direction = "in" | "out";
 

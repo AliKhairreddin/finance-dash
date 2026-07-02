@@ -42,6 +42,7 @@ import { calculateInvoiceDueDate, calculateRevenueMetrics, mergeRevenuePartnerDi
 import { calculateMetrics } from "./calculations";
 import {
   createMeritInvoice,
+  fetchAmexActivity,
   fetchMeritInvoices,
   fetchRevolutActivity,
   fetchSlashActivity,
@@ -833,10 +834,11 @@ export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, merit] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, merit] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(),
+    fetchAmexActivity(),
     fetchMeritInvoices()
   ]);
   const liveTransactions: Transaction[] = [];
@@ -868,6 +870,14 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     }
     if (slash.value.transactions.length > 0) liveSources.add("slash");
     liveTransactions.push(...slash.value.transactions);
+  }
+  if (amex.status === "fulfilled") {
+    if (amex.value.accounts.length > 0) {
+      accounts = [...accounts.filter((account) => account.source !== "amex"), ...amex.value.accounts];
+      liveSources.add("amex");
+    }
+    if (amex.value.transactions.length > 0) liveSources.add("amex");
+    liveTransactions.push(...amex.value.transactions);
   }
   if (merit.status === "fulfilled" && merit.value.length > 0) {
     invoices = realInvoices(mergeById(merit.value, invoices));

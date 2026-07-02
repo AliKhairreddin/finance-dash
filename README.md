@@ -51,9 +51,9 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 
 - Shows cash in accounts, receivables, open balances, payables, profit, and total assets when live or saved data exists.
 - Keeps the overview focused on the six summary cards.
-- Includes separate Wise, Revolut, and Slash operating views.
+- Includes a Banks page with Wise, Revolut, Slash, and Amex tabs.
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
-- Imports manually downloaded Wise statement CSVs in the Wise tab and stores rows for reconciliation.
+- Imports manually downloaded Wise statement CSVs in the Banks > Wise tab and stores rows for reconciliation.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
 - Treats each TUNE/HasOffers revenue stream as either partner-level or earning-team plus paying-partner, so a single Kissterra payment can stay as Kissterra while Cognitive Pixel and Wagner can still be split when the allocation is known.
 - Lets saved TUNE/HasOffers revenue streams store the affiliate ID used by the network.
@@ -61,8 +61,9 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 - Sends TUNE `hour_offset` from the selected timezone against the partner network timezone.
 - Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
 - Supports optional Wise transaction team assignment with saved teams, plus team filters and visible-team totals.
-- Keeps money-in categories separate from money-out categories. Spend charts use cost buckets, while revenue charts split incoming money by partner, or by earning team and partner when that attribution exists.
-- Keeps Slash balances, card activity, and cashback tracking on its own page.
+- Keeps money-in categories separate from money-out categories. Analytics uses live category, team, source, and company rollups from the dashboard snapshot.
+- Keeps Slash balances, card activity, and cashback tracking inside Banks.
+- Prepares Amex card accounts and activity for API access once Amex OAuth credentials and approved account/transaction paths are available.
 - Suggests company matches from saved aliases.
 - Lets you manually confirm a transaction company and remembers that bank/card name for future auto-matching.
 - Lets you categorize transactions from the Wise table and remembers category aliases for future auto-categorization.
@@ -80,6 +81,7 @@ The server-side integration code is in `server/integrations.ts`.
 - Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement CSVs when live balance statements are blocked by Wise.
 - Revolut: prepared for Business API accounts and transaction activity using `REVOLUT_REFRESH_TOKEN`, `REVOLUT_CLIENT_ASSERTION_JWT`, and `REVOLUT_ENVIRONMENT`.
 - Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
+- Amex: prepared for Account and Transaction API style card account and transaction activity using `AMEX_TOKEN_URL`, `AMEX_API_BASE_URL`, OAuth credentials, configured account IDs, and approved path templates.
 - Partner revenue: prepared for partner-level and team-attributed TUNE Affiliate API streams. The default enabled stream is partner-level Kissterra using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`. Additional disabled stream templates exist for Cognitive Pixel / Kissterra, Wagner / Kissterra, partner-level Lead Economy, Cognitive Pixel / Lead Economy, and Wagner / Lead Economy.
 - Merit: prepared to list sales invoices and create sales invoices using `MERIT_API_ID`, `MERIT_API_KEY`, and default tax/item settings. The dashboard intentionally does not send Merit payment updates.
 
@@ -92,7 +94,7 @@ Wise confirmed that live balance statement retrieval is not supported for the cu
 - Preferred cadence: upload one monthly statement CSV per currency balance after month end.
 - Faster cadence: upload custom weekly or daily statement CSVs when reconciliation needs to be fresher than month end.
 - Overlapping periods are safe because rows are deduplicated by Wise transaction id.
-- Upload the CSVs from the Wise page in the dashboard with the **CSV** button.
+- Upload the CSVs from Banks > Wise in the dashboard with the **CSV** button.
 
 ## Credentials Needed
 
@@ -109,6 +111,16 @@ REVOLUT_CLIENT_ASSERTION_JWT=
 SLASH_API_KEY=
 SLASH_LEGAL_ENTITY_ID=
 SLASH_BASE_URL=https://api.slash.com
+
+AMEX_TOKEN_URL=
+AMEX_API_BASE_URL=
+AMEX_CLIENT_ID=
+AMEX_CLIENT_SECRET=
+AMEX_REFRESH_TOKEN=
+# Comma-separated accountId:name:currency entries, for example: acct_123:Amex Platinum:USD
+AMEX_ACCOUNT_IDS=
+AMEX_ACCOUNT_PATH_TEMPLATE=
+AMEX_TRANSACTIONS_PATH_TEMPLATE=
 
 MERIT_API_BASE_URL=https://aktiva.merit.ee/api
 MERIT_GET_INVOICES_PATH=/v1/getinvoices
@@ -152,6 +164,8 @@ LEAD_ECONOMY_WAGNER_TUNE_API_BASE_URL=
 - Revolut Business API accounts: https://developer.revolut.com/docs/business/get-accounts
 - Revolut Business API transactions: https://developer.revolut.com/docs/business/get-transactions
 - Slash API docs: https://docs.slash.com/
+- Amex Account and Transaction API: https://developer.americanexpress.com/products/account-and-transaction-api-public/overview
+- Amex @ Work B2B APIs: https://developer.americanexpress.com/products/at-work-apis-public/overview
 - Merit API authentication: https://api.merit.ee/connecting-robots/reference-manual/authentication/
 - Merit sales invoice creation: https://api.merit.ee/connecting-robots/reference-manual/sales-invoices/create-sales-invoice/
 - Merit sales invoice list: https://apidoc.passelimerit.fi/parts/sales-invoices/get-list-of-invoices/

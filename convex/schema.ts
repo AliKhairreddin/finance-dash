@@ -5,6 +5,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
   v.literal("mock"),

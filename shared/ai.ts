@@ -191,7 +191,7 @@ export async function runOpenRouterTransactionCategorization(
           "Never use DEBIT, CREDIT, card, transfer, source names, or money-in/money-out direction as transaction categories.",
           "Use money_in_categories only for direction=in and money_out_categories only for direction=out.",
           "Return only JSON with this shape: {\"matches\":[{\"transactionId\":\"...\",\"providerId\":\"... or null\",\"category\":\"...\",\"confidence\":0.0,\"reason\":\"short reason\"}]}",
-          "Taxonomy: Cognitive Pixel is the internal media buying team. Wagner is an affiliate team; WGNR means Wagner and should not be treated as a separate team. Kissterra and Lead Economy are revenue partners. P2W, Rezono, and Position2 are ad account providers. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are ad platforms. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are subscriptions.",
+          "Taxonomy: Cognitive Pixel is the internal media buying team. Wagner is an affiliate team; WGNR means Wagner and should not be treated as a separate team. Kissterra and Lead Economy are revenue partners. P2W, Rezono, and Position2 are ad account providers. Meta/Facebook, TikTok, Bigo, Snapchat, and Google/YouTube are ad platforms. Wise, Revolut, Slash, and Amex are bank/card sources, not categories. Cursor, Namecheap, Cloudflare, Vercel, OpenAI, GitHub, and similar SaaS/tools are subscriptions.",
           "If the row is not clearly matchable, omit it from matches."
         ].join(" "),
         prompt: JSON.stringify(
