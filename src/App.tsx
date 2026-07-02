@@ -1783,12 +1783,13 @@ function TransactionTable({
       setDetailPopover(null);
       return;
     }
+    const position = detailPopoverPosition(event.currentTarget.getBoundingClientRect());
 
     setDetailPopover((current) => current?.id === id ? null : {
       id,
       title,
       description,
-      ...detailPopoverPosition(event.currentTarget.getBoundingClientRect())
+      ...position
     });
   }
 
