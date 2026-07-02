@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   FilePlus2,
   Filter,
+  Info,
   KeyRound,
   Link2,
   Loader2,
@@ -30,7 +31,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from "react";
 import type {
   AiPromptPayload,
   AiPromptResult,
@@ -60,11 +61,13 @@ type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "s
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
-type TransactionDescriptionToast = {
+type TransactionDetailPopover = {
+  id: string;
   title: string;
   description: string;
   left: number;
   top: number;
+  placement: "above" | "below";
 };
 const themeStorageKey = "finance-dash-theme";
 
@@ -318,21 +321,19 @@ function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, dire
   });
 }
 
-function detailToastPosition(event: React.MouseEvent<HTMLElement>): { left: number; top: number } {
-  const viewportPadding = 16;
-  const offset = 18;
-  const toastWidth = Math.min(420, window.innerWidth - viewportPadding * 2);
-  const toastMaxHeight = Math.min(260, window.innerHeight - viewportPadding * 2);
-  const left =
-    event.clientX + offset + toastWidth <= window.innerWidth - viewportPadding
-      ? event.clientX + offset
-      : Math.max(viewportPadding, event.clientX - toastWidth - offset);
-  const top =
-    event.clientY + offset + toastMaxHeight <= window.innerHeight - viewportPadding
-      ? event.clientY + offset
-      : Math.max(viewportPadding, event.clientY - toastMaxHeight - offset);
+function detailPopoverPosition(anchor: DOMRect): Pick<TransactionDetailPopover, "left" | "top" | "placement"> {
+  const viewportPadding = 12;
+  const gap = 8;
+  const popoverWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+  const popoverMinHeight = 150;
+  const placement = anchor.bottom + gap + popoverMinHeight <= window.innerHeight - viewportPadding ? "below" : "above";
+  const left = Math.min(
+    Math.max(viewportPadding, anchor.left - 6),
+    Math.max(viewportPadding, window.innerWidth - viewportPadding - popoverWidth)
+  );
+  const top = placement === "below" ? anchor.bottom + gap : anchor.top - gap;
 
-  return { left, top };
+  return { left, top, placement };
 }
 
 function App() {
@@ -1744,36 +1745,84 @@ function TransactionTable({
   onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
-  const [descriptionToast, setDescriptionToast] = useState<TransactionDescriptionToast | null>(null);
+  const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
 
-  function showDetailToast(title: string, detail: string, event: React.MouseEvent<HTMLElement>) {
+  useEffect(() => {
+    if (!detailPopover) return;
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("[data-transaction-detail-popover], [data-transaction-detail-trigger]")) return;
+      setDetailPopover(null);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setDetailPopover(null);
+    }
+
+    function closeOnViewportChange() {
+      setDetailPopover(null);
+    }
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [detailPopover]);
+
+  function toggleDetailPopover(id: string, title: string, detail: string, event: ReactMouseEvent<HTMLButtonElement>) {
     const description = detail.trim();
     if (!description) {
-      setDescriptionToast(null);
+      setDetailPopover(null);
       return;
     }
 
-    setDescriptionToast({
+    setDetailPopover((current) => current?.id === id ? null : {
+      id,
       title,
       description,
-      ...detailToastPosition(event)
+      ...detailPopoverPosition(event.currentTarget.getBoundingClientRect())
     });
   }
 
-  function showDescriptionToast(transaction: Transaction, event: React.MouseEvent<HTMLElement>) {
-    showDetailToast(transaction.counterparty, transaction.description, event);
+  function detailInfoButton(id: string, title: string, detail: string, label: string) {
+    const isOpen = detailPopover?.id === id;
+
+    return (
+      <button
+        type="button"
+        className="transaction-detail-trigger"
+        title={label}
+        aria-label={label}
+        aria-expanded={isOpen}
+        aria-describedby={isOpen ? "transaction-detail-popover" : undefined}
+        data-transaction-detail-trigger
+        onClick={(event) => toggleDetailPopover(id, title, detail, event)}
+      >
+        <Info size={12} strokeWidth={2.5} />
+      </button>
+    );
   }
 
   return (
     <div className="table-wrap">
-      {descriptionToast && (
+      {detailPopover && (
         <div
-          className="transaction-description-toast"
-          role="status"
-          style={{ left: descriptionToast.left, top: descriptionToast.top }}
+          id="transaction-detail-popover"
+          className={`transaction-detail-popover ${detailPopover.placement}`}
+          role="tooltip"
+          data-transaction-detail-popover
+          style={{ left: detailPopover.left, top: detailPopover.top }}
         >
-          <strong>{descriptionToast.title}</strong>
-          <span>{descriptionToast.description}</span>
+          <strong>{detailPopover.title}</strong>
+          <span>{detailPopover.description}</span>
         </div>
       )}
       <table className="data-table activity-table transaction-table">
@@ -1808,6 +1857,8 @@ function TransactionTable({
               const confidence = transaction.confidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
               const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
+              const counterpartyDetailId = `${transaction.id}-counterparty-description`;
+              const categoryDetailId = `${transaction.id}-category-description`;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
               const companyActionTitle = provider
@@ -1818,14 +1869,17 @@ function TransactionTable({
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
-                  <td
-                    className="counterparty-cell"
-                    onMouseEnter={(event) => showDescriptionToast(transaction, event)}
-                    onMouseMove={(event) => showDescriptionToast(transaction, event)}
-                    onMouseLeave={() => setDescriptionToast(null)}
-                  >
+                  <td className="counterparty-cell">
                     <strong>{transaction.counterparty}</strong>
-                    <small>{transaction.description}</small>
+                    <small className="transaction-detail-line">
+                      <span className="transaction-detail-text">{transaction.description}</span>
+                      {detailInfoButton(
+                        counterpartyDetailId,
+                        transaction.counterparty,
+                        transaction.description,
+                        `Show counterparty description for ${transaction.counterparty}`
+                      )}
+                    </small>
                   </td>
                   <td>
                     <span className={`direction-label ${transaction.direction}`}>
@@ -1869,13 +1923,14 @@ function TransactionTable({
                           <Save size={15} />
                         </button>
                       </div>
-                      <small
-                        className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}
-                        onMouseEnter={(event) => showDetailToast(displayCategory, categoryDetail, event)}
-                        onMouseMove={(event) => showDetailToast(displayCategory, categoryDetail, event)}
-                        onMouseLeave={() => setDescriptionToast(null)}
-                      >
-                        {categoryDetail}
+                      <small className={`transaction-detail-line ${confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}`}>
+                        <span className="transaction-detail-text">{categoryDetail}</span>
+                        {detailInfoButton(
+                          categoryDetailId,
+                          displayCategory,
+                          categoryDetail,
+                          `Show category description for ${displayCategory}`
+                        )}
                       </small>
                     </div>
                   </td>
