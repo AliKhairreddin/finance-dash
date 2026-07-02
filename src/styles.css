@@ -1072,6 +1072,7 @@ textarea:focus-visible {
 .team-select select,
 .filters select,
 .filters input,
+.category-chart-controls select,
 .revenue-controls select,
 .revenue-controls input,
 .settings-form input,
@@ -1098,6 +1099,7 @@ textarea:focus-visible {
 .team-select select:hover,
 .filters select:hover,
 .filters input:hover,
+.category-chart-controls select:hover,
 .revenue-controls select:hover,
 .revenue-controls input:hover,
 .settings-form input:hover,
@@ -1513,6 +1515,40 @@ textarea:focus-visible {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.category-chart-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--control-bg);
+}
+
+.category-chart-controls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  color: var(--label-text);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.category-chart-controls label svg {
+  color: var(--muted);
+}
+
+.category-chart-controls select {
+  grid-column: 1 / -1;
+}
+
+.category-chart-controls .secondary-button {
+  min-height: 36px;
+  align-self: end;
 }
 
 .category-pie-group {
@@ -2053,6 +2089,10 @@ textarea:focus-visible {
 
   .category-pie-visual {
     width: min(220px, 74vw);
+  }
+
+  .category-chart-controls {
+    grid-template-columns: 1fr;
   }
 }
 

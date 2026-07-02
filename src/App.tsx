@@ -31,7 +31,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { type FormEvent, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   AiPromptPayload,
   AiPromptResult,
@@ -67,6 +67,7 @@ type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "s
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
+type RevenuePieBreakdown = "team-partner" | "team" | "partner" | "category";
 type TransactionDetailPopover = {
   id: string;
   title: string;
@@ -236,7 +237,21 @@ const categoryChartPalette = [
   "#c2410c",
   "#0f766e",
   "#7c3aed",
-  "#64748b"
+  "#64748b",
+  "#be185d",
+  "#2f855a",
+  "#0369a1",
+  "#a16207",
+  "#4338ca",
+  "#15803d",
+  "#a21caf",
+  "#0e7490",
+  "#dc2626",
+  "#4d7c0f",
+  "#2563eb",
+  "#b45309",
+  "#6d28d9",
+  "#047857"
 ];
 
 type CategoryPieSegment = {
@@ -252,12 +267,41 @@ type CategoryPieGroup = {
   segments: CategoryPieSegment[];
 };
 
-function categoryChartColor(category: string): string {
+function categoryChartHash(category: string): number {
   let hash = 0;
   for (let index = 0; index < category.length; index += 1) {
-    hash = (hash * 31 + category.charCodeAt(index)) % categoryChartPalette.length;
+    hash = (hash * 31 + category.charCodeAt(index)) >>> 0;
   }
-  return categoryChartPalette[Math.abs(hash) % categoryChartPalette.length];
+  return hash;
+}
+
+function categoryChartColor(category: string, usedColors: Set<string>, index: number): string {
+  const hash = categoryChartHash(category);
+
+  for (let offset = 0; offset < categoryChartPalette.length; offset += 1) {
+    const color = categoryChartPalette[(hash + offset) % categoryChartPalette.length];
+    if (!usedColors.has(color)) return color;
+  }
+
+  let attempt = 0;
+  while (true) {
+    const hue = Math.round((hash + (index + attempt) * 137.508) % 360);
+    const saturation = 58 + ((hash + attempt) % 16);
+    const lightness = 36 + ((index + attempt) % 12);
+    const color = `hsl(${hue} ${saturation}% ${lightness}%)`;
+    if (!usedColors.has(color)) return color;
+    attempt += 1;
+  }
+}
+
+function revenuePartnerAttributionLabel(transaction: Transaction, providersById: Map<string, Provider>): string {
+  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+  return provider?.name ?? "Unmatched revenue";
+}
+
+function revenueTeamAttributionLabel(transaction: Transaction, teamsById: Map<string, Team>): string {
+  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
+  return team?.name ?? "Unassigned team";
 }
 
 function revenueAttributionLabel(
@@ -276,12 +320,27 @@ function revenueAttributionLabel(
   return category === "Uncategorized" ? "Unmatched revenue" : category;
 }
 
+function revenuePieLabelForBreakdown(
+  transaction: Transaction,
+  breakdown: RevenuePieBreakdown,
+  providersById: Map<string, Provider>,
+  teamsById: Map<string, Team>
+): string {
+  if (breakdown === "team") return revenueTeamAttributionLabel(transaction, teamsById);
+  if (breakdown === "partner") return revenuePartnerAttributionLabel(transaction, providersById);
+  if (breakdown === "category") return effectiveCategory(transaction);
+  return revenueAttributionLabel(transaction, providersById, teamsById);
+}
+
 function categoryPieGroups(
   rows: Transaction[],
   direction: Transaction["direction"],
   categoryForTransaction: (transaction: Transaction) => string = effectiveCategory
 ): CategoryPieGroup[] {
   const totals = new Map<string, Map<string, { amount: number; count: number }>>();
+  const assignedColors = new Map<string, string>();
+  const usedColors = new Set<string>();
+  let colorIndex = 0;
 
   for (const transaction of rows) {
     if (transaction.direction !== direction) continue;
@@ -300,12 +359,21 @@ function categoryPieGroups(
       const sortedTotals = [...categoryTotals.entries()].sort(
         ([leftCategory, left], [rightCategory, right]) => right.amount - left.amount || leftCategory.localeCompare(rightCategory)
       );
-      const segments = sortedTotals.map(([category, value]) => ({
-        category,
-        amount: value.amount,
-        count: value.count,
-        color: categoryChartColor(category)
-      }));
+      const segments = sortedTotals.map(([category, value]) => {
+        const assignedColor = assignedColors.get(category);
+        const color = assignedColor ?? categoryChartColor(category, usedColors, colorIndex);
+        if (!assignedColor) {
+          assignedColors.set(category, color);
+          usedColors.add(color);
+          colorIndex += 1;
+        }
+        return {
+          category,
+          amount: value.amount,
+          count: value.count,
+          color
+        };
+      });
       return {
         currency,
         total: segments.reduce((sum, segment) => sum + segment.amount, 0),
@@ -1410,6 +1478,46 @@ function CategorizationView({
 }) {
   const rows = dashboard.transactions;
   const needsReview = rows.filter(transactionNeedsReview);
+  const [revenuePieBreakdown, setRevenuePieBreakdown] = useState<RevenuePieBreakdown>("team-partner");
+  const [revenuePieCurrency, setRevenuePieCurrency] = useState("all");
+  const [revenuePieTeamId, setRevenuePieTeamId] = useState("all");
+  const [revenuePiePartnerId, setRevenuePiePartnerId] = useState("all");
+  const [revenuePieCategory, setRevenuePieCategory] = useState("all");
+  const revenueRows = rows.filter((transaction) => transaction.direction === "in");
+  const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
+  const revenueTeamOptions = [
+    ...revenueRows.reduce((map, transaction) => {
+      const key = transaction.teamId ?? "unassigned";
+      const label = transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? transaction.teamId : "Unassigned team";
+      map.set(key, label);
+      return map;
+    }, new Map<string, string>())
+  ].sort(([, left], [, right]) => left.localeCompare(right));
+  const revenuePartnerOptions = [
+    ...revenueRows.reduce((map, transaction) => {
+      const key = transaction.matchedProviderId ?? "unmatched";
+      const label = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name ?? transaction.matchedProviderId : "Unmatched revenue";
+      map.set(key, label);
+      return map;
+    }, new Map<string, string>())
+  ].sort(([, left], [, right]) => left.localeCompare(right));
+  const revenueCategoryOptions = [...new Set(revenueRows.map(effectiveCategory))].sort((left, right) => left.localeCompare(right));
+  const filteredRevenueRows = revenueRows.filter((transaction) => {
+    const teamKey = transaction.teamId ?? "unassigned";
+    const partnerKey = transaction.matchedProviderId ?? "unmatched";
+    return (
+      (revenuePieCurrency === "all" || transaction.currency === revenuePieCurrency) &&
+      (revenuePieTeamId === "all" || teamKey === revenuePieTeamId) &&
+      (revenuePiePartnerId === "all" || partnerKey === revenuePiePartnerId) &&
+      (revenuePieCategory === "all" || effectiveCategory(transaction) === revenuePieCategory)
+    );
+  });
+  const revenuePieFilterActive =
+    revenuePieBreakdown !== "team-partner" ||
+    revenuePieCurrency !== "all" ||
+    revenuePieTeamId !== "all" ||
+    revenuePiePartnerId !== "all" ||
+    revenuePieCategory !== "all";
 
   const categoryRows = [...rows.reduce((map, transaction) => {
     const category = effectiveCategory(transaction);
@@ -1431,8 +1539,85 @@ function CategorizationView({
     .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
 
   const spendPieGroups = categoryPieGroups(rows, "out");
-  const revenuePieGroups = categoryPieGroups(rows, "in", (transaction) =>
-    revenueAttributionLabel(transaction, providersById, teamsById)
+  const revenuePieGroups = categoryPieGroups(filteredRevenueRows, "in", (transaction) =>
+    revenuePieLabelForBreakdown(transaction, revenuePieBreakdown, providersById, teamsById)
+  );
+  const revenuePieControls = (
+    <div className="category-chart-controls" aria-label="Revenue pie filters">
+      <label>
+        <SlidersHorizontal size={15} />
+        <span>Show</span>
+        <select value={revenuePieBreakdown} onChange={(event) => setRevenuePieBreakdown(event.target.value as RevenuePieBreakdown)}>
+          <option value="team-partner">Team and partner</option>
+          <option value="team">Team only</option>
+          <option value="partner">Partner only</option>
+          <option value="category">Category only</option>
+        </select>
+      </label>
+      <label>
+        <CircleDollarSign size={15} />
+        <span>Currency</span>
+        <select value={revenuePieCurrency} onChange={(event) => setRevenuePieCurrency(event.target.value)}>
+          <option value="all">All currencies</option>
+          {revenueCurrencies.map((currency) => (
+            <option key={currency} value={currency}>
+              {currency}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <Building2 size={15} />
+        <span>Team</span>
+        <select value={revenuePieTeamId} onChange={(event) => setRevenuePieTeamId(event.target.value)}>
+          <option value="all">All teams</option>
+          {revenueTeamOptions.map(([teamId, label]) => (
+            <option key={teamId} value={teamId}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <BadgeDollarSign size={15} />
+        <span>Partner</span>
+        <select value={revenuePiePartnerId} onChange={(event) => setRevenuePiePartnerId(event.target.value)}>
+          <option value="all">All partners</option>
+          {revenuePartnerOptions.map(([partnerId, label]) => (
+            <option key={partnerId} value={partnerId}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <Tags size={15} />
+        <span>Category</span>
+        <select value={revenuePieCategory} onChange={(event) => setRevenuePieCategory(event.target.value)}>
+          <option value="all">All categories</option>
+          {revenueCategoryOptions.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => {
+          setRevenuePieBreakdown("team-partner");
+          setRevenuePieCurrency("all");
+          setRevenuePieTeamId("all");
+          setRevenuePiePartnerId("all");
+          setRevenuePieCategory("all");
+        }}
+        disabled={!revenuePieFilterActive}
+      >
+        <RefreshCw size={15} />
+        Reset
+      </button>
+    </div>
   );
 
   const relationshipRows = [...rows.reduce((map, transaction) => {
@@ -1485,7 +1670,13 @@ function CategorizationView({
       </section>
 
       <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} emptyLabel="No spend transactions yet" />
-      <CategoryPiePanel title="Revenue by team and partner" tone="good" groups={revenuePieGroups} emptyLabel="No revenue transactions yet" />
+      <CategoryPiePanel
+        title="Revenue by team and partner"
+        tone="good"
+        groups={revenuePieGroups}
+        emptyLabel={revenuePieFilterActive ? "No revenue rows match these filters" : "No revenue transactions yet"}
+        controls={revenuePieControls}
+      />
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -1619,12 +1810,14 @@ function CategoryPiePanel({
   title,
   tone,
   groups,
-  emptyLabel
+  emptyLabel,
+  controls
 }: {
   title: string;
   tone: "good" | "danger";
   groups: CategoryPieGroup[];
   emptyLabel: string;
+  controls?: ReactNode;
 }) {
   const totalLabel = groups.length > 0 ? groups.map((group) => money(group.total, group.currency)).join(" · ") : "—";
 
@@ -1634,6 +1827,7 @@ function CategoryPiePanel({
         <h2>{title}</h2>
         <span className={`total-pill ${tone}`}>{totalLabel}</span>
       </div>
+      {controls}
       <div className="category-chart-body">
         {groups.length > 0 ? (
           groups.map((group) => <CategoryPieGroupView group={group} key={group.currency} />)
