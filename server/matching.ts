@@ -3,8 +3,11 @@ import {
   canonicalCreatedAt,
   canonicalTeamId,
   canonicalTeamName,
+  aminSanjinTeamId,
+  benTeamId,
   cognitiveTeamId,
-  distributionTeamId,
+  ishanTeamId,
+  aminTeamId,
   kissterraProviderId,
   leadEconomyProviderId,
   wagnerTeamId,
@@ -151,8 +154,23 @@ export const canonicalTeams: Team[] = [
     createdAt: canonicalCreatedAt
   },
   {
-    id: distributionTeamId,
-    name: "Distribution",
+    id: aminSanjinTeamId,
+    name: "Amin Sanjin",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: benTeamId,
+    name: "Ben",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: ishanTeamId,
+    name: "Ishan",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: aminTeamId,
+    name: "Amin",
     createdAt: canonicalCreatedAt
   },
   {
@@ -424,6 +442,7 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
       id: canonicalTeamId(team.id),
       name: canonicalTeamName(team.name)
     };
+    if (normalizedTeam.id === "team-distribution" || normalizeName(normalizedTeam.name) === "distribution") continue;
     if (!byId.has(normalizedTeam.id)) {
       byId.set(normalizedTeam.id, normalizedTeam);
     }

@@ -14,6 +14,7 @@ export const moneyOutCategoryOptions = [
   "Ad spend",
   "Affiliate payout",
   "Partner payout",
+  "Distribution",
   "Creative production",
   "Software subscription",
   "Cloud and hosting",
