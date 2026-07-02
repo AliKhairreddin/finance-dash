@@ -35,6 +35,7 @@ import { type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode, use
 import type {
   AiPromptPayload,
   AiPromptResult,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
@@ -132,6 +133,16 @@ function dateLabel(value: string): string {
     day: "numeric",
     year: "numeric"
   }).format(date);
+}
+
+function normalizeLookupName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function providerLabel(provider?: Provider): string {
@@ -505,7 +516,14 @@ function App() {
       const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
       const matchesQuery =
         !query ||
-        [transaction.counterparty, transaction.description, transaction.rawName, provider?.name ?? "", team?.name ?? ""]
+        [
+          transaction.counterparty,
+          transaction.description,
+          transaction.rawName,
+          transaction.cardHolderName ?? "",
+          provider?.name ?? "",
+          team?.name ?? ""
+        ]
           .join(" ")
           .toLowerCase()
           .includes(query);
@@ -688,6 +706,20 @@ function App() {
     }
     await loadDashboard();
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
+  }
+
+  async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload) {
+    const response = await fetch(`${apiBase}/wise/card-holder-team`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Card holder team assignment failed");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice(`Assigned ${payload.cardHolderName.trim()} to ${teamsById.get(payload.teamId)?.name ?? "team"}.`);
   }
 
   async function createTeam(payload: CreateTeamPayload) {
@@ -1111,7 +1143,13 @@ function App() {
       )}
 
       {activeTab === "settings" && (
-        <SettingsView dashboard={dashboard} onCreateTeam={createTeam} onSaveAiSettings={saveAiSettings} onRunAiPrompt={runAiPrompt} />
+        <SettingsView
+          dashboard={dashboard}
+          onCreateTeam={createTeam}
+          onSaveAiSettings={saveAiSettings}
+          onSaveWiseCardHolderTeam={assignWiseCardHolderTeam}
+          onRunAiPrompt={runAiPrompt}
+        />
       )}
 
       {invoiceTransaction && (
@@ -2067,6 +2105,7 @@ function TransactionTable({
           <col className="transaction-counterparty-col" />
           <col className="transaction-direction-col" />
           <col className="transaction-amount-col" />
+          <col className="transaction-card-holder-col" />
           <col className="transaction-team-col" />
           <col className="transaction-category-col" />
           <col className="transaction-company-col" />
@@ -2079,6 +2118,7 @@ function TransactionTable({
             <th>Counterparty</th>
             <th>Direction</th>
             <th>Amount</th>
+            <th>Card holder</th>
             <th>
               Team <span className="column-note">Optional</span>
             </th>
@@ -2126,6 +2166,9 @@ function TransactionTable({
                     </span>
                   </td>
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+                  <td className="card-holder-cell" title={transaction.cardHolderName ?? ""}>
+                    {transaction.cardHolderName ? transaction.cardHolderName : <span className="muted-cell">—</span>}
+                  </td>
                   <td>
                     <div className="team-select">
                       <select value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
@@ -2796,11 +2839,13 @@ function SettingsView({
   dashboard,
   onCreateTeam,
   onSaveAiSettings,
+  onSaveWiseCardHolderTeam,
   onRunAiPrompt
 }: {
   dashboard: DashboardSnapshot;
   onCreateTeam: (payload: CreateTeamPayload) => Promise<void>;
   onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
+  onSaveWiseCardHolderTeam: (payload: AssignWiseCardHolderTeamPayload) => Promise<void>;
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
@@ -2812,14 +2857,48 @@ function SettingsView({
   const [prompt, setPrompt] = useState("");
   const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
   const [busy, setBusy] = useState<"team" | "save" | "prompt" | null>(null);
+  const [cardHolderBusy, setCardHolderBusy] = useState<string | null>(null);
+  const [cardHolderSelections, setCardHolderSelections] = useState<Record<string, string>>({});
   const [teamError, setTeamError] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [cardHolderError, setCardHolderError] = useState<string | null>(null);
 
   useEffect(() => {
     const isPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
     setModelChoice(isPreset ? dashboard.aiSettings.model : "custom");
     setCustomModel(isPreset ? "" : dashboard.aiSettings.model);
   }, [dashboard.aiSettings.model]);
+
+  const cardHolderRows = useMemo(() => {
+    const rows = new Map<string, { key: string; cardHolderName: string; transactionCount: number; teamId?: string }>();
+
+    for (const assignment of dashboard.wiseCardHolderTeamAssignments) {
+      const key = normalizeLookupName(assignment.cardHolderName);
+      if (!key) continue;
+      rows.set(key, {
+        key,
+        cardHolderName: assignment.cardHolderName,
+        transactionCount: 0,
+        teamId: assignment.teamId
+      });
+    }
+
+    for (const transaction of dashboard.transactions) {
+      if (transaction.source !== "wise" || !transaction.cardHolderName) continue;
+      const cardHolderName = transaction.cardHolderName.trim().replace(/\s+/g, " ");
+      const key = normalizeLookupName(cardHolderName);
+      if (!key) continue;
+      const existing = rows.get(key);
+      rows.set(key, {
+        key,
+        cardHolderName: existing?.cardHolderName ?? cardHolderName,
+        transactionCount: (existing?.transactionCount ?? 0) + 1,
+        teamId: existing?.teamId
+      });
+    }
+
+    return [...rows.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
+  }, [dashboard.transactions, dashboard.wiseCardHolderTeamAssignments]);
 
   const selectedModel = modelChoice === "custom" ? customModel : modelChoice;
 
@@ -2851,6 +2930,18 @@ function SettingsView({
       setAiError(err instanceof Error ? err.message : "AI settings could not be saved");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function saveCardHolderTeam(cardHolderName: string, key: string, teamId: string) {
+    setCardHolderBusy(key);
+    setCardHolderError(null);
+    try {
+      await onSaveWiseCardHolderTeam({ cardHolderName, teamId });
+    } catch (err) {
+      setCardHolderError(err instanceof Error ? err.message : "Card holder team could not be saved");
+    } finally {
+      setCardHolderBusy(null);
     }
   }
 
@@ -2903,6 +2994,60 @@ function SettingsView({
             <span key={team.id}>{team.name}</span>
           ))}
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Wise card holders</p>
+            <h2>Card holder teams</h2>
+          </div>
+          <span className="total-pill">{cardHolderRows.length} holders</span>
+        </div>
+        <div className="card-holder-rules">
+          {cardHolderRows.length > 0 ? (
+            cardHolderRows.map((row) => {
+              const selectedTeamId = cardHolderSelections[row.key] ?? row.teamId ?? "";
+              const savedTeamId = row.teamId ?? "";
+              return (
+                <div className="card-holder-rule" key={row.key}>
+                  <div className="card-holder-rule-name">
+                    <strong>{row.cardHolderName}</strong>
+                    <span>{row.transactionCount > 0 ? `${row.transactionCount} Wise rows` : "Saved rule"}</span>
+                  </div>
+                  <select
+                    value={selectedTeamId}
+                    onChange={(event) =>
+                      setCardHolderSelections((current) => ({
+                        ...current,
+                        [row.key]: event.target.value
+                      }))
+                    }
+                  >
+                    <option value="">Choose team</option>
+                    {dashboard.teams.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!selectedTeamId || selectedTeamId === savedTeamId || cardHolderBusy === row.key}
+                    onClick={() => void saveCardHolderTeam(row.cardHolderName, row.key, selectedTeamId)}
+                  >
+                    {cardHolderBusy === row.key ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                    Save
+                  </button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="empty-state">No Wise card holders</div>
+          )}
+        </div>
+        {cardHolderError && <div className="inline-error">{cardHolderError}</div>}
       </section>
 
       <section className="panel">

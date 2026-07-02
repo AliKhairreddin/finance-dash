@@ -1,4 +1,4 @@
-import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
+import type { Provider, Team, Transaction, TransactionCategoryRule, WiseCardHolderTeamAssignment } from "../shared/types";
 import {
   canonicalCreatedAt,
   canonicalTeamId,
@@ -159,6 +159,14 @@ export const canonicalTeams: Team[] = [
     id: wagnerTeamId,
     name: wagnerTeamName,
     createdAt: canonicalCreatedAt
+  }
+];
+
+export const canonicalWiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [
+  {
+    cardHolderName: "Sanjin Beckovic",
+    teamId: wagnerTeamId,
+    updatedAt: canonicalCreatedAt
   }
 ];
 
@@ -328,6 +336,28 @@ export function normalizeName(value: string): string {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+export function normalizeCardHolderName(value: string): string {
+  return normalizeName(value);
+}
+
+export function mergeWiseCardHolderTeamAssignments(assignments: WiseCardHolderTeamAssignment[]): WiseCardHolderTeamAssignment[] {
+  const byName = new Map<string, WiseCardHolderTeamAssignment>();
+  for (const assignment of canonicalWiseCardHolderTeamAssignments) {
+    byName.set(normalizeCardHolderName(assignment.cardHolderName), assignment);
+  }
+  for (const assignment of assignments) {
+    const cardHolderName = assignment.cardHolderName.trim().replace(/\s+/g, " ");
+    const normalizedName = normalizeCardHolderName(cardHolderName);
+    if (!normalizedName) continue;
+    byName.set(normalizedName, {
+      cardHolderName,
+      teamId: canonicalTeamId(assignment.teamId),
+      updatedAt: assignment.updatedAt
+    });
+  }
+  return [...byName.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
 }
 
 function compactSignature(value: string): string {

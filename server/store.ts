@@ -3,6 +3,7 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   AssignTransactionTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
@@ -27,6 +28,7 @@ import type {
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
+  WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
@@ -53,8 +55,10 @@ import {
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
+  mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeCardHolderName,
   normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
@@ -70,6 +74,7 @@ let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
 let aiSettings: StoredAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
+let wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [];
 let transactions: Transaction[] = [];
 let wiseStatementTransactions: Transaction[] = [];
 let wiseStatementImports: WiseStatementImport[] = [];
@@ -161,6 +166,7 @@ export async function initializeStore(): Promise<void> {
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
+  wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
   wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
   wiseStatementImports = persisted.wiseStatementImports ?? [];
 }
@@ -173,6 +179,7 @@ async function persist(): Promise<void> {
     transactionCategoryRules,
     revenuePartners,
     transactionTeamAssignments,
+    wiseCardHolderTeamAssignments,
     wiseStatementTransactions,
     wiseStatementImports,
     revenueRuns,
@@ -221,8 +228,14 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
   const teamByTransaction = new Map(transactionTeamAssignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  const teamByCardHolder = new Map(
+    wiseCardHolderTeamAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
+  );
   return rows.map((transaction) => {
-    const teamId = teamByTransaction.get(transaction.id);
+    const teamId =
+      teamByTransaction.get(transaction.id) ??
+      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
+      transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -372,6 +385,7 @@ export function getSnapshot(): DashboardSnapshot {
     transactions: getMatchedTransactions(),
     invoices,
     transactionCategoryRules,
+    wiseCardHolderTeamAssignments,
     wiseStatementImports,
     integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners),
     metrics,
@@ -398,7 +412,8 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transactionBusinessCategory(transaction.category || "Wise")
+      category: transactionBusinessCategory(transaction.category || "Wise"),
+      ...(transaction.cardHolderName ? { cardHolderName: transaction.cardHolderName.trim() } : {})
     }));
 }
 
@@ -457,6 +472,27 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
 
   await persist();
   return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
+}
+
+export async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
+  const teamId = canonicalTeamId(payload.teamId);
+  if (!cardHolderName) {
+    throw new Error("Card holder name is required");
+  }
+  if (!teams.some((team) => team.id === teamId)) {
+    throw new Error("Team not found");
+  }
+
+  wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
+    ...wiseCardHolderTeamAssignments.filter(
+      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
+    ),
+    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+  ]);
+
+  await persist();
+  return getSnapshot();
 }
 
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {

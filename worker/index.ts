@@ -2,6 +2,7 @@ import type {
   AccountBalance,
   AiPromptPayload,
   AssignTransactionTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
@@ -28,6 +29,7 @@ import type {
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
+  WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
@@ -52,8 +54,10 @@ import {
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
+  mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeCardHolderName,
   normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
@@ -99,6 +103,7 @@ interface PersistedState {
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
@@ -900,6 +905,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
     transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
+    wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: realRevenueRuns(stored?.revenueRuns),
@@ -1000,10 +1006,20 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
   ];
 }
 
-function applyTeamAssignments(rows: Transaction[], assignments: TransactionTeamAssignment[]): Transaction[] {
+function applyTeamAssignments(
+  rows: Transaction[],
+  assignments: TransactionTeamAssignment[],
+  cardHolderAssignments: WiseCardHolderTeamAssignment[]
+): Transaction[] {
   const teamByTransaction = new Map(assignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  const teamByCardHolder = new Map(
+    cardHolderAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
+  );
   return rows.map((transaction) => {
-    const teamId = teamByTransaction.get(transaction.id);
+    const teamId =
+      teamByTransaction.get(transaction.id) ??
+      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
+      transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -1027,7 +1043,8 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transactionBusinessCategory(transaction.category || "Wise")
+      category: transactionBusinessCategory(transaction.category || "Wise"),
+      ...(transaction.cardHolderName ? { cardHolderName: transaction.cardHolderName.trim() } : {})
     }));
 }
 
@@ -1086,7 +1103,8 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
           ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
           : transaction;
       }),
-      state.transactionTeamAssignments
+      state.transactionTeamAssignments,
+      state.wiseCardHolderTeamAssignments
     ),
     state.providers,
     state.transactionCategoryRules
@@ -1108,6 +1126,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     transactions,
     invoices,
     transactionCategoryRules: state.transactionCategoryRules,
+    wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
     integrationStatus: integrationStatus(env, wise, state.revenuePartners),
     metrics: calculateMetrics(accounts, [], [], [], []),
@@ -1412,6 +1431,28 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
   };
 }
 
+async function assignWiseCardHolderTeam(env: Env, payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
+  const teamId = canonicalTeamId(payload.teamId);
+  if (!cardHolderName) {
+    throw new Error("Card holder name is required");
+  }
+  if (!state.teams.some((team) => team.id === teamId)) {
+    throw new Error("Team not found");
+  }
+
+  state.wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
+    ...state.wiseCardHolderTeamAssignments.filter(
+      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
+    ),
+    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+  ]);
+
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
   const name = canonicalTeamName(payload.name.trim());
   if (!name) {
@@ -1639,6 +1680,14 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/wise/import-statement" && request.method === "POST") {
       return json(await importWiseStatement(env, (await request.json()) as ImportWiseStatementPayload));
+    }
+
+    if (url.pathname === "/api/wise/card-holder-team" && request.method === "POST") {
+      const payload = (await request.json()) as AssignWiseCardHolderTeamPayload;
+      if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
+        return json({ message: "cardHolderName and teamId are required" }, { status: 400 });
+      }
+      return json(await assignWiseCardHolderTeam(env, payload));
     }
 
     if (url.pathname === "/api/revenue/sync" && request.method === "POST") {

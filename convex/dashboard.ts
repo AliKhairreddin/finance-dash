@@ -83,6 +83,12 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const wiseCardHolderTeamAssignment = v.object({
+  cardHolderName: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
@@ -99,6 +105,7 @@ const transaction = v.object({
   matchedProviderId: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
   teamId: v.optional(v.string()),
+  cardHolderName: v.optional(v.string()),
   confidence: v.optional(v.number()),
   matchReason: v.optional(v.string())
 });
@@ -176,6 +183,7 @@ export const getState = query({
       transactionCategoryRules: v.array(transactionCategoryRule),
       revenuePartners: v.array(revenuePartner),
       transactionTeamAssignments: v.array(transactionTeamAssignment),
+      wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
       wiseStatementTransactions: v.array(transaction),
       wiseStatementImports: v.array(wiseStatementImport),
       revenueRuns: v.array(revenueRun),
@@ -198,6 +206,7 @@ export const getState = query({
       transactionCategoryRules: state.transactionCategoryRules ?? [],
       revenuePartners: state.revenuePartners ?? [],
       transactionTeamAssignments: state.transactionTeamAssignments ?? [],
+      wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments ?? [],
       wiseStatementTransactions: state.wiseStatementTransactions ?? [],
       wiseStatementImports: state.wiseStatementImports ?? [],
       revenueRuns: state.revenueRuns ?? [],
@@ -215,6 +224,7 @@ export const saveState = mutation({
     transactionCategoryRules: v.array(transactionCategoryRule),
     revenuePartners: v.array(revenuePartner),
     transactionTeamAssignments: v.array(transactionTeamAssignment),
+    wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
     wiseStatementTransactions: v.array(transaction),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
@@ -238,6 +248,7 @@ export const saveState = mutation({
         transactionCategoryRules: args.transactionCategoryRules,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseCardHolderTeamAssignments: args.wiseCardHolderTeamAssignments,
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
@@ -253,6 +264,7 @@ export const saveState = mutation({
         transactionCategoryRules: args.transactionCategoryRules,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseCardHolderTeamAssignments: args.wiseCardHolderTeamAssignments,
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,

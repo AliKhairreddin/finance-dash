@@ -866,7 +866,7 @@ textarea:focus-visible {
 
 .transaction-table {
   table-layout: fixed;
-  min-width: 1082px;
+  min-width: 1218px;
   font-size: 0.82rem;
 }
 
@@ -889,6 +889,10 @@ textarea:focus-visible {
 
 .transaction-amount-col {
   width: 106px;
+}
+
+.transaction-card-holder-col {
+  width: 136px;
 }
 
 .transaction-team-col {
@@ -922,6 +926,20 @@ textarea:focus-visible {
 
 .counterparty-cell {
   min-width: 240px;
+}
+
+.card-holder-cell {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted-cell {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .category-select,
@@ -1078,6 +1096,7 @@ textarea:focus-visible {
 .settings-form input,
 .settings-form select,
 .settings-form textarea,
+.card-holder-rule select,
 .modal input,
 .modal select,
 .modal textarea {
@@ -1105,6 +1124,7 @@ textarea:focus-visible {
 .settings-form input:hover,
 .settings-form select:hover,
 .settings-form textarea:hover,
+.card-holder-rule select:hover,
 .modal input:hover,
 .modal select:hover,
 .modal textarea:hover {
@@ -1462,6 +1482,42 @@ textarea:focus-visible {
   background: var(--control-bg);
   font-size: 0.76rem;
   font-weight: 650;
+}
+
+.card-holder-rules {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.card-holder-rule {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+.card-holder-rule-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.card-holder-rule-name strong,
+.card-holder-rule-name span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-holder-rule-name span {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .prompt-result {
@@ -2056,6 +2112,7 @@ textarea:focus-visible {
   .categorization-layout,
   .wise-summary-grid,
   .revenue-controls,
+  .card-holder-rule,
   .form-grid {
     grid-template-columns: 1fr;
   }

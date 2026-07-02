@@ -8,6 +8,7 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   CreateTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
   SaveAiSettingsPayload,
@@ -16,6 +17,7 @@ import type {
 } from "../shared/types";
 import {
   assignTransactionTeam,
+  assignWiseCardHolderTeam,
   autoCategorizeTransactions,
   createInvoice,
   createProvider,
@@ -60,6 +62,19 @@ app.post("/api/sync", async (_request, response, next) => {
 app.post("/api/wise/import-statement", async (request, response, next) => {
   try {
     response.json(await importWiseStatement(request.body as ImportWiseStatementPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/wise/card-holder-team", async (request, response, next) => {
+  try {
+    const payload = request.body as AssignWiseCardHolderTeamPayload;
+    if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
+      response.status(400).json({ message: "cardHolderName and teamId are required" });
+      return;
+    }
+    response.json(await assignWiseCardHolderTeam(payload));
   } catch (error) {
     next(error);
   }

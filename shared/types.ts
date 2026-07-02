@@ -141,6 +141,12 @@ export interface TransactionTeamAssignment {
   updatedAt: string;
 }
 
+export interface WiseCardHolderTeamAssignment {
+  cardHolderName: string;
+  teamId: string;
+  updatedAt: string;
+}
+
 export interface TransactionCategoryRule {
   id: string;
   category: string;
@@ -186,6 +192,7 @@ export interface Transaction {
   matchedProviderId?: string;
   matchedInvoiceId?: string;
   teamId?: string;
+  cardHolderName?: string;
   confidence?: number;
   matchReason?: string;
 }
@@ -248,6 +255,7 @@ export interface DashboardSnapshot {
   transactions: Transaction[];
   invoices: Invoice[];
   transactionCategoryRules: TransactionCategoryRule[];
+  wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementImports: WiseStatementImport[];
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
@@ -295,6 +303,11 @@ export interface MatchTransactionPayload {
 export interface AssignTransactionTeamPayload {
   transactionId: string;
   teamId?: string;
+}
+
+export interface AssignWiseCardHolderTeamPayload {
+  cardHolderName: string;
+  teamId: string;
 }
 
 export interface CreateTeamPayload {

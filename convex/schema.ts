@@ -74,6 +74,12 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const wiseCardHolderTeamAssignment = v.object({
+  cardHolderName: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 const transactionCategoryRule = v.object({
   id: v.string(),
   category: v.string(),
@@ -99,6 +105,7 @@ const transaction = v.object({
   matchedProviderId: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
   teamId: v.optional(v.string()),
+  cardHolderName: v.optional(v.string()),
   confidence: v.optional(v.number()),
   matchReason: v.optional(v.string())
 });
@@ -174,6 +181,7 @@ export default defineSchema({
     transactionCategoryRules: v.optional(v.array(transactionCategoryRule)),
     revenuePartners: v.optional(v.array(revenuePartner)),
     transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
+    wiseCardHolderTeamAssignments: v.optional(v.array(wiseCardHolderTeamAssignment)),
     wiseStatementTransactions: v.optional(v.array(transaction)),
     wiseStatementImports: v.optional(v.array(wiseStatementImport)),
     revenueRuns: v.optional(v.array(revenueRun)),
