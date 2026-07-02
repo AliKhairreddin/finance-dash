@@ -508,7 +508,7 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
   if (!providers.some((provider) => provider.id === payload.providerId)) {
     throw new Error("Revenue partner company not found");
   }
-  if (!teams.some((team) => team.id === payload.teamId)) {
+  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue partner team not found");
   }
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
@@ -519,11 +519,10 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
   let updated: RevenuePartner | undefined;
   revenuePartners = revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
-    updated = {
+    const nextPartner: RevenuePartner = {
       ...partner,
       name: payload.name.trim(),
       providerId: payload.providerId,
-      teamId: payload.teamId,
       revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
@@ -537,6 +536,12 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
       invoiceDueDays: payload.invoiceDueDays,
       enabled: payload.enabled
     };
+    if (payload.teamId) {
+      nextPartner.teamId = payload.teamId;
+    } else {
+      delete nextPartner.teamId;
+    }
+    updated = nextPartner;
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
@@ -660,7 +665,8 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     (partner) =>
       partner.enabled &&
       (!payload.partnerId || partner.id === payload.partnerId) &&
-      (!payload.teamId || partner.teamId === payload.teamId)
+      (!payload.teamId || partner.teamId === payload.teamId) &&
+      (!payload.partnerLevelOnly || !partner.teamId)
   );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
@@ -685,7 +691,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     try {
       let run = {
         ...(await fetchTuneRevenue(partner, period)),
-        teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+        ...(partner.teamId ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId } : {})
       };
       if (payload.createInvoices && existingInvoicedRun) {
         run = {
@@ -729,8 +735,12 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
         partnerId: partner.id,
         partnerName: partner.name,
         providerId: partner.providerId,
-        teamId: partner.teamId,
-        teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId,
+        ...(partner.teamId
+          ? {
+              teamId: partner.teamId,
+              teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+            }
+          : {}),
         revenueCategory: partner.revenueCategory,
         source: "tune",
         periodStart: period.periodStart,

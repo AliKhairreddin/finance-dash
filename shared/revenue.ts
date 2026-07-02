@@ -28,10 +28,9 @@ export interface RevenuePeriod {
 
 export const canonicalRevenuePartners: RevenuePartner[] = [
   {
-    id: "revenue-cognitive-kissterra",
+    id: "revenue-kissterra",
     name: "Kissterra",
     providerId: kissterraProviderId,
-    teamId: cognitiveTeamId,
     revenueCategory: "Partner network revenue",
     source: "tune",
     affiliateId: "",
@@ -44,6 +43,25 @@ export const canonicalRevenuePartners: RevenuePartner[] = [
     meritCustomerName: "Kissterra",
     invoiceDueDays: 7,
     enabled: true,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: "revenue-cognitive-kissterra",
+    name: "Kissterra",
+    providerId: kissterraProviderId,
+    teamId: cognitiveTeamId,
+    revenueCategory: "Partner network revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "KISSTERRA_COGNITIVE_TUNE_NETWORK_ID",
+    apiKeyEnv: "KISSTERRA_COGNITIVE_TUNE_API_KEY",
+    apiBaseUrlEnv: "KISSTERRA_COGNITIVE_TUNE_API_BASE_URL",
+    meritCustomerName: "Kissterra",
+    invoiceDueDays: 7,
+    enabled: false,
     createdAt: canonicalCreatedAt
   },
   {
@@ -61,6 +79,24 @@ export const canonicalRevenuePartners: RevenuePartner[] = [
     apiKeyEnv: "KISSTERRA_WAGNER_TUNE_API_KEY",
     apiBaseUrlEnv: "KISSTERRA_WAGNER_TUNE_API_BASE_URL",
     meritCustomerName: "Kissterra",
+    invoiceDueDays: 7,
+    enabled: false,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: "revenue-lead-economy",
+    name: "Lead Economy",
+    providerId: leadEconomyProviderId,
+    revenueCategory: "Partner network revenue",
+    source: "tune",
+    affiliateId: "",
+    currency: "USD",
+    timezone: "UTC",
+    networkTimezone: "UTC",
+    networkIdEnv: "LEAD_ECONOMY_TUNE_NETWORK_ID",
+    apiKeyEnv: "LEAD_ECONOMY_TUNE_API_KEY",
+    apiBaseUrlEnv: "LEAD_ECONOMY_TUNE_API_BASE_URL",
+    meritCustomerName: "Lead Economy",
     invoiceDueDays: 7,
     enabled: false,
     createdAt: canonicalCreatedAt
@@ -120,7 +156,7 @@ export function mergeRevenuePartnerDirectory(partners: RevenuePartner[]): Revenu
   }
 
   return next.sort((left, right) => {
-    const teamOrder = left.teamId.localeCompare(right.teamId);
+    const teamOrder = (left.teamId ?? "").localeCompare(right.teamId ?? "");
     return teamOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
   });
 }

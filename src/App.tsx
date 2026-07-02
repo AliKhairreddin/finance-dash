@@ -206,8 +206,14 @@ function sourceLabel(value: string): string {
 }
 
 function revenuePartnerLabel(partner: RevenuePartner, teamsById: Map<string, Team>): string {
+  if (!partner.teamId) return partner.name;
   const teamName = teamsById.get(partner.teamId)?.name ?? partner.teamId;
   return `${teamName} / ${partner.name}`;
+}
+
+function revenueTeamLabel(teamId: string | undefined, teamName: string | undefined, teamsById: Map<string, Team>): string {
+  if (!teamId) return "Partner-level";
+  return teamName || teamsById.get(teamId)?.name || teamId;
 }
 
 function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
@@ -2042,7 +2048,11 @@ function RevenueView({
     return map;
   }, [dashboard.teams]);
   const visibleRuns = dashboard.revenueRuns.filter(
-    (run) => (partnerId === "all" || run.partnerId === partnerId) && (revenueTeamId === "all" || run.teamId === revenueTeamId)
+    (run) =>
+      (partnerId === "all" || run.partnerId === partnerId) &&
+      (revenueTeamId === "all" ||
+        (revenueTeamId === "partner-level" && !run.teamId) ||
+        run.teamId === revenueTeamId)
   );
   const latestRun = visibleRuns[0];
   const hasPulledRevenue = visibleRuns.some((run) => run.status === "pulled" || run.status === "invoiced");
@@ -2053,7 +2063,11 @@ function RevenueView({
     return map;
   }, [dashboard.revenuePartners]);
   const visiblePartners = dashboard.revenuePartners.filter(
-    (partner) => (partnerId === "all" || partner.id === partnerId) && (revenueTeamId === "all" || partner.teamId === revenueTeamId)
+    (partner) =>
+      (partnerId === "all" || partner.id === partnerId) &&
+      (revenueTeamId === "all" ||
+        (revenueTeamId === "partner-level" && !partner.teamId) ||
+        partner.teamId === revenueTeamId)
   );
 
   async function handleSubmit(event: FormEvent) {
@@ -2063,7 +2077,8 @@ function RevenueView({
     try {
       await onSyncRevenue({
         partnerId: partnerId === "all" ? undefined : partnerId,
-        teamId: revenueTeamId === "all" ? undefined : revenueTeamId,
+        teamId: revenueTeamId !== "all" && revenueTeamId !== "partner-level" ? revenueTeamId : undefined,
+        partnerLevelOnly: revenueTeamId === "partner-level" ? true : undefined,
         periodPreset,
         periodStart: periodPreset === "custom" ? periodStart : undefined,
         periodEnd: periodPreset === "custom" ? periodEnd : undefined,
@@ -2104,6 +2119,7 @@ function RevenueView({
           Team
           <select value={revenueTeamId} onChange={(event) => setRevenueTeamId(event.target.value)}>
             <option value="all">All teams</option>
+            <option value="partner-level">Partner-level</option>
             {dashboard.teams.map((team) => (
               <option key={team.id} value={team.id}>
                 {team.name}
@@ -2193,7 +2209,7 @@ function RevenueView({
                     <strong>{run.partnerName}</strong>
                     <small>TUNE · Affiliate ID {revenuePartnersById.get(run.partnerId)?.affiliateId || "Not set"}</small>
                   </td>
-                  <td>{run.teamName || teamsById.get(run.teamId)?.name || run.teamId}</td>
+                  <td>{revenueTeamLabel(run.teamId, run.teamName, teamsById)}</td>
                   <td>{run.revenueCategory}</td>
                   <td>
                     {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
@@ -3102,7 +3118,7 @@ function RevenuePartnerModal({
 }) {
   const [name, setName] = useState(partner.name);
   const [providerId, setProviderId] = useState(partner.providerId);
-  const [teamId, setTeamId] = useState(partner.teamId);
+  const [teamId, setTeamId] = useState(partner.teamId ?? "");
   const [revenueCategory, setRevenueCategory] = useState(partner.revenueCategory);
   const [affiliateId, setAffiliateId] = useState(partner.affiliateId);
   const [externalId, setExternalId] = useState(partner.externalId ?? "");
@@ -3126,7 +3142,7 @@ function RevenuePartnerModal({
       await onSubmit({
         name,
         providerId,
-        teamId,
+        teamId: teamId || undefined,
         revenueCategory,
         affiliateId,
         externalId: externalId.trim() || undefined,
@@ -3186,6 +3202,7 @@ function RevenuePartnerModal({
           <label>
             Team
             <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
+              <option value="">No single team</option>
               {teams.map((team) => (
                 <option key={team.id} value={team.id}>
                   {team.name}

@@ -55,13 +55,13 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 - Splits Wise transactions into incoming and outgoing reconciliation tabs.
 - Imports manually downloaded Wise statement CSVs in the Wise tab and stores rows for reconciliation.
 - Adds a sidebar with a separate Revenue page for partner API pulls.
-- Treats each TUNE/HasOffers revenue stream as an earning team plus paying partner, so Cognitive Pixel and Wagner can both earn from Kissterra or Lead Economy without mixing the chart/filter logic.
+- Treats each TUNE/HasOffers revenue stream as either partner-level or earning-team plus paying-partner, so a single Kissterra payment can stay as Kissterra while Cognitive Pixel and Wagner can still be split when the allocation is known.
 - Lets saved TUNE/HasOffers revenue streams store the affiliate ID used by the network.
 - Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
 - Sends TUNE `hour_offset` from the selected timezone against the partner network timezone.
 - Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
 - Supports optional Wise transaction team assignment with saved teams, plus team filters and visible-team totals.
-- Keeps money-in categories separate from money-out categories. Spend charts use cost buckets, while revenue charts split incoming money by earning team and partner when those matches exist.
+- Keeps money-in categories separate from money-out categories. Spend charts use cost buckets, while revenue charts split incoming money by partner, or by earning team and partner when that attribution exists.
 - Keeps Slash balances, card activity, and cashback tracking on its own page.
 - Suggests company matches from saved aliases.
 - Lets you manually confirm a transaction company and remembers that bank/card name for future auto-matching.
@@ -80,7 +80,7 @@ The server-side integration code is in `server/integrations.ts`.
 - Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement CSVs when live balance statements are blocked by Wise.
 - Revolut: prepared for Business API accounts and transaction activity using `REVOLUT_REFRESH_TOKEN`, `REVOLUT_CLIENT_ASSERTION_JWT`, and `REVOLUT_ENVIRONMENT`.
 - Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
-- Partner revenue: prepared for team-attributed TUNE Affiliate API streams. The default enabled stream is Cognitive Pixel / Kissterra using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`. Additional disabled stream templates exist for Wagner / Kissterra, Cognitive Pixel / Lead Economy, and Wagner / Lead Economy.
+- Partner revenue: prepared for partner-level and team-attributed TUNE Affiliate API streams. The default enabled stream is partner-level Kissterra using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`. Additional disabled stream templates exist for Cognitive Pixel / Kissterra, Wagner / Kissterra, partner-level Lead Economy, Cognitive Pixel / Lead Economy, and Wagner / Lead Economy.
 - Merit: prepared to list sales invoices and create sales invoices using `MERIT_API_ID`, `MERIT_API_KEY`, and default tax/item settings. The dashboard intentionally does not send Merit payment updates.
 
 Copy `.env.example` to `.env` and fill credentials when ready.
@@ -124,9 +124,17 @@ KISSTERRA_TUNE_NETWORK_ID=
 KISSTERRA_TUNE_API_KEY=
 KISSTERRA_TUNE_API_BASE_URL=
 
+KISSTERRA_COGNITIVE_TUNE_NETWORK_ID=
+KISSTERRA_COGNITIVE_TUNE_API_KEY=
+KISSTERRA_COGNITIVE_TUNE_API_BASE_URL=
+
 KISSTERRA_WAGNER_TUNE_NETWORK_ID=
 KISSTERRA_WAGNER_TUNE_API_KEY=
 KISSTERRA_WAGNER_TUNE_API_BASE_URL=
+
+LEAD_ECONOMY_TUNE_NETWORK_ID=
+LEAD_ECONOMY_TUNE_API_KEY=
+LEAD_ECONOMY_TUNE_API_BASE_URL=
 
 LEAD_ECONOMY_COGNITIVE_TUNE_NETWORK_ID=
 LEAD_ECONOMY_COGNITIVE_TUNE_API_KEY=
