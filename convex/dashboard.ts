@@ -117,7 +117,9 @@ const wiseStatementImport = v.object({
 const revenueRun = v.object({
   id: v.string(),
   partnerId: v.string(),
+  providerId: v.optional(v.string()),
   partnerName: v.string(),
+  revenueCategory: v.optional(v.string()),
   source: v.literal("tune"),
   periodStart: v.string(),
   periodEnd: v.string(),

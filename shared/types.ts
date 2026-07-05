@@ -115,7 +115,9 @@ export interface StoredAiSettings {
 export interface RevenueRun {
   id: string;
   partnerId: string;
+  providerId?: string;
   partnerName: string;
+  revenueCategory?: string;
   source: "tune";
   periodStart: string;
   periodEnd: string;
