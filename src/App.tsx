@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   AiPromptPayload,
@@ -61,7 +62,8 @@ import { isReviewOnlyTransactionCategory, transactionBusinessCategory, transacti
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "wise" | "categories" | "revolut" | "revenue" | "slash" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "banking" | "categories" | "revenue" | "invoices" | "providers" | "settings";
+type BankTab = "wise" | "revolut" | "slash";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
@@ -346,6 +348,7 @@ function App() {
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const [bankTab, setBankTab] = useState<BankTab>("wise");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
@@ -854,113 +857,39 @@ function App() {
         </>
       )}
 
-      {activeTab === "wise" && (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Wise reconciliation</p>
-              <h2>Match incoming payments and outgoing spend</h2>
-            </div>
-            <div className="filters">
-              <div className="segmented-control" aria-label="Wise transaction direction">
-                <Button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
-                  <ArrowUpRight size={15} />
-                  In
-                </Button>
-                <Button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
-                  <ArrowDownRight size={15} />
-                  Out
-                </Button>
-              </div>
-              <label className="search-box">
-                <Search size={15} />
-                <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
-              </label>
-              <label>
-                <Filter size={15} />
-                <NativeSelect value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
-                  <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
-                  <NativeSelectOption value="matched">Matched</NativeSelectOption>
-                  <NativeSelectOption value="all">All rows</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label>
-                <SlidersHorizontal size={15} />
-                <NativeSelect value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
-                  <NativeSelectOption value="match">% match</NativeSelectOption>
-                  <NativeSelectOption value="date">Date</NativeSelectOption>
-                  <NativeSelectOption value="period">Period</NativeSelectOption>
-                  <NativeSelectOption value="amount">Amount</NativeSelectOption>
-                  <NativeSelectOption value="category">Category</NativeSelectOption>
-                  <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label>
-                Order
-                <NativeSelect value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
-                  <NativeSelectOption value="desc">Descending</NativeSelectOption>
-                  <NativeSelectOption value="asc">Ascending</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label>
-                Team
-                <NativeSelect value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-                  <NativeSelectOption value="all">All teams</NativeSelectOption>
-                  <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
-                  {dashboard.teams.map((team) => (
-                    <NativeSelectOption key={team.id} value={team.id}>
-                      {team.name}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </label>
-              <Button
-                className="secondary-button"
-                onClick={() => void autoCategorizeTransactions(wiseTransactions.map((transaction) => transaction.id))}
-                disabled={isCategorizing || wiseTransactions.length === 0}
-              >
-                {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-                Auto
-              </Button>
-              <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-                {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                CSV
-                <Input
-                  type="file"
-                  accept=".csv,text/csv"
-                  multiple
-                  disabled={isImportingWise}
-                  onChange={(event) => {
-                    void importWiseStatements(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-          <div className="wise-summary-grid">
-            <SummaryTile label="Visible volume" value={maybeMoney(wiseTransactions.length > 0, wiseTeamSummary.total)} />
-            <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
-            <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
-            <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
-          </div>
-          {wiseStatus?.issue && (
-            <div className="integration-alert">
-              <CircleAlert size={16} />
-              <span>{wiseStatus.issue}</span>
-            </div>
-          )}
-          <TransactionTable
-            rows={wiseTransactions}
-            teams={dashboard.teams}
-            teamsById={teamsById}
-            providersById={providersById}
-            onMatch={matchTransaction}
-            onAssignTeam={assignTransactionTeam}
-            onUpdateCategory={updateTransactionCategory}
-            onOpenInvoice={setInvoiceTransaction}
-          />
-        </section>
+      {activeTab === "banking" && (
+        <BankingView
+          activeBankTab={bankTab}
+          dashboard={dashboard}
+          isCategorizing={isCategorizing}
+          isImportingWise={isImportingWise}
+          matchFilter={matchFilter}
+          providersById={providersById}
+          revolutTransactions={revolutTransactions}
+          searchTerm={searchTerm}
+          slashTransactions={slashTransactions}
+          teamFilter={teamFilter}
+          teamsById={teamsById}
+          transactionSortDirection={transactionSortDirection}
+          transactionSortKey={transactionSortKey}
+          wiseDirection={wiseDirection}
+          wiseStatusIssue={wiseStatus?.issue}
+          wiseTeamSummary={wiseTeamSummary}
+          wiseTransactions={wiseTransactions}
+          onActiveBankTabChange={setBankTab}
+          onAssignTeam={assignTransactionTeam}
+          onAutoCategorize={autoCategorizeTransactions}
+          onImportWiseStatements={importWiseStatements}
+          onMatch={matchTransaction}
+          onOpenInvoice={setInvoiceTransaction}
+          onSearchTermChange={setSearchTerm}
+          onSetMatchFilter={setMatchFilter}
+          onSetTeamFilter={setTeamFilter}
+          onSetTransactionSortDirection={setTransactionSortDirection}
+          onSetTransactionSortKey={setTransactionSortKey}
+          onSetWiseDirection={setWiseDirection}
+          onUpdateCategory={updateTransactionCategory}
+        />
       )}
 
       {activeTab === "categories" && (
@@ -974,14 +903,6 @@ function App() {
 
       {activeTab === "revenue" && (
         <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} />
-      )}
-
-      {activeTab === "revolut" && (
-        <RevolutView dashboard={dashboard} rows={revolutTransactions} />
-      )}
-
-      {activeTab === "slash" && (
-        <SlashView dashboard={dashboard} rows={slashTransactions} />
       )}
 
       {activeTab === "invoices" && (
@@ -1094,11 +1015,9 @@ function Sidebar({
 }) {
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
-    { id: "wise", label: "Wise", icon: <Link2 size={17} /> },
+    { id: "banking", label: "Banking", icon: <Banknote size={17} /> },
     { id: "categories", label: "Categories", icon: <PieChart size={17} /> },
-    { id: "revolut", label: "Revolut", icon: <Banknote size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
-    { id: "slash", label: "Slash", icon: <WalletCards size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
@@ -1152,6 +1071,304 @@ function MetricCard({
         <small>{detail}</small>
       </div>
     </article>
+  );
+}
+
+function BankingView({
+  activeBankTab,
+  dashboard,
+  isCategorizing,
+  isImportingWise,
+  matchFilter,
+  providersById,
+  revolutTransactions,
+  searchTerm,
+  slashTransactions,
+  teamFilter,
+  teamsById,
+  transactionSortDirection,
+  transactionSortKey,
+  wiseDirection,
+  wiseStatusIssue,
+  wiseTeamSummary,
+  wiseTransactions,
+  onActiveBankTabChange,
+  onAssignTeam,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onOpenInvoice,
+  onSearchTermChange,
+  onSetMatchFilter,
+  onSetTeamFilter,
+  onSetTransactionSortDirection,
+  onSetTransactionSortKey,
+  onSetWiseDirection,
+  onUpdateCategory
+}: {
+  activeBankTab: BankTab;
+  dashboard: DashboardSnapshot;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  matchFilter: string;
+  providersById: Map<string, Provider>;
+  revolutTransactions: Transaction[];
+  searchTerm: string;
+  slashTransactions: Transaction[];
+  teamFilter: string;
+  teamsById: Map<string, Team>;
+  transactionSortDirection: SortDirection;
+  transactionSortKey: TransactionSortKey;
+  wiseDirection: "in" | "out";
+  wiseStatusIssue?: string;
+  wiseTeamSummary: { total: number; count: number; matched: number; unassigned: number };
+  wiseTransactions: Transaction[];
+  onActiveBankTabChange: React.Dispatch<React.SetStateAction<BankTab>>;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => Promise<void>;
+  onOpenInvoice: (transaction: Transaction) => void;
+  onSearchTermChange: React.Dispatch<React.SetStateAction<string>>;
+  onSetMatchFilter: React.Dispatch<React.SetStateAction<string>>;
+  onSetTeamFilter: React.Dispatch<React.SetStateAction<string>>;
+  onSetTransactionSortDirection: React.Dispatch<React.SetStateAction<SortDirection>>;
+  onSetTransactionSortKey: React.Dispatch<React.SetStateAction<TransactionSortKey>>;
+  onSetWiseDirection: React.Dispatch<React.SetStateAction<"in" | "out">>;
+  onUpdateCategory: (transaction: Transaction, category: string) => Promise<void>;
+}) {
+  return (
+    <Tabs
+      className="banking-page"
+      value={activeBankTab}
+      onValueChange={(value) => onActiveBankTabChange(value as BankTab)}
+    >
+      <div className="banking-page-header">
+        <div>
+          <p className="eyebrow">Banking</p>
+          <h2>Bank accounts, cards, and reconciliation</h2>
+        </div>
+        <TabsList className="banking-tabs-list">
+          <TabsTrigger value="wise">
+            <Link2 size={15} />
+            Wise
+            <span>{wiseTeamSummary.count}</span>
+          </TabsTrigger>
+          <TabsTrigger value="revolut">
+            <Banknote size={15} />
+            Revolut
+            <span>{revolutTransactions.length}</span>
+          </TabsTrigger>
+          <TabsTrigger value="slash">
+            <WalletCards size={15} />
+            Slash
+            <span>{slashTransactions.length}</span>
+          </TabsTrigger>
+        </TabsList>
+      </div>
+
+      <TabsContent value="wise">
+        <WiseBankingTab
+          dashboard={dashboard}
+          isCategorizing={isCategorizing}
+          isImportingWise={isImportingWise}
+          matchFilter={matchFilter}
+          providersById={providersById}
+          searchTerm={searchTerm}
+          teamFilter={teamFilter}
+          teamsById={teamsById}
+          transactionSortDirection={transactionSortDirection}
+          transactionSortKey={transactionSortKey}
+          wiseDirection={wiseDirection}
+          wiseStatusIssue={wiseStatusIssue}
+          wiseTeamSummary={wiseTeamSummary}
+          wiseTransactions={wiseTransactions}
+          onAssignTeam={onAssignTeam}
+          onAutoCategorize={onAutoCategorize}
+          onImportWiseStatements={onImportWiseStatements}
+          onMatch={onMatch}
+          onOpenInvoice={onOpenInvoice}
+          onSearchTermChange={onSearchTermChange}
+          onSetMatchFilter={onSetMatchFilter}
+          onSetTeamFilter={onSetTeamFilter}
+          onSetTransactionSortDirection={onSetTransactionSortDirection}
+          onSetTransactionSortKey={onSetTransactionSortKey}
+          onSetWiseDirection={onSetWiseDirection}
+          onUpdateCategory={onUpdateCategory}
+        />
+      </TabsContent>
+      <TabsContent value="revolut">
+        <RevolutView dashboard={dashboard} rows={revolutTransactions} />
+      </TabsContent>
+      <TabsContent value="slash">
+        <SlashView dashboard={dashboard} rows={slashTransactions} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function WiseBankingTab({
+  dashboard,
+  isCategorizing,
+  isImportingWise,
+  matchFilter,
+  providersById,
+  searchTerm,
+  teamFilter,
+  teamsById,
+  transactionSortDirection,
+  transactionSortKey,
+  wiseDirection,
+  wiseStatusIssue,
+  wiseTeamSummary,
+  wiseTransactions,
+  onAssignTeam,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onOpenInvoice,
+  onSearchTermChange,
+  onSetMatchFilter,
+  onSetTeamFilter,
+  onSetTransactionSortDirection,
+  onSetTransactionSortKey,
+  onSetWiseDirection,
+  onUpdateCategory
+}: {
+  dashboard: DashboardSnapshot;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  matchFilter: string;
+  providersById: Map<string, Provider>;
+  searchTerm: string;
+  teamFilter: string;
+  teamsById: Map<string, Team>;
+  transactionSortDirection: SortDirection;
+  transactionSortKey: TransactionSortKey;
+  wiseDirection: "in" | "out";
+  wiseStatusIssue?: string;
+  wiseTeamSummary: { total: number; count: number; matched: number; unassigned: number };
+  wiseTransactions: Transaction[];
+  onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => Promise<void>;
+  onOpenInvoice: (transaction: Transaction) => void;
+  onSearchTermChange: React.Dispatch<React.SetStateAction<string>>;
+  onSetMatchFilter: React.Dispatch<React.SetStateAction<string>>;
+  onSetTeamFilter: React.Dispatch<React.SetStateAction<string>>;
+  onSetTransactionSortDirection: React.Dispatch<React.SetStateAction<SortDirection>>;
+  onSetTransactionSortKey: React.Dispatch<React.SetStateAction<TransactionSortKey>>;
+  onSetWiseDirection: React.Dispatch<React.SetStateAction<"in" | "out">>;
+  onUpdateCategory: (transaction: Transaction, category: string) => Promise<void>;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Wise reconciliation</p>
+          <h2>Match incoming payments and outgoing spend</h2>
+        </div>
+        <div className="filters">
+          <div className="segmented-control" aria-label="Wise transaction direction">
+            <Button className={wiseDirection === "in" ? "active" : ""} onClick={() => onSetWiseDirection("in")}>
+              <ArrowUpRight size={15} />
+              In
+            </Button>
+            <Button className={wiseDirection === "out" ? "active" : ""} onClick={() => onSetWiseDirection("out")}>
+              <ArrowDownRight size={15} />
+              Out
+            </Button>
+          </div>
+          <label className="search-box">
+            <Search size={15} />
+            <Input value={searchTerm} onChange={(event) => onSearchTermChange(event.target.value)} placeholder="Search transactions" />
+          </label>
+          <label>
+            <Filter size={15} />
+            <NativeSelect value={matchFilter} onChange={(event) => onSetMatchFilter(event.target.value)}>
+              <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
+              <NativeSelectOption value="matched">Matched</NativeSelectOption>
+              <NativeSelectOption value="all">All rows</NativeSelectOption>
+            </NativeSelect>
+          </label>
+          <label>
+            <SlidersHorizontal size={15} />
+            <NativeSelect value={transactionSortKey} onChange={(event) => onSetTransactionSortKey(event.target.value as TransactionSortKey)}>
+              <NativeSelectOption value="match">% match</NativeSelectOption>
+              <NativeSelectOption value="date">Date</NativeSelectOption>
+              <NativeSelectOption value="period">Period</NativeSelectOption>
+              <NativeSelectOption value="amount">Amount</NativeSelectOption>
+              <NativeSelectOption value="category">Category</NativeSelectOption>
+              <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
+            </NativeSelect>
+          </label>
+          <label>
+            Order
+            <NativeSelect value={transactionSortDirection} onChange={(event) => onSetTransactionSortDirection(event.target.value as SortDirection)}>
+              <NativeSelectOption value="desc">Descending</NativeSelectOption>
+              <NativeSelectOption value="asc">Ascending</NativeSelectOption>
+            </NativeSelect>
+          </label>
+          <label>
+            Team
+            <NativeSelect value={teamFilter} onChange={(event) => onSetTeamFilter(event.target.value)}>
+              <NativeSelectOption value="all">All teams</NativeSelectOption>
+              <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
+              {dashboard.teams.map((team) => (
+                <NativeSelectOption key={team.id} value={team.id}>
+                  {team.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+          <Button
+            className="secondary-button"
+            onClick={() => void onAutoCategorize(wiseTransactions.map((transaction) => transaction.id))}
+            disabled={isCategorizing || wiseTransactions.length === 0}
+          >
+            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            Auto
+          </Button>
+          <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+            {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+            CSV
+            <Input
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+              disabled={isImportingWise}
+              onChange={(event) => {
+                void onImportWiseStatements(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="wise-summary-grid">
+        <SummaryTile label="Visible volume" value={maybeMoney(wiseTransactions.length > 0, wiseTeamSummary.total)} />
+        <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
+        <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
+        <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
+      </div>
+      {wiseStatusIssue && (
+        <div className="integration-alert">
+          <CircleAlert size={16} />
+          <span>{wiseStatusIssue}</span>
+        </div>
+      )}
+      <TransactionTable
+        rows={wiseTransactions}
+        teams={dashboard.teams}
+        teamsById={teamsById}
+        providersById={providersById}
+        onMatch={onMatch}
+        onAssignTeam={onAssignTeam}
+        onUpdateCategory={onUpdateCategory}
+        onOpenInvoice={onOpenInvoice}
+      />
+    </section>
   );
 }
 
