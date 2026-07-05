@@ -79,6 +79,7 @@ export interface Team {
 export interface RevenuePartner {
   id: string;
   providerId?: string;
+  teamId?: string;
   name: string;
   revenueCategory?: string;
   source: "tune";
