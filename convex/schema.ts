@@ -135,6 +135,7 @@ const revenueRun = v.object({
 
 const revenuePartner = v.object({
   id: v.string(),
+  providerId: v.optional(v.string()),
   name: v.string(),
   source: v.literal("tune"),
   affiliateId: v.string(),
