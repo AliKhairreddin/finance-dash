@@ -177,6 +177,7 @@ export default defineSchema({
     wiseStatementImports: v.optional(v.array(wiseStatementImport)),
     revenueRuns: v.optional(v.array(revenueRun)),
     profitDistributionAdjustments: v.optional(v.array(v.any())),
+    wiseCardHolderTeamAssignments: v.optional(v.array(v.any())),
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"])
