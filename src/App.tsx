@@ -31,6 +31,11 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 import type {
   AiPromptPayload,
   AiPromptResult,
@@ -208,16 +213,16 @@ function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["d
 }
 
 const categoryChartPalette = [
-  "#1f5592",
-  "#0f7a4c",
-  "#b42335",
-  "#95640a",
-  "#087682",
-  "#5d56b3",
-  "#c2410c",
+  "#18181b",
+  "#52525b",
+  "#71717a",
+  "#137333",
+  "#b42318",
+  "#8a5a00",
   "#0f766e",
-  "#7c3aed",
-  "#64748b"
+  "#a16207",
+  "#3f3f46",
+  "#a1a1aa"
 ];
 
 type CategoryPieSegment = {
@@ -359,7 +364,7 @@ function App() {
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.classList.toggle("dark", themeMode === "dark");
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
 
@@ -776,7 +781,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
-            <button
+            <Button
               className="secondary-button"
               onClick={() => {
                 setEditingProvider(null);
@@ -785,11 +790,11 @@ function App() {
             >
               <Plus size={16} />
               Company
-            </button>
-            <button className="primary-button" onClick={syncNow} disabled={isSyncing}>
+            </Button>
+            <Button className="primary-button" onClick={syncNow} disabled={isSyncing}>
               {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
               Sync
-            </button>
+            </Button>
           </div>
         </header>
 
@@ -797,9 +802,9 @@ function App() {
           <div className={error ? "toast error" : "toast"}>
             {error ? <CircleAlert size={16} /> : <Check size={16} />}
             <span>{error || notice}</span>
-            <button aria-label="Dismiss" onClick={() => (error ? setError(null) : setNotice(null))}>
+            <Button aria-label="Dismiss" onClick={() => (error ? setError(null) : setNotice(null))}>
               <X size={14} />
-            </button>
+            </Button>
           </div>
         )}
 
@@ -858,69 +863,69 @@ function App() {
             </div>
             <div className="filters">
               <div className="segmented-control" aria-label="Wise transaction direction">
-                <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
+                <Button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
                   <ArrowUpRight size={15} />
                   In
-                </button>
-                <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
+                </Button>
+                <Button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
                   <ArrowDownRight size={15} />
                   Out
-                </button>
+                </Button>
               </div>
               <label className="search-box">
                 <Search size={15} />
-                <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
+                <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
               </label>
               <label>
                 <Filter size={15} />
-                <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
-                  <option value="needs-review">Needs review</option>
-                  <option value="matched">Matched</option>
-                  <option value="all">All rows</option>
-                </select>
+                <NativeSelect value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
+                  <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
+                  <NativeSelectOption value="matched">Matched</NativeSelectOption>
+                  <NativeSelectOption value="all">All rows</NativeSelectOption>
+                </NativeSelect>
               </label>
               <label>
                 <SlidersHorizontal size={15} />
-                <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
-                  <option value="match">% match</option>
-                  <option value="date">Date</option>
-                  <option value="period">Period</option>
-                  <option value="amount">Amount</option>
-                  <option value="category">Category</option>
-                  <option value="counterparty">Counterparty</option>
-                </select>
+                <NativeSelect value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
+                  <NativeSelectOption value="match">% match</NativeSelectOption>
+                  <NativeSelectOption value="date">Date</NativeSelectOption>
+                  <NativeSelectOption value="period">Period</NativeSelectOption>
+                  <NativeSelectOption value="amount">Amount</NativeSelectOption>
+                  <NativeSelectOption value="category">Category</NativeSelectOption>
+                  <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
+                </NativeSelect>
               </label>
               <label>
                 Order
-                <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
-                  <option value="desc">Descending</option>
-                  <option value="asc">Ascending</option>
-                </select>
+                <NativeSelect value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
+                  <NativeSelectOption value="desc">Descending</NativeSelectOption>
+                  <NativeSelectOption value="asc">Ascending</NativeSelectOption>
+                </NativeSelect>
               </label>
               <label>
                 Team
-                <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-                  <option value="all">All teams</option>
-                  <option value="unassigned">Unassigned</option>
+                <NativeSelect value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
+                  <NativeSelectOption value="all">All teams</NativeSelectOption>
+                  <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
                   {dashboard.teams.map((team) => (
-                    <option key={team.id} value={team.id}>
+                    <NativeSelectOption key={team.id} value={team.id}>
                       {team.name}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
-              <button
+              <Button
                 className="secondary-button"
                 onClick={() => void autoCategorizeTransactions(wiseTransactions.map((transaction) => transaction.id))}
                 disabled={isCategorizing || wiseTransactions.length === 0}
               >
                 {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
                 Auto
-              </button>
+              </Button>
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
                 {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
                 CSV
-                <input
+                <Input
                   type="file"
                   accept=".csv,text/csv"
                   multiple
@@ -1059,7 +1064,7 @@ function App() {
 function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: () => void }) {
   const isDark = themeMode === "dark";
   return (
-    <button
+    <Button
       aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
       aria-pressed={isDark}
       className={`theme-toggle ${isDark ? "dark" : "light"}`}
@@ -1076,7 +1081,7 @@ function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: 
       <span className="theme-toggle-thumb" aria-hidden="true">
         {isDark ? <Moon size={16} /> : <Sun size={16} />}
       </span>
-    </button>
+    </Button>
   );
 }
 
@@ -1107,7 +1112,7 @@ function Sidebar({
       </div>
       <nav className="sidebar-nav">
         {items.map((item) => (
-          <button
+          <Button
             key={item.id}
             className={activeTab === item.id ? "active" : ""}
             onClick={() => setActiveTab(item.id)}
@@ -1116,7 +1121,7 @@ function Sidebar({
           >
             {item.icon}
             <span>{item.label}</span>
-          </button>
+          </Button>
         ))}
       </nav>
     </aside>
@@ -1335,14 +1340,14 @@ function Overview({
                   </div>
                   <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
                   <div className="match-chip">{providerLabel(provider)}</div>
-                  <button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
+                  <Button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
                     <ShieldCheck size={15} />
                     Match
-                  </button>
-                  <button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
+                  </Button>
+                  <Button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
                     <FilePlus2 size={15} />
                     Document
-                  </button>
+                  </Button>
                 </article>
               );
             })
@@ -1427,10 +1432,10 @@ function CategorizationView({
             <p className="eyebrow">Categorization</p>
             <h2>Money in, money out, providers, platforms, and review load</h2>
           </div>
-          <button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || rows.length === 0}>
+          <Button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || rows.length === 0}>
             {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
             Auto
-          </button>
+          </Button>
         </div>
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
@@ -1836,38 +1841,38 @@ function TransactionTable({
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
                   <td>
                     <div className="team-select">
-                      <select value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
-                        <option value="">No team</option>
+                      <NativeSelect value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
+                        <NativeSelectOption value="">No team</NativeSelectOption>
                         {teams.map((team) => (
-                          <option key={team.id} value={team.id}>
+                          <NativeSelectOption key={team.id} value={team.id}>
                             {team.name}
-                          </option>
+                          </NativeSelectOption>
                         ))}
-                      </select>
+                      </NativeSelect>
                       <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
                     </div>
                   </td>
                   <td>
                     <div className="category-select">
                       <div className="category-control-row">
-                        <select
+                        <NativeSelect
                           value={displayCategory}
                           onChange={(event) => onUpdateCategory(transaction, event.target.value)}
                         >
                           {transactionCategoryChoices(displayCategory).map((category) => (
-                            <option key={category} value={category}>
+                            <NativeSelectOption key={category} value={category}>
                               {category}
-                            </option>
+                            </NativeSelectOption>
                           ))}
-                        </select>
-                        <button
+                        </NativeSelect>
+                        <Button
                           className="icon-button"
                           title={categoryActionTitle}
                           aria-label={categoryActionTitle}
                           onClick={() => onUpdateCategory(transaction, displayCategory)}
                         >
                           <Save size={15} />
-                        </button>
+                        </Button>
                       </div>
                       <small
                         className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}
@@ -1896,22 +1901,22 @@ function TransactionTable({
                   <td>
                     <div className="row-actions">
                       {provider ? (
-                        <button
+                        <Button
                           className="icon-button"
                           title={companyActionTitle}
                           aria-label={companyActionTitle}
                           onClick={() => onMatch(transaction, provider.id)}
                         >
                           <ShieldCheck size={16} />
-                        </button>
+                        </Button>
                       ) : (
                         <span className="action-placeholder" title={companyActionTitle}>
                           —
                         </span>
                       )}
-                      <button className="icon-button" title={documentTitle} onClick={() => onOpenInvoice(transaction)}>
+                      <Button className="icon-button" title={documentTitle} onClick={() => onOpenInvoice(transaction)}>
                         <FilePlus2 size={16} />
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -1986,55 +1991,55 @@ function RevenueView({
       <form className="revenue-controls" onSubmit={handleSubmit}>
         <label>
           Partner
-          <select value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
-            <option value="all">All partners</option>
+          <NativeSelect value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
+            <NativeSelectOption value="all">All partners</NativeSelectOption>
             {dashboard.revenuePartners.map((partner) => (
-              <option key={partner.id} value={partner.id}>
+              <NativeSelectOption key={partner.id} value={partner.id}>
                 {partner.name}
                 {partner.affiliateId ? ` · ${partner.affiliateId}` : ""}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label>
           Period
-          <select value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value as RevenuePeriodPreset)}>
-            <option value="last-week">Last week</option>
-            <option value="last-7-days">Last 7 days</option>
-            <option value="this-month">This month</option>
-            <option value="custom">Custom</option>
-          </select>
+          <NativeSelect value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value as RevenuePeriodPreset)}>
+            <NativeSelectOption value="last-week">Last week</NativeSelectOption>
+            <NativeSelectOption value="last-7-days">Last 7 days</NativeSelectOption>
+            <NativeSelectOption value="this-month">This month</NativeSelectOption>
+            <NativeSelectOption value="custom">Custom</NativeSelectOption>
+          </NativeSelect>
         </label>
         <label className="timezone-field">
           Timezone
-          <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+          <NativeSelect value={timezone} onChange={(event) => setTimezone(event.target.value)}>
             {timezoneOptions.map((option) => (
-              <option key={option.value} value={option.value}>
+              <NativeSelectOption key={option.value} value={option.value}>
                 {option.label}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         {periodPreset === "custom" && (
           <>
             <label>
               Start
-              <input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} />
+              <Input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} />
             </label>
             <label>
               End
-              <input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} />
+              <Input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} />
             </label>
           </>
         )}
         <label className="check-row">
-          <input type="checkbox" checked={createInvoices} onChange={(event) => setCreateInvoices(event.target.checked)} />
+          <Checkbox checked={createInvoices} onCheckedChange={(checked) => setCreateInvoices(checked === true)} />
           Merit invoice
         </label>
-        <button className="primary-button" type="submit" disabled={busy}>
+        <Button className="primary-button" type="submit" disabled={busy}>
           {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
           Pull
-        </button>
+        </Button>
       </form>
 
       <div className="revenue-partner-strip">
@@ -2314,30 +2319,30 @@ function InvoicesView({
                   <td>{invoice.transactionId ? invoice.transactionId : "Not linked"}</td>
                   <td>
                     <div className="row-actions">
-                      <button
+                      <Button
                         className="icon-button"
                         title="Approve invoice match"
                         disabled={busyId === invoice.id}
                         onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "approved"))}
                       >
                         <Check size={16} />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         className="icon-button"
                         title="Deny invoice match"
                         disabled={busyId === invoice.id}
                         onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "denied"))}
                       >
                         <X size={16} />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         className="icon-text-button"
                         disabled={busyId === invoice.id || invoice.paidLocally}
                         onClick={() => runAction(invoice.id, () => onMarkPaid(invoice.id))}
                       >
                         <Check size={15} />
                         Paid here
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -2385,10 +2390,10 @@ function ProvidersView({
           <p className="eyebrow">Business directory</p>
           <h2>Companies, platforms, partners, and known bank names</h2>
         </div>
-        <button className="secondary-button" onClick={onAdd}>
+        <Button className="secondary-button" onClick={onAdd}>
           <Plus size={16} />
           Add company
-        </button>
+        </Button>
       </div>
       <div className="directory-toolbar">
         <div className="segmented-control" aria-label="Directory filter">
@@ -2399,13 +2404,13 @@ function ProvidersView({
             { id: "platform", label: "Platforms" },
             { id: "revenue", label: "Revenue" }
           ].map((item) => (
-            <button
+            <Button
               key={item.id}
               className={scope === item.id ? "active" : ""}
               onClick={() => setScope(item.id as "all" | ProviderType | "revenue")}
             >
               {item.label}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -2420,9 +2425,9 @@ function ProvidersView({
                 <strong>{provider.name}</strong>
                 <span>{providerTypeLabel(provider.type)} · {provider.category}</span>
               </div>
-              <button className="icon-button" title="Edit company" onClick={() => onEditProvider(provider)}>
+              <Button className="icon-button" title="Edit company" onClick={() => onEditProvider(provider)}>
                 <Pencil size={15} />
-              </button>
+              </Button>
             </div>
             <div className="alias-list">
               {[provider.name, ...provider.aliases].slice(0, 7).map((alias) => (
@@ -2442,9 +2447,9 @@ function ProvidersView({
                   <strong>{partner.name}</strong>
                   <span>TUNE · Affiliate ID {partner.affiliateId || "Not set"}</span>
                 </div>
-                <button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
+                <Button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
                   <Pencil size={15} />
-                </button>
+                </Button>
               </div>
               <div className="alias-list">
                 <span>{partner.currency}</span>
@@ -2555,15 +2560,15 @@ function SettingsView({
           <div className="form-grid">
             <label>
               Team name
-              <input value={teamName} onChange={(event) => setTeamName(event.target.value)} />
+              <Input value={teamName} onChange={(event) => setTeamName(event.target.value)} />
             </label>
           </div>
           {teamError && <div className="inline-error">{teamError}</div>}
           <div className="modal-actions">
-            <button className="primary-button" type="submit" disabled={busy === "team" || !teamName.trim()}>
+            <Button className="primary-button" type="submit" disabled={busy === "team" || !teamName.trim()}>
               {busy === "team" ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
               Add team
-            </button>
+            </Button>
           </div>
         </form>
         <div className="settings-chip-list">
@@ -2586,7 +2591,7 @@ function SettingsView({
         <form className="settings-form" onSubmit={saveSettings}>
           <label>
             OpenRouter API key
-            <input
+            <Input
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
@@ -2597,17 +2602,17 @@ function SettingsView({
           <div className="form-grid">
             <label>
               Model
-              <select value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}>
+              <NativeSelect value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}>
                 {openRouterModelOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
+                  <NativeSelectOption key={option.value} value={option.value}>
                     {option.label}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             <label>
               Model slug
-              <input
+              <Input
                 value={selectedModel}
                 onChange={(event) => {
                   setModelChoice("custom");
@@ -2618,22 +2623,22 @@ function SettingsView({
           </div>
           {aiError && <div className="inline-error">{aiError}</div>}
           <div className="modal-actions">
-            <button className="primary-button" type="submit" disabled={busy === "save"}>
+            <Button className="primary-button" type="submit" disabled={busy === "save"}>
               {busy === "save" ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
               Save AI settings
-            </button>
+            </Button>
           </div>
         </form>
         <form className="settings-form ai-prompt-form" onSubmit={runPrompt}>
           <label>
             Prompt
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={3} />
+            <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={3} />
           </label>
           <div className="modal-actions">
-            <button className="secondary-button" type="submit" disabled={busy === "prompt" || !dashboard.aiSettings.apiKeyConfigured}>
+            <Button className="secondary-button" type="submit" disabled={busy === "prompt" || !dashboard.aiSettings.apiKeyConfigured}>
               {busy === "prompt" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
               Run prompt
-            </button>
+            </Button>
           </div>
           {aiResult && (
             <div className="prompt-result">
@@ -2745,9 +2750,9 @@ function InvoiceModal({
             <p className="eyebrow">Finance document</p>
             <h2>{documentTitle}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
-          </button>
+          </Button>
         </div>
         <div className="transaction-summary">
           <span>{transaction.counterparty}</span>
@@ -2757,7 +2762,7 @@ function InvoiceModal({
         {error && <div className="inline-error">{error}</div>}
         <label>
           Company
-          <select
+          <NativeSelect
             value={providerId}
             onChange={(event) => {
               const nextProviderId = event.target.value;
@@ -2766,40 +2771,40 @@ function InvoiceModal({
               if (nextProvider) setCustomerName(nextProvider.legalName || nextProvider.name);
             }}
           >
-            <option value="">No company selected</option>
+            <NativeSelectOption value="">No company selected</NativeSelectOption>
             {providers.map((item) => (
-              <option key={item.id} value={item.id}>
+              <NativeSelectOption key={item.id} value={item.id}>
                 {item.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label>
           {documentType === "sales_invoice" ? "Customer name" : "Supplier name"}
-          <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+          <Input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
         </label>
         <div className="form-grid">
           <label>
             Amount
-            <input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
+            <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
           </label>
           <label>
             Due date
-            <input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+            <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
           </label>
         </div>
         <label>
           Description
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
+          <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
         </label>
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>
+          <Button type="button" className="secondary-button" onClick={onClose}>
             Cancel
-          </button>
-          <button type="submit" className="primary-button" disabled={submitting}>
+          </Button>
+          <Button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />}
             Create draft
-          </button>
+          </Button>
         </div>
       </form>
     </div>
@@ -2870,81 +2875,81 @@ function ProviderModal({
             <p className="eyebrow">Directory setup</p>
             <h2>{provider ? "Edit company" : "Add company or platform"}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
-          </button>
+          </Button>
         </div>
         {error && <div className="inline-error">{error}</div>}
         <label>
           Name
-          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Position2, Facebook Direct, client name" />
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Position2, Facebook Direct, client name" />
         </label>
         <div className="form-grid">
           <label>
             Relationship
-            <select value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
-              <option value="partner">Partner</option>
-              <option value="provider">Supplier</option>
-              <option value="platform">Platform</option>
-              <option value="internal">Internal</option>
-            </select>
+            <NativeSelect value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
+              <NativeSelectOption value="partner">Partner</NativeSelectOption>
+              <NativeSelectOption value="provider">Supplier</NativeSelectOption>
+              <NativeSelectOption value="platform">Platform</NativeSelectOption>
+              <NativeSelectOption value="internal">Internal</NativeSelectOption>
+            </NativeSelect>
           </label>
           <label>
             Company category
-            <input value={category} onChange={(event) => setCategory(event.target.value)} />
+            <Input value={category} onChange={(event) => setCategory(event.target.value)} />
           </label>
         </div>
         <div className="form-grid">
           <label>
             Legal name
-            <input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
+            <Input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
           </label>
           <label>
             Email
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
         </div>
         <div className="form-grid">
           <label>
             Country
-            <input value={country} onChange={(event) => setCountry(event.target.value)} />
+            <Input value={country} onChange={(event) => setCountry(event.target.value)} />
           </label>
           <label>
             Tax ID
-            <input value={taxId} onChange={(event) => setTaxId(event.target.value)} />
+            <Input value={taxId} onChange={(event) => setTaxId(event.target.value)} />
           </label>
         </div>
         <label>
           Address
-          <textarea value={address} onChange={(event) => setAddress(event.target.value)} rows={2} />
+          <Textarea value={address} onChange={(event) => setAddress(event.target.value)} rows={2} />
         </label>
         <div className="form-grid">
           <label>
             Default currency
-            <input value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value.toUpperCase())} placeholder="USD" />
+            <Input value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value.toUpperCase())} placeholder="USD" />
           </label>
           <label>
             Payment terms days
-            <input type="number" min="0" step="1" value={paymentTermsDays} onChange={(event) => setPaymentTermsDays(event.target.value)} />
+            <Input type="number" min="0" step="1" value={paymentTermsDays} onChange={(event) => setPaymentTermsDays(event.target.value)} />
           </label>
         </div>
         <div className="form-grid">
           <label>
             Merit customer ID
-            <input value={meritCustomerId} onChange={(event) => setMeritCustomerId(event.target.value)} />
+            <Input value={meritCustomerId} onChange={(event) => setMeritCustomerId(event.target.value)} />
           </label>
           <label>
             Merit supplier ID
-            <input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
+            <Input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
           </label>
         </div>
         <label>
           Default account
-          <input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />
+          <Input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />
         </label>
         <label>
           Aliases
-          <textarea
+          <Textarea
             value={aliases}
             onChange={(event) => setAliases(event.target.value)}
             rows={3}
@@ -2952,13 +2957,13 @@ function ProviderModal({
           />
         </label>
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>
+          <Button type="button" className="secondary-button" onClick={onClose}>
             Cancel
-          </button>
-          <button type="submit" className="primary-button" disabled={submitting}>
+          </Button>
+          <Button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
             Save
-          </button>
+          </Button>
         </div>
       </form>
     </div>
@@ -3023,89 +3028,89 @@ function RevenuePartnerModal({
             <p className="eyebrow">Revenue partner</p>
             <h2>Edit {partner.name}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
-          </button>
+          </Button>
         </div>
         {error && <div className="inline-error">{error}</div>}
         <div className="form-grid">
           <label>
             Name
-            <input value={name} onChange={(event) => setName(event.target.value)} />
+            <Input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
             Affiliate ID
-            <input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
+            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
           </label>
         </div>
         <div className="form-grid">
           <label>
             External ID
-            <input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
+            <Input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
           </label>
           <label>
             Currency
-            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} />
+            <Input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} />
           </label>
         </div>
         <div className="form-grid">
           <label>
             Timezone
-            <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+            <NativeSelect value={timezone} onChange={(event) => setTimezone(event.target.value)}>
               {timezoneOptions.map((option) => (
-                <option key={option.value} value={option.value}>
+                <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label>
             Network timezone
-            <select value={networkTimezone} onChange={(event) => setNetworkTimezone(event.target.value)}>
+            <NativeSelect value={networkTimezone} onChange={(event) => setNetworkTimezone(event.target.value)}>
               {timezoneOptions.map((option) => (
-                <option key={option.value} value={option.value}>
+                <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
         <div className="form-grid">
           <label>
             Network ID env
-            <input value={networkIdEnv} onChange={(event) => setNetworkIdEnv(event.target.value)} />
+            <Input value={networkIdEnv} onChange={(event) => setNetworkIdEnv(event.target.value)} />
           </label>
           <label>
             API key env
-            <input value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} />
+            <Input value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} />
           </label>
         </div>
         <label>
           API base URL env
-          <input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
+          <Input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
         </label>
         <div className="form-grid">
           <label>
             Merit customer
-            <input value={meritCustomerName} onChange={(event) => setMeritCustomerName(event.target.value)} />
+            <Input value={meritCustomerName} onChange={(event) => setMeritCustomerName(event.target.value)} />
           </label>
           <label>
             Invoice due days
-            <input type="number" min="0" step="1" value={invoiceDueDays} onChange={(event) => setInvoiceDueDays(event.target.value)} />
+            <Input type="number" min="0" step="1" value={invoiceDueDays} onChange={(event) => setInvoiceDueDays(event.target.value)} />
           </label>
         </div>
         <label className="check-row modal-check-row">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          <Checkbox checked={enabled} onCheckedChange={(checked) => setEnabled(checked === true)} />
           Enabled
         </label>
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>
+          <Button type="button" className="secondary-button" onClick={onClose}>
             Cancel
-          </button>
-          <button type="submit" className="primary-button" disabled={submitting}>
+          </Button>
+          <Button type="submit" className="primary-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
             Save
-          </button>
+          </Button>
         </div>
       </form>
     </div>
