@@ -91,6 +91,7 @@ const transaction = v.object({
   description: v.string(),
   rawName: v.string(),
   counterparty: v.string(),
+  cardHolderName: v.optional(v.string()),
   amount: v.number(),
   currency: v.string(),
   direction: v.union(v.literal("in"), v.literal("out")),

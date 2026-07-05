@@ -176,6 +176,7 @@ export interface Transaction {
   description: string;
   rawName: string;
   counterparty: string;
+  cardHolderName?: string;
   amount: number;
   currency: string;
   direction: Direction;
