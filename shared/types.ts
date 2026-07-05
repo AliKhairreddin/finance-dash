@@ -80,6 +80,7 @@ export interface RevenuePartner {
   id: string;
   providerId?: string;
   name: string;
+  revenueCategory?: string;
   source: "tune";
   affiliateId: string;
   externalId?: string;
