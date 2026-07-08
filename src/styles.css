@@ -1131,6 +1131,7 @@ textarea:focus-visible {
 }
 
 .category-select select,
+.company-select select,
 .team-select select,
 .filters select,
 .filters input,
@@ -1157,6 +1158,7 @@ textarea:focus-visible {
 }
 
 .category-select select:hover,
+.company-select select:hover,
 .team-select select:hover,
 .filters select:hover,
 .filters input:hover,
@@ -1250,6 +1252,7 @@ textarea:focus-visible {
 }
 
 .category-select small,
+.company-match small,
 .team-select small {
   color: var(--app-muted);
   font-size: 0.74rem;

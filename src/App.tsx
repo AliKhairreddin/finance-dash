@@ -1371,6 +1371,7 @@ function WiseBankingTab({
       <TransactionTable
         rows={wiseTransactions}
         teams={dashboard.teams}
+        providers={dashboard.providers}
         teamsById={teamsById}
         providersById={providersById}
         onMatch={onMatch}
@@ -1985,6 +1986,7 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
 function TransactionTable({
   rows,
   teams,
+  providers,
   teamsById,
   providersById,
   onMatch,
@@ -1994,6 +1996,7 @@ function TransactionTable({
 }: {
   rows: Transaction[];
   teams: Team[];
+  providers: Provider[];
   teamsById: Map<string, Team>;
   providersById: Map<string, Provider>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
@@ -2067,6 +2070,7 @@ function TransactionTable({
               const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
+              const companyPlaceholder = transaction.direction === "in" ? "Needs company" : "Optional";
               const companyActionTitle = provider
                 ? "Save suggested company match"
                 : transaction.direction === "in"
@@ -2138,9 +2142,27 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="company-match">
-                      <span className={`status-pill ${provider ? "good" : transaction.direction === "in" ? "warning" : ""}`}>
-                        {provider ? provider.name : transaction.direction === "in" ? "Needs company" : "Optional"}
-                      </span>
+                      <NativeSelect
+                        className="company-select"
+                        size="sm"
+                        value={provider?.id ?? ""}
+                        onChange={(event) => {
+                          if (!event.target.value) return;
+                          onMatch(transaction, event.target.value);
+                        }}
+                        aria-label={`Company for ${transaction.counterparty}`}
+                      >
+                        {!provider && (
+                          <NativeSelectOption value="" disabled>
+                            {companyPlaceholder}
+                          </NativeSelectOption>
+                        )}
+                        {providers.map((item) => (
+                          <NativeSelectOption key={item.id} value={item.id}>
+                            {item.name}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
                       {provider && <small>{providerTagLabel(provider)}</small>}
                     </div>
                   </td>
