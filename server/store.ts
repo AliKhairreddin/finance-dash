@@ -52,7 +52,8 @@ import {
   normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
-  transactionAliasCandidates
+  transactionAliasCandidates,
+  uniqueProviderTags
 } from "./matching";
 import { loadPersistedState, savePersistedState } from "./persistence";
 
@@ -204,6 +205,17 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
     meritCustomerId: cleanOptional(payload.meritCustomerId),
     meritSupplierId: cleanOptional(payload.meritSupplierId)
   };
+}
+
+function providerType(payload: CreateProviderPayload | UpdateProviderPayload): Provider["type"] {
+  if (payload.type !== "client" && payload.type !== "supplier") {
+    throw new Error("Company relationship must be client or supplier");
+  }
+  return payload.type;
+}
+
+function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): string[] {
+  return uniqueProviderTags(Array.isArray(payload.tags) ? payload.tags : []);
 }
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
@@ -468,8 +480,8 @@ export async function createProvider(payload: CreateProviderPayload): Promise<Pr
   const provider: Provider = {
     id: `provider-${crypto.randomUUID()}`,
     name: payload.name.trim(),
-    type: payload.type,
-    category: payload.category.trim() || "Uncategorized",
+    type: providerType(payload),
+    tags: providerTags(payload),
     aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
     ...companyDetails(payload),
     source: "manual",
@@ -487,8 +499,8 @@ export async function updateProvider(providerId: string, payload: UpdateProvider
     updated = {
       ...provider,
       name: payload.name.trim(),
-      type: payload.type,
-      category: payload.category.trim() || "Uncategorized",
+      type: providerType(payload),
+      tags: providerTags(payload),
       aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
       ...companyDetails(payload)
     };

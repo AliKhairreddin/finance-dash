@@ -1787,12 +1787,29 @@ textarea:focus-visible {
   background: var(--teal-soft);
 }
 
+.tag-list,
 .alias-list,
 .need-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 12px;
+}
+
+.tag-list {
+  margin-top: 10px;
+}
+
+.tag-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--info-text);
+  background: var(--blue-soft);
+  border: 1px solid var(--info-border);
+  font-size: 0.74rem;
 }
 
 .alias-list span,

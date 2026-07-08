@@ -137,12 +137,22 @@ function providerLabel(provider?: Provider): string {
 
 function providerTypeLabel(type: ProviderType): string {
   const labels: Record<ProviderType, string> = {
-    partner: "Partner",
-    provider: "Supplier",
-    platform: "Platform",
-    internal: "Internal"
+    client: "Client",
+    supplier: "Supplier"
   };
   return labels[type];
+}
+
+function providerTagLabel(provider?: Provider): string {
+  return provider?.tags.length ? provider.tags.join(" · ") : "No tags";
+}
+
+function companyTagOptions(providers: Provider[]): string[] {
+  return [...new Set(providers.flatMap((provider) => provider.tags))].sort((left, right) => left.localeCompare(right));
+}
+
+function providerHasTag(provider: Provider | undefined, tag: string): boolean {
+  return tag === "all" || Boolean(provider?.tags.some((item) => item === tag));
 }
 
 function effectiveCategory(transaction: Transaction): string {
@@ -1588,7 +1598,19 @@ function CategorizationView({
   isCategorizing: boolean;
   onAutoCategorize: () => void;
 }) {
-  const rows = dashboard.transactions;
+  const [tagFilter, setTagFilter] = useState("all");
+  const tagOptions = useMemo(() => companyTagOptions(dashboard.providers), [dashboard.providers]);
+
+  useEffect(() => {
+    if (tagFilter !== "all" && !tagOptions.includes(tagFilter)) {
+      setTagFilter("all");
+    }
+  }, [tagFilter, tagOptions]);
+
+  const rows = dashboard.transactions.filter((transaction) => {
+    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+    return providerHasTag(provider, tagFilter);
+  });
   const needsReview = rows.filter(transactionNeedsReview);
 
   const categoryRows = [...rows.reduce((map, transaction) => {
@@ -1647,12 +1669,25 @@ function CategorizationView({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Categorization</p>
-            <h2>Money in, money out, providers, platforms, and review load</h2>
+            <h2>Money in, money out, clients, suppliers, tags, and review load</h2>
           </div>
-          <Button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || rows.length === 0}>
-            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-            Auto
-          </Button>
+          <div className="filters">
+            <label>
+              <Tags size={15} />
+              <NativeSelect value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+                <NativeSelectOption value="all">All tags</NativeSelectOption>
+                {tagOptions.map((tag) => (
+                  <NativeSelectOption key={tag} value={tag}>
+                    {tag}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <Button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || dashboard.transactions.length === 0}>
+              {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+              Auto
+            </Button>
+          </div>
         </div>
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
@@ -2106,6 +2141,7 @@ function TransactionTable({
                       <span className={`status-pill ${provider ? "good" : transaction.direction === "in" ? "warning" : ""}`}>
                         {provider ? provider.name : transaction.direction === "in" ? "Needs company" : "Optional"}
                       </span>
+                      {provider && <small>{providerTagLabel(provider)}</small>}
                     </div>
                   </td>
                   <td>
@@ -2590,22 +2626,21 @@ function ProvidersView({
   onEditProvider: (provider: Provider) => void;
   onEditRevenuePartner: (partner: RevenuePartner) => void;
 }) {
-  const [scope, setScope] = useState<"all" | ProviderType | "revenue">("all");
+  const [scope, setScope] = useState<"all" | ProviderType>("all");
   const visibleProviders = providers.filter((provider) => {
     if (scope === "all") return true;
-    if (scope === "revenue") return false;
     return provider.type === scope;
   });
-  const showRevenuePartners = scope === "all" || scope === "revenue";
-  const partnerCount = providers.filter((provider) => provider.type === "partner").length;
-  const providerCount = providers.filter((provider) => provider.type === "provider").length;
+  const showRevenuePartners = scope === "all" || scope === "client";
+  const clientCount = providers.filter((provider) => provider.type === "client").length + revenuePartners.length;
+  const supplierCount = providers.filter((provider) => provider.type === "supplier").length;
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Business directory</p>
-          <h2>Companies, platforms, partners, and known bank names</h2>
+          <h2>Clients, suppliers, tags, and known bank names</h2>
         </div>
         <Button className="secondary-button" onClick={onAdd}>
           <Plus size={16} />
@@ -2616,15 +2651,13 @@ function ProvidersView({
         <div className="segmented-control" aria-label="Directory filter">
           {[
             { id: "all", label: "All" },
-            { id: "partner", label: `Partners ${partnerCount}` },
-            { id: "provider", label: `Suppliers ${providerCount}` },
-            { id: "platform", label: "Platforms" },
-            { id: "revenue", label: "Revenue" }
+            { id: "client", label: `Clients ${clientCount}` },
+            { id: "supplier", label: `Suppliers ${supplierCount}` }
           ].map((item) => (
             <Button
               key={item.id}
               className={scope === item.id ? "active" : ""}
-              onClick={() => setScope(item.id as "all" | ProviderType | "revenue")}
+              onClick={() => setScope(item.id as "all" | ProviderType)}
             >
               {item.label}
             </Button>
@@ -2640,11 +2673,14 @@ function ProvidersView({
               </div>
               <div>
                 <strong>{provider.name}</strong>
-                <span>{providerTypeLabel(provider.type)} · {provider.category}</span>
+                <span>{providerTypeLabel(provider.type)}</span>
               </div>
               <Button className="icon-button" title="Edit company" onClick={() => onEditProvider(provider)}>
                 <Pencil size={15} />
               </Button>
+            </div>
+            <div className="tag-list">
+              {provider.tags.length > 0 ? provider.tags.map((tag) => <span key={tag}>{tag}</span>) : <span>No tags</span>}
             </div>
             <div className="alias-list">
               {[provider.name, ...provider.aliases].slice(0, 7).map((alias) => (
@@ -2662,13 +2698,18 @@ function ProvidersView({
                 </div>
                 <div>
                   <strong>{partner.name}</strong>
-                  <span>TUNE · Affiliate ID {partner.affiliateId || "Not set"}</span>
+                  <span>Client · TUNE revenue</span>
                 </div>
                 <Button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
                   <Pencil size={15} />
                 </Button>
               </div>
+              <div className="tag-list">
+                <span>Revenue</span>
+                <span>TUNE</span>
+              </div>
               <div className="alias-list">
+                <span>Affiliate ID {partner.affiliateId || "Not set"}</span>
                 <span>{partner.currency}</span>
                 <span>{partner.timezone}</span>
                 <span>{partner.enabled ? "Enabled" : "Disabled"}</span>
@@ -2676,7 +2717,7 @@ function ProvidersView({
               </div>
             </article>
           ))}
-        {visibleProviders.length === 0 && !showRevenuePartners && <div className="empty-state">No companies in this filter</div>}
+        {visibleProviders.length === 0 && (!showRevenuePartners || revenuePartners.length === 0) && <div className="empty-state">No companies in this filter</div>}
       </div>
     </section>
   );
@@ -3038,8 +3079,8 @@ function ProviderModal({
   onSubmit: (payload: UpdateProviderPayload) => Promise<void>;
 }) {
   const [name, setName] = useState(provider?.name ?? "");
-  const [type, setType] = useState<ProviderType>(provider?.type ?? "provider");
-  const [category, setCategory] = useState(provider?.category ?? "Supplier");
+  const [type, setType] = useState<ProviderType>(provider?.type ?? "supplier");
+  const [tags, setTags] = useState(provider?.tags.join(", ") ?? "");
   const [aliases, setAliases] = useState(provider?.aliases.join(", ") ?? "");
   const [defaultAccount, setDefaultAccount] = useState(provider?.defaultAccount ?? "");
   const [legalName, setLegalName] = useState(provider?.legalName ?? "");
@@ -3064,7 +3105,7 @@ function ProviderModal({
       await onSubmit({
         name,
         type,
-        category,
+        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
         aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
         defaultAccount: defaultAccount.trim() || undefined,
         legalName: legalName.trim() || undefined,
@@ -3090,7 +3131,7 @@ function ProviderModal({
         <div className="modal-header">
           <div>
             <p className="eyebrow">Directory setup</p>
-            <h2>{provider ? "Edit company" : "Add company or platform"}</h2>
+            <h2>{provider ? "Edit company" : "Add company"}</h2>
           </div>
           <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -3105,15 +3146,13 @@ function ProviderModal({
           <label>
             Relationship
             <NativeSelect value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
-              <NativeSelectOption value="partner">Partner</NativeSelectOption>
-              <NativeSelectOption value="provider">Supplier</NativeSelectOption>
-              <NativeSelectOption value="platform">Platform</NativeSelectOption>
-              <NativeSelectOption value="internal">Internal</NativeSelectOption>
+              <NativeSelectOption value="client">Client</NativeSelectOption>
+              <NativeSelectOption value="supplier">Supplier</NativeSelectOption>
             </NativeSelect>
           </label>
           <label>
-            Company category
-            <Input value={category} onChange={(event) => setCategory(event.target.value)} />
+            Company tags
+            <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Ad platform, Subscription, Revenue" />
           </label>
         </div>
         <div className="form-grid">

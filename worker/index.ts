@@ -46,7 +46,8 @@ import {
   normalizeName,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
-  transactionAliasCandidates
+  transactionAliasCandidates,
+  uniqueProviderTags
 } from "../server/matching";
 
 interface Fetcher {
@@ -127,6 +128,17 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
     meritCustomerId: cleanOptional(payload.meritCustomerId),
     meritSupplierId: cleanOptional(payload.meritSupplierId)
   };
+}
+
+function providerType(payload: CreateProviderPayload | UpdateProviderPayload): Provider["type"] {
+  if (payload.type !== "client" && payload.type !== "supplier") {
+    throw new Error("Company relationship must be client or supplier");
+  }
+  return payload.type;
+}
+
+function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): string[] {
+  return uniqueProviderTags(Array.isArray(payload.tags) ? payload.tags : []);
 }
 
 interface WiseActivityResult {
@@ -1089,8 +1101,8 @@ async function createProvider(env: Env, payload: CreateProviderPayload): Promise
   const provider: Provider = {
     id: `provider-${crypto.randomUUID()}`,
     name: payload.name.trim(),
-    type: payload.type,
-    category: payload.category.trim() || "Uncategorized",
+    type: providerType(payload),
+    tags: providerTags(payload),
     aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
     ...companyDetails(payload),
     source: "manual",
@@ -1112,8 +1124,8 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
     updated = {
       ...provider,
       name: payload.name.trim(),
-      type: payload.type,
-      category: payload.category.trim() || "Uncategorized",
+      type: providerType(payload),
+      tags: providerTags(payload),
       aliases: payload.aliases.map((alias) => alias.trim()).filter(Boolean),
       ...companyDetails(payload)
     };

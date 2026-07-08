@@ -12,10 +12,8 @@ const dataSource = v.union(
 );
 
 const providerType = v.union(
-  v.literal("partner"),
-  v.literal("provider"),
-  v.literal("platform"),
-  v.literal("internal")
+  v.literal("client"),
+  v.literal("supplier")
 );
 
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"), v.literal("created"));
@@ -26,7 +24,7 @@ const provider = v.object({
   id: v.string(),
   name: v.string(),
   type: providerType,
-  category: v.string(),
+  tags: v.array(v.string()),
   aliases: v.array(v.string()),
   defaultAccount: v.optional(v.string()),
   legalName: v.optional(v.string()),

@@ -12,10 +12,8 @@ const dataSource = v.union(
 );
 
 const providerType = v.union(
-  v.literal("partner"),
-  v.literal("provider"),
-  v.literal("platform"),
-  v.literal("internal")
+  v.literal("client"),
+  v.literal("supplier")
 );
 
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"), v.literal("created"));
@@ -26,7 +24,7 @@ const provider = v.object({
   id: v.string(),
   name: v.string(),
   type: providerType,
-  category: v.string(),
+  tags: v.array(v.string()),
   aliases: v.array(v.string()),
   defaultAccount: v.optional(v.string()),
   legalName: v.optional(v.string()),
@@ -164,6 +162,93 @@ const aiSettings = v.object({
   updatedAt: v.optional(v.string())
 });
 
+type ProviderRelationship = "client" | "supplier";
+type ProviderSource = "wise" | "revolut" | "slash" | "merit" | "manual" | "mock" | "tune";
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function uniqueProviderTags(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const tag = value.trim().replace(/\s+/g, " ");
+    const normalized = normalizeText(tag);
+    if (!tag || !normalized || normalized === "uncategorized" || seen.has(normalized)) continue;
+    seen.add(normalized);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function relationshipTag(type: string): string | undefined {
+  if (type === "partner") return "Partner";
+  if (type === "platform") return "Platform";
+  if (type === "internal") return "Internal";
+  return undefined;
+}
+
+function inferProviderType(provider: Record<string, unknown>): ProviderRelationship {
+  const type = typeof provider.type === "string" ? provider.type : "";
+  if (type === "client" || type === "supplier") return type;
+  if (type === "partner") return "client";
+  if (typeof provider.meritCustomerId === "string" && provider.meritCustomerId && !provider.meritSupplierId) return "client";
+
+  const tagText = Array.isArray(provider.tags) ? provider.tags.filter((tag) => typeof tag === "string").join(" ") : "";
+  const text = normalizeText([provider.name, provider.category, tagText].filter((value) => typeof value === "string").join(" "));
+  return /\b(client|customer|revenue|affiliate|partner)\b/.test(text) ? "client" : "supplier";
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeProvider(provider: unknown) {
+  const record = provider && typeof provider === "object" && !Array.isArray(provider) ? (provider as Record<string, unknown>) : {};
+  const type = typeof record.type === "string" ? record.type : "";
+  const tags = uniqueProviderTags([
+    ...(Array.isArray(record.tags) ? record.tags : []),
+    record.category,
+    relationshipTag(type)
+  ]);
+
+  return {
+    id: String(record.id),
+    name: String(record.name),
+    type: inferProviderType(record),
+    tags,
+    aliases: stringArray(record.aliases),
+    defaultAccount: optionalString(record.defaultAccount),
+    legalName: optionalString(record.legalName),
+    email: optionalString(record.email),
+    country: optionalString(record.country),
+    address: optionalString(record.address),
+    taxId: optionalString(record.taxId),
+    defaultCurrency: optionalString(record.defaultCurrency),
+    paymentTermsDays: optionalNumber(record.paymentTermsDays),
+    meritCustomerId: optionalString(record.meritCustomerId),
+    meritSupplierId: optionalString(record.meritSupplierId),
+    source: record.source as ProviderSource,
+    createdAt: String(record.createdAt)
+  };
+}
+
 export const getState = query({
   args: {},
   returns: v.union(
@@ -191,7 +276,7 @@ export const getState = query({
     if (!state) return null;
 
     return {
-      providers: state.providers,
+      providers: state.providers.map(normalizeProvider),
       invoices: state.invoices,
       teams: state.teams ?? [],
       transactionCategoryRules: state.transactionCategoryRules ?? [],
@@ -202,6 +287,34 @@ export const getState = query({
       revenueRuns: state.revenueRuns ?? [],
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
+    };
+  }
+});
+
+export const migrateProviderRelationshipsAndTags = mutation({
+  args: {},
+  returns: v.object({
+    providers: v.number(),
+    updatedAt: v.optional(v.string())
+  }),
+  handler: async (ctx) => {
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+
+    if (!state) return { providers: 0 };
+
+    const updatedAt = new Date().toISOString();
+    const providers = state.providers.map(normalizeProvider);
+    await ctx.db.patch(state._id, {
+      providers,
+      updatedAt
+    });
+
+    return {
+      providers: providers.length,
+      updatedAt
     };
   }
 });

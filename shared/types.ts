@@ -2,7 +2,7 @@ export type DataSource = "wise" | "revolut" | "slash" | "merit" | "manual" | "mo
 
 export type Direction = "in" | "out";
 
-export type ProviderType = "partner" | "provider" | "platform" | "internal";
+export type ProviderType = "client" | "supplier";
 
 export type InvoiceStatus = "draft" | "open" | "paid" | "created";
 
@@ -54,7 +54,7 @@ export interface Provider {
   id: string;
   name: string;
   type: ProviderType;
-  category: string;
+  tags: string[];
   aliases: string[];
   defaultAccount?: string;
   legalName?: string;
@@ -309,7 +309,7 @@ export interface UpdateTransactionCategoryPayload {
 export interface CreateProviderPayload {
   name: string;
   type: ProviderType;
-  category: string;
+  tags: string[];
   aliases: string[];
   defaultAccount?: string;
   legalName?: string;

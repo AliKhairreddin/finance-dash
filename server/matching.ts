@@ -1,115 +1,120 @@
-import type { Provider, Team, Transaction, TransactionCategoryRule } from "../shared/types";
+import type { Provider, ProviderType, Team, Transaction, TransactionCategoryRule } from "../shared/types";
 import { transactionBusinessCategory } from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
 const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
 
 type ProviderDraft = Omit<Provider, "source" | "createdAt">;
+type PersistedProviderShape = Omit<Provider, "type" | "tags"> & {
+  type: ProviderType | "partner" | "provider" | "platform" | "internal" | string;
+  tags?: string[];
+  category?: string;
+};
 
 const canonicalProviderDrafts: ProviderDraft[] = [
   {
     id: "provider-ad-account-p2w",
     name: "P2W",
-    type: "provider",
-    category: "Ad account provider",
+    type: "supplier",
+    tags: ["Ad account provider"],
     aliases: ["p2w", "point to web", "point2web", "point 2 web"]
   },
   {
     id: "provider-ad-account-rezono",
     name: "Rezono",
-    type: "provider",
-    category: "Ad account provider",
+    type: "supplier",
+    tags: ["Ad account provider"],
     aliases: ["rezono", "rezono ads", "rezono account"]
   },
   {
     id: "provider-ad-account-position2",
     name: "Position2",
-    type: "provider",
-    category: "Ad account provider",
+    type: "supplier",
+    tags: ["Ad account provider"],
     aliases: ["position2", "position 2", "position two"]
   },
   {
     id: "platform-meta-facebook-ads",
     name: "Meta / Facebook Ads",
-    type: "platform",
-    category: "Ad platform",
+    type: "supplier",
+    tags: ["Ad platform"],
     aliases: ["facebook", "facebook ads", "facebk", "meta ads", "meta platforms", "fb ads", "fb me ads", "facebook direct"]
   },
   {
     id: "platform-tiktok-ads",
     name: "TikTok Ads",
-    type: "platform",
-    category: "Ad platform",
+    type: "supplier",
+    tags: ["Ad platform"],
     aliases: ["tiktok", "tik tok", "tiktok ads", "bytedance", "tt ads"]
   },
   {
     id: "platform-bigo-ads",
     name: "Bigo Ads",
-    type: "platform",
-    category: "Ad platform",
+    type: "supplier",
+    tags: ["Ad platform"],
     aliases: ["bigo", "bigo ads", "bigo live"]
   },
   {
     id: "platform-snapchat-ads",
     name: "Snapchat Ads",
-    type: "platform",
-    category: "Ad platform",
+    type: "supplier",
+    tags: ["Ad platform"],
     aliases: ["snapchat", "snap ads", "snap inc", "snap ads manager"]
   },
   {
     id: "platform-google-youtube-ads",
     name: "Google / YouTube Ads",
-    type: "platform",
-    category: "Ad platform",
+    type: "supplier",
+    tags: ["Ad platform"],
     aliases: ["google ads", "youtube ads", "adwords", "google payment center", "google mojo", "google ads manager"]
   },
   {
     id: "subscription-cursor",
     name: "Cursor",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription"],
     aliases: ["cursor", "cursor ai", "anysphere"]
   },
   {
     id: "subscription-namecheap",
     name: "Namecheap",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription"],
     aliases: ["namecheap", "name cheap"]
   },
   {
     id: "subscription-cloudflare",
     name: "Cloudflare",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription", "Cloud and hosting"],
     aliases: ["cloudflare"]
   },
   {
     id: "subscription-openai",
     name: "OpenAI",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription", "AI tools"],
     aliases: ["openai", "chatgpt", "chat gpt"]
   },
   {
     id: "subscription-github",
     name: "GitHub",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription", "Developer tools"],
     aliases: ["github", "git hub"]
   },
   {
     id: "subscription-vercel",
     name: "Vercel",
-    type: "provider",
-    category: "Subscription",
+    type: "supplier",
+    tags: ["Subscription", "Cloud and hosting"],
     aliases: ["vercel"]
   },
   {
     id: "internal-wise-fees",
     name: "Wise Fees",
-    type: "internal",
-    category: "Bank fees",
+    type: "supplier",
+    tags: ["Bank fees", "Internal"],
     aliases: ["wise fee", "wise fees", "transfer fee"]
   }
 ];
@@ -298,6 +303,46 @@ function uniqueAliases(values: string[]): string[] {
   return aliases;
 }
 
+export function uniqueProviderTags(values: string[]): string[] {
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const value of values) {
+    const tag = value.trim().replace(/\s+/g, " ");
+    const normalized = normalizeName(tag);
+    if (!tag || !normalized || normalized === "uncategorized" || seen.has(normalized)) continue;
+    seen.add(normalized);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function legacyRelationshipTag(type: string): string | undefined {
+  if (type === "partner") return "Partner";
+  if (type === "platform") return "Platform";
+  if (type === "internal") return "Internal";
+  return undefined;
+}
+
+function inferProviderType(provider: PersistedProviderShape): ProviderType {
+  if (provider.type === "client" || provider.type === "supplier") return provider.type;
+  if (provider.type === "partner") return "client";
+  if (provider.meritCustomerId && !provider.meritSupplierId) return "client";
+
+  const text = normalizeName([provider.name, provider.category ?? "", ...(provider.tags ?? [])].join(" "));
+  if (/\b(client|customer|revenue|affiliate|partner)\b/.test(text)) return "client";
+  return "supplier";
+}
+
+function normalizeProvider(provider: Provider): Provider {
+  const persisted = provider as PersistedProviderShape;
+  const legacyTag = legacyRelationshipTag(String(persisted.type));
+  return {
+    ...provider,
+    type: inferProviderType(persisted),
+    tags: uniqueProviderTags([...(persisted.tags ?? []), persisted.category ?? "", legacyTag ?? ""])
+  };
+}
+
 function providerNames(provider: Pick<Provider, "name" | "aliases">): string[] {
   return [provider.name, ...provider.aliases].map(normalizeName).filter(Boolean);
 }
@@ -308,7 +353,7 @@ function providersOverlap(left: Pick<Provider, "name" | "aliases">, right: Pick<
 }
 
 export function mergeProviderDirectory(providers: Provider[]): Provider[] {
-  const next = [...providers];
+  const next = providers.map(normalizeProvider);
 
   for (const canonical of canonicalProviders) {
     const existingIndex = next.findIndex((provider) => providersOverlap(provider, canonical));
@@ -317,8 +362,8 @@ export function mergeProviderDirectory(providers: Provider[]): Provider[] {
       next[existingIndex] = {
         ...existing,
         name: canonical.name,
-        type: canonical.type,
-        category: canonical.category,
+        type: existing.type,
+        tags: uniqueProviderTags([...canonical.tags, ...existing.tags]),
         aliases: uniqueAliases([...canonical.aliases, ...existing.aliases])
       };
     } else {
@@ -346,11 +391,12 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
 }
 
 function providerCategoryOrder(provider: Provider): number {
-  if (provider.category === "Ad account provider") return 0;
-  if (provider.category === "Ad platform") return 1;
-  if (provider.category === "Subscription") return 2;
-  if (provider.type === "partner") return 3;
-  if (provider.type === "internal") return 5;
+  const tags = new Set(provider.tags.map(normalizeName));
+  if (tags.has("ad account provider")) return 0;
+  if (tags.has("ad platform")) return 1;
+  if (tags.has("subscription")) return 2;
+  if (provider.type === "client") return 3;
+  if (tags.has("internal")) return 5;
   return 4;
 }
 
