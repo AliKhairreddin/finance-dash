@@ -50,6 +50,8 @@ import {
   mergeProviderDirectory,
   mergeTeamDirectory,
   normalizeName,
+  providerMatchesTransactionDirection,
+  providerTypeForTransactionDirection,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates,
@@ -214,6 +216,10 @@ function providerType(payload: CreateProviderPayload | UpdateProviderPayload): P
   return payload.type;
 }
 
+function providerTypeForInvoiceDocument(documentType: CreateInvoicePayload["documentType"]): Provider["type"] {
+  return documentType === "sales_invoice" ? "client" : "supplier";
+}
+
 function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): string[] {
   return uniqueProviderTags(Array.isArray(payload.tags) ? payload.tags : []);
 }
@@ -285,9 +291,10 @@ function applyAiCategorization(
   match: { providerId?: string; category?: string; confidence: number; reason: string }
 ): Transaction {
   const provider = match.providerId ? providers.find((item) => item.id === match.providerId) : undefined;
+  const matchedProvider = provider && providerMatchesTransactionDirection(transaction, provider) ? provider : undefined;
   return {
     ...transaction,
-    matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+    matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
     category: match.category ?? transaction.category,
     confidence: match.confidence,
     matchReason: `AI: ${match.reason}`
@@ -563,6 +570,9 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
   if (!provider || !transaction) {
     throw new Error("Company or transaction not found");
   }
+  if (!providerMatchesTransactionDirection(transaction, provider)) {
+    throw new Error(`Money-${transaction.direction} transactions can only be matched to ${providerTypeForTransactionDirection(transaction.direction)}s`);
+  }
 
   const matchedTransaction: Transaction = {
     ...transaction,
@@ -604,6 +614,16 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
+  const selectedProvider = payload.providerId ? providers.find((provider) => provider.id === payload.providerId) : undefined;
+  if (payload.providerId && !selectedProvider) {
+    throw new Error("Company not found");
+  }
+  if (selectedProvider && selectedProvider.type !== providerTypeForInvoiceDocument(payload.documentType)) {
+    throw new Error(
+      `${payload.documentType === "sales_invoice" ? "Sales invoice" : "Supplier bill"} requires a ${providerTypeForInvoiceDocument(payload.documentType)}`
+    );
+  }
+
   const invoice: Invoice = {
     id: `local-${payload.documentType}-${crypto.randomUUID()}`,
     providerId: payload.providerId,
@@ -622,18 +642,17 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
     createdAt: new Date().toISOString()
   };
 
-  invoices = [invoice, ...invoices];
-  if (payload.transactionId && payload.providerId) {
+  if (payload.transactionId && selectedProvider) {
     const sourceTransaction = findKnownTransaction(payload.transactionId);
     if (sourceTransaction) {
       providers = providers.map((provider) =>
-        provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(sourceTransaction)) : provider
+        provider.id === selectedProvider.id ? learnAliases(provider, bankAliasNames(sourceTransaction)) : provider
       );
-      const provider = providers.find((item) => item.id === payload.providerId);
+      const provider = providers.find((item) => item.id === selectedProvider.id);
       if (provider) {
         updateStoredTransaction({
           ...sourceTransaction,
-          matchedProviderId: payload.providerId,
+          matchedProviderId: selectedProvider.id,
           matchedInvoiceId: invoice.id,
           confidence: 1,
           matchReason: payload.documentType === "sales_invoice" ? "Sales invoice draft created" : "Supplier bill draft created"
@@ -641,6 +660,7 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
       }
     }
   }
+  invoices = [invoice, ...invoices];
   await persist();
   return invoice;
 }

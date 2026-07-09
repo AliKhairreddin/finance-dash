@@ -400,6 +400,14 @@ function providerCategoryOrder(provider: Provider): number {
   return 4;
 }
 
+export function providerTypeForTransactionDirection(direction: Transaction["direction"]): ProviderType {
+  return direction === "in" ? "client" : "supplier";
+}
+
+export function providerMatchesTransactionDirection(transaction: Pick<Transaction, "direction">, provider: Pick<Provider, "type">): boolean {
+  return provider.type === providerTypeForTransactionDirection(transaction.direction);
+}
+
 function transactionHaystack(transaction: Transaction): string {
   return normalizeName([transaction.rawName, transaction.counterparty, transaction.description, transaction.category].join(" "));
 }
@@ -574,6 +582,7 @@ export function enrichTransactions(
     }
 
     const ranked = providers
+      .filter((provider) => providerMatchesTransactionDirection(transaction, provider))
       .map((provider) => ({ provider, ...scoreProvider(transaction, provider) }))
       .filter((candidate) => candidate.confidence >= 0.45)
       .sort((a, b) => b.confidence - a.confidence);

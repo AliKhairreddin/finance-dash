@@ -47,6 +47,7 @@ import type {
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
+  InvoiceDocumentType,
   Provider,
   ProviderType,
   RevenuePartner,
@@ -145,6 +146,14 @@ function providerTypeLabel(type: ProviderType): string {
 
 function providerTagLabel(provider?: Provider): string {
   return provider?.tags.length ? provider.tags.join(" · ") : "No tags";
+}
+
+function providerTypeForTransaction(transaction: Pick<Transaction, "direction">): ProviderType {
+  return transaction.direction === "in" ? "client" : "supplier";
+}
+
+function providerTypeForDocument(documentType: InvoiceDocumentType): ProviderType {
+  return documentType === "sales_invoice" ? "client" : "supplier";
 }
 
 function companyTagOptions(providers: Provider[]): string[] {
@@ -2064,13 +2073,16 @@ function TransactionTable({
         <tbody>
           {rows.length > 0 ? (
             rows.map((transaction) => {
-              const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              const expectedProviderType = providerTypeForTransaction(transaction);
+              const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
               const confidence = transaction.confidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
               const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
-              const companyPlaceholder = transaction.direction === "in" ? "Needs company" : "Optional";
+              const providerOptions = providers.filter((item) => item.type === expectedProviderType);
+              const companyPlaceholder = transaction.direction === "in" ? "Needs client" : "Optional supplier";
               const companyActionTitle = provider
                 ? "Save suggested company match"
                 : transaction.direction === "in"
@@ -2157,7 +2169,7 @@ function TransactionTable({
                             {companyPlaceholder}
                           </NativeSelectOption>
                         )}
-                        {providers.map((item) => (
+                        {providerOptions.map((item) => (
                           <NativeSelectOption key={item.id} value={item.id}>
                             {item.name}
                           </NativeSelectOption>
@@ -2991,8 +3003,10 @@ function InvoiceModal({
 }) {
   const documentType = transaction.direction === "in" ? "sales_invoice" : "supplier_bill";
   const documentTitle = documentType === "sales_invoice" ? "Create sales invoice draft" : "Record supplier bill draft";
-  const selectedProvider = provider?.id ? provider : undefined;
-  const [providerId, setProviderId] = useState(provider?.id || "");
+  const expectedProviderType = providerTypeForDocument(documentType);
+  const providerOptions = providers.filter((item) => item.type === expectedProviderType);
+  const selectedProvider = provider?.type === expectedProviderType ? provider : undefined;
+  const [providerId, setProviderId] = useState(selectedProvider?.id || "");
   const [customerName, setCustomerName] = useState(selectedProvider?.legalName || selectedProvider?.name || bankInvoiceName(transaction));
   const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
   const [dueDate, setDueDate] = useState(new Date().toISOString().slice(0, 10));
@@ -3046,13 +3060,13 @@ function InvoiceModal({
             value={providerId}
             onChange={(event) => {
               const nextProviderId = event.target.value;
-              const nextProvider = providers.find((item) => item.id === nextProviderId);
+              const nextProvider = providerOptions.find((item) => item.id === nextProviderId);
               setProviderId(nextProviderId);
               if (nextProvider) setCustomerName(nextProvider.legalName || nextProvider.name);
             }}
           >
-            <NativeSelectOption value="">No company selected</NativeSelectOption>
-            {providers.map((item) => (
+            <NativeSelectOption value="">No {expectedProviderType} selected</NativeSelectOption>
+            {providerOptions.map((item) => (
               <NativeSelectOption key={item.id} value={item.id}>
                 {item.name}
               </NativeSelectOption>

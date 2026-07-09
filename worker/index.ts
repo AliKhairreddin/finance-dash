@@ -44,6 +44,8 @@ import {
   mergeProviderDirectory,
   mergeTeamDirectory,
   normalizeName,
+  providerMatchesTransactionDirection,
+  providerTypeForTransactionDirection,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates,
@@ -135,6 +137,10 @@ function providerType(payload: CreateProviderPayload | UpdateProviderPayload): P
     throw new Error("Company relationship must be client or supplier");
   }
   return payload.type;
+}
+
+function providerTypeForInvoiceDocument(documentType: CreateInvoicePayload["documentType"]): Provider["type"] {
+  return documentType === "sales_invoice" ? "client" : "supplier";
 }
 
 function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): string[] {
@@ -1243,9 +1249,10 @@ async function autoCategorizeState(
       const transaction = findPersistedTransaction(state, aiResult.transactionId);
       if (!transaction) continue;
       const provider = aiResult.providerId ? state.providers.find((item) => item.id === aiResult.providerId) : undefined;
+      const matchedProvider = provider && providerMatchesTransactionDirection(transaction, provider) ? provider : undefined;
       const updated: Transaction = {
         ...transaction,
-        matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+        matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
         category: aiResult.category ?? transaction.category,
         confidence: aiResult.confidence,
         matchReason: `AI: ${aiResult.reason}`
@@ -1284,6 +1291,9 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const provider = state.providers.find((item) => item.id === payload.providerId);
   if (!transaction || !provider) {
     throw new Error("Company or transaction not found");
+  }
+  if (!providerMatchesTransactionDirection(transaction, provider)) {
+    throw new Error(`Money-${transaction.direction} transactions can only be matched to ${providerTypeForTransactionDirection(transaction.direction)}s`);
   }
   const matchedTransaction: Transaction = {
     ...transaction,
@@ -1392,6 +1402,15 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     throw new Error("customerName, amount, dueDate, and documentType are required");
   }
   const state = await loadPersisted(env);
+  const selectedProvider = payload.providerId ? state.providers.find((provider) => provider.id === payload.providerId) : undefined;
+  if (payload.providerId && !selectedProvider) {
+    throw new Error("Company not found");
+  }
+  if (selectedProvider && selectedProvider.type !== providerTypeForInvoiceDocument(payload.documentType)) {
+    throw new Error(
+      `${payload.documentType === "sales_invoice" ? "Sales invoice" : "Supplier bill"} requires a ${providerTypeForInvoiceDocument(payload.documentType)}`
+    );
+  }
   const invoice: Invoice = {
     id: `local-${payload.documentType}-${crypto.randomUUID()}`,
     providerId: payload.providerId,
@@ -1409,17 +1428,17 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     transactionId: payload.transactionId,
     createdAt: new Date().toISOString()
   };
-  if (payload.transactionId && payload.providerId) {
+  if (payload.transactionId && selectedProvider) {
     const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
     if (transaction) {
       state.providers = state.providers.map((provider) =>
-        provider.id === payload.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
+        provider.id === selectedProvider.id ? learnAliases(provider, bankAliasNames(transaction)) : provider
       );
-      const provider = state.providers.find((item) => item.id === payload.providerId);
+      const provider = state.providers.find((item) => item.id === selectedProvider.id);
       if (provider) {
         updatePersistedTransaction(state, {
           ...transaction,
-          matchedProviderId: payload.providerId,
+          matchedProviderId: selectedProvider.id,
           matchedInvoiceId: invoice.id,
           confidence: 1,
           matchReason: payload.documentType === "sales_invoice" ? "Sales invoice draft created" : "Supplier bill draft created"
