@@ -584,8 +584,9 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: 1.3rem;
   font-variant-numeric: tabular-nums;
-  line-height: 1.05;
-  white-space: nowrap;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .metric-card.danger strong,
@@ -760,7 +761,11 @@ textarea:focus-visible {
 
 .total-pill {
   min-height: 28px;
-  padding: 0 9px;
+  padding: 6px 9px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-align: center;
+  white-space: normal;
 }
 
 .total-pill.danger,
@@ -1330,12 +1335,12 @@ textarea:focus-visible {
 
 .summary-tile strong {
   min-width: 0;
-  overflow: hidden;
   color: var(--ink);
   font-size: 1.05rem;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .filters label,

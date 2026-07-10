@@ -127,7 +127,14 @@ const revenueRun = v.object({
   currency: v.string(),
   clicks: v.optional(v.number()),
   conversions: v.optional(v.number()),
-  status: v.union(v.literal("pulled"), v.literal("invoiced"), v.literal("failed"), v.literal("mock"), v.literal("skipped")),
+  status: v.union(
+    v.literal("pulled"),
+    v.literal("invoicing"),
+    v.literal("invoiced"),
+    v.literal("failed"),
+    v.literal("mock"),
+    v.literal("skipped")
+  ),
   invoiceId: v.optional(v.string()),
   externalInvoiceId: v.optional(v.string()),
   error: v.optional(v.string()),
@@ -158,7 +165,6 @@ const revenuePartner = v.object({
 const aiSettings = v.object({
   provider: v.literal("openrouter"),
   model: v.string(),
-  openRouterApiKey: v.optional(v.string()),
   updatedAt: v.optional(v.string())
 });
 

@@ -1,5 +1,5 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -127,7 +127,14 @@ const revenueRun = v.object({
   currency: v.string(),
   clicks: v.optional(v.number()),
   conversions: v.optional(v.number()),
-  status: v.union(v.literal("pulled"), v.literal("invoiced"), v.literal("failed"), v.literal("mock"), v.literal("skipped")),
+  status: v.union(
+    v.literal("pulled"),
+    v.literal("invoicing"),
+    v.literal("invoiced"),
+    v.literal("failed"),
+    v.literal("mock"),
+    v.literal("skipped")
+  ),
   invoiceId: v.optional(v.string()),
   externalInvoiceId: v.optional(v.string()),
   error: v.optional(v.string()),
@@ -158,7 +165,6 @@ const revenuePartner = v.object({
 const aiSettings = v.object({
   provider: v.literal("openrouter"),
   model: v.string(),
-  openRouterApiKey: v.optional(v.string()),
   updatedAt: v.optional(v.string())
 });
 
@@ -249,8 +255,20 @@ function normalizeProvider(provider: unknown) {
   };
 }
 
+function requireServiceToken(serviceToken: string): void {
+  const expected = process.env.CONVEX_SERVICE_TOKEN;
+  if (!expected || serviceToken !== expected) {
+    throw new ConvexError({ code: "UNAUTHORIZED" });
+  }
+}
+
+function nextUpdatedAt(previous?: string): string {
+  const previousTimestamp = previous ? Date.parse(previous) : 0;
+  return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
+}
+
 export const getState = query({
-  args: {},
+  args: { serviceToken: v.string() },
   returns: v.union(
     v.null(),
     v.object({
@@ -267,7 +285,8 @@ export const getState = query({
       updatedAt: v.string()
     })
   ),
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
     const state = await ctx.db
       .query("dashboardState")
       .withIndex("by_key", (q) => q.eq("key", "default"))
@@ -291,34 +310,6 @@ export const getState = query({
   }
 });
 
-export const migrateProviderRelationshipsAndTags = mutation({
-  args: {},
-  returns: v.object({
-    providers: v.number(),
-    updatedAt: v.optional(v.string())
-  }),
-  handler: async (ctx) => {
-    const state = await ctx.db
-      .query("dashboardState")
-      .withIndex("by_key", (q) => q.eq("key", "default"))
-      .unique();
-
-    if (!state) return { providers: 0 };
-
-    const updatedAt = new Date().toISOString();
-    const providers = state.providers.map(normalizeProvider);
-    await ctx.db.patch(state._id, {
-      providers,
-      updatedAt
-    });
-
-    return {
-      providers: providers.length,
-      updatedAt
-    };
-  }
-});
-
 export const saveState = mutation({
   args: {
     providers: v.array(provider),
@@ -330,17 +321,25 @@ export const saveState = mutation({
     wiseStatementTransactions: v.array(transaction),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
-    aiSettings: v.optional(aiSettings)
+    aiSettings: v.optional(aiSettings),
+    serviceToken: v.string(),
+    expectedUpdatedAt: v.union(v.string(), v.null())
   },
   returns: v.object({
     updatedAt: v.string()
   }),
   handler: async (ctx, args) => {
-    const updatedAt = new Date().toISOString();
+    requireServiceToken(args.serviceToken);
     const existing = await ctx.db
       .query("dashboardState")
       .withIndex("by_key", (q) => q.eq("key", "default"))
       .unique();
+
+    if ((existing?.updatedAt ?? null) !== args.expectedUpdatedAt) {
+      throw new ConvexError({ code: "STATE_CONFLICT" });
+    }
+
+    const updatedAt = nextUpdatedAt(existing?.updatedAt);
 
     if (existing) {
       await ctx.db.patch(existing._id, {
@@ -373,6 +372,80 @@ export const saveState = mutation({
       });
     }
 
+    return { updatedAt };
+  }
+});
+
+export const reserveRevenueInvoice = mutation({
+  args: {
+    serviceToken: v.string(),
+    run: revenueRun
+  },
+  returns: v.object({
+    reserved: v.boolean(),
+    updatedAt: v.string()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    if (args.run.status !== "invoicing") {
+      throw new ConvexError({ code: "INVALID_REVENUE_RESERVATION" });
+    }
+
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) throw new ConvexError({ code: "STATE_NOT_FOUND" });
+
+    const revenueRuns = state.revenueRuns ?? [];
+    const existing = revenueRuns.find(
+      (run) =>
+        run.partnerId === args.run.partnerId &&
+        run.periodStart === args.run.periodStart &&
+        run.periodEnd === args.run.periodEnd &&
+        (run.status === "invoicing" || run.status === "invoiced")
+    );
+    if (existing) {
+      return { reserved: false, updatedAt: state.updatedAt };
+    }
+
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await ctx.db.patch(state._id, {
+      revenueRuns: [args.run, ...revenueRuns.filter((run) => run.id !== args.run.id)].slice(0, 250),
+      updatedAt
+    });
+    return { reserved: true, updatedAt };
+  }
+});
+
+export const finalizeRevenueInvoice = mutation({
+  args: {
+    serviceToken: v.string(),
+    run: revenueRun,
+    invoice: v.optional(invoice)
+  },
+  returns: v.object({ updatedAt: v.string() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) throw new ConvexError({ code: "STATE_NOT_FOUND" });
+
+    const revenueRuns = state.revenueRuns ?? [];
+    const reservation = revenueRuns.find((run) => run.id === args.run.id);
+    const isIdempotentFinalization = reservation?.status === args.run.status;
+    if (!reservation || (reservation.status !== "invoicing" && !isIdempotentFinalization)) {
+      throw new ConvexError({ code: "REVENUE_RESERVATION_CONFLICT" });
+    }
+
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await ctx.db.patch(state._id, {
+      revenueRuns: [args.run, ...revenueRuns.filter((run) => run.id !== args.run.id)].slice(0, 250),
+      invoices: args.invoice ? [args.invoice, ...state.invoices.filter((item) => item.id !== args.invoice?.id)] : state.invoices,
+      updatedAt
+    });
     return { updatedAt };
   }
 });

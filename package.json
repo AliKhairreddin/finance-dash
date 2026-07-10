@@ -8,7 +8,11 @@
     "server": "tsx watch server/index.ts",
     "build": "tsc -b && vite build",
     "convex:dev": "convex dev --once --env-file .env.local",
-    "deploy": "npm run build && wrangler deploy",
+    "test": "tsx --test server/*.test.ts shared/*.test.ts worker/*.test.ts",
+    "check": "npm run lint && npm test && npm run build",
+    "deploy:convex": "npm run convex:dev",
+    "deploy:cloudflare": "npm run build && wrangler deploy",
+    "deploy": "npm run build && npm run deploy:convex && wrangler deploy",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc -b --pretty false"
   },

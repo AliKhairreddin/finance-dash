@@ -14,6 +14,7 @@ import type {
   ImportWiseStatementSummary,
   Invoice,
   MatchTransactionPayload,
+  PersistedAiSettings,
   Provider,
   RevenuePartner,
   RevenueRun,
@@ -65,7 +66,7 @@ let teams: Team[] = [];
 let transactionCategoryRules: TransactionCategoryRule[] = [];
 let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
-let aiSettings: StoredAiSettings = { ...defaultAiSettings };
+let aiSettings: PersistedAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let transactions: Transaction[] = [];
 let wiseStatementTransactions: Transaction[] = [];
@@ -73,6 +74,13 @@ let wiseStatementImports: WiseStatementImport[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseSyncIssue: string | undefined;
+
+function runtimeAiSettings(): StoredAiSettings {
+  return {
+    ...aiSettings,
+    openRouterApiKey: process.env.OPENROUTER_API_KEY?.trim() || undefined
+  };
+}
 
 function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] {
   const map = new Map(initial.map((item) => [item.id, item]));
@@ -324,14 +332,15 @@ export async function autoCategorizeTransactions(
   transactions = transactions.map(categorizeRow);
 
   let aiMatches = 0;
-  const shouldUseAi = payload.useAi !== false && Boolean(aiSettings.openRouterApiKey?.trim());
+  const activeAiSettings = runtimeAiSettings();
+  const shouldUseAi = payload.useAi !== false && Boolean(activeAiSettings.openRouterApiKey);
   const remaining = getKnownTransactions().filter((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return false;
     return transactionNeedsCategorization(transaction);
   });
 
   if (shouldUseAi && remaining.length > 0) {
-    const aiResults = await runOpenRouterTransactionCategorization(aiSettings, remaining, providers, process.env.PUBLIC_APP_URL);
+    const aiResults = await runOpenRouterTransactionCategorization(activeAiSettings, remaining, providers, process.env.PUBLIC_APP_URL);
     for (const aiResult of aiResults) {
       if (aiResult.confidence < 0.72) continue;
       const transaction = findKnownTransaction(aiResult.transactionId);
@@ -374,7 +383,7 @@ export function getSnapshot(): DashboardSnapshot {
     revenuePartners,
     revenueRuns,
     revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
-    aiSettings: publicAiSettings(aiSettings),
+    aiSettings: publicAiSettings(runtimeAiSettings()),
     transactions: getMatchedTransactions(),
     invoices,
     transactionCategoryRules,
@@ -549,11 +558,9 @@ export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<Da
   const model = payload.model.trim();
   if (!model) throw new Error("OpenRouter model is required");
 
-  const nextKey = payload.clearApiKey ? undefined : payload.openRouterApiKey?.trim() || aiSettings.openRouterApiKey;
   aiSettings = {
     provider: "openrouter",
     model,
-    openRouterApiKey: nextKey,
     updatedAt: new Date().toISOString()
   };
   await persist();
@@ -561,7 +568,7 @@ export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<Da
 }
 
 export async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptResult> {
-  return runOpenRouterPrompt(aiSettings, payload, process.env.PUBLIC_APP_URL);
+  return runOpenRouterPrompt(runtimeAiSettings(), payload, process.env.PUBLIC_APP_URL);
 }
 
 export async function matchTransaction(payload: MatchTransactionPayload): Promise<Transaction> {
@@ -679,51 +686,60 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
       periodEnd: payload.periodEnd,
       timezone: payload.timezone || partner.timezone || process.env.REVENUE_TIMEZONE || "UTC"
     });
-    const existingInvoicedRun = revenueRuns.find(
+    const existingInvoiceRun = revenueRuns.find(
       (run) =>
         run.partnerId === partner.id &&
         run.periodStart === period.periodStart &&
         run.periodEnd === period.periodEnd &&
-        run.status === "invoiced"
+        (run.status === "invoicing" || run.status === "invoiced")
     );
+    if (payload.createInvoices && existingInvoiceRun) continue;
 
     try {
-      let run = await fetchTuneRevenue(partner, period);
-      if (payload.createInvoices && existingInvoicedRun) {
-        run = {
-          ...run,
-          status: "skipped",
-          invoiceId: existingInvoicedRun.invoiceId,
-          externalInvoiceId: existingInvoicedRun.externalInvoiceId,
-          error: "Invoice already exists for this partner and period"
-        };
-      } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
-        const invoice = await createMeritInvoice({
-          documentType: "sales_invoice",
-          customerName: partner.meritCustomerName || partner.name,
-          amount: run.revenue,
-          currency: run.currency,
-          dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
-        });
+      const run = await fetchTuneRevenue(partner, period);
+      if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
+        const concurrentReservation = revenueRuns.find(
+          (item) =>
+            item.partnerId === partner.id &&
+            item.periodStart === period.periodStart &&
+            item.periodEnd === period.periodEnd &&
+            (item.status === "invoicing" || item.status === "invoiced")
+        );
+        if (concurrentReservation) continue;
 
-        if (invoice) {
-          invoices = [invoice, ...invoices.filter((item) => item.id !== invoice.id)];
-          run = {
-            ...run,
-            status: "invoiced",
-            invoiceId: invoice.id,
-            externalInvoiceId: invoice.externalId
+        const reservation: RevenueRun = { ...run, status: "invoicing", error: "Merit invoice creation in progress" };
+        revenueRuns = [reservation, ...revenueRuns.filter((item) => item.id !== reservation.id)].slice(0, 250);
+        await persist();
+
+        let invoice: Invoice | undefined;
+        try {
+          invoice = await createMeritInvoice({
+            documentType: "sales_invoice",
+            customerName: partner.meritCustomerName || partner.name,
+            amount: run.revenue,
+            currency: run.currency,
+            dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
+            description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+          });
+        } catch (error) {
+          const needsReview: RevenueRun = {
+            ...reservation,
+            error: `Merit invoice outcome needs review: ${error instanceof Error ? error.message : "Unknown error"}`
           };
-        } else {
-          run = {
-            ...run,
-            status: "pulled",
-            error: "Revenue pulled, but Merit invoice credentials are not configured"
-          };
+          revenueRuns = [needsReview, ...revenueRuns.filter((item) => item.id !== needsReview.id)].slice(0, 250);
+          await persist();
+          continue;
         }
+
+        const finalizedRun: RevenueRun = invoice
+          ? { ...run, status: "invoiced", invoiceId: invoice.id, externalInvoiceId: invoice.externalId }
+          : { ...run, status: "pulled", error: "Revenue pulled, but Merit invoice credentials are not configured" };
+        if (invoice) invoices = [invoice, ...invoices.filter((item) => item.id !== invoice.id)];
+        revenueRuns = [finalizedRun, ...revenueRuns.filter((item) => item.id !== finalizedRun.id)].slice(0, 250);
+        await persist();
+      } else {
+        nextRuns.push(run);
       }
-      nextRuns.push(run);
     } catch (error) {
       nextRuns.push({
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
@@ -742,8 +758,12 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     }
   }
 
-  const nextRunIds = new Set(nextRuns.map((run) => run.id));
-  revenueRuns = [...nextRuns, ...revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
+  const protectedRunIds = new Set(
+    revenueRuns.filter((run) => run.status === "invoicing" || run.status === "invoiced").map((run) => run.id)
+  );
+  const safeNextRuns = nextRuns.filter((run) => !protectedRunIds.has(run.id));
+  const nextRunIds = new Set(safeNextRuns.map((run) => run.id));
+  revenueRuns = [...safeNextRuns, ...revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
   lastSync = new Date().toISOString();
   await persist();
   return getSnapshot();

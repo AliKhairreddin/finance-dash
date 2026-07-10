@@ -69,7 +69,9 @@ The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.j
 - Lets you create local sales invoice drafts for money-in Wise transactions and local supplier bill drafts for money-out Wise transactions.
 - Lets you approve or deny invoice matches inside the dashboard.
 - Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
-- Persists provider aliases, revenue partners, revenue runs, AI settings, created invoices, and uploaded Wise statement rows in Convex on the deployed Worker; local Express development persists the same dashboard state in `.local/finance-dashboard-store.json`.
+- Persists provider aliases, revenue partners, revenue runs, the selected AI model, created invoices, and uploaded Wise statement rows in Convex on the deployed Worker; local Express development persists the same dashboard state in `.local/finance-dashboard-store.json`.
+- Keeps `OPENROUTER_API_KEY` in the server/Worker runtime only; the key is never stored in Convex or returned by dashboard APIs.
+- Requires the same `CONVEX_SERVICE_TOKEN` runtime secret in Cloudflare and Convex so dashboard state functions cannot be called directly by anonymous clients.
 
 ## API Integrations
 
@@ -121,6 +123,8 @@ REVENUE_TIMEZONE=UTC
 KISSTERRA_TUNE_NETWORK_ID=
 KISSTERRA_TUNE_API_KEY=
 KISSTERRA_TUNE_API_BASE_URL=
+
+OPENROUTER_API_KEY=
 ```
 
 ## References

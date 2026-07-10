@@ -44,6 +44,7 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   CreateTeamPayload,
+  CurrencyTotals,
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
@@ -60,6 +61,7 @@ import type {
   UpdateRevenuePartnerPayload
 } from "../shared/types";
 import { isReviewOnlyTransactionCategory, transactionBusinessCategory, transactionCategoryOptions } from "../shared/categories";
+import { hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
@@ -100,12 +102,22 @@ function money(value: number, currency = "USD"): string {
   }).format(value);
 }
 
-function maybeMoney(hasValue: boolean, value: number, currency = "USD"): string {
-  return hasValue ? money(value, currency) : "—";
+function formatCurrencyTotals(totals: CurrencyTotals): string {
+  const values = Object.entries(totals).sort(([left], [right]) => left.localeCompare(right));
+  return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
 }
 
-function optionalMoney(value: number | null | undefined, currency = "USD"): string {
-  return typeof value === "number" ? money(value, currency) : "—";
+function negateCurrencyTotals(totals: CurrencyTotals): CurrencyTotals {
+  return Object.fromEntries(Object.entries(totals).map(([currency, amount]) => [currency, -amount]));
+}
+
+function currencyTotalsTone(totals: CurrencyTotals): "good" | "danger" | "" {
+  const amounts = Object.values(totals);
+  const hasPositive = amounts.some((amount) => amount > 0);
+  const hasNegative = amounts.some((amount) => amount < 0);
+  if (hasPositive && !hasNegative) return "good";
+  if (hasNegative && !hasPositive) return "danger";
+  return "";
 }
 
 function maybeDate(value?: string): string {
@@ -224,13 +236,8 @@ function sourceLabel(value: string): string {
 }
 
 function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
-  const totals = new Map<string, number>();
-  for (const row of rows) {
-    if (direction && row.direction !== direction) continue;
-    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
-  }
-  const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
-  return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+  const visibleRows = direction ? rows.filter((row) => row.direction === direction) : rows;
+  return formatCurrencyTotals(sumCurrencyTotals(visibleRows, (row) => row.amount));
 }
 
 const categoryChartPalette = [
@@ -397,8 +404,22 @@ function App() {
   async function loadDashboard() {
     setError(null);
     const response = await fetch(`${apiBase}/dashboard`);
-    if (!response.ok) throw new Error("Could not load dashboard data");
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Could not load dashboard data");
+    }
     setDashboard((await response.json()) as DashboardSnapshot);
+  }
+
+  async function retryDashboard() {
+    setIsLoading(true);
+    try {
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load dashboard");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -454,10 +475,10 @@ function App() {
   );
 
   const wiseTeamSummary = useMemo(() => {
-    const total = wiseTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
+    const volume = sumCurrencyTotals(wiseTransactions, (transaction) => transaction.amount);
     const matched = wiseTransactions.filter((transaction) => transaction.matchedProviderId).length;
     const unassigned = wiseTransactions.filter((transaction) => !transaction.teamId).length;
-    return { total, count: wiseTransactions.length, matched, unassigned };
+    return { volume, count: wiseTransactions.length, matched, unassigned };
   }, [wiseTransactions]);
 
   const slashTransactions = useMemo(
@@ -757,7 +778,7 @@ function App() {
 
   if (isLoading) {
     return (
-      <main className="loading-screen">
+      <main className="loading-screen" role="status" aria-live="polite">
         <div className="floating-theme-toggle">
           <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
         </div>
@@ -769,12 +790,16 @@ function App() {
 
   if (!dashboard) {
     return (
-      <main className="loading-screen">
+      <main className="loading-screen" role="alert" aria-live="assertive">
         <div className="floating-theme-toggle">
           <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
         </div>
         <CircleAlert size={28} />
         <span>{error || "Dashboard could not load"}</span>
+        <Button className="secondary-button" onClick={() => void retryDashboard()}>
+          <RefreshCw size={16} />
+          Retry
+        </Button>
       </main>
     );
   }
@@ -784,8 +809,8 @@ function App() {
   const hasOpenBalances = dashboard.openBalances.length > 0;
   const hasPayables = dashboard.payables.length > 0;
   const hasInvestments = dashboard.investments.length > 0;
-  const hasProfit = dashboard.metrics.profit !== null;
-  const hasTotalAssets = dashboard.metrics.totalAssets !== null;
+  const hasProfit = hasCurrencyTotals(dashboard.metrics.profit);
+  const profitTone = currencyTotalsTone(dashboard.metrics.profit);
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
 
   return (
@@ -821,7 +846,7 @@ function App() {
         </header>
 
         {(error || notice) && (
-          <div className={error ? "toast error" : "toast"}>
+          <div className={error ? "toast error" : "toast"} role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"}>
             {error ? <CircleAlert size={16} /> : <Check size={16} />}
             <span>{error || notice}</span>
             <Button aria-label="Dismiss" onClick={() => (error ? setError(null) : setNotice(null))}>
@@ -836,40 +861,41 @@ function App() {
             <MetricCard
               icon={<Banknote />}
               label="Cash in accounts"
-              value={maybeMoney(hasCash, dashboard.metrics.totalCash ?? 0)}
+              value={formatCurrencyTotals(dashboard.metrics.totalCash)}
               detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
             />
             <MetricCard
               icon={<BadgeDollarSign />}
               label="Receivables"
-              value={maybeMoney(hasReceivables, dashboard.metrics.totalReceivables ?? 0)}
+              value={formatCurrencyTotals(dashboard.metrics.totalReceivables)}
               detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
             />
             <MetricCard
               icon={<WalletCards />}
               label="Open balance"
-              value={maybeMoney(hasOpenBalances, dashboard.metrics.totalOpenBalance ?? 0)}
+              value={formatCurrencyTotals(dashboard.metrics.totalOpenBalance)}
               detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
             />
             <MetricCard
               icon={<ArrowDownRight />}
               label="Payables"
-              value={maybeMoney(hasPayables, dashboard.metrics.totalPayables ?? 0)}
+              value={formatCurrencyTotals(dashboard.metrics.totalPayables)}
               detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
               danger
             />
             <MetricCard
               icon={<CircleDollarSign />}
               label="Profit"
-              value={maybeMoney(hasProfit, dashboard.metrics.profit ?? 0)}
+              value={formatCurrencyTotals(dashboard.metrics.profit)}
               detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
-              good
+              good={profitTone === "good"}
+              danger={profitTone === "danger"}
             />
             <MetricCard
               icon={<ShieldCheck />}
               label="Total assets"
-              value={maybeMoney(hasTotalAssets, dashboard.metrics.totalAssets ?? 0)}
-              detail={hasInvestments ? `${money(dashboard.metrics.investments ?? 0)} investments` : "No live investments"}
+              value={formatCurrencyTotals(dashboard.metrics.totalAssets)}
+              detail={hasInvestments ? `${formatCurrencyTotals(dashboard.metrics.investments)} investments` : "No live investments"}
             />
           </section>
           <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
@@ -1140,7 +1166,7 @@ function BankingView({
   transactionSortKey: TransactionSortKey;
   wiseDirection: "in" | "out";
   wiseStatusIssue?: string;
-  wiseTeamSummary: { total: number; count: number; matched: number; unassigned: number };
+  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
   wiseTransactions: Transaction[];
   onActiveBankTabChange: React.Dispatch<React.SetStateAction<BankTab>>;
   onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
@@ -1266,7 +1292,7 @@ function WiseBankingTab({
   transactionSortKey: TransactionSortKey;
   wiseDirection: "in" | "out";
   wiseStatusIssue?: string;
-  wiseTeamSummary: { total: number; count: number; matched: number; unassigned: number };
+  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
   wiseTransactions: Transaction[];
   onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
   onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
@@ -1366,7 +1392,7 @@ function WiseBankingTab({
         </div>
       </div>
       <div className="wise-summary-grid">
-        <SummaryTile label="Visible volume" value={maybeMoney(wiseTransactions.length > 0, wiseTeamSummary.total)} />
+        <SummaryTile label="Visible volume" value={formatCurrencyTotals(wiseTeamSummary.volume)} />
         <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
         <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
         <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
@@ -1411,15 +1437,15 @@ function Overview({
   const hasPayables = dashboard.payables.length > 0;
   const hasInvestments = dashboard.investments.length > 0;
   const hasCompleteFloat = hasCash && hasReceivables && hasOpenBalances;
-  const hasProfit = dashboard.metrics.profit !== null;
-  const hasTotalAssets = dashboard.metrics.totalAssets !== null;
+  const profitTone = currencyTotalsTone(dashboard.metrics.profit);
+  const assetsTone = currencyTotalsTone(dashboard.metrics.totalAssets);
 
   return (
     <div className="overview-grid">
       <section className="panel">
         <div className="panel-header compact">
           <h2>Cash in accounts</h2>
-          <span className="total-pill">{optionalMoney(dashboard.metrics.totalCash)}</span>
+          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalCash)}</span>
         </div>
         <SimpleMoneyTable
           nameLabel="Account"
@@ -1437,7 +1463,7 @@ function Overview({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Receivables</h2>
-          <span className="total-pill">{optionalMoney(dashboard.metrics.totalReceivables)}</span>
+          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalReceivables)}</span>
         </div>
         <SimpleMoneyTable
           nameLabel="Name"
@@ -1455,7 +1481,7 @@ function Overview({
       <section className="panel tall">
         <div className="panel-header compact">
           <h2>Open balance</h2>
-          <span className="total-pill">{optionalMoney(dashboard.metrics.totalOpenBalance)}</span>
+          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalOpenBalance)}</span>
         </div>
         <SimpleMoneyTable
           nameLabel="Name"
@@ -1474,7 +1500,7 @@ function Overview({
       <section className="panel wide">
         <div className="panel-header compact">
           <h2>Payables by supplier and month</h2>
-          <span className="total-pill danger">{optionalMoney(dashboard.metrics.totalPayables)}</span>
+          <span className="total-pill danger">{formatCurrencyTotals(dashboard.metrics.totalPayables)}</span>
         </div>
         <div className="table-wrap">
           <table className="data-table payables-table">
@@ -1516,10 +1542,10 @@ function Overview({
               <tfoot>
                 <tr>
                   <td>Total</td>
-                  <td className="amount">{optionalMoney(dashboard.metrics.totalPayables)}</td>
+                  <td className="amount">{formatCurrencyTotals(dashboard.metrics.totalPayables)}</td>
                   {payableMonths.map((month) => (
                     <td className="amount" key={month}>
-                      {Object.prototype.hasOwnProperty.call(dashboard.metrics.monthTotals, month) ? money(dashboard.metrics.monthTotals[month]) : "—"}
+                      {formatCurrencyTotals(dashboard.metrics.monthTotals[month] ?? {})}
                     </td>
                   ))}
                 </tr>
@@ -1532,15 +1558,20 @@ function Overview({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Assets bridge</h2>
-          <span className="total-pill good">{hasTotalAssets ? optionalMoney(dashboard.metrics.totalAssets) : "—"}</span>
+          <span className={`total-pill ${assetsTone}`}>{formatCurrencyTotals(dashboard.metrics.totalAssets)}</span>
         </div>
         <div className="bridge">
           <BridgeRow label="Cash" value={dashboard.metrics.totalCash} />
           <BridgeRow label="Receivables" value={dashboard.metrics.totalReceivables} />
           <BridgeRow label="Open balance" value={dashboard.metrics.totalOpenBalance} />
-          <BridgeRow label="Cash + receivables + open balance" value={hasCompleteFloat ? dashboard.metrics.totalFloat : null} />
-          <BridgeRow label="Spend without payment" value={hasPayables && dashboard.metrics.totalPayables !== null ? -dashboard.metrics.totalPayables : null} danger />
-          <BridgeRow label="Profit" value={dashboard.metrics.profit} good />
+          <BridgeRow label="Cash + receivables + open balance" value={hasCompleteFloat ? dashboard.metrics.totalFloat : {}} />
+          <BridgeRow label="Spend without payment" value={hasPayables ? negateCurrencyTotals(dashboard.metrics.totalPayables) : {}} danger />
+          <BridgeRow
+            label="Profit"
+            value={dashboard.metrics.profit}
+            good={profitTone === "good"}
+            danger={profitTone === "danger"}
+          />
           <BridgeRow label="Investments" value={dashboard.metrics.investments} />
         </div>
       </section>
@@ -1963,11 +1994,11 @@ function SimpleMoneyTable({
   );
 }
 
-function BridgeRow({ label, value, danger, good }: { label: string; value?: number | null; danger?: boolean; good?: boolean }) {
+function BridgeRow({ label, value, danger, good }: { label: string; value: CurrencyTotals; danger?: boolean; good?: boolean }) {
   return (
     <div className="bridge-row">
       <span>{label}</span>
-      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{optionalMoney(value)}</strong>
+      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{formatCurrencyTotals(value)}</strong>
     </div>
   );
 }
@@ -2237,7 +2268,18 @@ function RevenueView({
   const [error, setError] = useState<string | null>(null);
   const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
   const latestRun = visibleRuns[0];
-  const hasPulledRevenue = visibleRuns.some((run) => run.status === "pulled" || run.status === "invoiced");
+  const totalRevenue = sumCurrencyTotals(
+    visibleRuns.filter((run) => run.status !== "failed" && run.status !== "skipped"),
+    (run) => run.revenue
+  );
+  const invoicedRevenue = sumCurrencyTotals(
+    visibleRuns.filter((run) => run.status === "invoiced"),
+    (run) => run.revenue
+  );
+  const pendingRevenue = sumCurrencyTotals(
+    visibleRuns.filter((run) => run.status === "pulled"),
+    (run) => run.revenue
+  );
   const revenuePartnersById = useMemo(() => {
     const map = new Map<string, RevenuePartner>();
     for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
@@ -2341,9 +2383,9 @@ function RevenueView({
       {error && <div className="inline-error revenue-error">{error}</div>}
 
       <div className="wise-summary-grid revenue-summary">
-        <SummaryTile label="Revenue" value={maybeMoney(hasPulledRevenue, dashboard.revenueMetrics.totalRevenue ?? 0)} />
-        <SummaryTile label="Invoiced" value={maybeMoney(dashboard.revenueMetrics.invoicedRevenue !== null, dashboard.revenueMetrics.invoicedRevenue ?? 0)} />
-        <SummaryTile label="Pending" value={maybeMoney(dashboard.revenueMetrics.pendingRevenue !== null, dashboard.revenueMetrics.pendingRevenue ?? 0)} />
+        <SummaryTile label="Revenue" value={formatCurrencyTotals(totalRevenue)} />
+        <SummaryTile label="Invoiced" value={formatCurrencyTotals(invoicedRevenue)} />
+        <SummaryTile label="Pending" value={formatCurrencyTotals(pendingRevenue)} />
         <SummaryTile label="Last run" value={latestRun ? dateLabel(latestRun.createdAt) : "None"} />
       </div>
 
@@ -2375,7 +2417,15 @@ function RevenueView({
                   <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
                   <td>{run.status === "failed" ? "—" : run.conversions ?? 0}</td>
                   <td>
-                    <span className={`status-pill ${run.status === "invoiced" ? "good" : run.status === "failed" || run.status === "skipped" ? "warning" : ""}`}>
+                    <span
+                      className={`status-pill ${
+                        run.status === "invoiced"
+                          ? "good"
+                          : run.status === "invoicing" || run.status === "failed" || run.status === "skipped"
+                            ? "warning"
+                            : ""
+                      }`}
+                    >
                       {run.status}
                     </span>
                     {run.error && <small>{run.error}</small>}
@@ -2447,15 +2497,15 @@ function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: 
 function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
   const cashbackRows = rows.filter((row) => row.category.toLowerCase().includes("cashback"));
-  const cashback = cashbackRows.reduce((total, row) => total + row.amount, 0);
-  const balance = slashAccounts.reduce((total, account) => total + account.balance, 0);
+  const cashback = sumCurrencyTotals(cashbackRows, (row) => row.amount);
+  const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
 
   return (
     <div className="split-view">
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash balances</h2>
-          <span className="total-pill">{maybeMoney(slashAccounts.length > 0, balance)}</span>
+          <span className="total-pill">{formatCurrencyTotals(balance)}</span>
         </div>
         <SimpleMoneyTable
           rows={slashAccounts.map((account) => ({
@@ -2471,7 +2521,7 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash cashback</h2>
-          <span className="total-pill good">{maybeMoney(cashbackRows.length > 0, cashback)}</span>
+          <span className="total-pill good">{formatCurrencyTotals(cashback)}</span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
@@ -2770,7 +2820,6 @@ function SettingsView({
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
   const initialModelIsPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
-  const [apiKey, setApiKey] = useState("");
   const [modelChoice, setModelChoice] = useState(initialModelIsPreset ? dashboard.aiSettings.model : "custom");
   const [customModel, setCustomModel] = useState(initialModelIsPreset ? "" : dashboard.aiSettings.model);
   const [teamName, setTeamName] = useState("");
@@ -2807,11 +2856,7 @@ function SettingsView({
     setBusy("save");
     setAiError(null);
     try {
-      await onSaveAiSettings({
-        model: selectedModel,
-        openRouterApiKey: apiKey || undefined
-      });
-      setApiKey("");
+      await onSaveAiSettings({ model: selectedModel });
     } catch (err) {
       setAiError(err instanceof Error ? err.message : "AI settings could not be saved");
     } finally {
@@ -2877,20 +2922,14 @@ function SettingsView({
             <h2>OpenRouter model for website and backend tasks</h2>
           </div>
           <span className={`status-pill ${dashboard.aiSettings.apiKeyConfigured ? "good" : "warning"}`}>
-            {dashboard.aiSettings.apiKeyConfigured ? `Key ${dashboard.aiSettings.apiKeyPreview}` : "No key"}
+            {dashboard.aiSettings.apiKeyConfigured ? "Runtime secret configured" : "Runtime secret missing"}
           </span>
         </div>
         <form className="settings-form" onSubmit={saveSettings}>
-          <label>
-            OpenRouter API key
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={dashboard.aiSettings.apiKeyConfigured ? "Leave blank to keep saved key" : "sk-or-v1..."}
-              autoComplete="off"
-            />
-          </label>
+          <div className="docs-note">
+            <strong>Secret storage</strong>
+            <span>OpenRouter credentials are managed as an OPENROUTER_API_KEY runtime secret and are never stored in dashboard data.</span>
+          </div>
           <div className="form-grid">
             <label>
               Model

@@ -32,7 +32,6 @@ export function publicAiSettings(settings: StoredAiSettings): AiSettings {
     provider: "openrouter",
     model: settings.model,
     apiKeyConfigured: Boolean(key),
-    apiKeyPreview: key ? `...${key.slice(-4)}` : undefined,
     updatedAt: settings.updatedAt
   };
 }

@@ -10,7 +10,9 @@ export type InvoiceDocumentType = "sales_invoice" | "supplier_bill";
 
 export type RevenuePeriodPreset = "last-week" | "last-7-days" | "this-month" | "custom";
 
-export type RevenueRunStatus = "pulled" | "invoiced" | "failed" | "mock" | "skipped";
+export type RevenueRunStatus = "pulled" | "invoicing" | "invoiced" | "failed" | "mock" | "skipped";
+
+export type CurrencyTotals = Record<string, number>;
 
 export interface AccountBalance {
   id: string;
@@ -101,15 +103,17 @@ export interface AiSettings {
   provider: "openrouter";
   model: string;
   apiKeyConfigured: boolean;
-  apiKeyPreview?: string;
   updatedAt?: string;
 }
 
-export interface StoredAiSettings {
+export interface PersistedAiSettings {
   provider: "openrouter";
   model: string;
-  openRouterApiKey?: string;
   updatedAt?: string;
+}
+
+export interface StoredAiSettings extends PersistedAiSettings {
+  openRouterApiKey?: string;
 }
 
 export interface RevenueRun {
@@ -211,21 +215,21 @@ export interface IntegrationStatus {
 }
 
 export interface Metrics {
-  totalCash: number | null;
-  totalReceivables: number | null;
-  totalOpenBalance: number | null;
-  totalPayables: number | null;
-  totalFloat: number | null;
-  profit: number | null;
-  investments: number | null;
-  totalAssets: number | null;
-  monthTotals: Record<string, number>;
+  totalCash: CurrencyTotals;
+  totalReceivables: CurrencyTotals;
+  totalOpenBalance: CurrencyTotals;
+  totalPayables: CurrencyTotals;
+  totalFloat: CurrencyTotals;
+  profit: CurrencyTotals;
+  investments: CurrencyTotals;
+  totalAssets: CurrencyTotals;
+  monthTotals: Record<string, CurrencyTotals>;
 }
 
 export interface RevenueMetrics {
-  totalRevenue: number | null;
-  invoicedRevenue: number | null;
-  pendingRevenue: number | null;
+  totalRevenue: CurrencyTotals;
+  invoicedRevenue: CurrencyTotals;
+  pendingRevenue: CurrencyTotals;
   failedRuns: number;
   partnerCount: number;
   lastRunAt?: string;
@@ -350,8 +354,6 @@ export interface SyncRevenuePayload {
 }
 
 export interface SaveAiSettingsPayload {
-  openRouterApiKey?: string;
-  clearApiKey?: boolean;
   model: string;
 }
 

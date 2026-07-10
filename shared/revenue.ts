@@ -1,4 +1,5 @@
 import type { RevenueMetrics, RevenuePartner, RevenuePeriodPreset, RevenueRun } from "./types";
+import { sumCurrencyTotals } from "./currencyTotals";
 
 const dayMs = 24 * 60 * 60 * 1000;
 
@@ -83,9 +84,9 @@ export function calculateRevenueMetrics(partners: RevenuePartner[], runs: Revenu
   const lastRunAt = runs.reduce<string | undefined>((latest, run) => (!latest || run.createdAt > latest ? run.createdAt : latest), undefined);
 
   return {
-    totalRevenue: billableRuns.length > 0 ? billableRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
-    invoicedRevenue: invoicedRuns.length > 0 ? invoicedRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
-    pendingRevenue: pendingRuns.length > 0 ? pendingRuns.reduce((sum, run) => sum + run.revenue, 0) : null,
+    totalRevenue: sumCurrencyTotals(billableRuns, (run) => run.revenue),
+    invoicedRevenue: sumCurrencyTotals(invoicedRuns, (run) => run.revenue),
+    pendingRevenue: sumCurrencyTotals(pendingRuns, (run) => run.revenue),
     failedRuns: runs.filter((run) => run.status === "failed").length,
     partnerCount: partners.filter((partner) => partner.enabled).length,
     lastRunAt

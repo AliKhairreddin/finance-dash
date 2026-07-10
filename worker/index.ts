@@ -15,6 +15,7 @@ import type {
   IntegrationStatus,
   Invoice,
   MatchTransactionPayload,
+  PersistedAiSettings,
   Provider,
   RevenuePartner,
   RevenueRun,
@@ -35,6 +36,7 @@ import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "..
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
 import {
@@ -59,6 +61,7 @@ interface Fetcher {
 interface Env {
   ASSETS: Fetcher;
   CONVEX_URL?: string;
+  CONVEX_SERVICE_TOKEN?: string;
   WISE_API_TOKEN?: string;
   WISE_PROFILE_ID?: string;
   WISE_BALANCE_IDS?: string;
@@ -81,10 +84,12 @@ interface Env {
   KISSTERRA_TUNE_NETWORK_ID?: string;
   KISSTERRA_TUNE_API_KEY?: string;
   KISSTERRA_TUNE_API_BASE_URL?: string;
+  OPENROUTER_API_KEY?: string;
   PUBLIC_APP_URL?: string;
 }
 
 interface PersistedState {
+  revision: string | null;
   providers: Provider[];
   invoices: Invoice[];
   teams: Team[];
@@ -94,7 +99,17 @@ interface PersistedState {
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
-  aiSettings?: StoredAiSettings;
+  aiSettings?: PersistedAiSettings;
+}
+
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
 }
 
 function cleanOptional(value?: string): string | undefined {
@@ -250,8 +265,16 @@ function bankAliasNames(transaction: Transaction): string[] {
   return transactionAliasCandidates(transaction);
 }
 
-function getConvexClient(env: Env): ConvexHttpClient | null {
-  return env.CONVEX_URL ? new ConvexHttpClient(env.CONVEX_URL) : null;
+function getConvexClient(env: Env): ConvexHttpClient {
+  const url = env.CONVEX_URL?.trim();
+  if (!url) throw new ApiError(503, "Dashboard storage is not configured");
+  return new ConvexHttpClient(url);
+}
+
+function getConvexServiceToken(env: Env): string {
+  const token = env.CONVEX_SERVICE_TOKEN?.trim();
+  if (!token) throw new ApiError(503, "Dashboard storage authentication is not configured");
+  return token;
 }
 
 function parseWiseBalanceIds(value: string | undefined): Set<string> {
@@ -888,9 +911,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function loadPersisted(env: Env): Promise<PersistedState> {
   const convex = getConvexClient(env);
-  const stored = convex ? await convex.query(api.dashboard.getState, {}).catch(() => null) : null;
+  const serviceToken = getConvexServiceToken(env);
+  const stored = await (async () => {
+    try {
+      return await convex.query(api.dashboard.getState, { serviceToken });
+    } catch (error) {
+      throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
+    }
+  })();
 
   return {
+    revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: realInvoices(stored?.invoices),
     teams: mergeTeamDirectory(stored?.teams ?? []),
@@ -906,10 +937,52 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
 
 async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const convex = getConvexClient(env);
-  if (!convex) {
-    throw new Error("CONVEX_URL is not configured");
+  const serviceToken = getConvexServiceToken(env);
+  const { revision, ...dashboardState } = state;
+  try {
+    const result = await convex.mutation(api.dashboard.saveState, {
+      ...dashboardState,
+      serviceToken,
+      expectedUpdatedAt: revision
+    });
+    state.revision = result.updatedAt;
+  } catch (error) {
+    if (error instanceof ConvexError && isRecord(error.data) && error.data.code === "STATE_CONFLICT") {
+      throw new ApiError(409, "Dashboard data changed while this update was saving. Retry the action.", { cause: error });
+    }
+    throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   }
-  await convex.mutation(api.dashboard.saveState, state);
+}
+
+async function reserveRevenueInvoice(env: Env, run: RevenueRun): Promise<boolean> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  try {
+    const result = await convex.mutation(api.dashboard.reserveRevenueInvoice, { serviceToken, run });
+    return result.reserved;
+  } catch (error) {
+    throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
+  }
+}
+
+async function finalizeRevenueInvoice(env: Env, run: RevenueRun, invoice?: Invoice): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  try {
+    await convex.mutation(api.dashboard.finalizeRevenueInvoice, { serviceToken, run, invoice });
+  } catch (error) {
+    if (error instanceof ConvexError && isRecord(error.data) && error.data.code === "REVENUE_RESERVATION_CONFLICT") {
+      throw new ApiError(409, "Revenue invoice reservation changed before it could be finalized.", { cause: error });
+    }
+    throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
+  }
+}
+
+function runtimeAiSettings(env: Env, settings?: PersistedAiSettings): StoredAiSettings {
+  return {
+    ...(settings ?? defaultAiSettings),
+    openRouterApiKey: env.OPENROUTER_API_KEY?.trim() || undefined
+  };
 }
 
 function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): IntegrationStatus[] {
@@ -1088,7 +1161,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     revenuePartners: state.revenuePartners,
     revenueRuns: state.revenueRuns,
     revenueMetrics: calculateRevenueMetrics(state.revenuePartners, state.revenueRuns),
-    aiSettings: publicAiSettings(state.aiSettings ?? { ...defaultAiSettings }),
+    aiSettings: publicAiSettings(runtimeAiSettings(env, state.aiSettings)),
     transactions,
     invoices,
     transactionCategoryRules: state.transactionCategoryRules,
@@ -1178,11 +1251,9 @@ async function saveAiSettings(env: Env, payload: SaveAiSettingsPayload): Promise
   if (!model) throw new Error("OpenRouter model is required");
 
   const state = await loadPersisted(env);
-  const nextKey = payload.clearApiKey ? undefined : payload.openRouterApiKey?.trim() || state.aiSettings?.openRouterApiKey;
   state.aiSettings = {
     provider: "openrouter",
     model,
-    openRouterApiKey: nextKey,
     updatedAt: new Date().toISOString()
   };
   await savePersisted(env, state);
@@ -1191,7 +1262,7 @@ async function saveAiSettings(env: Env, payload: SaveAiSettingsPayload): Promise
 
 async function runAiPrompt(env: Env, payload: AiPromptPayload) {
   const state = await loadPersisted(env);
-  return runOpenRouterPrompt(state.aiSettings ?? { ...defaultAiSettings }, payload, env.PUBLIC_APP_URL);
+  return runOpenRouterPrompt(runtimeAiSettings(env, state.aiSettings), payload, env.PUBLIC_APP_URL);
 }
 
 function transactionCategoryNeedsReview(transaction: Transaction): boolean {
@@ -1231,7 +1302,8 @@ async function autoCategorizeState(
   });
 
   let aiMatches = 0;
-  const shouldUseAi = payload.useAi !== false && Boolean(state.aiSettings?.openRouterApiKey?.trim());
+  const activeAiSettings = runtimeAiSettings(env, state.aiSettings);
+  const shouldUseAi = payload.useAi !== false && Boolean(activeAiSettings.openRouterApiKey);
   const remaining = state.wiseStatementTransactions.filter((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return false;
     return transactionNeedsCategorization(transaction);
@@ -1239,7 +1311,7 @@ async function autoCategorizeState(
 
   if (shouldUseAi && remaining.length > 0) {
     const aiResults = await runOpenRouterTransactionCategorization(
-      state.aiSettings ?? { ...defaultAiSettings },
+      activeAiSettings,
       remaining,
       state.providers,
       env.PUBLIC_APP_URL
@@ -1452,8 +1524,10 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
 }
 
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
-  const state = await loadPersisted(env);
-  const selectedPartners = state.revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  const initialState = await loadPersisted(env);
+  const selectedPartners = initialState.revenuePartners.filter(
+    (partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId)
+  );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
   }
@@ -1466,52 +1540,52 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
       periodEnd: payload.periodEnd,
       timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "UTC"
     });
-    const existingInvoicedRun = state.revenueRuns.find(
-      (run) =>
-        run.partnerId === partner.id &&
-        run.periodStart === period.periodStart &&
-        run.periodEnd === period.periodEnd &&
-        run.status === "invoiced"
-    );
 
     try {
-      let run = await fetchTuneRevenue(env, partner, period);
-      if (payload.createInvoices && existingInvoicedRun) {
-        run = {
-          ...run,
-          status: "skipped",
-          invoiceId: existingInvoicedRun.invoiceId,
-          externalInvoiceId: existingInvoicedRun.externalInvoiceId,
-          error: "Invoice already exists for this partner and period"
-        };
-      } else if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
-        const invoice = await createMeritInvoice(env, {
-          documentType: "sales_invoice",
-          customerName: partner.meritCustomerName || partner.name,
-          amount: run.revenue,
-          currency: run.currency,
-          dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-          description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
-        });
+      const run = await fetchTuneRevenue(env, partner, period);
+      if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
+        const reservation: RevenueRun = { ...run, status: "invoicing", error: "Merit invoice creation in progress" };
+        if (!(await reserveRevenueInvoice(env, reservation))) continue;
 
-        if (invoice) {
-          state.invoices = [invoice, ...state.invoices.filter((item) => item.id !== invoice.id)];
-          run = {
-            ...run,
-            status: "invoiced",
-            invoiceId: invoice.id,
-            externalInvoiceId: invoice.externalId
-          };
-        } else {
-          run = {
-            ...run,
-            status: "pulled",
-            error: "Revenue pulled, but Merit invoice credentials are not configured"
-          };
+        let invoice: Invoice | undefined;
+        try {
+          invoice = await createMeritInvoice(env, {
+            documentType: "sales_invoice",
+            customerName: partner.meritCustomerName || partner.name,
+            amount: run.revenue,
+            currency: run.currency,
+            dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
+            description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+          });
+        } catch (error) {
+          await finalizeRevenueInvoice(env, {
+            ...reservation,
+            error: `Merit invoice outcome needs review: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
+          continue;
         }
+
+        await finalizeRevenueInvoice(
+          env,
+          invoice
+            ? {
+                ...run,
+                status: "invoiced",
+                invoiceId: invoice.id,
+                externalInvoiceId: invoice.externalId
+              }
+            : {
+                ...run,
+                status: "pulled",
+                error: "Revenue pulled, but Merit invoice credentials are not configured"
+              },
+          invoice
+        );
+      } else {
+        nextRuns.push(run);
       }
-      nextRuns.push(run);
     } catch (error) {
+      if (error instanceof ApiError) throw error;
       nextRuns.push({
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
         partnerId: partner.id,
@@ -1529,9 +1603,16 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
     }
   }
 
-  const nextRunIds = new Set(nextRuns.map((run) => run.id));
-  state.revenueRuns = [...nextRuns, ...state.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
-  await savePersisted(env, state);
+  if (nextRuns.length > 0) {
+    const latestState = await loadPersisted(env);
+    const protectedRunIds = new Set(
+      latestState.revenueRuns.filter((run) => run.status === "invoicing" || run.status === "invoiced").map((run) => run.id)
+    );
+    const safeNextRuns = nextRuns.filter((run) => !protectedRunIds.has(run.id));
+    const nextRunIds = new Set(safeNextRuns.map((run) => run.id));
+    latestState.revenueRuns = [...safeNextRuns, ...latestState.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
+    await savePersisted(env, latestState);
+  }
   return getSnapshot(env);
 }
 
@@ -1668,7 +1749,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ message: "Not found" }, { status: 404 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown server error";
-    return json({ message }, { status: 500 });
+    return json({ message }, { status: error instanceof ApiError ? error.status : 500 });
   }
 }
 
@@ -1680,7 +1761,7 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(_controller: unknown, env: Env): Promise<void> {
     await syncRevenue(env, {
       periodPreset: "last-week",
       timezone: env.REVENUE_TIMEZONE || "UTC",
