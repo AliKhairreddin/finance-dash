@@ -1645,7 +1645,7 @@ function Overview({
           <h2>Needs review</h2>
           <span className="total-pill">{reviewRows.length} rows</span>
         </div>
-        <div className="review-list">
+        <div className="review-list overview-review-list">
           {reviewRows.length > 0 ? (
             reviewRows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -1654,20 +1654,22 @@ function Overview({
                   <div className={`direction-badge ${transaction.direction}`}>
                     {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
                   </div>
-                  <div>
+                  <div className="review-copy">
                     <strong>{transaction.counterparty}</strong>
                     <span>{transaction.description}</span>
                   </div>
                   <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
-                  <div className="match-chip">{providerLabel(provider)}</div>
-                  <Button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
-                    <ShieldCheck size={15} />
-                    Match
-                  </Button>
-                  <Button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
-                    <FilePlus2 size={15} />
-                    Document
-                  </Button>
+                  <div className="review-actions">
+                    <div className="match-chip">{providerLabel(provider)}</div>
+                    <Button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
+                      <ShieldCheck size={15} />
+                      Match
+                    </Button>
+                    <Button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
+                      <FilePlus2 size={15} />
+                      Document
+                    </Button>
+                  </div>
                 </article>
               );
             })
