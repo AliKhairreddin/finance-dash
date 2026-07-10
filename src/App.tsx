@@ -2858,7 +2858,7 @@ function ProvidersView({
                 <div className="provider-card-actions">
                   <Button
                     className="icon-button"
-                    aria-label={`Edit ${partner.name}`}
+                    aria-label={`Edit revenue client ${partner.name} (${partner.networkIdEnv})`}
                     title="Edit revenue partner"
                     onClick={() => onEditRevenuePartner(partner)}
                   >
@@ -2866,7 +2866,7 @@ function ProvidersView({
                   </Button>
                   <Button
                     className="icon-button destructive-icon-button"
-                    aria-label={`Delete ${partner.name}`}
+                    aria-label={`Delete revenue client ${partner.name} (${partner.networkIdEnv})`}
                     title="Delete revenue client"
                     onClick={() => onDeleteRevenuePartner(partner)}
                   >
