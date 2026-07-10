@@ -31,6 +31,7 @@ import type {
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
 import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
+import { deleteProviderReferences } from "../shared/providerDeletion";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
 import { calculateMetrics } from "./calculations";
 import {
@@ -528,6 +529,30 @@ export async function updateProvider(providerId: string, payload: UpdateProvider
   return updated;
 }
 
+export async function deleteProvider(providerId: string): Promise<Provider> {
+  const deletion = deleteProviderReferences(
+    {
+      providers,
+      invoices,
+      revenuePartners,
+      revenueRuns,
+      transactions,
+      wiseStatementTransactions
+    },
+    providerId
+  );
+  if (!deletion) throw new Error("Company not found");
+
+  providers = deletion.providers;
+  invoices = deletion.invoices;
+  revenuePartners = deletion.revenuePartners;
+  revenueRuns = deletion.revenueRuns;
+  transactions = deletion.transactions;
+  wiseStatementTransactions = deletion.wiseStatementTransactions;
+  await persist();
+  return deletion.deletedProvider;
+}
+
 export async function updateRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
   let updated: RevenuePartner | undefined;
   revenuePartners = revenuePartners.map((partner) => {
@@ -552,6 +577,14 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
   if (!updated) throw new Error("Revenue partner not found");
   await persist();
   return updated;
+}
+
+export async function deleteRevenuePartner(partnerId: string): Promise<RevenuePartner> {
+  const deleted = revenuePartners.find((partner) => partner.id === partnerId);
+  if (!deleted) throw new Error("Revenue partner not found");
+  revenuePartners = revenuePartners.filter((partner) => partner.id !== partnerId);
+  await persist();
+  return deleted;
 }
 
 export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {

@@ -402,7 +402,8 @@ h2 {
 .primary-button,
 .secondary-button,
 .icon-text-button,
-.icon-button {
+.icon-button,
+.destructive-button {
   border: 1px solid transparent;
   border-radius: 7px;
   display: inline-flex;
@@ -422,6 +423,19 @@ h2 {
 
 .primary-button:not(:disabled):hover {
   background: var(--primary-hover-bg);
+  transform: translateY(-1px);
+}
+
+.destructive-button {
+  padding: 0 14px;
+  color: #ffffff;
+  background: var(--red);
+  border-color: var(--red);
+  box-shadow: 0 10px 22px rgba(180, 35, 24, 0.18);
+}
+
+.destructive-button:not(:disabled):hover {
+  filter: brightness(0.94);
   transform: translateY(-1px);
 }
 
@@ -538,7 +552,7 @@ textarea:focus-visible {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -1762,6 +1776,22 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
+.provider-card-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto !important;
+}
+
+.destructive-icon-button {
+  color: var(--red);
+}
+
+.destructive-icon-button:not(:disabled):hover {
+  color: var(--red);
+  border-color: var(--red-border);
+  background: var(--red-soft);
+}
+
 .provider-avatar {
   display: grid;
   width: 36px;
@@ -1831,6 +1861,12 @@ textarea:focus-visible {
   border: 1px solid var(--line);
   color: var(--code-text);
   font-size: 0.74rem;
+}
+
+.alias-list .muted-chip {
+  border-style: dashed;
+  color: var(--app-muted);
+  background: transparent;
 }
 
 .need-list code.warning-code {
@@ -1934,6 +1970,100 @@ textarea:focus-visible {
   padding: 16px;
 }
 
+.provider-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(720px, calc(100vw - 30px));
+  padding: 0;
+  overflow: hidden;
+}
+
+.provider-modal .modal-header {
+  margin: 0;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-header-shine), var(--panel-soft);
+}
+
+.provider-modal-body {
+  min-height: 0;
+  padding: 0 18px 18px;
+  overflow-y: auto;
+  scrollbar-color: var(--app-muted) transparent;
+  scrollbar-width: thin;
+}
+
+.form-section {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.form-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.form-section-heading {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.form-section-heading h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.form-section-heading p,
+.confirmation-copy {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.provider-modal label {
+  margin: 9px 0;
+}
+
+.provider-modal-footer {
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.confirmation-modal {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  width: min(440px, calc(100vw - 30px));
+  overflow: hidden;
+}
+
+.confirmation-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: var(--red);
+  border: 1px solid var(--red-border);
+  border-radius: 8px;
+  background: var(--red-soft);
+}
+
+.confirmation-modal .confirmation-copy,
+.confirmation-modal .inline-error,
+.confirmation-modal .modal-actions {
+  grid-column: 1 / -1;
+}
+
+.confirmation-modal .modal-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
 .wide-modal {
   width: min(720px, calc(100vw - 30px));
 }
@@ -2019,7 +2149,7 @@ textarea:focus-visible {
 
 @media (max-width: 1180px) {
   .metric-grid {
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .overview-grid {
@@ -2122,6 +2252,19 @@ textarea:focus-visible {
   .revenue-controls,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .provider-modal {
+    max-height: calc(100vh - 20px);
+  }
+
+  .provider-modal .modal-header,
+  .provider-modal-footer {
+    padding-inline: 14px;
+  }
+
+  .provider-modal-body {
+    padding-inline: 14px;
   }
 
   .directory-toolbar {

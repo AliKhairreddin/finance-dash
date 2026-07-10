@@ -20,6 +20,8 @@ import {
   createInvoice,
   createProvider,
   createTeam,
+  deleteProvider,
+  deleteRevenuePartner,
   getSnapshot,
   initializeStore,
   importWiseStatement,
@@ -99,6 +101,14 @@ app.put("/api/providers/:providerId", async (request, response, next) => {
   }
 });
 
+app.delete("/api/providers/:providerId", async (request, response, next) => {
+  try {
+    response.json(await deleteProvider(request.params.providerId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
   try {
     const payload = request.body;
@@ -107,6 +117,14 @@ app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
       return;
     }
     response.json(await updateRevenuePartner(request.params.partnerId, payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/revenue-partners/:partnerId", async (request, response, next) => {
+  try {
+    response.json(await deleteRevenuePartner(request.params.partnerId));
   } catch (error) {
     next(error);
   }

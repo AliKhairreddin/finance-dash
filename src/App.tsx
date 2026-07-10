@@ -26,6 +26,7 @@ import {
   Sparkles,
   Sun,
   Tags,
+  Trash2,
   Upload,
   WalletCards,
   X
@@ -76,7 +77,20 @@ type TransactionDescriptionToast = {
   left: number;
   top: number;
 };
+type DirectoryDeleteTarget =
+  | { kind: "provider"; provider: Provider }
+  | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
+
+const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
+  overview: { eyebrow: "Finance operations", title: "Cash flow and open balance control" },
+  banking: { eyebrow: "Banking", title: "Reconcile account activity" },
+  categories: { eyebrow: "Categorization", title: "Review spend and revenue labels" },
+  revenue: { eyebrow: "Revenue", title: "Pull, review, and invoice partner revenue" },
+  invoices: { eyebrow: "Invoices", title: "Approval and payment control" },
+  providers: { eyebrow: "Business directory", title: "Clients and suppliers" },
+  settings: { eyebrow: "Configuration", title: "Teams, integrations, and AI" }
+};
 
 const openRouterModelOptions = [
   { label: "OpenRouter auto", value: "openrouter/auto" },
@@ -391,6 +405,7 @@ function App() {
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
+  const [directoryDeleteTarget, setDirectoryDeleteTarget] = useState<DirectoryDeleteTarget | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
@@ -673,6 +688,16 @@ function App() {
     await loadDashboard();
   }
 
+  async function removeProvider(provider: Provider) {
+    const response = await fetch(`${apiBase}/providers/${provider.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Company could not be deleted");
+    }
+    await loadDashboard();
+    setNotice(`${provider.name} deleted. Existing financial records were kept and company matches were cleared.`);
+  }
+
   async function saveRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload) {
     const response = await fetch(`${apiBase}/revenue-partners/${partnerId}`, {
       method: "PUT",
@@ -684,6 +709,16 @@ function App() {
       throw new Error(body.message || "Revenue partner could not be saved");
     }
     await loadDashboard();
+  }
+
+  async function removeRevenuePartner(partner: RevenuePartner) {
+    const response = await fetch(`${apiBase}/revenue-partners/${partner.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Revenue client could not be deleted");
+    }
+    await loadDashboard();
+    setNotice(`${partner.name} deleted from the revenue client directory. Existing run and invoice history was kept.`);
   }
 
   async function saveAiSettings(payload: SaveAiSettingsPayload) {
@@ -812,6 +847,7 @@ function App() {
   const hasProfit = hasCurrencyTotals(dashboard.metrics.profit);
   const profitTone = currencyTotalsTone(dashboard.metrics.profit);
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
+  const pageHeader = pageHeaderContent[activeTab];
 
   return (
     <main className="app-shell">
@@ -819,8 +855,8 @@ function App() {
       <div className="main-column">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Finance operations</p>
-            <h1>Cash flow and open balance control</h1>
+            <p className="eyebrow">{pageHeader.eyebrow}</p>
+            <h1>{pageHeader.title}</h1>
             <div className="meta-row">
               <span>Data as of: {maybeDate(dashboard.asOf)}</span>
               <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
@@ -972,6 +1008,8 @@ function App() {
             setProviderModalOpen(true);
           }}
           onEditRevenuePartner={setEditingRevenuePartner}
+          onDeleteProvider={(provider) => setDirectoryDeleteTarget({ kind: "provider", provider })}
+          onDeleteRevenuePartner={(partner) => setDirectoryDeleteTarget({ kind: "revenue-partner", partner })}
         />
       )}
 
@@ -1019,6 +1057,20 @@ function App() {
             await saveRevenuePartner(editingRevenuePartner.id, payload);
             setEditingRevenuePartner(null);
             setNotice("Revenue partner saved.");
+          }}
+        />
+      )}
+      {directoryDeleteTarget && (
+        <DeleteCompanyDialog
+          target={directoryDeleteTarget}
+          onClose={() => setDirectoryDeleteTarget(null)}
+          onConfirm={async () => {
+            if (directoryDeleteTarget.kind === "provider") {
+              await removeProvider(directoryDeleteTarget.provider);
+            } else {
+              await removeRevenuePartner(directoryDeleteTarget.partner);
+            }
+            setDirectoryDeleteTarget(null);
           }}
         />
       )}
@@ -2702,13 +2754,17 @@ function ProvidersView({
   revenuePartners,
   onAdd,
   onEditProvider,
-  onEditRevenuePartner
+  onEditRevenuePartner,
+  onDeleteProvider,
+  onDeleteRevenuePartner
 }: {
   providers: Provider[];
   revenuePartners: RevenuePartner[];
   onAdd: () => void;
   onEditProvider: (provider: Provider) => void;
   onEditRevenuePartner: (partner: RevenuePartner) => void;
+  onDeleteProvider: (provider: Provider) => void;
+  onDeleteRevenuePartner: (partner: RevenuePartner) => void;
 }) {
   const [scope, setScope] = useState<"all" | ProviderType>("all");
   const visibleProviders = providers.filter((provider) => {
@@ -2759,17 +2815,32 @@ function ProvidersView({
                 <strong>{provider.name}</strong>
                 <span>{providerTypeLabel(provider.type)}</span>
               </div>
-              <Button className="icon-button" title="Edit company" onClick={() => onEditProvider(provider)}>
-                <Pencil size={15} />
-              </Button>
+              <div className="provider-card-actions">
+                <Button className="icon-button" aria-label={`Edit ${provider.name}`} title="Edit company" onClick={() => onEditProvider(provider)}>
+                  <Pencil size={15} />
+                </Button>
+                <Button
+                  className="icon-button destructive-icon-button"
+                  aria-label={`Delete ${provider.name}`}
+                  title="Delete company"
+                  onClick={() => onDeleteProvider(provider)}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </div>
             </div>
             <div className="tag-list">
               {provider.tags.length > 0 ? provider.tags.map((tag) => <span key={tag}>{tag}</span>) : <span>No tags</span>}
             </div>
             <div className="alias-list">
-              {[provider.name, ...provider.aliases].slice(0, 7).map((alias) => (
-                <span key={alias}>{alias}</span>
-              ))}
+              {provider.aliases.filter((alias) => alias.trim().toLowerCase() !== provider.name.trim().toLowerCase()).length > 0 ? (
+                provider.aliases
+                  .filter((alias) => alias.trim().toLowerCase() !== provider.name.trim().toLowerCase())
+                  .slice(0, 6)
+                  .map((alias) => <span key={alias}>{alias}</span>)
+              ) : (
+                <span className="muted-chip">No known bank aliases</span>
+              )}
             </div>
           </article>
         ))}
@@ -2784,9 +2855,24 @@ function ProvidersView({
                   <strong>{partner.name}</strong>
                   <span>Client · TUNE revenue</span>
                 </div>
-                <Button className="icon-button" title="Edit revenue partner" onClick={() => onEditRevenuePartner(partner)}>
-                  <Pencil size={15} />
-                </Button>
+                <div className="provider-card-actions">
+                  <Button
+                    className="icon-button"
+                    aria-label={`Edit ${partner.name}`}
+                    title="Edit revenue partner"
+                    onClick={() => onEditRevenuePartner(partner)}
+                  >
+                    <Pencil size={15} />
+                  </Button>
+                  <Button
+                    className="icon-button destructive-icon-button"
+                    aria-label={`Delete ${partner.name}`}
+                    title="Delete revenue client"
+                    onClick={() => onDeleteRevenuePartner(partner)}
+                  >
+                    <Trash2 size={15} />
+                  </Button>
+                </div>
               </div>
               <div className="tag-list">
                 <span>Revenue</span>
@@ -2804,6 +2890,69 @@ function ProvidersView({
         {visibleProviders.length === 0 && (!showRevenuePartners || revenuePartners.length === 0) && <div className="empty-state">No companies in this filter</div>}
       </div>
     </section>
+  );
+}
+
+function DeleteCompanyDialog({
+  target,
+  onClose,
+  onConfirm
+}: {
+  target: DirectoryDeleteTarget;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = target.kind === "provider" ? target.provider.name : target.partner.name;
+  const relationship = target.kind === "provider" ? providerTypeLabel(target.provider.type).toLowerCase() : "revenue client";
+
+  async function handleConfirm(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Company could not be deleted");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form
+        className="modal confirmation-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-company-title"
+        onSubmit={handleConfirm}
+      >
+        <div className="confirmation-icon" aria-hidden="true">
+          <Trash2 size={20} />
+        </div>
+        <div>
+          <p className="eyebrow">Delete {relationship}</p>
+          <h2 id="delete-company-title">Delete {name}?</h2>
+        </div>
+        <p className="confirmation-copy">
+          {target.kind === "provider"
+            ? "This removes the company from the directory and clears it from matched transactions and invoices. Financial records stay in place."
+            : "This removes the TUNE revenue client and stops future syncs. Existing revenue runs and invoice history stay in place."}
+        </p>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="modal-actions">
+          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button type="submit" className="destructive-button" disabled={submitting}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+            Delete company
+          </Button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -3202,98 +3351,126 @@ function ProviderModal({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <form className="modal" onSubmit={handleSubmit}>
+      <form
+        className="modal provider-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="provider-modal-title"
+        onSubmit={handleSubmit}
+      >
         <div className="modal-header">
           <div>
             <p className="eyebrow">Directory setup</p>
-            <h2>{provider ? "Edit company" : "Add company"}</h2>
+            <h2 id="provider-modal-title">{provider ? "Edit company" : "Add company"}</h2>
           </div>
           <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
           </Button>
         </div>
-        {error && <div className="inline-error">{error}</div>}
-        <label>
-          Name
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Position2, Facebook Direct, client name" />
-        </label>
-        <div className="form-grid">
-          <label>
-            Relationship
-            <NativeSelect value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
-              <NativeSelectOption value="client">Client</NativeSelectOption>
-              <NativeSelectOption value="supplier">Supplier</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            Company tags
-            <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Ad platform, Subscription, Revenue" />
-          </label>
+        <div className="provider-modal-body">
+          {error && <div className="inline-error">{error}</div>}
+          <section className="form-section" aria-labelledby="company-details-heading">
+            <div className="form-section-heading">
+              <h3 id="company-details-heading">Company details</h3>
+              <p>Identity and contact information used on finance records.</p>
+            </div>
+            <label>
+              Name
+              <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Position2, Facebook Direct, client name" />
+            </label>
+            <div className="form-grid">
+              <label>
+                Relationship
+                <NativeSelect value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
+                  <NativeSelectOption value="client">Client</NativeSelectOption>
+                  <NativeSelectOption value="supplier">Supplier</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <label>
+                Company tags
+                <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Ad platform, Subscription, Revenue" />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Legal name
+                <Input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
+              </label>
+              <label>
+                Email
+                <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Country
+                <Input value={country} onChange={(event) => setCountry(event.target.value)} />
+              </label>
+              <label>
+                Tax ID
+                <Input value={taxId} onChange={(event) => setTaxId(event.target.value)} />
+              </label>
+            </div>
+            <label>
+              Address
+              <Textarea value={address} onChange={(event) => setAddress(event.target.value)} rows={2} />
+            </label>
+          </section>
+
+          <section className="form-section" aria-labelledby="billing-details-heading">
+            <div className="form-section-heading">
+              <h3 id="billing-details-heading">Billing defaults</h3>
+              <p>Optional defaults for invoices, bills, and Merit records.</p>
+            </div>
+            <div className="form-grid">
+              <label>
+                Default currency
+                <Input value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value.toUpperCase())} placeholder="USD" />
+              </label>
+              <label>
+                Payment terms days
+                <Input type="number" min="0" step="1" value={paymentTermsDays} onChange={(event) => setPaymentTermsDays(event.target.value)} />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Merit customer ID
+                <Input value={meritCustomerId} onChange={(event) => setMeritCustomerId(event.target.value)} />
+              </label>
+              <label>
+                Merit supplier ID
+                <Input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
+              </label>
+            </div>
+            <label>
+              Default account
+              <Input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />
+            </label>
+          </section>
+
+          <section className="form-section" aria-labelledby="matching-details-heading">
+            <div className="form-section-heading">
+              <h3 id="matching-details-heading">Bank matching</h3>
+              <p>Add names that appear on statements so future transactions match automatically.</p>
+            </div>
+            <label>
+              Aliases
+              <Textarea
+                value={aliases}
+                onChange={(event) => setAliases(event.target.value)}
+                rows={3}
+                placeholder="Comma-separated bank names, card merchant names, abbreviations"
+              />
+            </label>
+          </section>
         </div>
-        <div className="form-grid">
-          <label>
-            Legal name
-            <Input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
-          </label>
-          <label>
-            Email
-            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-          </label>
-        </div>
-        <div className="form-grid">
-          <label>
-            Country
-            <Input value={country} onChange={(event) => setCountry(event.target.value)} />
-          </label>
-          <label>
-            Tax ID
-            <Input value={taxId} onChange={(event) => setTaxId(event.target.value)} />
-          </label>
-        </div>
-        <label>
-          Address
-          <Textarea value={address} onChange={(event) => setAddress(event.target.value)} rows={2} />
-        </label>
-        <div className="form-grid">
-          <label>
-            Default currency
-            <Input value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value.toUpperCase())} placeholder="USD" />
-          </label>
-          <label>
-            Payment terms days
-            <Input type="number" min="0" step="1" value={paymentTermsDays} onChange={(event) => setPaymentTermsDays(event.target.value)} />
-          </label>
-        </div>
-        <div className="form-grid">
-          <label>
-            Merit customer ID
-            <Input value={meritCustomerId} onChange={(event) => setMeritCustomerId(event.target.value)} />
-          </label>
-          <label>
-            Merit supplier ID
-            <Input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
-          </label>
-        </div>
-        <label>
-          Default account
-          <Input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />
-        </label>
-        <label>
-          Aliases
-          <Textarea
-            value={aliases}
-            onChange={(event) => setAliases(event.target.value)}
-            rows={3}
-            placeholder="Comma-separated bank names, card merchant names, abbreviations"
-          />
-        </label>
-        <div className="modal-actions">
-          <Button type="button" className="secondary-button" onClick={onClose}>
+        <div className="modal-actions provider-modal-footer">
+          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
             Cancel
           </Button>
-          <Button type="submit" className="primary-button" disabled={submitting}>
-            {submitting ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
-            Save
+          <Button type="submit" className="primary-button" disabled={submitting || !name.trim()}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+            Save company
           </Button>
         </div>
       </form>

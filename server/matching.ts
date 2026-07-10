@@ -343,33 +343,8 @@ function normalizeProvider(provider: Provider): Provider {
   };
 }
 
-function providerNames(provider: Pick<Provider, "name" | "aliases">): string[] {
-  return [provider.name, ...provider.aliases].map(normalizeName).filter(Boolean);
-}
-
-function providersOverlap(left: Pick<Provider, "name" | "aliases">, right: Pick<Provider, "name" | "aliases">): boolean {
-  const leftNames = new Set(providerNames(left));
-  return providerNames(right).some((name) => leftNames.has(name));
-}
-
 export function mergeProviderDirectory(providers: Provider[]): Provider[] {
   const next = providers.map(normalizeProvider);
-
-  for (const canonical of canonicalProviders) {
-    const existingIndex = next.findIndex((provider) => providersOverlap(provider, canonical));
-    if (existingIndex >= 0) {
-      const existing = next[existingIndex];
-      next[existingIndex] = {
-        ...existing,
-        name: canonical.name,
-        type: existing.type,
-        tags: uniqueProviderTags([...canonical.tags, ...existing.tags]),
-        aliases: uniqueAliases([...canonical.aliases, ...existing.aliases])
-      };
-    } else {
-      next.push(canonical);
-    }
-  }
 
   return next.sort((left, right) => {
     const categoryOrder = providerCategoryOrder(left) - providerCategoryOrder(right);

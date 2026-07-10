@@ -33,6 +33,7 @@ import type {
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
 import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
+import { deleteProviderReferences } from "../shared/providerDeletion";
 import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { ConvexHttpClient } from "convex/browser";
@@ -1216,6 +1217,30 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
   return updated;
 }
 
+async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
+  const state = await loadPersisted(env);
+  const deletion = deleteProviderReferences(
+    {
+      providers: state.providers,
+      invoices: state.invoices,
+      revenuePartners: state.revenuePartners,
+      revenueRuns: state.revenueRuns,
+      transactions: state.wiseStatementTransactions,
+      wiseStatementTransactions: state.wiseStatementTransactions
+    },
+    providerId
+  );
+  if (!deletion) throw new ApiError(404, "Company not found");
+
+  state.providers = deletion.providers;
+  state.invoices = deletion.invoices;
+  state.revenuePartners = deletion.revenuePartners;
+  state.revenueRuns = deletion.revenueRuns;
+  state.wiseStatementTransactions = deletion.wiseStatementTransactions;
+  await savePersisted(env, state);
+  return deletion.deletedProvider;
+}
+
 async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
   if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
     throw new Error("name, networkIdEnv, and apiKeyEnv are required");
@@ -1244,6 +1269,15 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
   if (!updated) throw new Error("Revenue partner not found");
   await savePersisted(env, state);
   return updated;
+}
+
+async function deleteRevenuePartner(env: Env, partnerId: string): Promise<RevenuePartner> {
+  const state = await loadPersisted(env);
+  const deleted = state.revenuePartners.find((partner) => partner.id === partnerId);
+  if (!deleted) throw new ApiError(404, "Revenue partner not found");
+  state.revenuePartners = state.revenuePartners.filter((partner) => partner.id !== partnerId);
+  await savePersisted(env, state);
+  return deleted;
 }
 
 async function saveAiSettings(env: Env, payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {
@@ -1684,10 +1718,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (providerMatch && request.method === "PUT") {
       return json(await updateProvider(env, providerMatch[1], (await request.json()) as UpdateProviderPayload));
     }
+    if (providerMatch && request.method === "DELETE") {
+      return json(await deleteProvider(env, providerMatch[1]));
+    }
 
     const revenuePartnerMatch = url.pathname.match(/^\/api\/revenue-partners\/([^/]+)$/);
     if (revenuePartnerMatch && request.method === "PUT") {
       return json(await updateRevenuePartner(env, revenuePartnerMatch[1], (await request.json()) as UpdateRevenuePartnerPayload));
+    }
+    if (revenuePartnerMatch && request.method === "DELETE") {
+      return json(await deleteRevenuePartner(env, revenuePartnerMatch[1]));
     }
 
     if (url.pathname === "/api/settings/ai" && request.method === "POST") {
