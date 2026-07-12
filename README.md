@@ -1,6 +1,6 @@
 # Finance Operations Dashboard
 
-Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, revenue pulls, invoice review, and currency-aware operating views.
+Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, team-attributed revenue, invoice review, profit distribution, and currency-aware operating views.
 
 **Showcase:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
 
@@ -8,7 +8,7 @@ Finance Operations Dashboard is a full-stack cash-flow and reconciliation worksp
 
 ## Problem and Approach
 
-The original workflow required manually combining bank activity, partner revenue, providers, clients, categories, and invoices in a shared spreadsheet. The dashboard models those records directly and preserves the operator's decisions so recurring transactions become easier to reconcile over time.
+The original workflow required manually combining bank activity, partner revenue, providers, clients, categories, invoices, and partner distributions in a shared spreadsheet. The dashboard models those records directly and preserves the operator's decisions so recurring transactions become easier to reconcile over time.
 
 The system follows three rules:
 
@@ -21,12 +21,14 @@ The system follows three rules:
 - Import Wise statement CSVs and deduplicate overlapping uploads by transaction ID.
 - Separate incoming and outgoing reconciliation queues.
 - Suggest companies and categories from saved aliases, while requiring an explicit review before learning a new mapping.
+- Assign transactions and cardholders to teams for filtered operating views.
 - Create local sales-invoice drafts for incoming funds and supplier-bill drafts for outgoing funds.
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
-- Pull partner revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
+- Pull partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
 - Reserve scheduled invoice creation atomically so retries cannot create duplicate invoices.
-- Display Wise, Revolut, Slash, revenue, receivable, payable, and company workflows without fabricating unavailable data.
+- Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
+- Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
 ## Architecture
 
@@ -35,7 +37,7 @@ flowchart LR
     U["React operations UI"] --> API["Express locally / Cloudflare Worker"]
     API <--> C["Convex durable state"]
     API --> W["Wise CSV and API adapters"]
-    API --> R["Revolut / Slash adapters"]
+    API --> R["Revolut / Slash / Amex adapters"]
     API --> T["TUNE partner revenue"]
     API --> M["Merit invoice adapter"]
     CRON["Cloudflare scheduled event"] --> API
@@ -44,7 +46,7 @@ flowchart LR
 
 ### Runtime Modes
 
-- **Local:** Vite frontend plus an Express server; local fallback state is written under `.local/` when Convex is not configured.
+- **Local:** Vite frontend plus an Express server; local state is written under `.local/` when Convex is not configured.
 - **Cloudflare:** Static assets and API routes run from one Worker.
 - **Convex:** Stores the durable dashboard snapshot and rejects unauthenticated or stale whole-state writes.
 
@@ -52,7 +54,7 @@ flowchart LR
 
 ### Currency Isolation
 
-Derived cash, revenue, payable, and profit metrics stay grouped by currency. If records contain multiple currencies, the dashboard does not invent a single converted total.
+Derived cash, revenue, payable, distribution, and profit metrics stay grouped by currency. If records contain multiple currencies, the dashboard does not invent a single converted total.
 
 ### Learned Matching Without Silent Mutation
 
@@ -82,7 +84,7 @@ The current test suite covers currency math, empty-state behavior, service-token
 | Local API | Express 5, TypeScript |
 | Cloud API | Cloudflare Workers |
 | State | Convex |
-| Integrations | Wise, Revolut, Slash, TUNE/HasOffers, Merit |
+| Integrations | Wise, Revolut, Slash, Amex, TUNE/HasOffers, Merit |
 | Quality | Node test runner, TypeScript project references |
 
 ## Repository Layout
@@ -91,7 +93,7 @@ The current test suite covers currency math, empty-state behavior, service-token
 src/                    React dashboard and UI components
 server/                 Local API, calculations, matching, persistence, integrations
 worker/                 Cloudflare Worker API and scheduled handler
-shared/                 Currency, revenue, category, and provider domain logic
+shared/                 Currency, revenue, distribution, category, and provider logic
 convex/                 Durable dashboard state and schema
 .env.example            Supported runtime configuration
 wrangler.jsonc          Worker routes, vars, and scheduled triggers
@@ -115,8 +117,9 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 - Wise API/profile/balance identifiers;
 - Revolut Business credentials;
 - Slash API credentials;
+- Amex OAuth, account IDs, and approved API paths;
 - Merit invoice settings;
-- TUNE/Kissterra network credentials;
+- TUNE network and revenue-stream credentials;
 - server-only OpenRouter configuration.
 
 Missing credentials should produce unavailable/empty integration states rather than seeded financial numbers.
@@ -137,7 +140,8 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Wise | CSV statement import; live balance adapter available when supported |
 | Revolut | Business API adapter prepared; requires account credentials |
 | Slash | Account/transaction adapter prepared; requires API access |
-| TUNE/Kissterra | Partner revenue pulls and reporting windows |
+| Amex | OAuth and account/transaction adapter prepared; requires approved API access |
+| TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
 | Merit | Invoice list/create adapter; local payment state remains independent |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
@@ -148,7 +152,7 @@ Prepared adapters are not presented as active integrations until the required pr
 npm run check
 ```
 
-The gate runs TypeScript validation, 13 regression tests, and the production frontend build.
+The gate runs TypeScript validation, regression tests, and the production frontend build.
 
 ## Deployment
 
@@ -171,5 +175,6 @@ Before moving from showcase to production:
 - [Wise Platform](https://docs.wise.com/)
 - [Revolut Business API](https://developer.revolut.com/docs/business/business-api)
 - [Slash API](https://docs.slash.com/)
+- [American Express APIs](https://developer.americanexpress.com/)
 - [Merit API](https://api.merit.ee/connecting-robots/reference-manual/authentication/)
 - [TUNE Affiliate API](https://developers.tune.com/affiliate)

@@ -8,14 +8,17 @@ import type {
   CreateInvoicePayload,
   CreateProviderPayload,
   CreateTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   SyncRevenuePayload,
   UpdateTransactionCategoryPayload
 } from "../shared/types";
 import {
   assignTransactionTeam,
+  assignWiseCardHolderTeam,
   autoCategorizeTransactions,
   createInvoice,
   createProvider,
@@ -29,6 +32,7 @@ import {
   matchTransaction,
   runAiPrompt,
   saveAiSettings,
+  saveProfitDistributionAdjustment,
   setInvoiceApproval,
   syncExternalActivity,
   syncRevenue,
@@ -62,6 +66,19 @@ app.post("/api/sync", async (_request, response, next) => {
 app.post("/api/wise/import-statement", async (request, response, next) => {
   try {
     response.json(await importWiseStatement(request.body as ImportWiseStatementPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/wise/card-holder-team", async (request, response, next) => {
+  try {
+    const payload = request.body as AssignWiseCardHolderTeamPayload;
+    if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
+      response.status(400).json({ message: "cardHolderName and teamId are required" });
+      return;
+    }
+    response.json(await assignWiseCardHolderTeam(payload));
   } catch (error) {
     next(error);
   }
@@ -112,8 +129,14 @@ app.delete("/api/providers/:providerId", async (request, response, next) => {
 app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
   try {
     const payload = request.body;
-    if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
-      response.status(400).json({ message: "name, networkIdEnv, and apiKeyEnv are required" });
+    if (
+      !payload.name?.trim() ||
+      !payload.providerId?.trim() ||
+      !payload.revenueCategory?.trim() ||
+      !payload.networkIdEnv?.trim() ||
+      !payload.apiKeyEnv?.trim()
+    ) {
+      response.status(400).json({ message: "name, providerId, revenueCategory, networkIdEnv, and apiKeyEnv are required" });
       return;
     }
     response.json(await updateRevenuePartner(request.params.partnerId, payload));
@@ -196,6 +219,14 @@ app.post("/api/transactions/:transactionId/category", async (request, response, 
       return;
     }
     response.json(await updateTransactionCategory(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/distribution/adjustments", async (request, response, next) => {
+  try {
+    response.json(await saveProfitDistributionAdjustment(request.body as SaveProfitDistributionAdjustmentPayload));
   } catch (error) {
     next(error);
   }

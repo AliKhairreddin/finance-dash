@@ -1,8 +1,21 @@
-import type { Provider, ProviderType, Team, Transaction, TransactionCategoryRule } from "../shared/types";
+import type { Provider, ProviderType, Team, Transaction, TransactionCategoryRule, WiseCardHolderTeamAssignment } from "../shared/types";
+import {
+  canonicalCreatedAt,
+  canonicalTeamId,
+  canonicalTeamName,
+  sanjinTeamId,
+  benTeamId,
+  cognitiveTeamId,
+  ishanTeamId,
+  aminTeamId,
+  kissterraProviderId,
+  leadEconomyProviderId,
+  wagnerTeamId,
+  wagnerTeamName
+} from "../shared/business";
 import { transactionBusinessCategory } from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
-const canonicalCreatedAt = "2026-07-01T00:00:00.000Z";
 
 type ProviderDraft = Omit<Provider, "source" | "createdAt">;
 type PersistedProviderShape = Omit<Provider, "type" | "tags"> & {
@@ -116,6 +129,20 @@ const canonicalProviderDrafts: ProviderDraft[] = [
     type: "supplier",
     tags: ["Bank fees", "Internal"],
     aliases: ["wise fee", "wise fees", "transfer fee"]
+  },
+  {
+    id: kissterraProviderId,
+    name: "Kissterra",
+    type: "client",
+    tags: ["Revenue partner"],
+    aliases: ["kissterra", "kisterra", "tune kissterra", "hasoffers kissterra"]
+  },
+  {
+    id: leadEconomyProviderId,
+    name: "Lead Economy",
+    type: "client",
+    tags: ["Revenue partner"],
+    aliases: ["lead economy", "leadeconomy", "lead-economy", "tune lead economy", "hasoffers lead economy"]
   }
 ];
 
@@ -127,22 +154,60 @@ export const canonicalProviders: Provider[] = canonicalProviderDrafts.map((provi
 
 export const canonicalTeams: Team[] = [
   {
-    id: "team-general",
-    name: "General",
+    id: cognitiveTeamId,
+    name: "Cognitive Pixel",
     createdAt: canonicalCreatedAt
   },
   {
-    id: "team-acp",
-    name: "ACP",
+    id: sanjinTeamId,
+    name: "Sanjin",
     createdAt: canonicalCreatedAt
+  },
+  {
+    id: benTeamId,
+    name: "Ben",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: ishanTeamId,
+    name: "Ishan",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: aminTeamId,
+    name: "Amin",
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: wagnerTeamId,
+    name: wagnerTeamName,
+    createdAt: canonicalCreatedAt
+  }
+];
+
+export const canonicalWiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [
+  {
+    cardHolderName: "Sanjin Beckovic",
+    teamId: wagnerTeamId,
+    updatedAt: canonicalCreatedAt
   }
 ];
 
 const categoryRules: Array<{ category: string; phrases: string[]; direction?: Transaction["direction"] }> = [
   {
-    category: "Revenue",
+    category: "Media buying direct",
     direction: "in",
-    phrases: ["invoice payment", "customer payment", "client payment", "payout", "settlement", "hasoffers", "tune revenue", "affiliate revenue"]
+    phrases: ["invoice payment", "customer payment", "client payment", "media buying direct", "direct media buying"]
+  },
+  {
+    category: "Partner network revenue",
+    direction: "in",
+    phrases: ["payout", "settlement", "hasoffers", "tune revenue", "partner revenue", "kissterra", "lead economy"]
+  },
+  {
+    category: "Affiliate team revenue",
+    direction: "in",
+    phrases: ["affiliate revenue", "affiliate payout", "affiliate earnings", "wagner revenue", "wgnr revenue"]
   },
   {
     category: "Refunds and chargebacks",
@@ -163,6 +228,16 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
     phrases: ["ads", "advertising", "campaign", "media buying", "ad manager", "business manager"]
   },
   {
+    category: "Affiliate payout",
+    direction: "out",
+    phrases: ["affiliate payout", "affiliate payment", "wagner payout", "wagner payment", "wgnr payout", "wgnr payment"]
+  },
+  {
+    category: "Creative production",
+    direction: "out",
+    phrases: ["creative", "creative production", "video editor", "designer", "ugc"]
+  },
+  {
     category: "Software subscription",
     direction: "out",
     phrases: ["subscription", "software", "saas", "cursor", "namecheap", "openai", "github", "cloudflare", "vercel", "notion", "slack", "zoom"]
@@ -171,6 +246,11 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
     category: "Cloud and hosting",
     direction: "out",
     phrases: ["aws", "amazon web services", "google cloud", "digitalocean", "netlify", "hosting", "server", "domain", "dns"]
+  },
+  {
+    category: "Tracking and analytics",
+    direction: "out",
+    phrases: ["voluum", "redtrack", "keitaro", "tracking", "analytics", "attribution", "postback"]
   },
   {
     category: "Food and meals",
@@ -281,6 +361,28 @@ export function normalizeName(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+export function normalizeCardHolderName(value: string): string {
+  return normalizeName(value);
+}
+
+export function mergeWiseCardHolderTeamAssignments(assignments: WiseCardHolderTeamAssignment[]): WiseCardHolderTeamAssignment[] {
+  const byName = new Map<string, WiseCardHolderTeamAssignment>();
+  for (const assignment of canonicalWiseCardHolderTeamAssignments) {
+    byName.set(normalizeCardHolderName(assignment.cardHolderName), assignment);
+  }
+  for (const assignment of assignments) {
+    const cardHolderName = assignment.cardHolderName.trim().replace(/\s+/g, " ");
+    const normalizedName = normalizeCardHolderName(cardHolderName);
+    if (!normalizedName) continue;
+    byName.set(normalizedName, {
+      cardHolderName,
+      teamId: canonicalTeamId(assignment.teamId),
+      updatedAt: assignment.updatedAt
+    });
+  }
+  return [...byName.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
+}
+
 function compactSignature(value: string): string {
   return normalizeName(value)
     .replace(/\b(?:usd|eur|gbp|aed|cad|aud|sgd|sek|nok|dkk|chf|jpy)\b/g, " ")
@@ -353,14 +455,32 @@ export function mergeProviderDirectory(providers: Provider[]): Provider[] {
 }
 
 export function mergeTeamDirectory(teams: Team[]): Team[] {
-  const next = [...teams];
+  const byId = new Map<string, Team>();
+  for (const team of teams) {
+    const normalizedTeam = {
+      ...team,
+      id: canonicalTeamId(team.id),
+      name: canonicalTeamName(team.name)
+    };
+    const normalizedName = normalizeName(normalizedTeam.name);
+    if (
+      normalizedTeam.id === "team-distribution" ||
+      normalizedName === "distribution" ||
+      normalizedTeam.id === "team-amin-sanjin" ||
+      normalizedName === "amin sanjin"
+    ) continue;
+    if (!byId.has(normalizedTeam.id)) {
+      byId.set(normalizedTeam.id, normalizedTeam);
+    }
+  }
+  const next = [...byId.values()];
   for (const canonical of canonicalTeams) {
-    if (next.some((team) => normalizeName(team.name) === normalizeName(canonical.name))) continue;
+    if (next.some((team) => team.id === canonical.id || normalizeName(team.name) === normalizeName(canonical.name))) continue;
     next.push(canonical);
   }
   return next.sort((left, right) => {
-    if (normalizeName(left.name) === "general") return -1;
-    if (normalizeName(right.name) === "general") return 1;
+    if (left.id === cognitiveTeamId) return -1;
+    if (right.id === cognitiveTeamId) return 1;
     return left.name.localeCompare(right.name);
   });
 }
@@ -454,6 +574,12 @@ function hardTypedReason(transaction: Transaction, provider: Provider): string |
   }
   if (providerName === "wise fees" && ["wise fee", "wise fees", "transfer fee"].some((phrase) => hasPhrase(haystack, phrase))) {
     return "Bank fee: Wise";
+  }
+  if (providerName === "kissterra" && ["kissterra", "kisterra"].some((phrase) => hasPhrase(haystack, phrase))) {
+    return "Revenue partner: Kissterra";
+  }
+  if (providerName === "lead economy" && ["lead economy", "leadeconomy"].some((phrase) => hasPhrase(haystack, phrase))) {
+    return "Revenue partner: Lead Economy";
   }
 
   return undefined;

@@ -63,7 +63,8 @@ const columnAliases = {
     "name"
   ],
   category: ["type", "transactiontype", "category"],
-  accountName: ["account", "accountname", "balancename"]
+  accountName: ["account", "accountname", "balancename"],
+  cardHolderName: ["cardholderfullname", "cardholdername", "cardholder", "cardholderfull"]
 };
 
 function stableHash(value: string): string {
@@ -302,6 +303,7 @@ function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: st
   const description = cell(row, columnAliases.description) ?? categoryFromRow(row, reference);
   const sourceId = cell(row, columnAliases.transactionId) ?? reference;
   const counterparty = counterpartyFromRow(row, description, signedAmount);
+  const cardHolderName = cell(row, columnAliases.cardHolderName);
   const fallbackId = `${date}-${counterparty}-${description}-${signedAmount}-${currency}`;
   const idKey = transactionIdKey(sourceId, fallbackId);
   const category = categoryFromRow(row, reference, description);
@@ -318,7 +320,8 @@ function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: st
     currency,
     direction: signedAmount >= 0 ? "in" : "out",
     status: "posted",
-    category
+    category,
+    ...(cardHolderName ? { cardHolderName } : {})
   };
 }
 

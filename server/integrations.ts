@@ -15,6 +15,10 @@ const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
 const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.ee/api";
 const meritGetInvoicesPath = process.env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices";
 const meritCreateInvoicePath = process.env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice";
+const amexApiBaseUrl = process.env.AMEX_API_BASE_URL;
+const amexTokenUrl = process.env.AMEX_TOKEN_URL;
+const amexAccountPathTemplate = process.env.AMEX_ACCOUNT_PATH_TEMPLATE;
+const amexTransactionsPathTemplate = process.env.AMEX_TRANSACTIONS_PATH_TEMPLATE;
 const wiseBaseUrl =
   process.env.WISE_ENVIRONMENT === "sandbox"
     ? "https://api.wise-sandbox.com"
@@ -62,15 +66,36 @@ export function summarizeWiseStatementIssues(issues: string[]): string | undefin
   return `${uniqueIssues[0]}${suffix}`;
 }
 
-export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+  const names = new Set<string>();
+  for (const partner of revenuePartners.filter((item) => item.enabled)) {
+    names.add(partner.networkIdEnv);
+    names.add(partner.apiKeyEnv);
+  }
+  return [...names].filter(Boolean).sort();
+}
+
+export function getIntegrationStatus(wiseIssue?: string, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !process.env[name]);
   if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !process.env[name]);
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !process.env[name]);
+  const amexNeeds = [
+    "AMEX_TOKEN_URL",
+    "AMEX_API_BASE_URL",
+    "AMEX_CLIENT_ID",
+    "AMEX_CLIENT_SECRET",
+    "AMEX_REFRESH_TOKEN",
+    "AMEX_ACCOUNT_IDS",
+    "AMEX_ACCOUNT_PATH_TEMPLATE",
+    "AMEX_TRANSACTIONS_PATH_TEMPLATE"
+  ].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
-  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !process.env[name]);
+  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
+  const tuneNeeds = revenueEnvNames.filter((name) => !process.env[name]);
+  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
 
   return [
     {
@@ -109,6 +134,17 @@ export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
       needs: slashNeeds
     },
     {
+      id: "amex",
+      label: "Amex",
+      configured: amexNeeds.length === 0,
+      mode: amexNeeds.length === 0 ? "live" : "partial",
+      message:
+        amexNeeds.length === 0
+          ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
+          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured.",
+      needs: amexNeeds
+    },
+    {
       id: "merit",
       label: "Merit",
       configured: meritNeeds.length === 0,
@@ -122,12 +158,14 @@ export function getIntegrationStatus(wiseIssue?: string): IntegrationStatus[] {
     {
       id: "tune",
       label: "Partner revenue",
-      configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "partial",
+      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
+      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        tuneNeeds.length === 0
-          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
+        enabledRevenuePartnerCount === 0
+          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          : tuneNeeds.length === 0
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
   ];
@@ -425,6 +463,182 @@ export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]
   return { accounts, transactions };
 }
 
+type AmexAccountConfig = {
+  id: string;
+  name: string;
+  currency: string;
+};
+
+function parseAmexAccountConfigs(value?: string): AmexAccountConfig[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => {
+      const [id, name, currency = "USD"] = item.trim().split(":");
+      const accountId = id?.trim();
+      return accountId
+        ? {
+            id: accountId,
+            name: name?.trim() || `Amex ${accountId}`,
+            currency: currency.trim() || "USD"
+          }
+        : undefined;
+    })
+    .filter((item): item is AmexAccountConfig => Boolean(item));
+}
+
+async function fetchAmexAccessToken(): Promise<string | undefined> {
+  if (!amexTokenUrl || !process.env.AMEX_CLIENT_ID || !process.env.AMEX_CLIENT_SECRET || !process.env.AMEX_REFRESH_TOKEN) {
+    return undefined;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: process.env.AMEX_REFRESH_TOKEN,
+    client_id: process.env.AMEX_CLIENT_ID,
+    client_secret: process.env.AMEX_CLIENT_SECRET
+  });
+
+  const response = await fetchJson<{ access_token?: string }>(amexTokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json"
+    },
+    body
+  });
+
+  if (!response.access_token) {
+    throw new Error("Amex token response did not include access_token");
+  }
+  return response.access_token;
+}
+
+function amexEndpoint(template: string, accountId: string, query?: URLSearchParams): string {
+  if (!amexApiBaseUrl) throw new Error("AMEX_API_BASE_URL is not configured");
+  const path = template.replaceAll("{accountId}", encodeURIComponent(accountId));
+  const separator = path.startsWith("/") ? "" : "/";
+  const suffix = query ? `?${query.toString()}` : "";
+  return `${amexApiBaseUrl.replace(/\/+$/, "")}${separator}${path}${suffix}`;
+}
+
+function amexString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function amexMoneyValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (isRecord(value)) {
+    return amexMoneyValue(value.value ?? value.amount ?? value.amountValue);
+  }
+  return undefined;
+}
+
+function amexCurrency(value: unknown, fallback: string): string {
+  if (isRecord(value)) {
+    return amexString(value.currency, value.currencyCode, value.isoCurrencyCode) ?? fallback;
+  }
+  return fallback;
+}
+
+function amexRecords(payload: unknown, primaryKey: string): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter(isRecord);
+  if (!isRecord(payload)) return [];
+  const rows = payload[primaryKey] ?? payload.items ?? payload.data;
+  return Array.isArray(rows) ? rows.filter(isRecord) : [];
+}
+
+function amexStatus(value: unknown): Transaction["status"] {
+  const status = amexString(value)?.toLowerCase();
+  return status === "pending" || status === "authorized" || status === "authorization" ? "pending" : "posted";
+}
+
+function normalizeAmexAccount(payload: unknown, config: AmexAccountConfig): AccountBalance {
+  const account = isRecord(payload) ? payload : {};
+  const balanceValue = amexMoneyValue(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance) ?? 0;
+  const currency = amexCurrency(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance, config.currency);
+  const name = amexString(account.name, account.displayName, account.productName, account.lastFive, account.last4) ?? config.name;
+  return {
+    id: `amex-${config.id}`,
+    name,
+    source: "amex",
+    balance: balanceValue === 0 ? 0 : -Math.abs(balanceValue),
+    currency,
+    updatedAt: amexString(account.updatedAt, account.lastUpdatedAt, account.asOfDate) ?? new Date().toISOString(),
+    status: "live"
+  };
+}
+
+function normalizeAmexTransactions(payload: unknown, config: AmexAccountConfig): Transaction[] {
+  return amexRecords(payload, "transactions").map((item, index) => {
+    const rawAmount = amexMoneyValue(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount) ?? 0;
+    const status = amexStatus(item.status ?? item.transactionStatus);
+    const category = amexString(item.category, item.categoryCode, item.industry, item.merchantCategory) ?? "Amex";
+    const type = amexString(item.type, item.transactionType, item.kind)?.toLowerCase() ?? "";
+    const merchant = isRecord(item.merchant) ? item.merchant : {};
+    const counterparty =
+      amexString(merchant.name, item.merchantName, item.description, item.memo, item.reference) ?? "Amex transaction";
+    const transactionId = amexString(item.id, item.transactionId, item.reference, item.authorizationCode) ?? `${config.id}-${index}`;
+    const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
+    return {
+      id: `amex-${config.id}-${transactionId}`,
+      source: "amex",
+      accountName: config.name,
+      date: (amexString(item.postedDate, item.transactionDate, item.date, item.authorizationDate) ?? new Date().toISOString()).slice(0, 10),
+      description: amexString(item.description, item.memo, item.reference, counterparty) ?? counterparty,
+      rawName: counterparty,
+      counterparty,
+      amount: Math.abs(rawAmount),
+      currency: amexCurrency(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount, config.currency),
+      direction: isCredit ? "in" : "out",
+      status,
+      category,
+      ...(amexString(item.cardHolderName, item.cardMemberName, item.employeeName) ? { cardHolderName: amexString(item.cardHolderName, item.cardMemberName, item.employeeName) } : {})
+    };
+  });
+}
+
+export async function fetchAmexActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  const accountConfigs = parseAmexAccountConfigs(process.env.AMEX_ACCOUNT_IDS);
+  const accessToken = await fetchAmexAccessToken();
+  if (!accessToken || !amexApiBaseUrl || !amexAccountPathTemplate || !amexTransactionsPathTemplate || accountConfigs.length === 0) {
+    return { accounts: [], transactions: [] };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json"
+  };
+  const intervalEnd = new Date().toISOString().slice(0, 10);
+  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString().slice(0, 10);
+  const accountResults = await Promise.all(
+    accountConfigs.map(async (config) => {
+      const transactionParams = new URLSearchParams({ from: intervalStart, to: intervalEnd });
+      const [account, transactions] = await Promise.all([
+        fetchJson<unknown>(amexEndpoint(amexAccountPathTemplate, config.id), { headers }),
+        fetchJson<unknown>(amexEndpoint(amexTransactionsPathTemplate, config.id, transactionParams), { headers })
+      ]);
+      return {
+        account: normalizeAmexAccount(account, config),
+        transactions: normalizeAmexTransactions(transactions, config)
+      };
+    })
+  );
+
+  return {
+    accounts: accountResults.map((result) => result.account),
+    transactions: accountResults.flatMap((result) => result.transactions)
+  };
+}
+
 function meritTimestamp(): string {
   return new Date().toISOString().replace(/\D/g, "").slice(0, 14);
 }
@@ -619,6 +833,9 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
     partnerId: partner.id,
     partnerName: partner.name,
+    providerId: partner.providerId,
+    ...(partner.teamId ? { teamId: partner.teamId } : {}),
+    revenueCategory: partner.revenueCategory,
     source: "tune",
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,

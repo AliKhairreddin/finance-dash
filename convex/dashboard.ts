@@ -5,6 +5,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
   v.literal("mock"),
@@ -81,6 +82,12 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const wiseCardHolderTeamAssignment = v.object({
+  cardHolderName: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
@@ -119,6 +126,8 @@ const revenueRun = v.object({
   providerId: v.optional(v.string()),
   partnerName: v.string(),
   revenueCategory: v.optional(v.string()),
+  teamId: v.optional(v.string()),
+  teamName: v.optional(v.string()),
   source: v.literal("tune"),
   periodStart: v.string(),
   periodEnd: v.string(),
@@ -267,6 +276,32 @@ function nextUpdatedAt(previous?: string): string {
   return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
 }
 
+const profitDistributionPartnerId = v.union(
+  v.literal("ishan"),
+  v.literal("ben"),
+  v.literal("sanjan"),
+  v.literal("amin")
+);
+
+const profitDistributionBucket = v.union(
+  v.literal("profit-share"),
+  v.literal("salary"),
+  v.literal("distribution")
+);
+
+const profitDistributionAdjustment = v.object({
+  id: v.string(),
+  month: v.string(),
+  currency: v.string(),
+  partnerId: profitDistributionPartnerId,
+  bucket: profitDistributionBucket,
+  waived: v.boolean(),
+  deferred: v.boolean(),
+  overrideAmount: v.optional(v.number()),
+  note: v.optional(v.string()),
+  updatedAt: v.string()
+});
+
 export const getState = query({
   args: { serviceToken: v.string() },
   returns: v.union(
@@ -278,9 +313,11 @@ export const getState = query({
       transactionCategoryRules: v.array(transactionCategoryRule),
       revenuePartners: v.array(revenuePartner),
       transactionTeamAssignments: v.array(transactionTeamAssignment),
+      wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
       wiseStatementTransactions: v.array(transaction),
       wiseStatementImports: v.array(wiseStatementImport),
       revenueRuns: v.array(revenueRun),
+      profitDistributionAdjustments: v.array(profitDistributionAdjustment),
       aiSettings: v.optional(aiSettings),
       updatedAt: v.string()
     })
@@ -301,9 +338,11 @@ export const getState = query({
       transactionCategoryRules: state.transactionCategoryRules ?? [],
       revenuePartners: state.revenuePartners ?? [],
       transactionTeamAssignments: state.transactionTeamAssignments ?? [],
+      wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments ?? [],
       wiseStatementTransactions: state.wiseStatementTransactions ?? [],
       wiseStatementImports: state.wiseStatementImports ?? [],
       revenueRuns: state.revenueRuns ?? [],
+      profitDistributionAdjustments: state.profitDistributionAdjustments ?? [],
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
     };
@@ -318,9 +357,11 @@ export const saveState = mutation({
     transactionCategoryRules: v.array(transactionCategoryRule),
     revenuePartners: v.array(revenuePartner),
     transactionTeamAssignments: v.array(transactionTeamAssignment),
+    wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
     wiseStatementTransactions: v.array(transaction),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
+    profitDistributionAdjustments: v.array(profitDistributionAdjustment),
     aiSettings: v.optional(aiSettings),
     serviceToken: v.string(),
     expectedUpdatedAt: v.union(v.string(), v.null())
@@ -349,9 +390,11 @@ export const saveState = mutation({
         transactionCategoryRules: args.transactionCategoryRules,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseCardHolderTeamAssignments: args.wiseCardHolderTeamAssignments,
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
+        profitDistributionAdjustments: args.profitDistributionAdjustments,
         aiSettings: args.aiSettings,
         updatedAt
       });
@@ -364,9 +407,11 @@ export const saveState = mutation({
         transactionCategoryRules: args.transactionCategoryRules,
         revenuePartners: args.revenuePartners,
         transactionTeamAssignments: args.transactionTeamAssignments,
+        wiseCardHolderTeamAssignments: args.wiseCardHolderTeamAssignments,
         wiseStatementTransactions: args.wiseStatementTransactions,
         wiseStatementImports: args.wiseStatementImports,
         revenueRuns: args.revenueRuns,
+        profitDistributionAdjustments: args.profitDistributionAdjustments,
         aiSettings: args.aiSettings,
         updatedAt
       });

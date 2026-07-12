@@ -6,10 +6,12 @@ import type {
   Provider,
   RevenuePartner,
   RevenueRun,
+  ProfitDistributionAdjustment,
   Team,
   Transaction,
   TransactionCategoryRule,
   TransactionTeamAssignment,
+  WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
 
@@ -22,9 +24,11 @@ export interface PersistedState {
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
 }
 

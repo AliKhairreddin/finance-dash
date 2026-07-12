@@ -2,6 +2,7 @@ import type {
   AccountBalance,
   AiPromptPayload,
   AssignTransactionTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
@@ -16,9 +17,11 @@ import type {
   Invoice,
   MatchTransactionPayload,
   PersistedAiSettings,
+  ProfitDistributionAdjustment,
   Provider,
   RevenuePartner,
   RevenueRun,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   StoredAiSettings,
   SyncRevenuePayload,
@@ -29,13 +32,30 @@ import type {
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
+  WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
+import { canonicalTeamId, canonicalTeamName } from "../shared/business";
+import {
+  isReviewOnlyTransactionCategory,
+  isTransactionCategoryForDirection,
+  transactionBusinessCategory
+} from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
-import { calculateInvoiceDueDate, calculateRevenueMetrics, calculateTuneHourOffset, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  calculateInvoiceDueDate,
+  calculateRevenueMetrics,
+  calculateTuneHourOffset,
+  mergeRevenuePartnerDirectory,
+  resolveRevenuePeriod
+} from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import {
+  calculateProfitDistribution,
+  profitDistributionAdjustmentFromPayload,
+  shouldKeepProfitDistributionAdjustment
+} from "../shared/distribution";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
@@ -44,8 +64,10 @@ import {
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
+  mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeCardHolderName,
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
@@ -73,6 +95,14 @@ interface Env {
   SLASH_API_KEY?: string;
   SLASH_LEGAL_ENTITY_ID?: string;
   SLASH_BASE_URL?: string;
+  AMEX_TOKEN_URL?: string;
+  AMEX_API_BASE_URL?: string;
+  AMEX_CLIENT_ID?: string;
+  AMEX_CLIENT_SECRET?: string;
+  AMEX_REFRESH_TOKEN?: string;
+  AMEX_ACCOUNT_IDS?: string;
+  AMEX_ACCOUNT_PATH_TEMPLATE?: string;
+  AMEX_TRANSACTIONS_PATH_TEMPLATE?: string;
   MERIT_API_ID?: string;
   MERIT_API_BASE_URL?: string;
   MERIT_GET_INVOICES_PATH?: string;
@@ -97,9 +127,11 @@ interface PersistedState {
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
+  wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
 }
 
@@ -260,6 +292,13 @@ function realInvoices(invoices?: Invoice[]): Invoice[] {
 
 function realRevenueRuns(runs?: RevenueRun[]): RevenueRun[] {
   return (runs ?? []).filter((run) => run.status !== "mock");
+}
+
+function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
+  return (rows ?? []).map((assignment) => ({
+    ...assignment,
+    teamId: canonicalTeamId(assignment.teamId)
+  }));
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
@@ -624,6 +663,187 @@ async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[
   return { accounts, transactions };
 }
 
+type AmexAccountConfig = {
+  id: string;
+  name: string;
+  currency: string;
+};
+
+function parseAmexAccountConfigs(value?: string): AmexAccountConfig[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => {
+      const [id, name, currency = "USD"] = item.trim().split(":");
+      const accountId = id?.trim();
+      return accountId
+        ? {
+            id: accountId,
+            name: name?.trim() || `Amex ${accountId}`,
+            currency: currency.trim() || "USD"
+          }
+        : undefined;
+    })
+    .filter((item): item is AmexAccountConfig => Boolean(item));
+}
+
+async function fetchAmexAccessToken(env: Env): Promise<string | undefined> {
+  if (!env.AMEX_TOKEN_URL || !env.AMEX_CLIENT_ID || !env.AMEX_CLIENT_SECRET || !env.AMEX_REFRESH_TOKEN) return undefined;
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: env.AMEX_REFRESH_TOKEN,
+    client_id: env.AMEX_CLIENT_ID,
+    client_secret: env.AMEX_CLIENT_SECRET
+  });
+
+  const response = await fetchJson<{ access_token?: string }>(env.AMEX_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json"
+    },
+    body
+  });
+
+  if (!response.access_token) {
+    throw new Error("Amex token response did not include access_token");
+  }
+  return response.access_token;
+}
+
+function amexEndpoint(env: Env, template: string, accountId: string, query?: URLSearchParams): string {
+  if (!env.AMEX_API_BASE_URL) throw new Error("AMEX_API_BASE_URL is not configured");
+  const path = template.replaceAll("{accountId}", encodeURIComponent(accountId));
+  const separator = path.startsWith("/") ? "" : "/";
+  const suffix = query ? `?${query.toString()}` : "";
+  return `${env.AMEX_API_BASE_URL.replace(/\/+$/, "")}${separator}${path}${suffix}`;
+}
+
+function amexString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function amexMoneyValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (isRecord(value)) {
+    return amexMoneyValue(value.value ?? value.amount ?? value.amountValue);
+  }
+  return undefined;
+}
+
+function amexCurrency(value: unknown, fallback: string): string {
+  if (isRecord(value)) {
+    return amexString(value.currency, value.currencyCode, value.isoCurrencyCode) ?? fallback;
+  }
+  return fallback;
+}
+
+function amexRecords(payload: unknown, primaryKey: string): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter(isRecord);
+  if (!isRecord(payload)) return [];
+  const rows = payload[primaryKey] ?? payload.items ?? payload.data;
+  return Array.isArray(rows) ? rows.filter(isRecord) : [];
+}
+
+function amexStatus(value: unknown): Transaction["status"] {
+  const status = amexString(value)?.toLowerCase();
+  return status === "pending" || status === "authorized" || status === "authorization" ? "pending" : "posted";
+}
+
+function normalizeAmexAccount(payload: unknown, config: AmexAccountConfig): AccountBalance {
+  const account = isRecord(payload) ? payload : {};
+  const balanceValue = amexMoneyValue(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance) ?? 0;
+  const currency = amexCurrency(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance, config.currency);
+  const name = amexString(account.name, account.displayName, account.productName, account.lastFive, account.last4) ?? config.name;
+  return {
+    id: `amex-${config.id}`,
+    name,
+    source: "amex",
+    balance: balanceValue === 0 ? 0 : -Math.abs(balanceValue),
+    currency,
+    updatedAt: amexString(account.updatedAt, account.lastUpdatedAt, account.asOfDate) ?? new Date().toISOString(),
+    status: "live"
+  };
+}
+
+function normalizeAmexTransactions(payload: unknown, config: AmexAccountConfig): Transaction[] {
+  return amexRecords(payload, "transactions").map((item, index) => {
+    const rawAmount = amexMoneyValue(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount) ?? 0;
+    const status = amexStatus(item.status ?? item.transactionStatus);
+    const category = amexString(item.category, item.categoryCode, item.industry, item.merchantCategory) ?? "Amex";
+    const type = amexString(item.type, item.transactionType, item.kind)?.toLowerCase() ?? "";
+    const merchant = isRecord(item.merchant) ? item.merchant : {};
+    const counterparty =
+      amexString(merchant.name, item.merchantName, item.description, item.memo, item.reference) ?? "Amex transaction";
+    const transactionId = amexString(item.id, item.transactionId, item.reference, item.authorizationCode) ?? `${config.id}-${index}`;
+    const cardHolderName = amexString(item.cardHolderName, item.cardMemberName, item.employeeName);
+    const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
+    return {
+      id: `amex-${config.id}-${transactionId}`,
+      source: "amex",
+      accountName: config.name,
+      date: (amexString(item.postedDate, item.transactionDate, item.date, item.authorizationDate) ?? new Date().toISOString()).slice(0, 10),
+      description: amexString(item.description, item.memo, item.reference, counterparty) ?? counterparty,
+      rawName: counterparty,
+      counterparty,
+      amount: Math.abs(rawAmount),
+      currency: amexCurrency(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount, config.currency),
+      direction: isCredit ? "in" : "out",
+      status,
+      category,
+      ...(cardHolderName ? { cardHolderName } : {})
+    };
+  });
+}
+
+async function fetchAmexActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+  const accountConfigs = parseAmexAccountConfigs(env.AMEX_ACCOUNT_IDS);
+  const accessToken = await fetchAmexAccessToken(env);
+  if (
+    !accessToken ||
+    !env.AMEX_API_BASE_URL ||
+    !env.AMEX_ACCOUNT_PATH_TEMPLATE ||
+    !env.AMEX_TRANSACTIONS_PATH_TEMPLATE ||
+    accountConfigs.length === 0
+  ) {
+    return { accounts: [], transactions: [] };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json"
+  };
+  const intervalEnd = new Date().toISOString().slice(0, 10);
+  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString().slice(0, 10);
+  const accountResults = await Promise.all(
+    accountConfigs.map(async (config) => {
+      const transactionParams = new URLSearchParams({ from: intervalStart, to: intervalEnd });
+      const [account, transactions] = await Promise.all([
+        fetchJson<unknown>(amexEndpoint(env, env.AMEX_ACCOUNT_PATH_TEMPLATE!, config.id), { headers }),
+        fetchJson<unknown>(amexEndpoint(env, env.AMEX_TRANSACTIONS_PATH_TEMPLATE!, config.id, transactionParams), { headers })
+      ]);
+      return {
+        account: normalizeAmexAccount(account, config),
+        transactions: normalizeAmexTransactions(transactions, config)
+      };
+    })
+  );
+
+  return {
+    accounts: accountResults.map((result) => result.account),
+    transactions: accountResults.flatMap((result) => result.transactions)
+  };
+}
+
 function mergeLiveAccounts(...accountGroups: AccountBalance[][]): AccountBalance[] {
   return accountGroups.flat();
 }
@@ -652,12 +872,15 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
     if (persisted) return persisted;
   }
 
-  const [wise, revolut, slash] = await Promise.all([
+  const [wise, revolut, slash, amex] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] }))
+    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
   ]);
-  return [...wise.transactions, ...revolut.transactions, ...slash.transactions].find((transaction) => transaction.id === transactionId);
+  return [...wise.transactions, ...revolut.transactions, ...slash.transactions, ...amex.transactions].find(
+    (transaction) => transaction.id === transactionId
+  );
 }
 
 async function fetchTransactionForMatch(env: Env, transactionId: string, state: PersistedState): Promise<Transaction | undefined> {
@@ -871,6 +1094,9 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
     partnerId: partner.id,
     partnerName: partner.name,
+    providerId: partner.providerId,
+    ...(partner.teamId ? { teamId: partner.teamId } : {}),
+    revenueCategory: partner.revenueCategory,
     source: "tune",
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
@@ -927,11 +1153,13 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     invoices: realInvoices(stored?.invoices),
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
-    revenuePartners: stored?.revenuePartners ?? [],
-    transactionTeamAssignments: stored?.transactionTeamAssignments ?? [],
+    revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
+    transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
+    wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: realRevenueRuns(stored?.revenueRuns),
+    profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
 }
@@ -986,16 +1214,37 @@ function runtimeAiSettings(env: Env, settings?: PersistedAiSettings): StoredAiSe
   };
 }
 
-function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): IntegrationStatus[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+  const names = new Set<string>();
+  for (const partner of revenuePartners.filter((item) => item.enabled)) {
+    names.add(partner.networkIdEnv);
+    names.add(partner.apiKeyEnv);
+  }
+  return [...names].filter(Boolean).sort();
+}
+
+function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
   const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const amexNeeds = [
+    "AMEX_TOKEN_URL",
+    "AMEX_API_BASE_URL",
+    "AMEX_CLIENT_ID",
+    "AMEX_CLIENT_SECRET",
+    "AMEX_REFRESH_TOKEN",
+    "AMEX_ACCOUNT_IDS",
+    "AMEX_ACCOUNT_PATH_TEMPLATE",
+    "AMEX_TRANSACTIONS_PATH_TEMPLATE"
+  ].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
-  const tuneNeeds = ["KISSTERRA_TUNE_NETWORK_ID", "KISSTERRA_TUNE_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
+  const tuneNeeds = revenueEnvNames.filter((name) => !envString(env, name));
+  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
 
   return [
     {
@@ -1034,6 +1283,17 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): Integra
       needs: slashNeeds
     },
     {
+      id: "amex" as DataSource,
+      label: "Amex",
+      configured: amexNeeds.length === 0,
+      mode: amexNeeds.length === 0 ? "live" : "partial",
+      message:
+        amexNeeds.length === 0
+          ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
+          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured.",
+      needs: amexNeeds
+    },
+    {
       id: "merit" as DataSource,
       label: "Merit",
       configured: meritNeeds.length === 0,
@@ -1047,21 +1307,33 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult): Integra
     {
       id: "tune" as DataSource,
       label: "Partner revenue",
-      configured: tuneNeeds.length === 0,
-      mode: tuneNeeds.length === 0 ? "live" : "partial",
+      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
+      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        tuneNeeds.length === 0
-          ? "Ready to pull partner revenue from TUNE/HasOffers and generate Merit invoices."
-          : "Partner revenue stays empty until the TUNE network ID and API key are configured.",
+        enabledRevenuePartnerCount === 0
+          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          : tuneNeeds.length === 0
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
   ];
 }
 
-function applyTeamAssignments(rows: Transaction[], assignments: TransactionTeamAssignment[]): Transaction[] {
+function applyTeamAssignments(
+  rows: Transaction[],
+  assignments: TransactionTeamAssignment[],
+  cardHolderAssignments: WiseCardHolderTeamAssignment[]
+): Transaction[] {
   const teamByTransaction = new Map(assignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  const teamByCardHolder = new Map(
+    cardHolderAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
+  );
   return rows.map((transaction) => {
-    const teamId = teamByTransaction.get(transaction.id);
+    const teamId =
+      teamByTransaction.get(transaction.id) ??
+      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
+      transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -1085,7 +1357,8 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transactionBusinessCategory(transaction.category || "Wise")
+      category: transactionBusinessCategory(transaction.category || "Wise"),
+      ...(transaction.cardHolderName ? { cardHolderName: transaction.cardHolderName.trim() } : {})
     }));
 }
 
@@ -1127,15 +1400,21 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const [wise, revolut, slash, liveMeritInvoices] = await Promise.all([
+  const [wise, revolut, slash, amex, liveMeritInvoices] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchMeritInvoices(env).catch(() => [])
   ]);
-  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts);
+  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
-  const rawTransactions = mergeById(state.wiseStatementTransactions, [...wise.transactions, ...revolut.transactions, ...slash.transactions]);
+  const rawTransactions = mergeById(state.wiseStatementTransactions, [
+    ...wise.transactions,
+    ...revolut.transactions,
+    ...slash.transactions,
+    ...amex.transactions
+  ]);
   const transactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {
@@ -1144,7 +1423,8 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
           ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
           : transaction;
       }),
-      state.transactionTeamAssignments
+      state.transactionTeamAssignments,
+      state.wiseCardHolderTeamAssignments
     ),
     state.providers,
     state.transactionCategoryRules
@@ -1166,9 +1446,11 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     transactions,
     invoices,
     transactionCategoryRules: state.transactionCategoryRules,
+    wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
-    integrationStatus: integrationStatus(env, wise),
+    integrationStatus: integrationStatus(env, wise, state.revenuePartners),
     metrics: calculateMetrics(accounts, [], [], [], []),
+    profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()
   };
 }
@@ -1242,16 +1524,34 @@ async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
 }
 
 async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
-  if (!payload.name?.trim() || !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim()) {
-    throw new Error("name, networkIdEnv, and apiKeyEnv are required");
+  if (
+    !payload.name?.trim() ||
+    !payload.providerId?.trim() ||
+    !payload.revenueCategory?.trim() ||
+    !payload.networkIdEnv?.trim() ||
+    !payload.apiKeyEnv?.trim()
+  ) {
+    throw new Error("name, providerId, revenueCategory, networkIdEnv, and apiKeyEnv are required");
   }
   const state = await loadPersisted(env);
+  if (!state.providers.some((provider) => provider.id === payload.providerId)) {
+    throw new Error("Revenue partner company not found");
+  }
+  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Revenue partner team not found");
+  }
+  const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
+  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+    throw new Error(`Category "${revenueCategory}" is not valid for money in`);
+  }
   let updated: RevenuePartner | undefined;
   state.revenuePartners = state.revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
-    updated = {
+    const nextPartner: RevenuePartner = {
       ...partner,
       name: payload.name.trim(),
+      providerId: payload.providerId,
+      revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
       currency: payload.currency.trim() || "USD",
@@ -1264,9 +1564,16 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
       invoiceDueDays: payload.invoiceDueDays,
       enabled: payload.enabled
     };
+    if (payload.teamId) {
+      nextPartner.teamId = payload.teamId;
+    } else {
+      delete nextPartner.teamId;
+    }
+    updated = nextPartner;
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
+  state.revenuePartners = mergeRevenuePartnerDirectory(state.revenuePartners);
   await savePersisted(env, state);
   return updated;
 }
@@ -1435,6 +1742,9 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
   }
 
   const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+    throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
+  }
   const updated: Transaction = {
     ...transaction,
     category,
@@ -1450,22 +1760,37 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
   return enrichTransactions([updated], state.providers, state.transactionCategoryRules)[0];
 }
 
+async function saveProfitDistributionAdjustment(
+  env: Env,
+  payload: SaveProfitDistributionAdjustmentPayload
+): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const adjustment = profitDistributionAdjustmentFromPayload(payload, new Date().toISOString());
+  state.profitDistributionAdjustments = state.profitDistributionAdjustments.filter((item) => item.id !== adjustment.id);
+  if (shouldKeepProfitDistributionAdjustment(adjustment)) {
+    state.profitDistributionAdjustments = [adjustment, ...state.profitDistributionAdjustments];
+  }
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
 async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPayload): Promise<Transaction> {
   const state = await loadPersisted(env);
   const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
+  const teamId = payload.teamId ? canonicalTeamId(payload.teamId) : undefined;
   if (!transaction) {
     throw new Error("Transaction not found");
   }
-  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+  if (teamId && !state.teams.some((team) => team.id === teamId)) {
     throw new Error("Team not found");
   }
 
   state.transactionTeamAssignments = state.transactionTeamAssignments.filter(
     (assignment) => assignment.transactionId !== payload.transactionId
   );
-  if (payload.teamId) {
+  if (teamId) {
     state.transactionTeamAssignments = [
-      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      { transactionId: payload.transactionId, teamId, updatedAt: new Date().toISOString() },
       ...state.transactionTeamAssignments
     ];
   }
@@ -1473,12 +1798,34 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
   await savePersisted(env, state);
   return {
     ...transaction,
-    teamId: payload.teamId
+    teamId
   };
 }
 
+async function assignWiseCardHolderTeam(env: Env, payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
+  const teamId = canonicalTeamId(payload.teamId);
+  if (!cardHolderName) {
+    throw new Error("Card holder name is required");
+  }
+  if (!state.teams.some((team) => team.id === teamId)) {
+    throw new Error("Team not found");
+  }
+
+  state.wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
+    ...state.wiseCardHolderTeamAssignments.filter(
+      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
+    ),
+    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+  ]);
+
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
-  const name = payload.name.trim();
+  const name = canonicalTeamName(payload.name.trim());
   if (!name) {
     throw new Error("Team name is required");
   }
@@ -1560,7 +1907,11 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
   const initialState = await loadPersisted(env);
   const selectedPartners = initialState.revenuePartners.filter(
-    (partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId)
+    (partner) =>
+      partner.enabled &&
+      (!payload.partnerId || partner.id === payload.partnerId) &&
+      (!payload.teamId || partner.teamId === payload.teamId) &&
+      (!payload.partnerLevelOnly || !partner.teamId)
   );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
@@ -1576,7 +1927,12 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
     });
 
     try {
-      const run = await fetchTuneRevenue(env, partner, period);
+      const run: RevenueRun = {
+        ...(await fetchTuneRevenue(env, partner, period)),
+        ...(partner.teamId
+          ? { teamName: initialState.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
+          : {})
+      };
       if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const reservation: RevenueRun = { ...run, status: "invoicing", error: "Merit invoice creation in progress" };
         if (!(await reserveRevenueInvoice(env, reservation))) continue;
@@ -1589,7 +1945,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
             amount: run.revenue,
             currency: run.currency,
             dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-            description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+            description: `${partner.revenueCategory || "Revenue"} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
           });
         } catch (error) {
           await finalizeRevenueInvoice(env, {
@@ -1624,6 +1980,14 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
         partnerId: partner.id,
         partnerName: partner.name,
+        providerId: partner.providerId,
+        ...(partner.teamId
+          ? {
+              teamId: partner.teamId,
+              teamName: initialState.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+            }
+          : {}),
+        revenueCategory: partner.revenueCategory,
         source: "tune",
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
@@ -1706,6 +2070,14 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await importWiseStatement(env, (await request.json()) as ImportWiseStatementPayload));
     }
 
+    if (url.pathname === "/api/wise/card-holder-team" && request.method === "POST") {
+      const payload = (await request.json()) as AssignWiseCardHolderTeamPayload;
+      if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
+        return json({ message: "cardHolderName and teamId are required" }, { status: 400 });
+      }
+      return json(await assignWiseCardHolderTeam(env, payload));
+    }
+
     if (url.pathname === "/api/revenue/sync" && request.method === "POST") {
       return json(await syncRevenue(env, (await request.json()) as SyncRevenuePayload));
     }
@@ -1762,6 +2134,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
           rememberAlias: body.rememberAlias !== false
         })
       );
+    }
+
+    if (url.pathname === "/api/distribution/adjustments" && request.method === "POST") {
+      return json(await saveProfitDistributionAdjustment(env, (await request.json()) as SaveProfitDistributionAdjustmentPayload));
     }
 
     if (url.pathname === "/api/teams" && request.method === "POST") {

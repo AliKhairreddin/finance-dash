@@ -5,6 +5,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
   v.literal("mock"),
@@ -72,6 +73,12 @@ const transactionTeamAssignment = v.object({
   updatedAt: v.string()
 });
 
+const wiseCardHolderTeamAssignment = v.object({
+  cardHolderName: v.string(),
+  teamId: v.string(),
+  updatedAt: v.string()
+});
+
 const transactionCategoryRule = v.object({
   id: v.string(),
   category: v.string(),
@@ -119,6 +126,8 @@ const revenueRun = v.object({
   providerId: v.optional(v.string()),
   partnerName: v.string(),
   revenueCategory: v.optional(v.string()),
+  teamId: v.optional(v.string()),
+  teamName: v.optional(v.string()),
   source: v.literal("tune"),
   periodStart: v.string(),
   periodEnd: v.string(),
@@ -168,6 +177,32 @@ const aiSettings = v.object({
   updatedAt: v.optional(v.string())
 });
 
+const profitDistributionPartnerId = v.union(
+  v.literal("ishan"),
+  v.literal("ben"),
+  v.literal("sanjan"),
+  v.literal("amin")
+);
+
+const profitDistributionBucket = v.union(
+  v.literal("profit-share"),
+  v.literal("salary"),
+  v.literal("distribution")
+);
+
+const profitDistributionAdjustment = v.object({
+  id: v.string(),
+  month: v.string(),
+  currency: v.string(),
+  partnerId: profitDistributionPartnerId,
+  bucket: profitDistributionBucket,
+  waived: v.boolean(),
+  deferred: v.boolean(),
+  overrideAmount: v.optional(v.number()),
+  note: v.optional(v.string()),
+  updatedAt: v.string()
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
@@ -177,11 +212,11 @@ export default defineSchema({
     transactionCategoryRules: v.optional(v.array(transactionCategoryRule)),
     revenuePartners: v.optional(v.array(revenuePartner)),
     transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
+    wiseCardHolderTeamAssignments: v.optional(v.array(wiseCardHolderTeamAssignment)),
     wiseStatementTransactions: v.optional(v.array(transaction)),
     wiseStatementImports: v.optional(v.array(wiseStatementImport)),
     revenueRuns: v.optional(v.array(revenueRun)),
-    profitDistributionAdjustments: v.optional(v.array(v.any())),
-    wiseCardHolderTeamAssignments: v.optional(v.array(v.any())),
+    profitDistributionAdjustments: v.optional(v.array(profitDistributionAdjustment)),
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"])

@@ -8,8 +8,10 @@ import {
   Check,
   CircleAlert,
   CircleDollarSign,
+  CreditCard,
   FilePlus2,
   Filter,
+  Info,
   KeyRound,
   Link2,
   Loader2,
@@ -31,7 +33,17 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -41,19 +53,26 @@ import { Textarea } from "@/components/ui/textarea";
 import type {
   AiPromptPayload,
   AiPromptResult,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
   CreateProviderPayload,
   CreateTeamPayload,
   CurrencyTotals,
+  DataSource,
   DashboardSnapshot,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   InvoiceDocumentType,
+  ProfitDistributionAdjustment,
+  ProfitDistributionBucket,
+  ProfitDistributionPartnerId,
+  ProfitDistributionPartnerLedger,
   Provider,
   ProviderType,
   RevenuePartner,
   RevenuePeriodPreset,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   SyncRevenuePayload,
   Team,
@@ -61,21 +80,42 @@ import type {
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory, transactionCategoryOptions } from "../shared/categories";
+import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
+import {
+  isReviewOnlyTransactionCategory,
+  moneyInCategoryOptions,
+  transactionBusinessCategory,
+  transactionCategoryOptions,
+  transactionCategoryOptionsForDirection
+} from "../shared/categories";
 import { hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
+import {
+  profitDistributionAdjustmentId,
+  profitDistributionBucketLabels,
+  profitDistributionPartners
+} from "../shared/distribution";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "banking" | "categories" | "revenue" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
 type BankTab = "wise" | "revolut" | "slash";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
-type TransactionDescriptionToast = {
+type RevenuePieBreakdown = "team-partner" | "team" | "partner" | "category";
+type TransactionDetailPopover = {
+  id: string;
   title: string;
   description: string;
   left: number;
   top: number;
+  placement: "above" | "below";
+};
+type CategorySearchMenuPosition = {
+  left: number;
+  top: number;
+  width: number;
+  placement: "above" | "below";
 };
 type DirectoryDeleteTarget =
   | { kind: "provider"; provider: Provider }
@@ -84,8 +124,9 @@ const themeStorageKey = "finance-dash-theme";
 
 const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
   overview: { eyebrow: "Finance operations", title: "Cash flow and open balance control" },
-  banking: { eyebrow: "Banking", title: "Reconcile account activity" },
-  categories: { eyebrow: "Categorization", title: "Review spend and revenue labels" },
+  banks: { eyebrow: "Banking", title: "Reconcile account activity" },
+  analytics: { eyebrow: "Analytics", title: "Review spend, revenue, teams, and categories" },
+  distribution: { eyebrow: "Distribution", title: "Track partner payables and adjustments" },
   revenue: { eyebrow: "Revenue", title: "Pull, review, and invoice partner revenue" },
   invoices: { eyebrow: "Invoices", title: "Approval and payment control" },
   providers: { eyebrow: "Business directory", title: "Clients and suppliers" },
@@ -114,6 +155,14 @@ function money(value: number, currency = "USD"): string {
     currency,
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function maybeMoney(hasValue: boolean, value: number, currency = "USD"): string {
+  return hasValue ? money(value, currency) : "—";
+}
+
+function optionalMoney(value: number | null | undefined, currency = "USD"): string {
+  return typeof value === "number" ? money(value, currency) : "—";
 }
 
 function formatCurrencyTotals(totals: CurrencyTotals): string {
@@ -156,6 +205,20 @@ function dateLabel(value: string): string {
     day: "numeric",
     year: "numeric"
   }).format(date);
+}
+
+function monthLabel(value: string): string {
+  return dateLabel(`${value}-01`);
+}
+
+function normalizeLookupName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function providerLabel(provider?: Provider): string {
@@ -230,11 +293,10 @@ function companyRollupStatusClass(status: string): "good" | "warning" | "" {
   return "";
 }
 
-function transactionCategoryChoices(currentCategory: string): string[] {
+function transactionCategoryChoices(currentCategory: string, direction: Transaction["direction"]): string[] {
   const current = transactionBusinessCategory(currentCategory);
-  return transactionCategoryOptions.includes(current as (typeof transactionCategoryOptions)[number])
-    ? [...transactionCategoryOptions]
-    : [current, ...transactionCategoryOptions];
+  const options = transactionCategoryOptionsForDirection(direction);
+  return options.includes(current) ? [...options] : [current, ...options];
 }
 
 function formatTransactionGroups(rows: Transaction[]): string {
@@ -245,13 +307,33 @@ function bankInvoiceName(transaction: Transaction): string {
   return transaction.counterparty || transaction.rawName;
 }
 
-function sourceLabel(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+function sourceLabel(value: DataSource | string): string {
+  return bankSourceLabel(value as DataSource);
+}
+
+function revenuePartnerLabel(partner: RevenuePartner, teamsById: Map<string, Team>): string {
+  if (!partner.teamId) return partner.name;
+  const teamName = teamsById.get(partner.teamId)?.name ?? partner.teamId;
+  return `${teamName} / ${partner.name}`;
+}
+
+function revenueTeamLabel(teamId: string | undefined, teamName: string | undefined, teamsById: Map<string, Team>): string {
+  if (!teamId) return "Partner-level";
+  return teamName || teamsById.get(teamId)?.name || teamId;
 }
 
 function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
   const visibleRows = direction ? rows.filter((row) => row.direction === direction) : rows;
   return formatCurrencyTotals(sumCurrencyTotals(visibleRows, (row) => row.amount));
+}
+
+function groupedAccountMoney(rows: DashboardSnapshot["accounts"]): string {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.balance);
+  }
+  const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
+  return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
 }
 
 const categoryChartPalette = [
@@ -264,7 +346,23 @@ const categoryChartPalette = [
   "#0f766e",
   "#a16207",
   "#3f3f46",
-  "#a1a1aa"
+  "#a1a1aa",
+  "#7c3aed",
+  "#64748b",
+  "#be185d",
+  "#2f855a",
+  "#0369a1",
+  "#a16207",
+  "#4338ca",
+  "#15803d",
+  "#a21caf",
+  "#0e7490",
+  "#dc2626",
+  "#4d7c0f",
+  "#2563eb",
+  "#b45309",
+  "#6d28d9",
+  "#047857"
 ];
 
 type CategoryPieSegment = {
@@ -280,20 +378,84 @@ type CategoryPieGroup = {
   segments: CategoryPieSegment[];
 };
 
-function categoryChartColor(category: string): string {
+function categoryChartHash(category: string): number {
   let hash = 0;
   for (let index = 0; index < category.length; index += 1) {
-    hash = (hash * 31 + category.charCodeAt(index)) % categoryChartPalette.length;
+    hash = (hash * 31 + category.charCodeAt(index)) >>> 0;
   }
-  return categoryChartPalette[Math.abs(hash) % categoryChartPalette.length];
+  return hash;
 }
 
-function categoryPieGroups(rows: Transaction[], direction: Transaction["direction"]): CategoryPieGroup[] {
+function categoryChartColor(category: string, usedColors: Set<string>, index: number): string {
+  const hash = categoryChartHash(category);
+
+  for (let offset = 0; offset < categoryChartPalette.length; offset += 1) {
+    const color = categoryChartPalette[(hash + offset) % categoryChartPalette.length];
+    if (!usedColors.has(color)) return color;
+  }
+
+  let attempt = 0;
+  while (true) {
+    const hue = Math.round((hash + (index + attempt) * 137.508) % 360);
+    const saturation = 58 + ((hash + attempt) % 16);
+    const lightness = 36 + ((index + attempt) % 12);
+    const color = `hsl(${hue} ${saturation}% ${lightness}%)`;
+    if (!usedColors.has(color)) return color;
+    attempt += 1;
+  }
+}
+
+function revenuePartnerAttributionLabel(transaction: Transaction, providersById: Map<string, Provider>): string {
+  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+  return provider?.name ?? "Unmatched revenue";
+}
+
+function revenueTeamAttributionLabel(transaction: Transaction, teamsById: Map<string, Team>): string {
+  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
+  return team?.name ?? "Unassigned team";
+}
+
+function revenueAttributionLabel(
+  transaction: Transaction,
+  providersById: Map<string, Provider>,
+  teamsById: Map<string, Team>
+): string {
+  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
+  const category = effectiveCategory(transaction);
+  const source = provider?.name ?? (category === "Media buying direct" ? "Direct revenue" : category);
+
+  if (team && provider) return `${team.name} / ${provider.name}`;
+  if (team) return `${team.name} / ${source}`;
+  if (provider) return `Unassigned / ${provider.name}`;
+  return category === "Uncategorized" ? "Unmatched revenue" : category;
+}
+
+function revenuePieLabelForBreakdown(
+  transaction: Transaction,
+  breakdown: RevenuePieBreakdown,
+  providersById: Map<string, Provider>,
+  teamsById: Map<string, Team>
+): string {
+  if (breakdown === "team") return revenueTeamAttributionLabel(transaction, teamsById);
+  if (breakdown === "partner") return revenuePartnerAttributionLabel(transaction, providersById);
+  if (breakdown === "category") return effectiveCategory(transaction);
+  return revenueAttributionLabel(transaction, providersById, teamsById);
+}
+
+function categoryPieGroups(
+  rows: Transaction[],
+  direction: Transaction["direction"],
+  categoryForTransaction: (transaction: Transaction) => string = effectiveCategory
+): CategoryPieGroup[] {
   const totals = new Map<string, Map<string, { amount: number; count: number }>>();
+  const assignedColors = new Map<string, string>();
+  const usedColors = new Set<string>();
+  let colorIndex = 0;
 
   for (const transaction of rows) {
     if (transaction.direction !== direction) continue;
-    const category = effectiveCategory(transaction);
+    const category = categoryForTransaction(transaction);
     const currencyTotals = totals.get(transaction.currency) ?? new Map<string, { amount: number; count: number }>();
     const current = currencyTotals.get(category) ?? { amount: 0, count: 0 };
     currencyTotals.set(category, {
@@ -308,12 +470,21 @@ function categoryPieGroups(rows: Transaction[], direction: Transaction["directio
       const sortedTotals = [...categoryTotals.entries()].sort(
         ([leftCategory, left], [rightCategory, right]) => right.amount - left.amount || leftCategory.localeCompare(rightCategory)
       );
-      const segments = sortedTotals.map(([category, value]) => ({
-        category,
-        amount: value.amount,
-        count: value.count,
-        color: categoryChartColor(category)
-      }));
+      const segments = sortedTotals.map(([category, value]) => {
+        const assignedColor = assignedColors.get(category);
+        const color = assignedColor ?? categoryChartColor(category, usedColors, colorIndex);
+        if (!assignedColor) {
+          assignedColors.set(category, color);
+          usedColors.add(color);
+          colorIndex += 1;
+        }
+        return {
+          category,
+          amount: value.amount,
+          count: value.count,
+          color
+        };
+      });
       return {
         currency,
         total: segments.reduce((sum, segment) => sum + segment.amount, 0),
@@ -365,21 +536,35 @@ function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, dire
   });
 }
 
-function detailToastPosition(event: React.MouseEvent<HTMLElement>): { left: number; top: number } {
-  const viewportPadding = 16;
-  const offset = 18;
-  const toastWidth = Math.min(420, window.innerWidth - viewportPadding * 2);
-  const toastMaxHeight = Math.min(260, window.innerHeight - viewportPadding * 2);
-  const left =
-    event.clientX + offset + toastWidth <= window.innerWidth - viewportPadding
-      ? event.clientX + offset
-      : Math.max(viewportPadding, event.clientX - toastWidth - offset);
-  const top =
-    event.clientY + offset + toastMaxHeight <= window.innerHeight - viewportPadding
-      ? event.clientY + offset
-      : Math.max(viewportPadding, event.clientY - toastMaxHeight - offset);
+function detailPopoverPosition(anchor: DOMRect): Pick<TransactionDetailPopover, "left" | "top" | "placement"> {
+  const viewportPadding = 12;
+  const gap = 8;
+  const popoverWidth = Math.min(360, window.innerWidth - viewportPadding * 2);
+  const popoverMinHeight = 150;
+  const placement = anchor.bottom + gap + popoverMinHeight <= window.innerHeight - viewportPadding ? "below" : "above";
+  const left = Math.min(
+    Math.max(viewportPadding, anchor.left - 6),
+    Math.max(viewportPadding, window.innerWidth - viewportPadding - popoverWidth)
+  );
+  const top = placement === "below" ? anchor.bottom + gap : anchor.top - gap;
 
-  return { left, top };
+  return { left, top, placement };
+}
+
+function categorySearchMenuPosition(anchor: DOMRect, visibleOptions: number): CategorySearchMenuPosition {
+  const viewportPadding = 12;
+  const gap = 4;
+  const width = Math.min(Math.max(anchor.width, 244), window.innerWidth - viewportPadding * 2);
+  const optionRows = Math.max(1, Math.min(visibleOptions, 6));
+  const estimatedHeight = 58 + optionRows * 34;
+  const placement = anchor.bottom + gap + estimatedHeight <= window.innerHeight - viewportPadding ? "below" : "above";
+  const left = Math.min(
+    Math.max(viewportPadding, anchor.left),
+    Math.max(viewportPadding, window.innerWidth - viewportPadding - width)
+  );
+  const top = placement === "below" ? anchor.bottom + gap : anchor.top - gap;
+
+  return { left, top, width, placement };
 }
 
 function App() {
@@ -388,7 +573,7 @@ function App() {
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
-  const [bankTab, setBankTab] = useState<BankTab>("wise");
+  const [bankTab, setBankTab] = useState<BankSource>("wise");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
@@ -463,7 +648,14 @@ function App() {
       const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
       const matchesQuery =
         !query ||
-        [transaction.counterparty, transaction.description, transaction.rawName, provider?.name ?? "", team?.name ?? ""]
+        [
+          transaction.counterparty,
+          transaction.description,
+          transaction.rawName,
+          transaction.cardHolderName ?? "",
+          provider?.name ?? "",
+          team?.name ?? ""
+        ]
           .join(" ")
           .toLowerCase()
           .includes(query);
@@ -503,6 +695,11 @@ function App() {
 
   const revolutTransactions = useMemo(
     () => filteredTransactions.filter((transaction) => transaction.source === "revolut"),
+    [filteredTransactions]
+  );
+
+  const amexTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.source === "amex"),
     [filteredTransactions]
   );
 
@@ -632,6 +829,21 @@ function App() {
     setNotice(`Saved ${category} for ${transaction.counterparty}. Future similar rows can auto-categorize.`);
   }
 
+  async function saveProfitDistributionAdjustment(payload: SaveProfitDistributionAdjustmentPayload) {
+    setError(null);
+    const response = await fetch(`${apiBase}/distribution/adjustments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Distribution adjustment could not be saved");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice("Distribution adjustment saved.");
+  }
+
   async function assignTransactionTeam(transaction: Transaction, teamId?: string) {
     setError(null);
     const response = await fetch(`${apiBase}/transactions/${transaction.id}/team`, {
@@ -646,6 +858,20 @@ function App() {
     }
     await loadDashboard();
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
+  }
+
+  async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload) {
+    const response = await fetch(`${apiBase}/wise/card-holder-team`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = await response.json();
+      throw new Error(body.message || "Card holder team assignment failed");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice(`Assigned ${payload.cardHolderName.trim()} to ${teamsById.get(payload.teamId)?.name ?? "team"}.`);
   }
 
   async function createTeam(payload: CreateTeamPayload) {
@@ -938,48 +1164,52 @@ function App() {
         </>
       )}
 
-      {activeTab === "banking" && (
-        <BankingView
-          activeBankTab={bankTab}
+      {activeTab === "banks" && (
+        <BanksView
           dashboard={dashboard}
+          activeBank={bankTab}
+          setActiveBank={setBankTab}
+          wiseDirection={wiseDirection}
+          setWiseDirection={setWiseDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          wiseTransactions={wiseTransactions}
+          wiseTeamSummary={wiseTeamSummary}
+          revolutTransactions={revolutTransactions}
+          slashTransactions={slashTransactions}
+          amexTransactions={amexTransactions}
+          providersById={providersById}
           isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
-          matchFilter={matchFilter}
-          providersById={providersById}
-          revolutTransactions={revolutTransactions}
-          searchTerm={searchTerm}
-          slashTransactions={slashTransactions}
-          teamFilter={teamFilter}
-          teamsById={teamsById}
-          transactionSortDirection={transactionSortDirection}
-          transactionSortKey={transactionSortKey}
-          wiseDirection={wiseDirection}
-          wiseStatusIssue={wiseStatus?.issue}
-          wiseTeamSummary={wiseTeamSummary}
-          wiseTransactions={wiseTransactions}
-          onActiveBankTabChange={setBankTab}
-          onAssignTeam={assignTransactionTeam}
           onAutoCategorize={autoCategorizeTransactions}
           onImportWiseStatements={importWiseStatements}
           onMatch={matchTransaction}
-          onOpenInvoice={setInvoiceTransaction}
-          onSearchTermChange={setSearchTerm}
-          onSetMatchFilter={setMatchFilter}
-          onSetTeamFilter={setTeamFilter}
-          onSetTransactionSortDirection={setTransactionSortDirection}
-          onSetTransactionSortKey={setTransactionSortKey}
-          onSetWiseDirection={setWiseDirection}
+          onAssignTeam={assignTransactionTeam}
           onUpdateCategory={updateTransactionCategory}
+          onOpenInvoice={setInvoiceTransaction}
         />
       )}
 
-      {activeTab === "categories" && (
-        <CategorizationView
+      {activeTab === "analytics" && (
+        <AnalyticsView
           dashboard={dashboard}
           providersById={providersById}
+          teamsById={teamsById}
           isCategorizing={isCategorizing}
           onAutoCategorize={() => void autoCategorizeTransactions()}
         />
+      )}
+
+      {activeTab === "distribution" && (
+        <DistributionView dashboard={dashboard} onSaveAdjustment={saveProfitDistributionAdjustment} />
       )}
 
       {activeTab === "revenue" && (
@@ -999,6 +1229,7 @@ function App() {
         <ProvidersView
           providers={dashboard.providers}
           revenuePartners={dashboard.revenuePartners}
+          teamsById={teamsById}
           onAdd={() => {
             setEditingProvider(null);
             setProviderModalOpen(true);
@@ -1014,7 +1245,13 @@ function App() {
       )}
 
       {activeTab === "settings" && (
-        <SettingsView dashboard={dashboard} onCreateTeam={createTeam} onSaveAiSettings={saveAiSettings} onRunAiPrompt={runAiPrompt} />
+        <SettingsView
+          dashboard={dashboard}
+          onCreateTeam={createTeam}
+          onSaveAiSettings={saveAiSettings}
+          onSaveWiseCardHolderTeam={assignWiseCardHolderTeam}
+          onRunAiPrompt={runAiPrompt}
+        />
       )}
 
       {invoiceTransaction && (
@@ -1052,6 +1289,8 @@ function App() {
       {editingRevenuePartner && (
         <RevenuePartnerModal
           partner={editingRevenuePartner}
+          providers={dashboard.providers}
+          teams={dashboard.teams}
           onClose={() => setEditingRevenuePartner(null)}
           onSubmit={async (payload) => {
             await saveRevenuePartner(editingRevenuePartner.id, payload);
@@ -1112,8 +1351,9 @@ function Sidebar({
 }) {
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
-    { id: "banking", label: "Banking", icon: <Banknote size={17} /> },
-    { id: "categories", label: "Categories", icon: <PieChart size={17} /> },
+    { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
+    { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
+    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> },
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
@@ -1682,14 +1922,334 @@ function Overview({
   );
 }
 
-function CategorizationView({
+function BanksView({
+  dashboard,
+  activeBank,
+  setActiveBank,
+  wiseDirection,
+  setWiseDirection,
+  teamFilter,
+  setTeamFilter,
+  searchTerm,
+  setSearchTerm,
+  matchFilter,
+  setMatchFilter,
+  transactionSortKey,
+  setTransactionSortKey,
+  transactionSortDirection,
+  setTransactionSortDirection,
+  wiseTransactions,
+  wiseTeamSummary,
+  revolutTransactions,
+  slashTransactions,
+  amexTransactions,
+  providersById,
+  isCategorizing,
+  isImportingWise,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onAssignTeam,
+  onUpdateCategory,
+  onOpenInvoice
+}: {
+  dashboard: DashboardSnapshot;
+  activeBank: BankSource;
+  setActiveBank: (source: BankSource) => void;
+  wiseDirection: "in" | "out";
+  setWiseDirection: (direction: "in" | "out") => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  matchFilter: string;
+  setMatchFilter: (value: string) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: SortDirection;
+  setTransactionSortDirection: (value: SortDirection) => void;
+  wiseTransactions: Transaction[];
+  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
+  revolutTransactions: Transaction[];
+  slashTransactions: Transaction[];
+  amexTransactions: Transaction[];
+  providersById: Map<string, Provider>;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onOpenInvoice: (transaction: Transaction) => void;
+}) {
+  const rowsBySource = new Map<BankSource, Transaction[]>();
+  const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
+  const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
+  for (const status of dashboard.integrationStatus) {
+    if (status.id !== "openrouter" && isBankSource(status.id)) {
+      statusBySource.set(status.id, status);
+    }
+  }
+  for (const source of bankSources) {
+    rowsBySource.set(
+      source.id,
+      dashboard.transactions.filter((transaction) => transaction.source === source.id)
+    );
+    accountsBySource.set(
+      source.id,
+      dashboard.accounts.filter((account) => account.source === source.id)
+    );
+  }
+
+  return (
+    <div className="banks-layout">
+      <section className="panel wide-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Banks</p>
+            <h2>Connected bank, card, and reconciliation activity</h2>
+          </div>
+          <div className="segmented-control bank-tabs" aria-label="Bank source">
+            {bankSources.map((source) => (
+              <button
+                className={activeBank === source.id ? "active" : ""}
+                key={source.id}
+                onClick={() => setActiveBank(source.id)}
+                type="button"
+              >
+                {source.id === "amex" ? <CreditCard size={15} /> : <Banknote size={15} />}
+                {source.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="wise-summary-grid bank-source-summary">
+          {bankSources.map((source) => {
+            const accounts = accountsBySource.get(source.id) ?? [];
+            const rows = rowsBySource.get(source.id) ?? [];
+            const status = statusBySource.get(source.id);
+            return (
+              <SummaryTile
+                key={source.id}
+                label={`${source.label} ${status?.mode ?? "partial"}`}
+                value={accounts.length > 0 ? groupedAccountMoney(accounts) : `${rows.length} rows`}
+              />
+            );
+          })}
+        </div>
+      </section>
+
+      {activeBank === "wise" && (
+        <WiseBankView
+          dashboard={dashboard}
+          rows={wiseTransactions}
+          summary={wiseTeamSummary}
+          providersById={providersById}
+          wiseDirection={wiseDirection}
+          setWiseDirection={setWiseDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          isCategorizing={isCategorizing}
+          isImportingWise={isImportingWise}
+          onAutoCategorize={onAutoCategorize}
+          onImportWiseStatements={onImportWiseStatements}
+          onMatch={onMatch}
+          onAssignTeam={onAssignTeam}
+          onUpdateCategory={onUpdateCategory}
+          onOpenInvoice={onOpenInvoice}
+        />
+      )}
+      {activeBank === "revolut" && <RevolutView dashboard={dashboard} rows={revolutTransactions} />}
+      {activeBank === "slash" && <SlashView dashboard={dashboard} rows={slashTransactions} />}
+      {activeBank === "amex" && <AmexView dashboard={dashboard} rows={amexTransactions} />}
+    </div>
+  );
+}
+
+function WiseBankView({
+  dashboard,
+  rows,
+  summary,
+  providersById,
+  wiseDirection,
+  setWiseDirection,
+  teamFilter,
+  setTeamFilter,
+  searchTerm,
+  setSearchTerm,
+  matchFilter,
+  setMatchFilter,
+  transactionSortKey,
+  setTransactionSortKey,
+  transactionSortDirection,
+  setTransactionSortDirection,
+  isCategorizing,
+  isImportingWise,
+  onAutoCategorize,
+  onImportWiseStatements,
+  onMatch,
+  onAssignTeam,
+  onUpdateCategory,
+  onOpenInvoice
+}: {
+  dashboard: DashboardSnapshot;
+  rows: Transaction[];
+  summary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
+  providersById: Map<string, Provider>;
+  wiseDirection: "in" | "out";
+  setWiseDirection: (direction: "in" | "out") => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  matchFilter: string;
+  setMatchFilter: (value: string) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: SortDirection;
+  setTransactionSortDirection: (value: SortDirection) => void;
+  isCategorizing: boolean;
+  isImportingWise: boolean;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onOpenInvoice: (transaction: Transaction) => void;
+}) {
+  const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
+  const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Wise reconciliation</p>
+          <h2>Match incoming payments and outgoing spend</h2>
+        </div>
+        <div className="filters">
+          <div className="segmented-control" aria-label="Wise transaction direction">
+            <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
+              <ArrowUpRight size={15} />
+              In
+            </button>
+            <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
+              <ArrowDownRight size={15} />
+              Out
+            </button>
+          </div>
+          <label className="search-box">
+            <Search size={15} />
+            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
+          </label>
+          <label>
+            <Filter size={15} />
+            <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
+              <option value="needs-review">Needs review</option>
+              <option value="matched">Matched</option>
+              <option value="all">All rows</option>
+            </select>
+          </label>
+          <label>
+            <SlidersHorizontal size={15} />
+            <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
+              <option value="match">% match</option>
+              <option value="date">Date</option>
+              <option value="period">Period</option>
+              <option value="amount">Amount</option>
+              <option value="category">Category</option>
+              <option value="counterparty">Counterparty</option>
+            </select>
+          </label>
+          <label>
+            Order
+            <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </label>
+          <label>
+            Team
+            <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
+              <option value="all">All teams</option>
+              <option value="unassigned">Unassigned</option>
+              {dashboard.teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="secondary-button"
+            onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
+            disabled={isCategorizing || rows.length === 0}
+          >
+            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            Auto
+          </button>
+          <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+            {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+            CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+              disabled={isImportingWise}
+              onChange={(event) => {
+                void onImportWiseStatements(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="wise-summary-grid">
+        <SummaryTile label="Visible volume" value={formatCurrencyTotals(summary.volume)} />
+        <SummaryTile label="Transactions" value={String(summary.count)} />
+        <SummaryTile label="Matched rows" value={String(summary.matched)} />
+        <SummaryTile label="No team" value={String(summary.unassigned)} />
+      </div>
+      {wiseStatus?.issue && (
+        <div className="integration-alert">
+          <CircleAlert size={16} />
+          <span>{wiseStatus.issue}</span>
+        </div>
+      )}
+      <TransactionTable
+        rows={rows}
+        teams={dashboard.teams}
+        providers={dashboard.providers}
+        teamsById={teamsById}
+        providersById={providersById}
+        onMatch={onMatch}
+        onAssignTeam={onAssignTeam}
+        onUpdateCategory={onUpdateCategory}
+        onOpenInvoice={onOpenInvoice}
+      />
+    </section>
+  );
+}
+
+function AnalyticsView({
   dashboard,
   providersById,
+  teamsById,
   isCategorizing,
   onAutoCategorize
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
+  teamsById: Map<string, Team>;
   isCategorizing: boolean;
   onAutoCategorize: () => void;
 }) {
@@ -1707,6 +2267,42 @@ function CategorizationView({
     return providerHasTag(provider, tagFilter);
   });
   const needsReview = rows.filter(transactionNeedsReview);
+  const [revenuePieBreakdown, setRevenuePieBreakdown] = useState<RevenuePieBreakdown>("team-partner");
+  const [revenuePieCurrency, setRevenuePieCurrency] = useState("all");
+  const [revenuePieTeamId, setRevenuePieTeamId] = useState("all");
+  const [revenuePiePartnerId, setRevenuePiePartnerId] = useState("all");
+  const [revenuePieCategory, setRevenuePieCategory] = useState("all");
+  const revenueRows = rows.filter((transaction) => transaction.direction === "in");
+  const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
+  const revenueTeamOptions = [
+    ...dashboard.teams.map((team) => [team.id, team.name] as [string, string]),
+    ...(revenueRows.some((transaction) => !transaction.teamId) ? [["unassigned", "Unassigned team"] as [string, string]] : [])
+  ].sort(([, left], [, right]) => left.localeCompare(right));
+  const revenuePartnerOptions = [
+    ...revenueRows.reduce((map, transaction) => {
+      const key = transaction.matchedProviderId ?? "unmatched";
+      const label = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name ?? transaction.matchedProviderId : "Unmatched revenue";
+      map.set(key, label);
+      return map;
+    }, new Map<string, string>())
+  ].sort(([, left], [, right]) => left.localeCompare(right));
+  const revenueCategoryOptions = [...new Set(revenueRows.map(effectiveCategory))].sort((left, right) => left.localeCompare(right));
+  const filteredRevenueRows = revenueRows.filter((transaction) => {
+    const teamKey = transaction.teamId ?? "unassigned";
+    const partnerKey = transaction.matchedProviderId ?? "unmatched";
+    return (
+      (revenuePieCurrency === "all" || transaction.currency === revenuePieCurrency) &&
+      (revenuePieTeamId === "all" || teamKey === revenuePieTeamId) &&
+      (revenuePiePartnerId === "all" || partnerKey === revenuePiePartnerId) &&
+      (revenuePieCategory === "all" || effectiveCategory(transaction) === revenuePieCategory)
+    );
+  });
+  const revenuePieFilterActive =
+    revenuePieBreakdown !== "team-partner" ||
+    revenuePieCurrency !== "all" ||
+    revenuePieTeamId !== "all" ||
+    revenuePiePartnerId !== "all" ||
+    revenuePieCategory !== "all";
 
   const categoryRows = [...rows.reduce((map, transaction) => {
     const category = effectiveCategory(transaction);
@@ -1728,7 +2324,86 @@ function CategorizationView({
     .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
 
   const spendPieGroups = categoryPieGroups(rows, "out");
-  const revenuePieGroups = categoryPieGroups(rows, "in");
+  const revenuePieGroups = categoryPieGroups(filteredRevenueRows, "in", (transaction) =>
+    revenuePieLabelForBreakdown(transaction, revenuePieBreakdown, providersById, teamsById)
+  );
+  const revenuePieControls = (
+    <div className="category-chart-controls" aria-label="Revenue pie filters">
+      <label>
+        <SlidersHorizontal size={15} />
+        <span>Show</span>
+        <select value={revenuePieBreakdown} onChange={(event) => setRevenuePieBreakdown(event.target.value as RevenuePieBreakdown)}>
+          <option value="team-partner">Team and partner</option>
+          <option value="team">Team only</option>
+          <option value="partner">Partner only</option>
+          <option value="category">Category only</option>
+        </select>
+      </label>
+      <label>
+        <CircleDollarSign size={15} />
+        <span>Currency</span>
+        <select value={revenuePieCurrency} onChange={(event) => setRevenuePieCurrency(event.target.value)}>
+          <option value="all">All currencies</option>
+          {revenueCurrencies.map((currency) => (
+            <option key={currency} value={currency}>
+              {currency}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <Building2 size={15} />
+        <span>Team</span>
+        <select value={revenuePieTeamId} onChange={(event) => setRevenuePieTeamId(event.target.value)}>
+          <option value="all">All teams</option>
+          {revenueTeamOptions.map(([teamId, label]) => (
+            <option key={teamId} value={teamId}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <BadgeDollarSign size={15} />
+        <span>Partner</span>
+        <select value={revenuePiePartnerId} onChange={(event) => setRevenuePiePartnerId(event.target.value)}>
+          <option value="all">All partners</option>
+          {revenuePartnerOptions.map(([partnerId, label]) => (
+            <option key={partnerId} value={partnerId}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <Tags size={15} />
+        <span>Category</span>
+        <select value={revenuePieCategory} onChange={(event) => setRevenuePieCategory(event.target.value)}>
+          <option value="all">All categories</option>
+          {revenueCategoryOptions.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        className="secondary-button"
+        type="button"
+        onClick={() => {
+          setRevenuePieBreakdown("team-partner");
+          setRevenuePieCurrency("all");
+          setRevenuePieTeamId("all");
+          setRevenuePiePartnerId("all");
+          setRevenuePieCategory("all");
+        }}
+        disabled={!revenuePieFilterActive}
+      >
+        <RefreshCw size={15} />
+        Reset
+      </button>
+    </div>
+  );
 
   const relationshipRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -1758,13 +2433,55 @@ function CategorizationView({
     }))
     .sort((left, right) => right.transactions.length - left.transactions.length || left.name.localeCompare(right.name));
 
+  const teamRows = [
+    ...dashboard.teams.map((team) => {
+      const transactions = rows.filter((transaction) => transaction.teamId === team.id);
+      const partners = dashboard.revenuePartners.filter((partner) => partner.teamId === team.id);
+      return {
+        id: team.id,
+        name: team.name,
+        transactions,
+        partners,
+        enabledPartners: partners.filter((partner) => partner.enabled).length
+      };
+    }),
+    ...(rows.some((transaction) => !transaction.teamId) || dashboard.revenuePartners.some((partner) => !partner.teamId)
+      ? [
+          {
+            id: "unassigned",
+            name: "Unassigned",
+            transactions: rows.filter((transaction) => !transaction.teamId),
+            partners: dashboard.revenuePartners.filter((partner) => !partner.teamId),
+            enabledPartners: dashboard.revenuePartners.filter((partner) => !partner.teamId && partner.enabled).length
+          }
+        ]
+      : [])
+  ];
+
+  const sourceIds = new Set<DataSource>();
+  for (const transaction of rows) sourceIds.add(transaction.source);
+  for (const account of dashboard.accounts) sourceIds.add(account.source);
+  for (const invoice of dashboard.invoices) sourceIds.add(invoice.source);
+  for (const status of dashboard.integrationStatus) {
+    if (status.id !== "openrouter") sourceIds.add(status.id);
+  }
+  const sourceRows = [...sourceIds]
+    .map((source) => {
+      const transactions = rows.filter((transaction) => transaction.source === source);
+      const accounts = dashboard.accounts.filter((account) => account.source === source);
+      const invoices = dashboard.invoices.filter((invoice) => invoice.source === source);
+      const status = dashboard.integrationStatus.find((integration) => integration.id === source);
+      return { source, transactions, accounts, invoices, status };
+    })
+    .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
+
   return (
     <div className="categorization-layout">
       <section className="panel wide-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Categorization</p>
-            <h2>Money in, money out, clients, suppliers, tags, and review load</h2>
+            <p className="eyebrow">Analytics</p>
+            <h2>Money flow, teams, sources, companies, and review load</h2>
           </div>
           <div className="filters">
             <label>
@@ -1787,13 +2504,106 @@ function CategorizationView({
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
           <SummaryTile label="Money out" value={groupedTransactionMoney(rows, "out")} />
-          <SummaryTile label="Categories" value={String(categoryRows.length)} />
+          <SummaryTile label="Teams" value={String(dashboard.teams.length)} />
+          <SummaryTile label="Sources" value={String(sourceRows.length)} />
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
       </section>
 
       <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} emptyLabel="No spend transactions yet" />
-      <CategoryPiePanel title="Revenue pie" tone="good" groups={revenuePieGroups} emptyLabel="No revenue transactions yet" />
+      <CategoryPiePanel
+        title="Revenue by team and partner"
+        tone="good"
+        groups={revenuePieGroups}
+        emptyLabel={revenuePieFilterActive ? "No revenue rows match these filters" : "No revenue transactions yet"}
+        controls={revenuePieControls}
+      />
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>By team</h2>
+          <span className="total-pill">{teamRows.length} teams</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table analytics-table">
+            <thead>
+              <tr>
+                <th>Team</th>
+                <th>Transactions</th>
+                <th>Revenue streams</th>
+                <th>Money in</th>
+                <th>Money out</th>
+                <th>Needs review</th>
+              </tr>
+            </thead>
+            <tbody>
+              {teamRows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <strong>{row.name}</strong>
+                  </td>
+                  <td>{row.transactions.length}</td>
+                  <td>{row.partners.length > 0 ? `${row.enabledPartners}/${row.partners.length} enabled` : "—"}</td>
+                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
+                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                  <td>{row.transactions.filter(transactionNeedsReview).length}</td>
+                </tr>
+              ))}
+              {teamRows.length === 0 && (
+                <tr>
+                  <td colSpan={6}>No teams yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>By source</h2>
+          <span className="total-pill">{sourceRows.length} sources</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table analytics-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Accounts</th>
+                <th>Transactions</th>
+                <th>Invoices</th>
+                <th>Money in</th>
+                <th>Money out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceRows.map((row) => (
+                <tr key={row.source}>
+                  <td>
+                    <span className={`source-pill ${row.source}`}>{sourceLabel(row.source)}</span>
+                  </td>
+                  <td>
+                    <span className={`status-pill ${row.status?.mode === "live" ? "good" : row.status?.mode === "partial" ? "warning" : ""}`}>
+                      {row.status?.mode ?? "saved"}
+                    </span>
+                  </td>
+                  <td>{row.accounts.length > 0 ? groupedAccountMoney(row.accounts) : "—"}</td>
+                  <td>{row.transactions.length}</td>
+                  <td>{row.invoices.length}</td>
+                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
+                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                </tr>
+              ))}
+              {sourceRows.length === 0 && (
+                <tr>
+                  <td colSpan={7}>No sources yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -1927,12 +2737,14 @@ function CategoryPiePanel({
   title,
   tone,
   groups,
-  emptyLabel
+  emptyLabel,
+  controls
 }: {
   title: string;
   tone: "good" | "danger";
   groups: CategoryPieGroup[];
   emptyLabel: string;
+  controls?: ReactNode;
 }) {
   const totalLabel = groups.length > 0 ? groups.map((group) => money(group.total, group.currency)).join(" · ") : "—";
 
@@ -1942,6 +2754,7 @@ function CategoryPiePanel({
         <h2>{title}</h2>
         <span className={`total-pill ${tone}`}>{totalLabel}</span>
       </div>
+      {controls}
       <div className="category-chart-body">
         {groups.length > 0 ? (
           groups.map((group) => <CategoryPieGroupView group={group} key={group.currency} />)
@@ -2048,11 +2861,24 @@ function SimpleMoneyTable({
   );
 }
 
-function BridgeRow({ label, value, danger, good }: { label: string; value: CurrencyTotals; danger?: boolean; good?: boolean }) {
+function BridgeRow({
+  label,
+  value,
+  danger,
+  good,
+  currency = "USD"
+}: {
+  label: string;
+  value: CurrencyTotals | number | null | undefined;
+  danger?: boolean;
+  good?: boolean;
+  currency?: string;
+}) {
+  const formattedValue = typeof value === "number" || value == null ? optionalMoney(value, currency) : formatCurrencyTotals(value);
   return (
     <div className="bridge-row">
       <span>{label}</span>
-      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{formatCurrencyTotals(value)}</strong>
+      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{formattedValue}</strong>
     </div>
   );
 }
@@ -2073,6 +2899,209 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
     <div className="summary-tile">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function CategorySearchSelect({
+  value,
+  options,
+  onChange,
+  label
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  const listboxId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [menuPosition, setMenuPosition] = useState<CategorySearchMenuPosition | null>(null);
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return options;
+    return options.filter((option) => option.toLowerCase().includes(normalizedQuery));
+  }, [options, query]);
+  const activeOptionId = isOpen && filteredOptions[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined;
+
+  function updateMenuPosition(visibleOptions = filteredOptions.length) {
+    const anchor = triggerRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    setMenuPosition(categorySearchMenuPosition(anchor, visibleOptions));
+  }
+
+  function openMenu(nextQuery = "") {
+    setQuery(nextQuery);
+    setIsOpen(true);
+    updateMenuPosition(nextQuery ? options.filter((option) => option.toLowerCase().includes(nextQuery.toLowerCase())).length : options.length);
+  }
+
+  function closeMenu() {
+    setIsOpen(false);
+    setQuery("");
+    setActiveIndex(0);
+    setMenuPosition(null);
+  }
+
+  function selectCategory(category: string) {
+    if (category !== value) onChange(category);
+    closeMenu();
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updateMenuPosition(filteredOptions.length);
+    const selectedIndex = filteredOptions.findIndex((option) => option === value);
+    setActiveIndex(query.trim() ? 0 : Math.max(selectedIndex, 0));
+  }, [filteredOptions, isOpen, query, value]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    requestAnimationFrame(() => inputRef.current?.focus());
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!(event.target instanceof Node) || rootRef.current?.contains(event.target)) return;
+      closeMenu();
+    }
+
+    function closeOnViewportChange() {
+      closeMenu();
+    }
+
+    function closeOnOutsideScroll(event: Event) {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      closeMenu();
+    }
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnOutsideScroll, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnOutsideScroll, true);
+    };
+  }, [isOpen]);
+
+  function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openMenu();
+      return;
+    }
+
+    if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      openMenu(event.key);
+    }
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.min(current + 1, Math.max(filteredOptions.length - 1, 0)));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const category = filteredOptions[activeIndex];
+      if (category) selectCategory(category);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      requestAnimationFrame(() => triggerRef.current?.focus());
+      return;
+    }
+
+    if (event.key === "Tab") closeMenu();
+  }
+
+  return (
+    <div className="category-combobox" ref={rootRef}>
+      <button
+        type="button"
+        className="category-combobox-trigger"
+        aria-label={label}
+        aria-controls={isOpen ? listboxId : undefined}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        onClick={() => (isOpen ? closeMenu() : openMenu())}
+        onKeyDown={handleTriggerKeyDown}
+        ref={triggerRef}
+      >
+        <span title={value}>{value}</span>
+        <Search size={14} />
+      </button>
+      {isOpen && menuPosition && (
+        <div
+          className={`category-combobox-menu ${menuPosition.placement}`}
+          style={{ left: menuPosition.left, top: menuPosition.top, width: menuPosition.width }}
+        >
+          <div className="category-combobox-search">
+            <Search size={14} />
+            <input
+              ref={inputRef}
+              value={query}
+              placeholder="Search category"
+              role="combobox"
+              aria-controls={listboxId}
+              aria-expanded={isOpen}
+              aria-activedescendant={activeOptionId}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {query && (
+              <button
+                type="button"
+                className="category-combobox-clear"
+                aria-label="Clear category search"
+                onClick={() => setQuery("")}
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          <div className="category-combobox-options" id={listboxId} role="listbox" aria-label={label}>
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((category, index) => (
+                <button
+                  type="button"
+                  className={`category-combobox-option ${index === activeIndex ? "active" : ""}`}
+                  id={`${listboxId}-option-${index}`}
+                  key={category}
+                  role="option"
+                  aria-selected={category === value}
+                  onClick={() => selectCategory(category)}
+                  onMouseEnter={() => setActiveIndex(index)}
+                >
+                  <span>{category}</span>
+                  {category === value && <Check size={14} />}
+                </button>
+              ))
+            ) : (
+              <div className="category-combobox-empty">No categories found</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2098,36 +3127,85 @@ function TransactionTable({
   onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
-  const [descriptionToast, setDescriptionToast] = useState<TransactionDescriptionToast | null>(null);
+  const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
 
-  function showDetailToast(title: string, detail: string, event: React.MouseEvent<HTMLElement>) {
-    const description = detail.trim();
-    if (!description) {
-      setDescriptionToast(null);
-      return;
+  useEffect(() => {
+    if (!detailPopover) return;
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("[data-transaction-detail-popover], [data-transaction-detail-trigger]")) return;
+      setDetailPopover(null);
     }
 
-    setDescriptionToast({
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setDetailPopover(null);
+    }
+
+    function closeOnViewportChange() {
+      setDetailPopover(null);
+    }
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [detailPopover]);
+
+  function toggleDetailPopover(id: string, title: string, detail: string, event: ReactMouseEvent<HTMLButtonElement>) {
+    const description = detail.trim();
+    if (!description) {
+      setDetailPopover(null);
+      return;
+    }
+    const position = detailPopoverPosition(event.currentTarget.getBoundingClientRect());
+
+    setDetailPopover((current) => current?.id === id ? null : {
+      id,
       title,
       description,
-      ...detailToastPosition(event)
+      ...position
     });
   }
 
-  function showDescriptionToast(transaction: Transaction, event: React.MouseEvent<HTMLElement>) {
-    showDetailToast(transaction.counterparty, transaction.description, event);
+  function detailInfoButton(id: string, title: string, detail: string, label: string) {
+    const isOpen = detailPopover?.id === id;
+
+    return (
+      <button
+        type="button"
+        className="transaction-detail-trigger"
+        title={label}
+        aria-label={label}
+        aria-expanded={isOpen}
+        aria-describedby={isOpen ? "transaction-detail-popover" : undefined}
+        data-transaction-detail-trigger
+        onClick={(event) => toggleDetailPopover(id, title, detail, event)}
+      >
+        <Info size={12} strokeWidth={2.5} />
+      </button>
+    );
   }
 
   return (
     <div className="table-wrap">
-      {descriptionToast && (
+      {detailPopover && (
         <div
-          className="transaction-description-toast"
-          role="status"
-          style={{ left: descriptionToast.left, top: descriptionToast.top }}
+          id="transaction-detail-popover"
+          className={`transaction-detail-popover ${detailPopover.placement}`}
+          role="tooltip"
+          data-transaction-detail-popover
+          style={{ left: detailPopover.left, top: detailPopover.top }}
         >
-          <strong>{descriptionToast.title}</strong>
-          <span>{descriptionToast.description}</span>
+          <strong>{detailPopover.title}</strong>
+          <span>{detailPopover.description}</span>
         </div>
       )}
       <table className="data-table activity-table transaction-table">
@@ -2136,6 +3214,7 @@ function TransactionTable({
           <col className="transaction-counterparty-col" />
           <col className="transaction-direction-col" />
           <col className="transaction-amount-col" />
+          <col className="transaction-card-holder-col" />
           <col className="transaction-team-col" />
           <col className="transaction-category-col" />
           <col className="transaction-company-col" />
@@ -2148,7 +3227,10 @@ function TransactionTable({
             <th>Counterparty</th>
             <th>Direction</th>
             <th>Amount</th>
-            <th>Team</th>
+            <th>Card holder</th>
+            <th>
+              Team <span className="column-note">Optional</span>
+            </th>
             <th>Category</th>
             <th>Company</th>
             <th>Document</th>
@@ -2164,6 +3246,8 @@ function TransactionTable({
               const confidence = transaction.confidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
               const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
+              const counterpartyDetailId = `${transaction.id}-counterparty-description`;
+              const categoryDetailId = `${transaction.id}-category-description`;
               const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
               const categoryActionTitle = "Save category and remember alias";
               const providerOptions = providers.filter((item) => item.type === expectedProviderType);
@@ -2176,14 +3260,17 @@ function TransactionTable({
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
-                  <td
-                    className="counterparty-cell"
-                    onMouseEnter={(event) => showDescriptionToast(transaction, event)}
-                    onMouseMove={(event) => showDescriptionToast(transaction, event)}
-                    onMouseLeave={() => setDescriptionToast(null)}
-                  >
+                  <td className="counterparty-cell">
                     <strong>{transaction.counterparty}</strong>
-                    <small>{transaction.description}</small>
+                    <small className="transaction-detail-line">
+                      <span className="transaction-detail-text">{transaction.description}</span>
+                      {detailInfoButton(
+                        counterpartyDetailId,
+                        transaction.counterparty,
+                        transaction.description,
+                        `Show counterparty description for ${transaction.counterparty}`
+                      )}
+                    </small>
                   </td>
                   <td>
                     <span className={`direction-label ${transaction.direction}`}>
@@ -2192,6 +3279,9 @@ function TransactionTable({
                     </span>
                   </td>
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+                  <td className="card-holder-cell" title={transaction.cardHolderName ?? ""}>
+                    {transaction.cardHolderName ? transaction.cardHolderName : <span className="muted-cell">—</span>}
+                  </td>
                   <td>
                     <div className="team-select">
                       <NativeSelect value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
@@ -2208,16 +3298,12 @@ function TransactionTable({
                   <td>
                     <div className="category-select">
                       <div className="category-control-row">
-                        <NativeSelect
+                        <CategorySearchSelect
                           value={displayCategory}
-                          onChange={(event) => onUpdateCategory(transaction, event.target.value)}
-                        >
-                          {transactionCategoryChoices(displayCategory).map((category) => (
-                            <NativeSelectOption key={category} value={category}>
-                              {category}
-                            </NativeSelectOption>
-                          ))}
-                        </NativeSelect>
+                          options={transactionCategoryChoices(displayCategory, transaction.direction)}
+                          label={`Search category for ${transaction.counterparty}`}
+                          onChange={(category) => onUpdateCategory(transaction, category)}
+                        />
                         <Button
                           className="icon-button"
                           title={categoryActionTitle}
@@ -2227,13 +3313,14 @@ function TransactionTable({
                           <Save size={15} />
                         </Button>
                       </div>
-                      <small
-                        className={confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}
-                        onMouseEnter={(event) => showDetailToast(displayCategory, categoryDetail, event)}
-                        onMouseMove={(event) => showDetailToast(displayCategory, categoryDetail, event)}
-                        onMouseLeave={() => setDescriptionToast(null)}
-                      >
-                        {categoryDetail}
+                      <small className={`transaction-detail-line ${confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}`}>
+                        <span className="transaction-detail-text">{categoryDetail}</span>
+                        {detailInfoButton(
+                          categoryDetailId,
+                          displayCategory,
+                          categoryDetail,
+                          `Show category description for ${displayCategory}`
+                        )}
                       </small>
                     </div>
                   </td>
@@ -2305,6 +3392,489 @@ function TransactionTable({
   );
 }
 
+type DistributionAdjustmentTarget = {
+  month: string;
+  currency: string;
+  partnerId: ProfitDistributionPartnerId;
+  partnerName: string;
+  bucket: ProfitDistributionBucket;
+  currentAmount: number;
+  adjustment?: ProfitDistributionAdjustment;
+};
+
+function distributionAdjustmentFor(
+  adjustments: ProfitDistributionAdjustment[],
+  month: string,
+  currency: string,
+  partnerId: ProfitDistributionPartnerId,
+  bucket: ProfitDistributionBucket
+): ProfitDistributionAdjustment | undefined {
+  const id = profitDistributionAdjustmentId({ month, currency, partnerId, bucket });
+  return adjustments.find((adjustment) => adjustment.id === id);
+}
+
+function distributionBucketAmount(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket): number {
+  if (bucket === "profit-share") return row.profitSharePayable;
+  if (bucket === "salary") return row.salaryPayable;
+  return row.distributionPayable;
+}
+
+function DistributionAmountButton({
+  value,
+  currency,
+  disabled,
+  adjusted,
+  title,
+  onClick
+}: {
+  value: number;
+  currency: string;
+  disabled: boolean;
+  adjusted: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  if (disabled) return <span className="muted-cell">—</span>;
+
+  return (
+    <button
+      className={`amount-adjust-button ${adjusted ? "adjusted" : ""}`}
+      title={title}
+      type="button"
+      onClick={onClick}
+    >
+      <span>{money(value, currency)}</span>
+      <Pencil size={13} />
+    </button>
+  );
+}
+
+function DistributionView({
+  dashboard,
+  onSaveAdjustment
+}: {
+  dashboard: DashboardSnapshot;
+  onSaveAdjustment: (payload: SaveProfitDistributionAdjustmentPayload) => Promise<void>;
+}) {
+  const distribution = dashboard.profitDistribution;
+  const monthOptions = useMemo(
+    () => [...new Set(distribution.months.map((month) => month.month))].sort((left, right) => right.localeCompare(left)),
+    [distribution.months]
+  );
+  const currencyOptions = useMemo(() => distribution.currencies.map((currency) => currency.currency), [distribution.currencies]);
+  const [selectedMonth, setSelectedMonth] = useState(monthOptions[0] ?? new Date().toISOString().slice(0, 7));
+  const [selectedCurrency, setSelectedCurrency] = useState(
+    currencyOptions.includes("EUR") ? "EUR" : currencyOptions[0] ?? "EUR"
+  );
+  const [editingAdjustment, setEditingAdjustment] = useState<DistributionAdjustmentTarget | null>(null);
+  const monthOptionsKey = monthOptions.join("|");
+  const currencyOptionsKey = currencyOptions.join("|");
+  const selectedMonthCurrencies = useMemo(
+    () => distribution.months.filter((month) => month.month === selectedMonth).map((month) => month.currency),
+    [distribution.months, selectedMonth]
+  );
+  const selectedMonthCurrenciesKey = selectedMonthCurrencies.join("|");
+
+  useEffect(() => {
+    if (monthOptions.length > 0 && !monthOptions.includes(selectedMonth)) {
+      setSelectedMonth(monthOptions[0]);
+    }
+  }, [monthOptions, monthOptionsKey, selectedMonth]);
+
+  useEffect(() => {
+    if (currencyOptions.length === 0) return;
+    const allowedCurrencies = selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions;
+    if (!allowedCurrencies.includes(selectedCurrency)) {
+      setSelectedCurrency(allowedCurrencies.includes("EUR") ? "EUR" : allowedCurrencies[0]);
+    }
+  }, [currencyOptions, currencyOptionsKey, selectedCurrency, selectedMonthCurrencies, selectedMonthCurrenciesKey]);
+
+  const selectedLedger =
+    distribution.months.find((month) => month.month === selectedMonth && month.currency === selectedCurrency) ??
+    distribution.months[0];
+  const currencySummary = distribution.currencies.find((currency) => currency.currency === selectedCurrency);
+  const balanceRows = distribution.partners.filter((partner) => partner.currency === selectedCurrency);
+  const partnerOrder = new Map(profitDistributionPartners.map((partner, index) => [partner.id, index]));
+  const selectedPartners = selectedLedger
+    ? [...selectedLedger.partners].sort(
+        (left, right) => (partnerOrder.get(left.partnerId) ?? 0) - (partnerOrder.get(right.partnerId) ?? 0)
+      )
+    : [];
+  const sortedBalanceRows = [...balanceRows].sort(
+    (left, right) => (partnerOrder.get(left.partnerId) ?? 0) - (partnerOrder.get(right.partnerId) ?? 0)
+  );
+
+  function openAdjustment(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket) {
+    if (!selectedLedger) return;
+    setEditingAdjustment({
+      month: selectedLedger.month,
+      currency: selectedLedger.currency,
+      partnerId: row.partnerId,
+      partnerName: row.entityName ? `${row.partnerName} / ${row.entityName}` : row.partnerName,
+      bucket,
+      currentAmount: distributionBucketAmount(row, bucket),
+      adjustment: distributionAdjustmentFor(
+        distribution.adjustments,
+        selectedLedger.month,
+        selectedLedger.currency,
+        row.partnerId,
+        bucket
+      )
+    });
+  }
+
+  function bucketCanAdjust(row: ProfitDistributionPartnerLedger, bucket: ProfitDistributionBucket): boolean {
+    const existing = selectedLedger
+      ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, bucket)
+      : undefined;
+    if (existing) return true;
+    if (bucket === "profit-share") return row.partnerId === "ishan";
+    if (bucket === "salary") return row.salaryPayable > 0;
+    return true;
+  }
+
+  return (
+    <div className="distribution-layout">
+      <section className="panel wide-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Distribution</p>
+            <h2>Partner payables, paid amounts, and remaining balances</h2>
+          </div>
+          <span className="total-pill">{currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} remaining</span>
+        </div>
+        <div className="revenue-controls distribution-controls">
+          <label>
+            Month
+            <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
+              {monthOptions.map((month) => (
+                <option key={month} value={month}>
+                  {monthLabel(month)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Currency
+            <select value={selectedCurrency} onChange={(event) => setSelectedCurrency(event.target.value)}>
+              {(selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions).map((currency) => (
+                <option key={currency} value={currency}>
+                  {currency}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="wise-summary-grid distribution-summary">
+          <SummaryTile label="Payable" value={currencySummary ? money(currencySummary.totalPayable, currencySummary.currency) : "—"} />
+          <SummaryTile label="Paid" value={currencySummary ? money(currencySummary.totalPaid, currencySummary.currency) : "—"} />
+          <SummaryTile label="Remaining" value={currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} />
+          <SummaryTile label="Adjustments" value={String(distribution.adjustments.length)} />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Calculation bridge</h2>
+          <span className="total-pill">{selectedLedger ? monthLabel(selectedLedger.month) : "—"}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Revenue" value={selectedLedger?.revenue} currency={selectedCurrency} good />
+          <BridgeRow label="General costs" value={selectedLedger ? -selectedLedger.generalCosts : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Net profit after general costs" value={selectedLedger?.netProfitAfterGeneralCosts} currency={selectedCurrency} />
+          <BridgeRow label="Ishan 25% share" value={selectedLedger ? -selectedLedger.ishanProfitShare : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Fixed salaries" value={selectedLedger ? -selectedLedger.salaryDeductions : null} currency={selectedCurrency} danger />
+          <BridgeRow label="Profit available for distribution" value={selectedLedger?.profitAvailableForDistribution} currency={selectedCurrency} good />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Currency balance</h2>
+          <span className="total-pill">{selectedCurrency}</span>
+        </div>
+        <div className="bridge">
+          <BridgeRow label="Total payable" value={currencySummary?.totalPayable} currency={selectedCurrency} />
+          <BridgeRow label="Total paid" value={currencySummary?.totalPaid} currency={selectedCurrency} good />
+          <BridgeRow label="Remaining" value={currencySummary?.remaining} currency={selectedCurrency} />
+          <BridgeRow label="Distribution pool" value={selectedLedger?.distributionPool} currency={selectedCurrency} />
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Accumulated partner balances</h2>
+          <span className="total-pill">{sortedBalanceRows.length} rows</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table distribution-table">
+            <thead>
+              <tr>
+                <th>Partner</th>
+                <th>Profit share</th>
+                <th>Salary</th>
+                <th>Distribution</th>
+                <th>Payable</th>
+                <th>Paid</th>
+                <th>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedBalanceRows.length > 0 ? (
+                sortedBalanceRows.map((row) => (
+                  <tr key={`${row.partnerId}-${row.currency}`}>
+                    <td>
+                      <strong>{row.partnerName}</strong>
+                      <small>{row.entityName ?? row.currency}</small>
+                    </td>
+                    <td className="amount">{money(row.profitSharePayable, row.currency)}</td>
+                    <td className="amount">{money(row.salaryPayable, row.currency)}</td>
+                    <td className="amount">{money(row.distributionPayable, row.currency)}</td>
+                    <td className="amount">{money(row.totalPayable, row.currency)}</td>
+                    <td className="amount good-text">{money(row.totalPaid, row.currency)}</td>
+                    <td className={`amount ${row.remaining <= 0 ? "good-text" : ""}`}>{money(row.remaining, row.currency)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7}>No distribution balances yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Selected month payables</h2>
+          <span className="total-pill">{selectedLedger ? `${selectedLedger.month} ${selectedLedger.currency}` : "—"}</span>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table distribution-table">
+            <thead>
+              <tr>
+                <th>Partner</th>
+                <th>Profit share</th>
+                <th>Salary</th>
+                <th>Distribution</th>
+                <th>Paid</th>
+                <th>Remaining</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedPartners.length > 0 ? (
+                selectedPartners.map((row) => {
+                  const profitShareAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "profit-share")
+                    : undefined;
+                  const salaryAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "salary")
+                    : undefined;
+                  const distributionAdjustment = selectedLedger
+                    ? distributionAdjustmentFor(distribution.adjustments, selectedLedger.month, selectedLedger.currency, row.partnerId, "distribution")
+                    : undefined;
+                  return (
+                    <tr key={`${selectedLedger?.id}-${row.partnerId}`}>
+                      <td>
+                        <strong>{row.partnerName}</strong>
+                        <small>{row.entityName ?? row.currency}</small>
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.profitSharePayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "profit-share")}
+                          adjusted={Boolean(profitShareAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels["profit-share"]} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "profit-share")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.salaryPayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "salary")}
+                          adjusted={Boolean(salaryAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels.salary} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "salary")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <DistributionAmountButton
+                          value={row.distributionPayable}
+                          currency={row.currency}
+                          disabled={!bucketCanAdjust(row, "distribution")}
+                          adjusted={Boolean(distributionAdjustment)}
+                          title={`Adjust ${profitDistributionBucketLabels.distribution} for ${row.partnerName}`}
+                          onClick={() => openAdjustment(row, "distribution")}
+                        />
+                      </td>
+                      <td className="amount">
+                        <strong className="good-text">{money(row.totalPaid, row.currency)}</strong>
+                        <small>
+                          Salary {money(row.salaryPaid, row.currency)} · Dist. {money(row.profitSharePaid + row.distributionPaid, row.currency)}
+                        </small>
+                      </td>
+                      <td className={`amount ${row.remaining <= 0 ? "good-text" : ""}`}>{money(row.remaining, row.currency)}</td>
+                      <td>
+                        <div className="status-chip-list">
+                          {row.hasAdjustment && <span className="status-pill warning">Adjusted</span>}
+                          {row.hasDeferred && <span className="status-pill">Deferred</span>}
+                          {!row.hasAdjustment && !row.hasDeferred && <span className="status-pill good">Calculated</span>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7}>No selected month ledger</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {editingAdjustment && (
+        <DistributionAdjustmentModal
+          target={editingAdjustment}
+          onClose={() => setEditingAdjustment(null)}
+          onSubmit={async (payload) => {
+            await onSaveAdjustment(payload);
+            setEditingAdjustment(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function DistributionAdjustmentModal({
+  target,
+  onClose,
+  onSubmit
+}: {
+  target: DistributionAdjustmentTarget;
+  onClose: () => void;
+  onSubmit: (payload: SaveProfitDistributionAdjustmentPayload) => Promise<void>;
+}) {
+  const isSalary = target.bucket === "salary";
+  const [overrideAmount, setOverrideAmount] = useState(
+    target.adjustment?.overrideAmount === undefined ? "" : String(target.adjustment.overrideAmount)
+  );
+  const [waived, setWaived] = useState(Boolean(target.adjustment?.waived));
+  const [deferred, setDeferred] = useState(Boolean(target.adjustment?.deferred));
+  const [note, setNote] = useState(target.adjustment?.note ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function saveAdjustment(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        month: target.month,
+        currency: target.currency,
+        partnerId: target.partnerId,
+        bucket: target.bucket,
+        waived: isSalary ? waived : false,
+        deferred: isSalary ? false : deferred,
+        overrideAmount: overrideAmount.trim() ? Number(overrideAmount) : null,
+        note
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Distribution adjustment could not be saved");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function clearAdjustment() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        month: target.month,
+        currency: target.currency,
+        partnerId: target.partnerId,
+        bucket: target.bucket,
+        waived: false,
+        deferred: false,
+        overrideAmount: null,
+        note: ""
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Distribution adjustment could not be cleared");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal" onSubmit={saveAdjustment}>
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Distribution adjustment</p>
+            <h2>{profitDistributionBucketLabels[target.bucket]} for {target.partnerName}</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="transaction-summary">
+          <span>{monthLabel(target.month)} · {target.currency}</span>
+          <strong>{money(target.currentAmount, target.currency)}</strong>
+          <small>Current payable</small>
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="form-grid">
+          <label>
+            Override amount
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={overrideAmount}
+              onChange={(event) => setOverrideAmount(event.target.value)}
+              placeholder={money(target.currentAmount, target.currency)}
+            />
+          </label>
+          <label className="check-row modal-check-row distribution-check-row">
+            <input
+              type="checkbox"
+              checked={isSalary ? waived : deferred}
+              onChange={(event) => (isSalary ? setWaived(event.target.checked) : setDeferred(event.target.checked))}
+            />
+            {isSalary ? "Salary waived" : "Payment deferred"}
+          </label>
+        </div>
+        <label>
+          Note
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} />
+        </label>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="secondary-button" onClick={() => void clearAdjustment()} disabled={submitting || !target.adjustment}>
+            <RefreshCw size={16} />
+            Clear
+          </button>
+          <button type="submit" className="primary-button" disabled={submitting}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function RevenueView({
   dashboard,
   onSyncRevenue
@@ -2314,13 +3884,25 @@ function RevenueView({
 }) {
   const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
   const [partnerId, setPartnerId] = useState("all");
+  const [revenueTeamId, setRevenueTeamId] = useState("all");
   const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "UTC");
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [createInvoices, setCreateInvoices] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const visibleRuns = dashboard.revenueRuns.filter((run) => partnerId === "all" || run.partnerId === partnerId);
+  const teamsById = useMemo(() => {
+    const map = new Map<string, Team>();
+    for (const team of dashboard.teams) map.set(team.id, team);
+    return map;
+  }, [dashboard.teams]);
+  const visibleRuns = dashboard.revenueRuns.filter(
+    (run) =>
+      (partnerId === "all" || run.partnerId === partnerId) &&
+      (revenueTeamId === "all" ||
+        (revenueTeamId === "partner-level" && !run.teamId) ||
+        run.teamId === revenueTeamId)
+  );
   const latestRun = visibleRuns[0];
   const totalRevenue = sumCurrencyTotals(
     visibleRuns.filter((run) => run.status !== "failed" && run.status !== "skipped"),
@@ -2339,7 +3921,13 @@ function RevenueView({
     for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
     return map;
   }, [dashboard.revenuePartners]);
-  const visiblePartners = dashboard.revenuePartners.filter((partner) => partnerId === "all" || partner.id === partnerId);
+  const visiblePartners = dashboard.revenuePartners.filter(
+    (partner) =>
+      (partnerId === "all" || partner.id === partnerId) &&
+      (revenueTeamId === "all" ||
+        (revenueTeamId === "partner-level" && !partner.teamId) ||
+        partner.teamId === revenueTeamId)
+  );
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -2348,6 +3936,8 @@ function RevenueView({
     try {
       await onSyncRevenue({
         partnerId: partnerId === "all" ? undefined : partnerId,
+        teamId: revenueTeamId !== "all" && revenueTeamId !== "partner-level" ? revenueTeamId : undefined,
+        partnerLevelOnly: revenueTeamId === "partner-level" ? true : undefined,
         periodPreset,
         periodStart: periodPreset === "custom" ? periodStart : undefined,
         periodEnd: periodPreset === "custom" ? periodEnd : undefined,
@@ -2378,11 +3968,23 @@ function RevenueView({
             <NativeSelectOption value="all">All partners</NativeSelectOption>
             {dashboard.revenuePartners.map((partner) => (
               <NativeSelectOption key={partner.id} value={partner.id}>
-                {partner.name}
+                {revenuePartnerLabel(partner, teamsById)}
                 {partner.affiliateId ? ` · ${partner.affiliateId}` : ""}
               </NativeSelectOption>
             ))}
           </NativeSelect>
+        </label>
+        <label>
+          Team
+          <select value={revenueTeamId} onChange={(event) => setRevenueTeamId(event.target.value)}>
+            <option value="all">All teams</option>
+            <option value="partner-level">Partner-level</option>
+            {dashboard.teams.map((team) => (
+              <option key={team.id} value={team.id}>
+                {team.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Period
@@ -2428,8 +4030,8 @@ function RevenueView({
       <div className="revenue-partner-strip">
         {visiblePartners.map((partner) => (
           <div className="revenue-partner-chip" key={partner.id}>
-            <strong>{partner.name}</strong>
-            <span>Affiliate ID {partner.affiliateId || "Not set"}</span>
+            <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
+            <span>{partner.revenueCategory} · Affiliate ID {partner.affiliateId || "Not set"}</span>
           </div>
         ))}
       </div>
@@ -2448,6 +4050,8 @@ function RevenueView({
           <thead>
             <tr>
               <th>Partner</th>
+              <th>Team</th>
+              <th>Category</th>
               <th>Period</th>
               <th>Timezone</th>
               <th>Revenue</th>
@@ -2464,6 +4068,8 @@ function RevenueView({
                     <strong>{run.partnerName}</strong>
                     <small>TUNE · Affiliate ID {revenuePartnersById.get(run.partnerId)?.affiliateId || "Not set"}</small>
                   </td>
+                  <td>{revenueTeamLabel(run.teamId, run.teamName, teamsById)}</td>
+                  <td>{run.revenueCategory}</td>
                   <td>
                     {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
                   </td>
@@ -2489,7 +4095,7 @@ function RevenueView({
               ))
             ) : (
               <tr>
-                <td colSpan={7}>No revenue runs yet</td>
+                <td colSpan={9}>No revenue runs yet</td>
               </tr>
             )}
           </tbody>
@@ -2588,6 +4194,65 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
       <section className="panel wide-panel">
         <div className="panel-header compact">
           <h2>Slash card activity</h2>
+          <span className="total-pill">{rows.length} rows</span>
+        </div>
+        <BasicTransactionsTable rows={rows} />
+      </section>
+    </div>
+  );
+}
+
+function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+  const amexAccounts = dashboard.accounts.filter((account) => account.source === "amex");
+  const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
+  const balance = amexAccounts.reduce((total, account) => total + account.balance, 0);
+
+  return (
+    <div className="split-view">
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Amex cards</h2>
+          <span className={`total-pill ${balance < 0 ? "warning" : ""}`}>{maybeMoney(amexAccounts.length > 0, balance)}</span>
+        </div>
+        <SimpleMoneyTable
+          rows={amexAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            amount: account.balance,
+            currency: account.currency,
+            source: sourceLabel(account.source)
+          }))}
+          emptyLabel="No live Amex cards"
+        />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header compact">
+          <h2>Amex readiness</h2>
+          <span className={`status-pill ${amexStatus?.mode === "live" ? "good" : "warning"}`}>{amexStatus?.mode ?? "partial"}</span>
+        </div>
+        <div className="bridge">
+          <div className="bridge-row">
+            <span>Money out</span>
+            <strong className="danger-text">{groupedTransactionMoney(rows, "out")}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Credits</span>
+            <strong className="good-text">{groupedTransactionMoney(rows, "in")}</strong>
+          </div>
+        </div>
+        {amexStatus && amexStatus.needs.length > 0 && (
+          <div className="need-list bank-need-list">
+            {amexStatus.needs.map((need) => (
+              <code key={need}>{need}</code>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel wide-panel">
+        <div className="panel-header compact">
+          <h2>Amex activity</h2>
           <span className="total-pill">{rows.length} rows</span>
         </div>
         <BasicTransactionsTable rows={rows} />
@@ -2754,6 +4419,7 @@ function InvoicesView({
 function ProvidersView({
   providers,
   revenuePartners,
+  teamsById,
   onAdd,
   onEditProvider,
   onEditRevenuePartner,
@@ -2762,6 +4428,7 @@ function ProvidersView({
 }: {
   providers: Provider[];
   revenuePartners: RevenuePartner[];
+  teamsById: Map<string, Team>;
   onAdd: () => void;
   onEditProvider: (provider: Provider) => void;
   onEditRevenuePartner: (partner: RevenuePartner) => void;
@@ -2854,8 +4521,8 @@ function ProvidersView({
                   <BarChart3 size={18} />
                 </div>
                 <div>
-                  <strong>{partner.name}</strong>
-                  <span>Client · TUNE revenue</span>
+                  <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
+                  <span>{partner.revenueCategory || "Revenue"} · Affiliate ID {partner.affiliateId || "Not set"}</span>
                 </div>
                 <div className="provider-card-actions">
                   <Button
@@ -2886,6 +4553,7 @@ function ProvidersView({
                 <span>{partner.timezone}</span>
                 <span>{partner.enabled ? "Enabled" : "Disabled"}</span>
                 <span>{partner.networkIdEnv}</span>
+                <span>{partner.apiKeyEnv}</span>
               </div>
             </article>
           ))}
@@ -2962,11 +4630,13 @@ function SettingsView({
   dashboard,
   onCreateTeam,
   onSaveAiSettings,
+  onSaveWiseCardHolderTeam,
   onRunAiPrompt
 }: {
   dashboard: DashboardSnapshot;
   onCreateTeam: (payload: CreateTeamPayload) => Promise<void>;
   onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
+  onSaveWiseCardHolderTeam: (payload: AssignWiseCardHolderTeamPayload) => Promise<void>;
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
@@ -2977,14 +4647,48 @@ function SettingsView({
   const [prompt, setPrompt] = useState("");
   const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
   const [busy, setBusy] = useState<"team" | "save" | "prompt" | null>(null);
+  const [cardHolderBusy, setCardHolderBusy] = useState<string | null>(null);
+  const [cardHolderSelections, setCardHolderSelections] = useState<Record<string, string>>({});
   const [teamError, setTeamError] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [cardHolderError, setCardHolderError] = useState<string | null>(null);
 
   useEffect(() => {
     const isPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
     setModelChoice(isPreset ? dashboard.aiSettings.model : "custom");
     setCustomModel(isPreset ? "" : dashboard.aiSettings.model);
   }, [dashboard.aiSettings.model]);
+
+  const cardHolderRows = useMemo(() => {
+    const rows = new Map<string, { key: string; cardHolderName: string; transactionCount: number; teamId?: string }>();
+
+    for (const assignment of dashboard.wiseCardHolderTeamAssignments) {
+      const key = normalizeLookupName(assignment.cardHolderName);
+      if (!key) continue;
+      rows.set(key, {
+        key,
+        cardHolderName: assignment.cardHolderName,
+        transactionCount: 0,
+        teamId: assignment.teamId
+      });
+    }
+
+    for (const transaction of dashboard.transactions) {
+      if (transaction.source !== "wise" || !transaction.cardHolderName) continue;
+      const cardHolderName = transaction.cardHolderName.trim().replace(/\s+/g, " ");
+      const key = normalizeLookupName(cardHolderName);
+      if (!key) continue;
+      const existing = rows.get(key);
+      rows.set(key, {
+        key,
+        cardHolderName: existing?.cardHolderName ?? cardHolderName,
+        transactionCount: (existing?.transactionCount ?? 0) + 1,
+        teamId: existing?.teamId
+      });
+    }
+
+    return [...rows.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
+  }, [dashboard.transactions, dashboard.wiseCardHolderTeamAssignments]);
 
   const selectedModel = modelChoice === "custom" ? customModel : modelChoice;
 
@@ -3012,6 +4716,18 @@ function SettingsView({
       setAiError(err instanceof Error ? err.message : "AI settings could not be saved");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function saveCardHolderTeam(cardHolderName: string, key: string, teamId: string) {
+    setCardHolderBusy(key);
+    setCardHolderError(null);
+    try {
+      await onSaveWiseCardHolderTeam({ cardHolderName, teamId });
+    } catch (err) {
+      setCardHolderError(err instanceof Error ? err.message : "Card holder team could not be saved");
+    } finally {
+      setCardHolderBusy(null);
     }
   }
 
@@ -3064,6 +4780,60 @@ function SettingsView({
             <span key={team.id}>{team.name}</span>
           ))}
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Wise card holders</p>
+            <h2>Card holder teams</h2>
+          </div>
+          <span className="total-pill">{cardHolderRows.length} holders</span>
+        </div>
+        <div className="card-holder-rules">
+          {cardHolderRows.length > 0 ? (
+            cardHolderRows.map((row) => {
+              const selectedTeamId = cardHolderSelections[row.key] ?? row.teamId ?? "";
+              const savedTeamId = row.teamId ?? "";
+              return (
+                <div className="card-holder-rule" key={row.key}>
+                  <div className="card-holder-rule-name">
+                    <strong>{row.cardHolderName}</strong>
+                    <span>{row.transactionCount > 0 ? `${row.transactionCount} Wise rows` : "Saved rule"}</span>
+                  </div>
+                  <select
+                    value={selectedTeamId}
+                    onChange={(event) =>
+                      setCardHolderSelections((current) => ({
+                        ...current,
+                        [row.key]: event.target.value
+                      }))
+                    }
+                  >
+                    <option value="">Choose team</option>
+                    {dashboard.teams.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!selectedTeamId || selectedTeamId === savedTeamId || cardHolderBusy === row.key}
+                    onClick={() => void saveCardHolderTeam(row.cardHolderName, row.key, selectedTeamId)}
+                  >
+                    {cardHolderBusy === row.key ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                    Save
+                  </button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="empty-state">No Wise card holders</div>
+          )}
+        </div>
+        {cardHolderError && <div className="inline-error">{cardHolderError}</div>}
       </section>
 
       <section className="panel">
@@ -3169,8 +4939,8 @@ function SettingsView({
         <div className="docs-note">
           <strong>Integration shape</strong>
           <span>
-            Wise and Revolut pull balances plus transaction activity for reconciliation. Partner revenue pulls from TUNE and creates Merit invoices.
-            Slash has its own card/cashback page. Marking paid here never marks paid in Merit.
+            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE and creates Merit invoices. Marking paid
+            here never marks paid in Merit.
           </span>
         </div>
       </section>
@@ -3482,14 +5252,21 @@ function ProviderModal({
 
 function RevenuePartnerModal({
   partner,
+  providers,
+  teams,
   onClose,
   onSubmit
 }: {
   partner: RevenuePartner;
+  providers: Provider[];
+  teams: Team[];
   onClose: () => void;
   onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
 }) {
   const [name, setName] = useState(partner.name);
+  const [providerId, setProviderId] = useState(partner.providerId ?? "");
+  const [teamId, setTeamId] = useState(partner.teamId ?? "");
+  const [revenueCategory, setRevenueCategory] = useState(partner.revenueCategory ?? "Revenue");
   const [affiliateId, setAffiliateId] = useState(partner.affiliateId);
   const [externalId, setExternalId] = useState(partner.externalId ?? "");
   const [currency, setCurrency] = useState(partner.currency);
@@ -3511,6 +5288,9 @@ function RevenuePartnerModal({
     try {
       await onSubmit({
         name,
+        providerId,
+        teamId: teamId || undefined,
+        revenueCategory,
         affiliateId,
         externalId: externalId.trim() || undefined,
         currency,
@@ -3553,6 +5333,41 @@ function RevenuePartnerModal({
             <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
           </label>
         </div>
+        <div className="form-grid">
+          <label>
+            Company
+            <select value={providerId} onChange={(event) => setProviderId(event.target.value)}>
+              {providers
+                .filter((provider) => provider.type === "client")
+                .map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Team
+            <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
+              <option value="">No single team</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label>
+          Money in category
+          <select value={revenueCategory} onChange={(event) => setRevenueCategory(event.target.value)}>
+            {moneyInCategoryOptions.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="form-grid">
           <label>
             External ID

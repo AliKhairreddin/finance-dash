@@ -3,6 +3,7 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   AssignTransactionTeamPayload,
+  AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   CreateInvoicePayload,
@@ -15,27 +16,42 @@ import type {
   Invoice,
   MatchTransactionPayload,
   PersistedAiSettings,
+  ProfitDistributionAdjustment,
   Provider,
   RevenuePartner,
   RevenueRun,
+  SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
   StoredAiSettings,
   SyncRevenuePayload,
   Team,
   Transaction,
   TransactionCategoryRule,
+  TransactionTeamAssignment,
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
+  WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
 import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
-import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "../shared/categories";
+import { canonicalTeamId, canonicalTeamName } from "../shared/business";
+import {
+  isReviewOnlyTransactionCategory,
+  isTransactionCategoryForDirection,
+  transactionBusinessCategory
+} from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
-import { calculateInvoiceDueDate, calculateRevenueMetrics, resolveRevenuePeriod } from "../shared/revenue";
+import { calculateInvoiceDueDate, calculateRevenueMetrics, mergeRevenuePartnerDirectory, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  calculateProfitDistribution,
+  profitDistributionAdjustmentFromPayload,
+  shouldKeepProfitDistributionAdjustment
+} from "../shared/distribution";
 import { calculateMetrics } from "./calculations";
 import {
   createMeritInvoice,
+  fetchAmexActivity,
   fetchMeritInvoices,
   fetchRevolutActivity,
   fetchSlashActivity,
@@ -49,8 +65,10 @@ import {
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
+  mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
+  normalizeCardHolderName,
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
@@ -69,9 +87,11 @@ let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
 let aiSettings: PersistedAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
+let wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [];
 let transactions: Transaction[] = [];
 let wiseStatementTransactions: Transaction[] = [];
 let wiseStatementImports: WiseStatementImport[] = [];
+let profitDistributionAdjustments: ProfitDistributionAdjustment[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseSyncIssue: string | undefined;
@@ -150,18 +170,27 @@ function realRevenueRuns(rows?: RevenueRun[]): RevenueRun[] {
   return (rows ?? []).filter((run) => run.status !== "mock");
 }
 
+function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
+  return (rows ?? []).map((assignment) => ({
+    ...assignment,
+    teamId: canonicalTeamId(assignment.teamId)
+  }));
+}
+
 export async function initializeStore(): Promise<void> {
   const persisted = await loadPersistedState();
   providers = mergeProviderDirectory(persisted.providers ?? []);
   invoices = realInvoices(persisted.invoices);
   teams = mergeTeamDirectory(persisted.teams ?? []);
   transactionCategoryRules = persisted.transactionCategoryRules ?? [];
-  revenuePartners = persisted.revenuePartners ?? [];
+  revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
   revenueRuns = realRevenueRuns(persisted.revenueRuns);
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
-  transactionTeamAssignments = persisted.transactionTeamAssignments ?? [];
+  transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
+  wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
   wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
   wiseStatementImports = persisted.wiseStatementImports ?? [];
+  profitDistributionAdjustments = persisted.profitDistributionAdjustments ?? [];
 }
 
 async function persist(): Promise<void> {
@@ -172,8 +201,10 @@ async function persist(): Promise<void> {
     transactionCategoryRules,
     revenuePartners,
     transactionTeamAssignments,
+    wiseCardHolderTeamAssignments,
     wiseStatementTransactions,
     wiseStatementImports,
+    profitDistributionAdjustments,
     revenueRuns,
     aiSettings
   });
@@ -235,8 +266,14 @@ function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): s
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
   const teamByTransaction = new Map(transactionTeamAssignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
+  const teamByCardHolder = new Map(
+    wiseCardHolderTeamAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
+  );
   return rows.map((transaction) => {
-    const teamId = teamByTransaction.get(transaction.id);
+    const teamId =
+      teamByTransaction.get(transaction.id) ??
+      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
+      transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -372,6 +409,7 @@ export async function autoCategorizeTransactions(
 
 export function getSnapshot(): DashboardSnapshot {
   const metrics = calculateMetrics(accounts, [], [], [], []);
+  const matchedTransactions = getMatchedTransactions();
   return {
     asOf: new Date().toISOString(),
     accounts,
@@ -385,12 +423,14 @@ export function getSnapshot(): DashboardSnapshot {
     revenueRuns,
     revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
     aiSettings: publicAiSettings(runtimeAiSettings()),
-    transactions: getMatchedTransactions(),
+    transactions: matchedTransactions,
     invoices,
     transactionCategoryRules,
+    wiseCardHolderTeamAssignments,
     wiseStatementImports,
-    integrationStatus: getIntegrationStatus(wiseSyncIssue),
+    integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners),
     metrics,
+    profitDistribution: calculateProfitDistribution(matchedTransactions, profitDistributionAdjustments),
     lastSync
   };
 }
@@ -414,7 +454,8 @@ function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload):
       currency: payload.currency,
       direction: transaction.direction,
       status: "posted" as const,
-      category: transactionBusinessCategory(transaction.category || "Wise")
+      category: transactionBusinessCategory(transaction.category || "Wise"),
+      ...(transaction.cardHolderName ? { cardHolderName: transaction.cardHolderName.trim() } : {})
     }));
 }
 
@@ -455,17 +496,18 @@ export async function importWiseStatement(payload: ImportWiseStatementPayload): 
 
 export async function assignTransactionTeam(payload: AssignTransactionTeamPayload): Promise<Transaction> {
   const transaction = findKnownTransaction(payload.transactionId);
+  const teamId = payload.teamId ? canonicalTeamId(payload.teamId) : undefined;
   if (!transaction) {
     throw new Error("Transaction not found");
   }
-  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
+  if (teamId && !teams.some((team) => team.id === teamId)) {
     throw new Error("Team not found");
   }
 
   transactionTeamAssignments = transactionTeamAssignments.filter((assignment) => assignment.transactionId !== payload.transactionId);
-  if (payload.teamId) {
+  if (teamId) {
     transactionTeamAssignments = [
-      { transactionId: payload.transactionId, teamId: payload.teamId, updatedAt: new Date().toISOString() },
+      { transactionId: payload.transactionId, teamId, updatedAt: new Date().toISOString() },
       ...transactionTeamAssignments
     ];
   }
@@ -474,8 +516,29 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
   return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
 }
 
+export async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
+  const teamId = canonicalTeamId(payload.teamId);
+  if (!cardHolderName) {
+    throw new Error("Card holder name is required");
+  }
+  if (!teams.some((team) => team.id === teamId)) {
+    throw new Error("Team not found");
+  }
+
+  wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
+    ...wiseCardHolderTeamAssignments.filter(
+      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
+    ),
+    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+  ]);
+
+  await persist();
+  return getSnapshot();
+}
+
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
-  const name = payload.name.trim();
+  const name = canonicalTeamName(payload.name.trim());
   if (!name) {
     throw new Error("Team name is required");
   }
@@ -554,12 +617,25 @@ export async function deleteProvider(providerId: string): Promise<Provider> {
 }
 
 export async function updateRevenuePartner(partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
+  if (!providers.some((provider) => provider.id === payload.providerId)) {
+    throw new Error("Revenue partner company not found");
+  }
+  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Revenue partner team not found");
+  }
+  const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
+  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+    throw new Error(`Category "${revenueCategory}" is not valid for money in`);
+  }
+
   let updated: RevenuePartner | undefined;
   revenuePartners = revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
-    updated = {
+    const nextPartner: RevenuePartner = {
       ...partner,
       name: payload.name.trim(),
+      providerId: payload.providerId,
+      revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
       currency: payload.currency.trim() || "USD",
@@ -572,9 +648,16 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
       invoiceDueDays: payload.invoiceDueDays,
       enabled: payload.enabled
     };
+    if (payload.teamId) {
+      nextPartner.teamId = payload.teamId;
+    } else {
+      delete nextPartner.teamId;
+    }
+    updated = nextPartner;
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
+  revenuePartners = mergeRevenuePartnerDirectory(revenuePartners);
   await persist();
   return updated;
 }
@@ -638,6 +721,9 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
   }
 
   const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+    throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
+  }
   const updated: Transaction = {
     ...transaction,
     category,
@@ -651,6 +737,18 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
 
   await persist();
   return enrichTransactions([updated], providers, transactionCategoryRules)[0];
+}
+
+export async function saveProfitDistributionAdjustment(
+  payload: SaveProfitDistributionAdjustmentPayload
+): Promise<DashboardSnapshot> {
+  const adjustment = profitDistributionAdjustmentFromPayload(payload, new Date().toISOString());
+  profitDistributionAdjustments = profitDistributionAdjustments.filter((item) => item.id !== adjustment.id);
+  if (shouldKeepProfitDistributionAdjustment(adjustment)) {
+    profitDistributionAdjustments = [adjustment, ...profitDistributionAdjustments];
+  }
+  await persist();
+  return getSnapshot();
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
@@ -706,7 +804,13 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
 }
 
 export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
-  const selectedPartners = revenuePartners.filter((partner) => partner.enabled && (!payload.partnerId || partner.id === payload.partnerId));
+  const selectedPartners = revenuePartners.filter(
+    (partner) =>
+      partner.enabled &&
+      (!payload.partnerId || partner.id === payload.partnerId) &&
+      (!payload.teamId || partner.teamId === payload.teamId) &&
+      (!payload.partnerLevelOnly || !partner.teamId)
+  );
   if (selectedPartners.length === 0) {
     throw new Error("No revenue partner found for this sync");
   }
@@ -729,7 +833,10 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     if (payload.createInvoices && existingInvoiceRun) continue;
 
     try {
-      const run = await fetchTuneRevenue(partner, period);
+      const run: RevenueRun = {
+        ...(await fetchTuneRevenue(partner, period)),
+        ...(partner.teamId ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId } : {})
+      };
       if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
         const concurrentReservation = revenueRuns.find(
           (item) =>
@@ -752,7 +859,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
             amount: run.revenue,
             currency: run.currency,
             dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-            description: `${partner.name} revenue for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
+            description: `${partner.revenueCategory || "Revenue"} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
           });
         } catch (error) {
           const needsReview: RevenueRun = {
@@ -778,6 +885,14 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
         partnerId: partner.id,
         partnerName: partner.name,
+        providerId: partner.providerId,
+        ...(partner.teamId
+          ? {
+              teamId: partner.teamId,
+              teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId
+            }
+          : {}),
+        revenueCategory: partner.revenueCategory,
         source: "tune",
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
@@ -827,10 +942,11 @@ export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, merit] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, merit] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(),
+    fetchAmexActivity(),
     fetchMeritInvoices()
   ]);
   const liveTransactions: Transaction[] = [];
@@ -862,6 +978,14 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     }
     if (slash.value.transactions.length > 0) liveSources.add("slash");
     liveTransactions.push(...slash.value.transactions);
+  }
+  if (amex.status === "fulfilled") {
+    if (amex.value.accounts.length > 0) {
+      accounts = [...accounts.filter((account) => account.source !== "amex"), ...amex.value.accounts];
+      liveSources.add("amex");
+    }
+    if (amex.value.transactions.length > 0) liveSources.add("amex");
+    liveTransactions.push(...amex.value.transactions);
   }
   if (merit.status === "fulfilled" && merit.value.length > 0) {
     invoices = realInvoices(mergeById(merit.value, invoices));

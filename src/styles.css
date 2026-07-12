@@ -819,6 +819,11 @@ textarea:focus-visible {
   background: var(--violet-soft);
 }
 
+.source-pill.amex {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
 .status-pill {
   min-width: 60px;
   min-height: 25px;
@@ -862,6 +867,12 @@ textarea:focus-visible {
   font-weight: 760;
   text-transform: uppercase;
   letter-spacing: 0;
+}
+
+.column-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .data-table tbody tr {
@@ -947,7 +958,7 @@ textarea:focus-visible {
 }
 
 .amount {
-  text-align: right !important;
+  text-align: center !important;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -972,7 +983,7 @@ textarea:focus-visible {
 
 .transaction-table {
   table-layout: fixed;
-  min-width: 1082px;
+  min-width: 1218px;
   font-size: 0.82rem;
 }
 
@@ -995,6 +1006,10 @@ textarea:focus-visible {
 
 .transaction-amount-col {
   width: 106px;
+}
+
+.transaction-card-holder-col {
+  width: 136px;
 }
 
 .transaction-team-col {
@@ -1030,6 +1045,20 @@ textarea:focus-visible {
   min-width: 240px;
 }
 
+.card-holder-cell {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted-cell {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .category-select,
 .company-match,
 .team-select {
@@ -1056,7 +1085,6 @@ textarea:focus-visible {
 .transaction-table .counterparty-cell strong,
 .transaction-table .counterparty-cell small,
 .transaction-table .category-select small,
-.transaction-table .team-select small,
 .transaction-table .status-pill {
   min-width: 0;
   overflow: hidden;
@@ -1068,58 +1096,84 @@ textarea:focus-visible {
   display: block;
 }
 
-.transaction-table .counterparty-cell,
-.transaction-table .category-select small {
-  cursor: help;
-}
-
-.transaction-description-toast {
-  position: fixed;
-  z-index: 70;
-  display: grid;
+.transaction-detail-line {
+  display: inline-flex !important;
+  align-items: center;
   gap: 5px;
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(260px, calc(100vh - 32px));
-  padding: 12px 14px;
-  color: #ffffff;
-  background: #09090b;
-  border: 1px solid #3f3f46;
-  border-radius: 8px;
-  box-shadow: 0 18px 46px rgba(16, 27, 43, 0.28);
-  line-height: 1.35;
-  overflow: auto;
-  pointer-events: none;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: top;
 }
 
-.transaction-description-toast strong {
+.transaction-detail-text {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: #ffffff;
-  font-size: 0.82rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.transaction-description-toast span {
-  color: #e4e4e7;
+.transaction-detail-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  color: currentColor;
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(20, 32, 51, 0.05);
+  opacity: 0.82;
+}
+
+.transaction-detail-trigger:hover,
+.transaction-detail-trigger[aria-expanded="true"] {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: var(--info-border);
+  opacity: 1;
+  transform: none;
+}
+
+.transaction-detail-popover {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  gap: 6px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(240px, calc(100vh - 24px));
+  padding: 10px 12px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 18px 46px rgba(16, 27, 43, 0.2);
+  line-height: 1.35;
+  overflow: auto;
+}
+
+.transaction-detail-popover.above {
+  transform: translateY(-100%);
+}
+
+.transaction-detail-popover strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transaction-detail-popover span {
+  color: var(--muted);
   font-size: 0.84rem;
   overflow-wrap: anywhere;
   white-space: normal;
-}
-
-.dark .transaction-description-toast {
-  color: #fafafa;
-  background: #18181b;
-  border-color: #3f3f46;
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
-}
-
-.dark .transaction-description-toast strong {
-  color: #fafafa;
-}
-
-.dark .transaction-description-toast span {
-  color: #d4d4d8;
 }
 
 .transaction-table .row-actions {
@@ -1131,6 +1185,151 @@ textarea:focus-visible {
   grid-template-columns: minmax(0, 1fr) 30px;
   gap: 6px;
   align-items: center;
+}
+
+.category-combobox {
+  min-width: 0;
+}
+
+.category-combobox-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 9px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 1px 1px rgba(20, 32, 51, 0.03);
+}
+
+.category-combobox-trigger span,
+.category-combobox-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-combobox-trigger svg {
+  color: var(--muted);
+}
+
+.category-combobox-trigger:hover,
+.category-combobox-trigger[aria-expanded="true"] {
+  background: var(--control-hover-bg);
+  border-color: var(--control-border-hover);
+}
+
+.category-combobox-menu {
+  position: fixed;
+  z-index: 90;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 18px 46px rgba(16, 27, 43, 0.2);
+}
+
+.category-combobox-menu.above {
+  transform: translateY(-100%);
+}
+
+.category-combobox-search {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 7px;
+  color: var(--muted);
+  background: var(--control-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+}
+
+.category-combobox-search:focus-within {
+  border-color: var(--search-focus-border);
+  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+}
+
+.category-combobox-search input {
+  width: 100%;
+  min-height: 30px;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.category-combobox-clear {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+
+.category-combobox-clear:hover {
+  color: var(--ink);
+  background: var(--hover-bg);
+}
+
+.category-combobox-options {
+  display: grid;
+  gap: 2px;
+  max-height: 214px;
+  overflow-y: auto;
+  scrollbar-color: var(--muted) transparent;
+  scrollbar-width: thin;
+}
+
+.category-combobox-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+
+.category-combobox-option:hover,
+.category-combobox-option.active {
+  background: var(--hover-bg);
+}
+
+.category-combobox-option[aria-selected="true"] {
+  color: var(--blue);
+  font-weight: 720;
+}
+
+.category-combobox-option svg {
+  justify-self: end;
+}
+
+.category-combobox-empty {
+  min-height: 32px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .transaction-table .icon-button {
@@ -1154,11 +1353,13 @@ textarea:focus-visible {
 .team-select select,
 .filters select,
 .filters input,
+.category-chart-controls select,
 .revenue-controls select,
 .revenue-controls input,
 .settings-form input,
 .settings-form select,
 .settings-form textarea,
+.card-holder-rule select,
 .modal input,
 .modal select,
 .modal textarea {
@@ -1181,11 +1382,13 @@ textarea:focus-visible {
 .team-select select:hover,
 .filters select:hover,
 .filters input:hover,
+.category-chart-controls select:hover,
 .revenue-controls select:hover,
 .revenue-controls input:hover,
 .settings-form input:hover,
 .settings-form select:hover,
 .settings-form textarea:hover,
+.card-holder-rule select:hover,
 .modal input:hover,
 .modal select:hover,
 .modal textarea:hover {
@@ -1264,6 +1467,75 @@ textarea:focus-visible {
 
 .revenue-table {
   min-width: 840px;
+}
+
+.distribution-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(300px, 0.9fr) minmax(430px, 1.2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.distribution-controls {
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.5fr);
+}
+
+.distribution-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.distribution-table {
+  min-width: 980px;
+}
+
+.amount-adjust-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0 8px;
+  color: var(--ink);
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.amount-adjust-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.amount-adjust-button svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.amount-adjust-button:hover,
+.amount-adjust-button.adjusted {
+  color: var(--ink);
+  background: var(--control-hover-bg);
+  border-color: var(--control-border-hover);
+  transform: none;
+}
+
+.amount-adjust-button.adjusted {
+  box-shadow: 0 0 0 2px var(--focus-ring-strong);
+}
+
+.status-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.distribution-check-row {
+  align-self: end;
+  min-height: 36px;
 }
 
 .revenue-error {
@@ -1589,6 +1861,42 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+.card-holder-rules {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.card-holder-rule {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 220px) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+.card-holder-rule-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.card-holder-rule-name strong,
+.card-holder-rule-name span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-holder-rule-name span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .prompt-result {
   display: grid;
   gap: 8px;
@@ -1621,6 +1929,21 @@ textarea:focus-visible {
   align-items: start;
 }
 
+.banks-layout {
+  display: grid;
+  gap: 14px;
+  align-items: start;
+}
+
+.bank-tabs {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.bank-source-summary {
+  border-bottom: 0;
+}
+
 .categorization-layout {
   display: grid;
   grid-template-columns: minmax(360px, 1fr) minmax(340px, 0.75fr);
@@ -1634,12 +1957,47 @@ textarea:focus-visible {
 
 .categorization-summary {
   border-bottom: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .category-chart-body {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.category-chart-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--control-bg);
+}
+
+.category-chart-controls label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  color: var(--label-text);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.category-chart-controls label svg {
+  color: var(--muted);
+}
+
+.category-chart-controls select {
+  grid-column: 1 / -1;
+}
+
+.category-chart-controls .secondary-button {
+  min-height: 36px;
+  align-self: end;
 }
 
 .category-pie-group {
@@ -1915,6 +2273,11 @@ textarea:focus-visible {
   color: var(--red);
   background: var(--red-soft);
   border-color: var(--red-border);
+}
+
+.bank-need-list {
+  margin: 0;
+  padding: 0 14px 14px;
 }
 
 .empty-state {
@@ -2210,7 +2573,8 @@ textarea:focus-visible {
   .provider-grid,
   .integration-grid,
   .split-view,
-  .categorization-layout {
+  .categorization-layout,
+  .distribution-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2293,8 +2657,10 @@ textarea:focus-visible {
   .integration-grid,
   .split-view,
   .categorization-layout,
+  .distribution-layout,
   .wise-summary-grid,
   .revenue-controls,
+  .card-holder-rule,
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -2344,6 +2710,10 @@ textarea:focus-visible {
 
   .category-pie-visual {
     width: min(220px, 74vw);
+  }
+
+  .category-chart-controls {
+    grid-template-columns: 1fr;
   }
 }
 
