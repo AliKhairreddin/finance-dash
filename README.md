@@ -1,141 +1,175 @@
-# Finance Dash
+# Finance Operations Dashboard
 
-Operational dashboard for cash flow, open balances, receivables, payables, provider matching, and invoice creation.
+Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, revenue pulls, invoice review, and currency-aware operating views.
 
-The dashboard shows live integration data and saved user-managed records only. Missing integrations render empty sections instead of invented balances.
+**Showcase:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
 
-## Run
+> **Status:** Development/showcase deployment. The current Cloudflare Worker points at development Convex state and is not a substitute for production access controls. Do not load sensitive production finance data until authentication and the production deployment are explicitly configured.
+
+## Problem and Approach
+
+The original workflow required manually combining bank activity, partner revenue, providers, clients, categories, and invoices in a shared spreadsheet. The dashboard models those records directly and preserves the operator's decisions so recurring transactions become easier to reconcile over time.
+
+The system follows three rules:
+
+1. Never invent balances when an integration is unavailable.
+2. Never add unlike currencies into a misleading total.
+3. Keep external accounting state separate from local review decisions.
+
+## Core Workflows
+
+- Import Wise statement CSVs and deduplicate overlapping uploads by transaction ID.
+- Separate incoming and outgoing reconciliation queues.
+- Suggest companies and categories from saved aliases, while requiring an explicit review before learning a new mapping.
+- Create local sales-invoice drafts for incoming funds and supplier-bill drafts for outgoing funds.
+- Keep local paid/review state independent from Merit accounting status.
+- Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
+- Pull partner revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
+- Reserve scheduled invoice creation atomically so retries cannot create duplicate invoices.
+- Display Wise, Revolut, Slash, revenue, receivable, payable, and company workflows without fabricating unavailable data.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U["React operations UI"] --> API["Express locally / Cloudflare Worker"]
+    API <--> C["Convex durable state"]
+    API --> W["Wise CSV and API adapters"]
+    API --> R["Revolut / Slash adapters"]
+    API --> T["TUNE partner revenue"]
+    API --> M["Merit invoice adapter"]
+    CRON["Cloudflare scheduled event"] --> API
+    C --> U
+```
+
+### Runtime Modes
+
+- **Local:** Vite frontend plus an Express server; local fallback state is written under `.local/` when Convex is not configured.
+- **Cloudflare:** Static assets and API routes run from one Worker.
+- **Convex:** Stores the durable dashboard snapshot and rejects unauthenticated or stale whole-state writes.
+
+## Reliability and Data Integrity
+
+### Currency Isolation
+
+Derived cash, revenue, payable, and profit metrics stay grouped by currency. If records contain multiple currencies, the dashboard does not invent a single converted total.
+
+### Learned Matching Without Silent Mutation
+
+Counterparty and category aliases are created from reviewed matches. Deleting a company clears references without deleting the underlying financial history.
+
+### Stale-Write Protection
+
+Convex state includes revision-aware write protection so an older browser snapshot cannot silently overwrite newer decisions.
+
+### Atomic Invoice Reservation
+
+Scheduled partner-revenue invoicing reserves an invoice operation before calling the external adapter, then records finalization separately. This keeps retries granular and prevents duplicate work.
+
+### Secret Boundaries
+
+Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker environment. `OPENROUTER_API_KEY` is never stored in Convex or returned to the browser. Calls into Convex require a matching `CONVEX_SERVICE_TOKEN`.
+
+### Regression Coverage
+
+The current test suite covers currency math, empty-state behavior, service-token enforcement, stale writes, atomic invoice reservations, company deletion, secret scrubbing, and API fail-closed behavior.
+
+## Technology
+
+| Layer | Technologies |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
+| Local API | Express 5, TypeScript |
+| Cloud API | Cloudflare Workers |
+| State | Convex |
+| Integrations | Wise, Revolut, Slash, TUNE/HasOffers, Merit |
+| Quality | Node test runner, TypeScript project references |
+
+## Repository Layout
+
+```text
+src/                    React dashboard and UI components
+server/                 Local API, calculations, matching, persistence, integrations
+worker/                 Cloudflare Worker API and scheduled handler
+shared/                 Currency, revenue, category, and provider domain logic
+convex/                 Durable dashboard state and schema
+.env.example            Supported runtime configuration
+wrangler.jsonc          Worker routes, vars, and scheduled triggers
+```
+
+## Local Development
 
 ```bash
 npm install
+cp .env.example .env
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173` and proxies API calls to the Express server on `http://localhost:8787`.
+The frontend runs on `http://localhost:5173` and proxies `/api` requests to the Express server on `http://localhost:8787`.
 
-## Deploy
+## Configuration
 
-The current showcase deployment runs on Cloudflare Workers with static assets and a Worker API.
+Use [`.env.example`](.env.example) as the configuration reference. Integration groups include:
+
+- Convex URL/deployment and `CONVEX_SERVICE_TOKEN`;
+- Wise API/profile/balance identifiers;
+- Revolut Business credentials;
+- Slash API credentials;
+- Merit invoice settings;
+- TUNE/Kissterra network credentials;
+- server-only OpenRouter configuration.
+
+Missing credentials should produce unavailable/empty integration states rather than seeded financial numbers.
+
+## Wise Statement Imports
+
+The current Netherlands Wise Business profile does not expose the required live statement feed, so CSV import is the supported reconciliation path:
+
+- export one statement per currency balance;
+- upload monthly, weekly, or daily depending on the desired cadence;
+- overlapping date ranges are safe because transaction IDs are deduplicated;
+- review unmatched companies/categories and save aliases for future imports.
+
+## Integration Status
+
+| Integration | Current role |
+| --- | --- |
+| Wise | CSV statement import; live balance adapter available when supported |
+| Revolut | Business API adapter prepared; requires account credentials |
+| Slash | Account/transaction adapter prepared; requires API access |
+| TUNE/Kissterra | Partner revenue pulls and reporting windows |
+| Merit | Invoice list/create adapter; local payment state remains independent |
+
+Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
+
+## Verification
+
+```bash
+npm run check
+```
+
+The gate runs TypeScript validation, 13 regression tests, and the production frontend build.
+
+## Deployment
 
 ```bash
 npm run deploy
 ```
 
-Showcase URL:
+This command builds the app, deploys Convex functions using `.env.local`, and publishes the Cloudflare Worker. The current showcase route is `finance.thatcanadian.dev`.
 
-```text
-https://finance.thatcanadian.dev
-```
+Before moving from showcase to production:
 
-The Worker is configured in `wrangler.jsonc`. While the dashboard is still in development/showcase mode, it points at the shared development Convex deployment so uploaded Wise statement rows, provider aliases, revenue runs, and local invoice decisions are visible after refreshes. Switch `CONVEX_URL` to the production Convex deployment only when the app is ready for full production data.
+1. add real user authentication/authorization at the application boundary;
+2. point the Worker at the production Convex deployment;
+3. configure secrets in Cloudflare and Convex rather than local files;
+4. validate each live banking/accounting integration with non-destructive tests;
+5. establish audit, backup, and incident procedures for financial data.
 
-## Convex Backend
+## External Documentation
 
-Convex is configured as the durable dashboard state backend.
-
-```text
-Development Cloud URL: https://fabulous-elephant-597.convex.cloud
-Development HTTP Actions URL: https://fabulous-elephant-597.convex.site
-Production Cloud URL: https://famous-oyster-878.convex.cloud
-```
-
-Push Convex schema/functions to the shared development deployment:
-
-```bash
-npm run convex:dev
-```
-
-The Cloudflare Worker currently uses the development `CONVEX_URL` in `wrangler.jsonc`. The production Convex deployment is `https://famous-oyster-878.convex.cloud`, but it should stay unused until the dashboard is ready for production data.
-
-## What It Does
-
-- Shows cash in accounts, receivables, open balances, payables, profit, and total assets when live or saved data exists.
-- Keeps the overview focused on the six summary cards.
-- Includes separate Wise, Revolut, and Slash operating views.
-- Splits Wise transactions into incoming and outgoing reconciliation tabs.
-- Imports manually downloaded Wise statement CSVs in the Wise tab and stores rows for reconciliation.
-- Adds a sidebar with a separate Revenue page for partner API pulls.
-- Lets saved TUNE/HasOffers revenue partners store the affiliate ID used by the network.
-- Pulls last-week revenue using a Monday-to-Sunday period in the selected timezone, plus last-7-days, this-month, and custom filters.
-- Sends TUNE `hour_offset` from the selected timezone against the partner network timezone.
-- Runs a Cloudflare cron every Monday to pull the previous week and create a Merit invoice for positive live revenue.
-- Supports optional Wise transaction team assignment with saved teams, plus team filters and visible-team totals.
-- Keeps Slash balances, card activity, and cashback tracking on its own page.
-- Suggests company matches from saved aliases.
-- Lets you manually confirm a transaction company and remembers that bank/card name for future auto-matching.
-- Lets you categorize transactions from the Wise table and remembers category aliases for future auto-categorization.
-- Lets you add companies, suppliers, platforms, customers, and invoice-ready company details.
-- Pulls Merit invoices when Merit credentials are configured.
-- Lets you create local sales invoice drafts for money-in Wise transactions and local supplier bill drafts for money-out Wise transactions.
-- Lets you approve or deny invoice matches inside the dashboard.
-- Lets you mark an invoice paid locally in the finance dashboard without marking it paid in Merit. Merit payment status stays independent for the accountant.
-- Persists provider aliases, revenue partners, revenue runs, the selected AI model, created invoices, and uploaded Wise statement rows in Convex on the deployed Worker; local Express development persists the same dashboard state in `.local/finance-dashboard-store.json`.
-- Keeps `OPENROUTER_API_KEY` in the server/Worker runtime only; the key is never stored in Convex or returned by dashboard APIs.
-- Requires the same `CONVEX_SERVICE_TOKEN` runtime secret in Cloudflare and Convex so dashboard state functions cannot be called directly by anonymous clients.
-
-## API Integrations
-
-The server-side integration code is in `server/integrations.ts`.
-
-- Wise: pulls live balances with `WISE_API_TOKEN`, `WISE_PROFILE_ID`, and `WISE_BALANCE_IDS`; transaction rows can be imported from Wise statement CSVs when live balance statements are blocked by Wise.
-- Revolut: prepared for Business API accounts and transaction activity using `REVOLUT_REFRESH_TOKEN`, `REVOLUT_CLIENT_ASSERTION_JWT`, and `REVOLUT_ENVIRONMENT`.
-- Slash: prepared for accounts, transactions, card/account activity, and legal-entity scoped requests using `SLASH_API_KEY` and optional `SLASH_LEGAL_ENTITY_ID`.
-- Partner revenue: prepared for Kissterra through the TUNE Affiliate API using `KISSTERRA_TUNE_NETWORK_ID`, `KISSTERRA_TUNE_API_KEY`, and optional `KISSTERRA_TUNE_API_BASE_URL`.
-- Merit: prepared to list sales invoices and create sales invoices using `MERIT_API_ID`, `MERIT_API_KEY`, and default tax/item settings. The dashboard intentionally does not send Merit payment updates.
-
-Copy `.env.example` to `.env` and fill credentials when ready.
-
-## Wise Statement Imports
-
-Wise confirmed that live balance statement retrieval is not supported for the current Netherlands Wise Business profile. Use Wise statement CSVs instead:
-
-- Preferred cadence: upload one monthly statement CSV per currency balance after month end.
-- Faster cadence: upload custom weekly or daily statement CSVs when reconciliation needs to be fresher than month end.
-- Overlapping periods are safe because rows are deduplicated by Wise transaction id.
-- Upload the CSVs from the Wise page in the dashboard with the **CSV** button.
-
-## Credentials Needed
-
-```bash
-WISE_API_TOKEN=
-WISE_PROFILE_ID=
-WISE_ENVIRONMENT=production
-WISE_BALANCE_IDS=
-
-REVOLUT_ENVIRONMENT=production
-REVOLUT_REFRESH_TOKEN=
-REVOLUT_CLIENT_ASSERTION_JWT=
-
-SLASH_API_KEY=
-SLASH_LEGAL_ENTITY_ID=
-SLASH_BASE_URL=https://api.slash.com
-
-MERIT_API_BASE_URL=https://aktiva.merit.ee/api
-MERIT_GET_INVOICES_PATH=/v1/getinvoices
-MERIT_CREATE_INVOICE_PATH=/v2/sendinvoice
-MERIT_API_ID=
-MERIT_API_KEY=
-MERIT_DEFAULT_TAX_ID=
-MERIT_DEFAULT_ITEM_CODE=SERVICES
-MERIT_DEFAULT_COUNTRY_CODE=CA
-
-REVENUE_TIMEZONE=UTC
-KISSTERRA_TUNE_NETWORK_ID=
-KISSTERRA_TUNE_API_KEY=
-KISSTERRA_TUNE_API_BASE_URL=
-
-OPENROUTER_API_KEY=
-```
-
-## References
-
-- Wise Platform docs: https://docs.wise.com/
-- Revolut Business API docs: https://developer.revolut.com/docs/business/business-api
-- Revolut Business API accounts: https://developer.revolut.com/docs/business/get-accounts
-- Revolut Business API transactions: https://developer.revolut.com/docs/business/get-transactions
-- Slash API docs: https://docs.slash.com/
-- Merit API authentication: https://api.merit.ee/connecting-robots/reference-manual/authentication/
-- Merit sales invoice creation: https://api.merit.ee/connecting-robots/reference-manual/sales-invoices/create-sales-invoice/
-- Merit sales invoice list: https://apidoc.passelimerit.fi/parts/sales-invoices/get-list-of-invoices/
-- TUNE Affiliate API: https://developers.tune.com/affiliate
-- TUNE Affiliate_Report getStats: https://developers.tune.com/affiliate/affiliate_report-getstats/
+- [Wise Platform](https://docs.wise.com/)
+- [Revolut Business API](https://developer.revolut.com/docs/business/business-api)
+- [Slash API](https://docs.slash.com/)
+- [Merit API](https://api.merit.ee/connecting-robots/reference-manual/authentication/)
+- [TUNE Affiliate API](https://developers.tune.com/affiliate)
