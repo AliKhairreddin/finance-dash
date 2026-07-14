@@ -886,7 +886,8 @@ export async function sendRevenueInvoice(
   try {
     liveMeritTaxes = await fetchMeritTaxes();
   } catch (error) {
-    throw new Error("Merit tax rates could not be verified. No invoice was created.", { cause: error });
+    const detail = error instanceof Error ? error.message : "Unknown Merit API error";
+    throw new Error(`Merit tax rates could not be verified (${detail}). No invoice was created.`, { cause: error });
   }
   const selectedTax = liveMeritTaxes.find((tax) => tax.id === payload.taxId);
   if (!selectedTax) throw new Error("The selected Merit tax rate is no longer available.");
