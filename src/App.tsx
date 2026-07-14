@@ -4051,7 +4051,9 @@ function RevenueView({
           <strong>“Send to Merit” creates a real sales invoice in Merit</strong>
           <span>
             Revenue pulls are read-only and never create invoices. Invoice sending is currently{" "}
-            {meritSendReady
+            {meritIntegration?.issue
+              ? `blocked because ${meritIntegration.issue}`
+              : meritSendReady
               ? "enabled; every send requires choosing a Merit tax rate and confirming the external write"
               : meritWriteEnabled
                 ? "enabled, but Merit tax rates could not be loaded—click Sync before sending"

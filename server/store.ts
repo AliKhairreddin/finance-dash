@@ -62,6 +62,7 @@ import {
   fetchTuneRevenue,
   fetchWiseActivity,
   getIntegrationStatus,
+  meritConnectionIssue,
   summarizeWiseStatementIssues,
   wiseStatementIssue
 } from "./integrations";
@@ -100,6 +101,7 @@ let profitDistributionAdjustments: ProfitDistributionAdjustment[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseSyncIssue: string | undefined;
+let meritSyncIssue: string | undefined;
 
 function runtimeAiSettings(): StoredAiSettings {
   return {
@@ -434,7 +436,7 @@ export function getSnapshot(): DashboardSnapshot {
     transactionCategoryRules,
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
-    integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners),
+    integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners, meritSyncIssue),
     metrics,
     profitDistribution: calculateProfitDistribution(matchedTransactions, profitDistributionAdjustments),
     lastSync
@@ -1034,6 +1036,12 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   if (liveMeritTaxes.status === "fulfilled") {
     meritTaxes = liveMeritTaxes.value;
   }
+  meritSyncIssue =
+    merit.status === "rejected"
+      ? meritConnectionIssue(merit.reason)
+      : liveMeritTaxes.status === "rejected"
+        ? meritConnectionIssue(liveMeritTaxes.reason)
+        : undefined;
 
   if (liveSources.size > 0) {
     const existingIds = new Set(transactions.map((transaction) => transaction.id));

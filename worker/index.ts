@@ -385,6 +385,17 @@ function wiseStatementIssue(error: unknown): string {
   return `Wise statement fetch failed: ${message.replace(/\s+/g, " ").slice(0, 240)}`;
 }
 
+function meritConnectionIssue(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown Merit API error";
+  if (/\b401\b/.test(message)) {
+    return "Merit rejected API access (401). Confirm this company has Merit API access on its plan and that these credentials belong to it.";
+  }
+  if (/\b400\b/.test(message)) {
+    return "Merit rejected the API credentials (400). Regenerate the API ID and key in Merit, then update both Worker secrets.";
+  }
+  return `Merit read failed: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+}
+
 function summarizeWiseStatementIssues(issues: string[]): string | undefined {
   if (issues.length === 0) return undefined;
   const uniqueIssues = [...new Set(issues)];
@@ -1271,7 +1282,12 @@ function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
   return [...names].filter(Boolean).sort();
 }
 
-function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
+function integrationStatus(
+  env: Env,
+  wiseActivity?: WiseActivityResult,
+  revenuePartners: RevenuePartner[] = [],
+  meritIssue?: string
+): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
@@ -1346,14 +1362,16 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
       id: "merit" as DataSource,
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "live" : "partial",
+      mode: meritNeeds.length === 0 && !meritIssue ? "live" : "partial",
       message:
         meritNeeds.length === 0
-          ? meritWriteEnabled
-            ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
-            : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch."
+          ? meritIssue ??
+            (meritWriteEnabled
+              ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
+              : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch.")
           : "Add the Merit API ID and API key to enable read-only invoice sync.",
       needs: meritNeeds,
+      issue: meritNeeds.length === 0 ? meritIssue : undefined,
       writeEnabled: meritWriteEnabled
     },
     {
@@ -1452,14 +1470,22 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const [wise, revolut, slash, amex, liveMeritInvoices, meritTaxes] = await Promise.all([
+  const [wise, revolut, slash, amex, meritResults] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchMeritInvoices(env).catch(() => []),
-    fetchMeritTaxes(env).catch(() => [])
+    Promise.allSettled([fetchMeritInvoices(env), fetchMeritTaxes(env)])
   ]);
+  const [meritInvoicesResult, meritTaxesResult] = meritResults;
+  const liveMeritInvoices = meritInvoicesResult.status === "fulfilled" ? meritInvoicesResult.value : [];
+  const meritTaxes = meritTaxesResult.status === "fulfilled" ? meritTaxesResult.value : [];
+  const meritIssue =
+    meritInvoicesResult.status === "rejected"
+      ? meritConnectionIssue(meritInvoicesResult.reason)
+      : meritTaxesResult.status === "rejected"
+        ? meritConnectionIssue(meritTaxesResult.reason)
+        : undefined;
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
   const rawTransactions = mergeById(state.wiseStatementTransactions, [
@@ -1502,7 +1528,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     transactionCategoryRules: state.transactionCategoryRules,
     wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
-    integrationStatus: integrationStatus(env, wise, state.revenuePartners),
+    integrationStatus: integrationStatus(env, wise, state.revenuePartners, meritIssue),
     metrics: calculateMetrics(accounts, [], [], [], []),
     profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()

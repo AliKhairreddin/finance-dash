@@ -82,6 +82,17 @@ export function summarizeWiseStatementIssues(issues: string[]): string | undefin
   return `${uniqueIssues[0]}${suffix}`;
 }
 
+export function meritConnectionIssue(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown Merit API error";
+  if (/\b401\b/.test(message)) {
+    return "Merit rejected API access (401). Confirm this company has Merit API access on its plan and that these credentials belong to it.";
+  }
+  if (/\b400\b/.test(message)) {
+    return "Merit rejected the API credentials (400). Regenerate the API ID and key in Merit, then update both Worker secrets.";
+  }
+  return `Merit read failed: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
+}
+
 function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
   const names = new Set<string>();
   for (const partner of revenuePartners.filter((item) => item.enabled)) {
@@ -91,7 +102,11 @@ function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
   return [...names].filter(Boolean).sort();
 }
 
-export function getIntegrationStatus(wiseIssue?: string, revenuePartners: RevenuePartner[] = []): IntegrationStatus[] {
+export function getIntegrationStatus(
+  wiseIssue?: string,
+  revenuePartners: RevenuePartner[] = [],
+  meritIssue?: string
+): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !process.env[name]);
   if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
@@ -165,14 +180,16 @@ export function getIntegrationStatus(wiseIssue?: string, revenuePartners: Revenu
       id: "merit",
       label: "Merit",
       configured: meritNeeds.length === 0,
-      mode: meritNeeds.length === 0 ? "live" : "partial",
+      mode: meritNeeds.length === 0 && !meritIssue ? "live" : "partial",
       message:
         meritNeeds.length === 0
-          ? meritWriteEnabled
-            ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
-            : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch."
+          ? meritIssue ??
+            (meritWriteEnabled
+              ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
+              : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch.")
           : "Add the Merit API ID and API key to enable read-only invoice sync.",
       needs: meritNeeds,
+      issue: meritNeeds.length === 0 ? meritIssue : undefined,
       writeEnabled: meritWriteEnabled
     },
     {
