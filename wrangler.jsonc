@@ -23,6 +23,8 @@
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
     "MERIT_CREATE_INVOICE_PATH": "/v2/sendinvoice",
+    // Hard safety gate. Keep false until invoice payloads have been reviewed and a live write is intentionally approved.
+    "MERIT_WRITES_ENABLED": "false",
     "REVENUE_TIMEZONE": "UTC"
   },
   "triggers": {

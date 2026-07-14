@@ -29,6 +29,21 @@ const revolutBaseUrl =
     : "https://b2b.revolut.com/api/1.0";
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
+function meritWritesEnabled(): boolean {
+  return process.env.MERIT_WRITES_ENABLED === "true";
+}
+
+export function assertMeritWriteConfiguration(): void {
+  if (!meritWritesEnabled()) {
+    throw new Error("Merit invoice sending is disabled by the deployment safety switch.");
+  }
+
+  const missing = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    throw new Error(`Merit invoice sending is missing ${missing.join(", ")}.`);
+  }
+}
+
 export interface WiseActivityResult {
   accounts: AccountBalance[];
   transactions: Transaction[];
@@ -92,7 +107,8 @@ export function getIntegrationStatus(wiseIssue?: string, revenuePartners: Revenu
     "AMEX_ACCOUNT_PATH_TEMPLATE",
     "AMEX_TRANSACTIONS_PATH_TEMPLATE"
   ].filter((name) => !process.env[name]);
-  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
+  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !process.env[name]);
+  const meritWriteEnabled = meritWritesEnabled();
   const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
   const tuneNeeds = revenueEnvNames.filter((name) => !process.env[name]);
   const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
@@ -151,9 +167,12 @@ export function getIntegrationStatus(wiseIssue?: string, revenuePartners: Revenu
       mode: meritNeeds.length === 0 ? "live" : "partial",
       message:
         meritNeeds.length === 0
-          ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
-          : "Merit invoices stay empty until API credentials and default tax configuration are added.",
-      needs: meritNeeds
+          ? meritWriteEnabled
+            ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
+            : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch."
+          : "Add the Merit API ID and API key to enable read-only invoice sync.",
+      needs: meritNeeds,
+      writeEnabled: meritWriteEnabled
     },
     {
       id: "tune",
@@ -164,7 +183,7 @@ export function getIntegrationStatus(wiseIssue?: string, revenuePartners: Revenu
         enabledRevenuePartnerCount === 0
           ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
-            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
@@ -715,9 +734,9 @@ export async function fetchMeritInvoices(): Promise<Invoice[]> {
   }));
 }
 
-export async function createMeritInvoice(payload: CreateInvoicePayload): Promise<Invoice | undefined> {
-  const taxId = process.env.MERIT_DEFAULT_TAX_ID;
-  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY || !taxId) return undefined;
+export async function createMeritInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
+  assertMeritWriteConfiguration();
+  const taxId = process.env.MERIT_DEFAULT_TAX_ID!;
 
   const invoiceNo = `FD-${Date.now()}`;
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(meritCreateInvoicePath, {

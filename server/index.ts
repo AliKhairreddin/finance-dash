@@ -13,6 +13,7 @@ import type {
   MatchTransactionPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SendRevenueInvoicePayload,
   SyncRevenuePayload,
   UpdateTransactionCategoryPayload
 } from "../shared/types";
@@ -33,6 +34,7 @@ import {
   runAiPrompt,
   saveAiSettings,
   saveProfitDistributionAdjustment,
+  sendRevenueInvoice,
   setInvoiceApproval,
   syncExternalActivity,
   syncRevenue,
@@ -87,6 +89,14 @@ app.post("/api/wise/card-holder-team", async (request, response, next) => {
 app.post("/api/revenue/sync", async (request, response, next) => {
   try {
     response.json(await syncRevenue(request.body as SyncRevenuePayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/revenue/runs/:runId/merit-invoice", async (request, response, next) => {
+  try {
+    response.json(await sendRevenueInvoice(request.params.runId, request.body as SendRevenueInvoicePayload));
   } catch (error) {
     next(error);
   }

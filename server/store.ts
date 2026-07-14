@@ -22,6 +22,7 @@ import type {
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SendRevenueInvoicePayload,
   StoredAiSettings,
   SyncRevenuePayload,
   Team,
@@ -50,6 +51,7 @@ import {
 } from "../shared/distribution";
 import { calculateMetrics } from "./calculations";
 import {
+  assertMeritWriteConfiguration,
   createMeritInvoice,
   fetchAmexActivity,
   fetchMeritInvoices,
@@ -823,63 +825,12 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
       periodEnd: payload.periodEnd,
       timezone: payload.timezone || partner.timezone || process.env.REVENUE_TIMEZONE || "UTC"
     });
-    const existingInvoiceRun = revenueRuns.find(
-      (run) =>
-        run.partnerId === partner.id &&
-        run.periodStart === period.periodStart &&
-        run.periodEnd === period.periodEnd &&
-        (run.status === "invoicing" || run.status === "invoiced")
-    );
-    if (payload.createInvoices && existingInvoiceRun) continue;
-
     try {
       const run: RevenueRun = {
         ...(await fetchTuneRevenue(partner, period)),
         ...(partner.teamId ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId } : {})
       };
-      if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
-        const concurrentReservation = revenueRuns.find(
-          (item) =>
-            item.partnerId === partner.id &&
-            item.periodStart === period.periodStart &&
-            item.periodEnd === period.periodEnd &&
-            (item.status === "invoicing" || item.status === "invoiced")
-        );
-        if (concurrentReservation) continue;
-
-        const reservation: RevenueRun = { ...run, status: "invoicing", error: "Merit invoice creation in progress" };
-        revenueRuns = [reservation, ...revenueRuns.filter((item) => item.id !== reservation.id)].slice(0, 250);
-        await persist();
-
-        let invoice: Invoice | undefined;
-        try {
-          invoice = await createMeritInvoice({
-            documentType: "sales_invoice",
-            customerName: partner.meritCustomerName || partner.name,
-            amount: run.revenue,
-            currency: run.currency,
-            dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-            description: `${partner.revenueCategory || "Revenue"} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
-          });
-        } catch (error) {
-          const needsReview: RevenueRun = {
-            ...reservation,
-            error: `Merit invoice outcome needs review: ${error instanceof Error ? error.message : "Unknown error"}`
-          };
-          revenueRuns = [needsReview, ...revenueRuns.filter((item) => item.id !== needsReview.id)].slice(0, 250);
-          await persist();
-          continue;
-        }
-
-        const finalizedRun: RevenueRun = invoice
-          ? { ...run, status: "invoiced", invoiceId: invoice.id, externalInvoiceId: invoice.externalId }
-          : { ...run, status: "pulled", error: "Revenue pulled, but Merit invoice credentials are not configured" };
-        if (invoice) invoices = [invoice, ...invoices.filter((item) => item.id !== invoice.id)];
-        revenueRuns = [finalizedRun, ...revenueRuns.filter((item) => item.id !== finalizedRun.id)].slice(0, 250);
-        await persist();
-      } else {
-        nextRuns.push(run);
-      }
+      nextRuns.push(run);
     } catch (error) {
       nextRuns.push({
         id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}-${Date.now()}`,
@@ -913,6 +864,77 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
   const nextRunIds = new Set(safeNextRuns.map((run) => run.id));
   revenueRuns = [...safeNextRuns, ...revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
   lastSync = new Date().toISOString();
+  await persist();
+  return getSnapshot();
+}
+
+export async function sendRevenueInvoice(
+  runId: string,
+  payload: SendRevenueInvoicePayload
+): Promise<DashboardSnapshot> {
+  if (payload.confirmation !== "SEND_TO_MERIT") {
+    throw new Error("Explicit SEND_TO_MERIT confirmation is required.");
+  }
+  assertMeritWriteConfiguration();
+
+  const run = revenueRuns.find((item) => item.id === runId);
+  if (!run) throw new Error("Revenue run not found.");
+  if (run.status !== "pulled" || run.revenue <= 0) {
+    throw new Error("Only a positive, pulled revenue run can be sent to Merit.");
+  }
+
+  const partner = revenuePartners.find((item) => item.id === run.partnerId);
+  if (!partner) throw new Error("The revenue client for this run no longer exists.");
+  if (
+    revenueRuns.some(
+      (item) =>
+        item.id !== run.id &&
+        item.partnerId === run.partnerId &&
+        item.periodStart === run.periodStart &&
+        item.periodEnd === run.periodEnd &&
+        (item.status === "invoicing" || item.status === "invoiced")
+    )
+  ) {
+    throw new Error("This revenue period already has a Merit invoice or an invoice creation in progress.");
+  }
+
+  const reservation: RevenueRun = {
+    ...run,
+    status: "invoicing",
+    error: "Merit invoice creation in progress"
+  };
+  revenueRuns = [reservation, ...revenueRuns.filter((item) => item.id !== reservation.id)].slice(0, 250);
+  await persist();
+
+  const { error: _previousError, ...runWithoutError } = run;
+  try {
+    const invoice = await createMeritInvoice({
+      providerId: run.providerId,
+      documentType: "sales_invoice",
+      customerName: partner.meritCustomerName || partner.name,
+      amount: run.revenue,
+      currency: run.currency,
+      dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
+      description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
+    });
+    const finalizedRun: RevenueRun = {
+      ...runWithoutError,
+      status: "invoiced",
+      invoiceId: invoice.id,
+      externalInvoiceId: invoice.externalId
+    };
+    invoices = [invoice, ...invoices.filter((item) => item.id !== invoice.id)];
+    revenueRuns = [finalizedRun, ...revenueRuns.filter((item) => item.id !== finalizedRun.id)].slice(0, 250);
+  } catch (error) {
+    const needsReview: RevenueRun = {
+      ...reservation,
+      error: `Merit invoice outcome needs review before retrying: ${error instanceof Error ? error.message : "Unknown error"}`
+    };
+    revenueRuns = [needsReview, ...revenueRuns.filter((item) => item.id !== needsReview.id)].slice(0, 250);
+    await persist();
+    throw error;
+  }
+
   await persist();
   return getSnapshot();
 }

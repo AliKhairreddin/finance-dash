@@ -220,6 +220,7 @@ export interface IntegrationStatus {
   message: string;
   needs: string[];
   issue?: string;
+  writeEnabled?: boolean;
 }
 
 export interface Metrics {
@@ -444,7 +445,10 @@ export interface SyncRevenuePayload {
   periodStart?: string;
   periodEnd?: string;
   timezone?: string;
-  createInvoices?: boolean;
+}
+
+export interface SendRevenueInvoicePayload {
+  confirmation: "SEND_TO_MERIT";
 }
 
 export interface SaveAiSettingsPayload {

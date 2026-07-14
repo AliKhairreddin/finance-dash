@@ -23,6 +23,7 @@ import type {
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SendRevenueInvoicePayload,
   StoredAiSettings,
   SyncRevenuePayload,
   Team,
@@ -108,6 +109,7 @@ interface Env {
   MERIT_GET_INVOICES_PATH?: string;
   MERIT_CREATE_INVOICE_PATH?: string;
   MERIT_API_KEY?: string;
+  MERIT_WRITES_ENABLED?: string;
   MERIT_DEFAULT_TAX_ID?: string;
   MERIT_DEFAULT_ITEM_CODE?: string;
   MERIT_DEFAULT_COUNTRY_CODE?: string;
@@ -151,6 +153,23 @@ function cleanOptional(value?: string): string | undefined {
 
 function cleanOptionalNumber(value?: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function meritWritesEnabled(env: Env): boolean {
+  return env.MERIT_WRITES_ENABLED === "true";
+}
+
+function assertMeritWriteConfiguration(env: Env): void {
+  if (!meritWritesEnabled(env)) {
+    throw new ApiError(409, "Merit invoice sending is disabled by the deployment safety switch.");
+  }
+
+  const missing = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter(
+    (name) => !env[name as keyof Env]
+  );
+  if (missing.length > 0) {
+    throw new ApiError(503, `Merit invoice sending is missing ${missing.join(", ")}.`);
+  }
 }
 
 function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload): Pick<
@@ -974,8 +993,8 @@ async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
   }));
 }
 
-async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice | undefined> {
-  if (!env.MERIT_API_ID || !env.MERIT_API_KEY || !env.MERIT_DEFAULT_TAX_ID) return undefined;
+export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
+  assertMeritWriteConfiguration(env);
 
   const invoiceNo = `FD-${Date.now()}`;
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(
@@ -1001,12 +1020,12 @@ async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Prom
           },
           Quantity: 1,
           Price: payload.amount,
-          TaxId: env.MERIT_DEFAULT_TAX_ID
+          TaxId: env.MERIT_DEFAULT_TAX_ID!
         }
       ],
       TaxAmount: [
         {
-          TaxId: env.MERIT_DEFAULT_TAX_ID,
+          TaxId: env.MERIT_DEFAULT_TAX_ID!,
           Amount: 0
         }
       ],
@@ -1241,7 +1260,8 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
     "AMEX_TRANSACTIONS_PATH_TEMPLATE"
   ].filter((name) => !env[name as keyof Env]);
 
-  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !env[name as keyof Env]);
+  const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const meritWriteEnabled = meritWritesEnabled(env);
   const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
   const tuneNeeds = revenueEnvNames.filter((name) => !envString(env, name));
   const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
@@ -1300,9 +1320,12 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
       mode: meritNeeds.length === 0 ? "live" : "partial",
       message:
         meritNeeds.length === 0
-          ? "Ready to pull Merit invoices and create new Merit invoices. Local paid status never updates Merit."
-          : "Merit invoices stay empty until API credentials and default tax configuration are added.",
-      needs: meritNeeds
+          ? meritWriteEnabled
+            ? "Merit invoice reads are connected. Explicitly confirmed invoice sending is enabled."
+            : "Merit invoice reads are connected. Invoice sending is disabled by the deployment safety switch."
+          : "Add the Merit API ID and API key to enable read-only invoice sync.",
+      needs: meritNeeds,
+      writeEnabled: meritWriteEnabled
     },
     {
       id: "tune" as DataSource,
@@ -1313,7 +1336,7 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
         enabledRevenuePartnerCount === 0
           ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
-            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers and generate Merit invoices."
+            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     }
@@ -1933,47 +1956,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
           ? { teamName: initialState.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
           : {})
       };
-      if (payload.createInvoices && run.revenue > 0 && run.status === "pulled") {
-        const reservation: RevenueRun = { ...run, status: "invoicing", error: "Merit invoice creation in progress" };
-        if (!(await reserveRevenueInvoice(env, reservation))) continue;
-
-        let invoice: Invoice | undefined;
-        try {
-          invoice = await createMeritInvoice(env, {
-            documentType: "sales_invoice",
-            customerName: partner.meritCustomerName || partner.name,
-            amount: run.revenue,
-            currency: run.currency,
-            dueDate: calculateInvoiceDueDate(period.periodEnd, partner.invoiceDueDays),
-            description: `${partner.revenueCategory || "Revenue"} from ${partner.name} for ${period.periodStart} to ${period.periodEnd} (${period.timezone})`
-          });
-        } catch (error) {
-          await finalizeRevenueInvoice(env, {
-            ...reservation,
-            error: `Merit invoice outcome needs review: ${error instanceof Error ? error.message : "Unknown error"}`
-          });
-          continue;
-        }
-
-        await finalizeRevenueInvoice(
-          env,
-          invoice
-            ? {
-                ...run,
-                status: "invoiced",
-                invoiceId: invoice.id,
-                externalInvoiceId: invoice.externalId
-              }
-            : {
-                ...run,
-                status: "pulled",
-                error: "Revenue pulled, but Merit invoice credentials are not configured"
-              },
-          invoice
-        );
-      } else {
-        nextRuns.push(run);
-      }
+      nextRuns.push(run);
     } catch (error) {
       if (error instanceof ApiError) throw error;
       nextRuns.push({
@@ -2011,6 +1994,67 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
     latestState.revenueRuns = [...safeNextRuns, ...latestState.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
     await savePersisted(env, latestState);
   }
+  return getSnapshot(env);
+}
+
+async function sendRevenueInvoice(
+  env: Env,
+  runId: string,
+  payload: SendRevenueInvoicePayload
+): Promise<DashboardSnapshot> {
+  if (payload.confirmation !== "SEND_TO_MERIT") {
+    throw new ApiError(400, "Explicit SEND_TO_MERIT confirmation is required.");
+  }
+  assertMeritWriteConfiguration(env);
+
+  const state = await loadPersisted(env);
+  const run = state.revenueRuns.find((item) => item.id === runId);
+  if (!run) throw new ApiError(404, "Revenue run not found.");
+  if (run.status !== "pulled" || run.revenue <= 0) {
+    throw new ApiError(409, "Only a positive, pulled revenue run can be sent to Merit.");
+  }
+
+  const partner = state.revenuePartners.find((item) => item.id === run.partnerId);
+  if (!partner) throw new ApiError(409, "The revenue client for this run no longer exists.");
+
+  const reservation: RevenueRun = {
+    ...run,
+    status: "invoicing",
+    error: "Merit invoice creation in progress"
+  };
+  if (!(await reserveRevenueInvoice(env, reservation))) {
+    throw new ApiError(409, "This revenue period already has a Merit invoice or an invoice creation in progress.");
+  }
+
+  const { error: _previousError, ...runWithoutError } = run;
+  try {
+    const invoice = await createMeritInvoice(env, {
+      providerId: run.providerId,
+      documentType: "sales_invoice",
+      customerName: partner.meritCustomerName || partner.name,
+      amount: run.revenue,
+      currency: run.currency,
+      dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
+      description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
+    });
+    await finalizeRevenueInvoice(
+      env,
+      {
+        ...runWithoutError,
+        status: "invoiced",
+        invoiceId: invoice.id,
+        externalInvoiceId: invoice.externalId
+      },
+      invoice
+    );
+  } catch (error) {
+    await finalizeRevenueInvoice(env, {
+      ...reservation,
+      error: `Merit invoice outcome needs review before retrying: ${error instanceof Error ? error.message : "Unknown error"}`
+    });
+    throw error;
+  }
+
   return getSnapshot(env);
 }
 
@@ -2080,6 +2124,17 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/revenue/sync" && request.method === "POST") {
       return json(await syncRevenue(env, (await request.json()) as SyncRevenuePayload));
+    }
+
+    const revenueInvoiceMatch = url.pathname.match(/^\/api\/revenue\/runs\/([^/]+)\/merit-invoice$/);
+    if (revenueInvoiceMatch && request.method === "POST") {
+      return json(
+        await sendRevenueInvoice(
+          env,
+          decodeURIComponent(revenueInvoiceMatch[1]),
+          (await request.json()) as SendRevenueInvoicePayload
+        )
+      );
     }
 
     if (url.pathname === "/api/providers" && request.method === "POST") {
@@ -2180,8 +2235,7 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     await syncRevenue(env, {
       periodPreset: "last-week",
-      timezone: env.REVENUE_TIMEZONE || "UTC",
-      createInvoices: true
+      timezone: env.REVENUE_TIMEZONE || "UTC"
     });
   }
 };

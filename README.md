@@ -26,7 +26,7 @@ The system follows three rules:
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
 - Pull partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
-- Reserve scheduled invoice creation atomically so retries cannot create duplicate invoices.
+- Create a Merit invoice only through a separate, explicitly confirmed dashboard action.
 - Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
 - Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
@@ -64,13 +64,13 @@ Counterparty and category aliases are created from reviewed matches. Deleting a 
 
 Convex state includes revision-aware write protection so an older browser snapshot cannot silently overwrite newer decisions.
 
-### Atomic Invoice Reservation
+### Explicit Merit Writes
 
-Scheduled partner-revenue invoicing reserves an invoice operation before calling the external adapter, then records finalization separately. This keeps retries granular and prevents duplicate work.
+Revenue pulls and scheduled syncs never create Merit invoices. The separate “Send to Merit” action warns that it creates a real external accounting record, requires an explicit confirmation, and reserves the operation atomically before calling Merit. `MERIT_WRITES_ENABLED` is a hard deployment gate and defaults to `false`.
 
 ### Secret Boundaries
 
-Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker environment. `OPENROUTER_API_KEY` is never stored in Convex or returned to the browser. Calls into Convex require a matching `CONVEX_SERVICE_TOKEN`.
+Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker environment. Merit API ID/key and `OPENROUTER_API_KEY` are never stored in Convex or returned to the browser. Calls into Convex require a matching `CONVEX_SERVICE_TOKEN`.
 
 ### Regression Coverage
 
@@ -142,7 +142,7 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
-| Merit | Invoice list/create adapter; local payment state remains independent |
+| Merit | Read-only invoice sync; explicit invoice creation is guarded by confirmation and a disabled-by-default deployment switch |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
 
