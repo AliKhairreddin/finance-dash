@@ -64,6 +64,7 @@ import type {
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   InvoiceDocumentType,
+  MeritTax,
   ProfitDistributionAdjustment,
   ProfitDistributionBucket,
   ProfitDistributionPartnerId,
@@ -788,13 +789,13 @@ function App() {
     setNotice("Revenue pulled. Nothing was sent to Merit.");
   }
 
-  async function sendRevenueInvoice(runId: string) {
+  async function sendRevenueInvoice(runId: string, taxId: string) {
     setNotice(null);
     setError(null);
     const response = await fetch(`${apiBase}/revenue/runs/${encodeURIComponent(runId)}/merit-invoice`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmation: "SEND_TO_MERIT" })
+      body: JSON.stringify({ confirmation: "SEND_TO_MERIT", taxId })
     });
     if (!response.ok) {
       const body = await response.json();
@@ -3899,7 +3900,7 @@ function RevenueView({
 }: {
   dashboard: DashboardSnapshot;
   onSyncRevenue: (payload: SyncRevenuePayload) => Promise<void>;
-  onSendRevenueInvoice: (runId: string) => Promise<void>;
+  onSendRevenueInvoice: (runId: string, taxId: string) => Promise<void>;
 }) {
   const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
   const [partnerId, setPartnerId] = useState("all");
@@ -3949,6 +3950,7 @@ function RevenueView({
   );
   const meritIntegration = dashboard.integrationStatus.find((integration) => integration.id === "merit");
   const meritWriteEnabled = meritIntegration?.writeEnabled === true;
+  const meritSendReady = meritWriteEnabled && dashboard.meritTaxes.length > 0;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -4043,12 +4045,17 @@ function RevenueView({
         </Button>
       </form>
 
-      <div className={`merit-write-warning ${meritWriteEnabled ? "" : "disabled"}`}>
+      <div className={`merit-write-warning ${meritSendReady ? "" : "disabled"}`}>
         <CircleAlert size={19} aria-hidden="true" />
         <div>
           <strong>“Send to Merit” creates a real sales invoice in Merit</strong>
           <span>
-            Revenue pulls are read-only and never create invoices. Invoice sending is currently {meritWriteEnabled ? "enabled and always requires confirmation" : "disabled by the deployment safety switch"}.
+            Revenue pulls are read-only and never create invoices. Invoice sending is currently{" "}
+            {meritSendReady
+              ? "enabled; every send requires choosing a Merit tax rate and confirming the external write"
+              : meritWriteEnabled
+                ? "enabled, but Merit tax rates could not be loaded—click Sync before sending"
+                : "disabled by the deployment safety switch"}.
           </span>
         </div>
       </div>
@@ -4122,11 +4129,13 @@ function RevenueView({
                     {run.status === "pulled" && run.revenue > 0 && !run.invoiceId ? (
                       <Button
                         className="icon-text-button"
-                        disabled={!meritWriteEnabled}
+                        disabled={!meritSendReady}
                         title={
-                          meritWriteEnabled
+                          meritSendReady
                             ? "Review and create this sales invoice in Merit"
-                            : "Invoice sending is disabled by the deployment safety switch"
+                            : meritWriteEnabled
+                              ? "Sync the dashboard to load Merit tax rates before sending"
+                              : "Invoice sending is disabled by the deployment safety switch"
                         }
                         onClick={() => setMeritInvoiceTarget(run)}
                       >
@@ -4150,9 +4159,10 @@ function RevenueView({
       {meritInvoiceTarget && (
         <MeritInvoiceDialog
           run={meritInvoiceTarget}
+          taxes={dashboard.meritTaxes}
           onClose={() => setMeritInvoiceTarget(null)}
-          onConfirm={async () => {
-            await onSendRevenueInvoice(meritInvoiceTarget.id);
+          onConfirm={async (taxId) => {
+            await onSendRevenueInvoice(meritInvoiceTarget.id, taxId);
             setMeritInvoiceTarget(null);
           }}
         />
@@ -4163,24 +4173,29 @@ function RevenueView({
 
 function MeritInvoiceDialog({
   run,
+  taxes,
   onClose,
   onConfirm
 }: {
   run: RevenueRun;
+  taxes: MeritTax[];
   onClose: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (taxId: string) => Promise<void>;
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
+  const [taxId, setTaxId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedTax = taxes.find((tax) => tax.id === taxId);
+  const taxAmount = selectedTax ? Number(((run.revenue * selectedTax.taxPct) / 100).toFixed(2)) : 0;
 
   async function handleConfirm(event: FormEvent) {
     event.preventDefault();
-    if (!acknowledged) return;
+    if (!acknowledged || !taxId) return;
     setSubmitting(true);
     setError(null);
     try {
-      await onConfirm();
+      await onConfirm(taxId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invoice could not be sent to Merit");
     } finally {
@@ -4205,8 +4220,22 @@ function MeritInvoiceDialog({
           <h2 id="send-merit-invoice-title">Create this invoice in Merit?</h2>
         </div>
         <p className="confirmation-copy">
-          This action creates a real {money(run.revenue, run.currency)} sales invoice for {run.partnerName} in Merit. It writes outside this dashboard and cannot be undone here. It does not email the invoice.
+          This action sends a real sales invoice for {run.partnerName} into Merit. The net amount is {money(run.revenue, run.currency)}
+          {selectedTax ? `, tax is ${money(taxAmount, run.currency)}, and the total is ${money(run.revenue + taxAmount, run.currency)}` : ""}. It writes outside this dashboard and cannot be undone here. It does not email the invoice.
         </p>
+        <label>
+          Merit tax rate
+          <NativeSelect value={taxId} onChange={(event) => setTaxId(event.target.value)}>
+            <NativeSelectOption value="" disabled>
+              Choose the tax rate for this invoice
+            </NativeSelectOption>
+            {taxes.map((tax) => (
+              <NativeSelectOption key={tax.id} value={tax.id}>
+                {tax.name} · {tax.taxPct}% ({tax.code})
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
         <label className="merit-confirmation-check">
           <Checkbox checked={acknowledged} onCheckedChange={(checked) => setAcknowledged(checked === true)} />
           I understand this creates an invoice in Merit.
@@ -4216,7 +4245,7 @@ function MeritInvoiceDialog({
           <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
             Cancel
           </Button>
-          <Button type="submit" className="destructive-button" disabled={submitting || !acknowledged}>
+          <Button type="submit" className="destructive-button" disabled={submitting || !acknowledged || !taxId}>
             {submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />}
             Create in Merit
           </Button>
@@ -4761,6 +4790,7 @@ function SettingsView({
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
+  const meritIntegration = dashboard.integrationStatus.find((integration) => integration.id === "merit");
   const initialModelIsPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
   const [modelChoice, setModelChoice] = useState(initialModelIsPreset ? dashboard.aiSettings.model : "custom");
   const [customModel, setCustomModel] = useState(initialModelIsPreset ? "" : dashboard.aiSettings.model);
@@ -5061,7 +5091,10 @@ function SettingsView({
           <strong>Integration shape</strong>
           <span>
             Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE without writing to Merit. Only the
-            separately confirmed “Send to Merit” action creates an invoice, and that action is currently disabled by the deployment safety switch.
+            separately confirmed “Send to Merit” action creates an invoice. That action is currently{" "}
+            {meritIntegration?.writeEnabled
+              ? "enabled and requires both a Merit tax selection and explicit confirmation"
+              : "disabled by the deployment safety switch"}.
             Marking paid here never marks paid in Merit.
           </span>
         </div>

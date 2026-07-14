@@ -15,6 +15,7 @@ import type {
   ImportWiseStatementSummary,
   IntegrationStatus,
   Invoice,
+  MeritTax,
   MatchTransactionPayload,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
@@ -110,7 +111,6 @@ interface Env {
   MERIT_CREATE_INVOICE_PATH?: string;
   MERIT_API_KEY?: string;
   MERIT_WRITES_ENABLED?: string;
-  MERIT_DEFAULT_TAX_ID?: string;
   MERIT_DEFAULT_ITEM_CODE?: string;
   MERIT_DEFAULT_COUNTRY_CODE?: string;
   REVENUE_TIMEZONE?: string;
@@ -164,9 +164,7 @@ function assertMeritWriteConfiguration(env: Env): void {
     throw new ApiError(409, "Merit invoice sending is disabled by the deployment safety switch.");
   }
 
-  const missing = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter(
-    (name) => !env[name as keyof Env]
-  );
+  const missing = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
   if (missing.length > 0) {
     throw new ApiError(503, `Merit invoice sending is missing ${missing.join(", ")}.`);
   }
@@ -914,6 +912,12 @@ function meritDate(value: string): string {
   return value.replace(/\D/g, "").slice(0, 8);
 }
 
+function meritItemCode(env: Env, tax: MeritTax): string {
+  const prefix = (env.MERIT_DEFAULT_ITEM_CODE || "SERVICES").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "SERVICES";
+  const taxCode = tax.code.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || String(tax.taxPct).replace(/\D/g, "");
+  return `${prefix}-${taxCode}`.slice(0, 20);
+}
+
 function base64(bytes: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(bytes)));
 }
@@ -993,8 +997,33 @@ async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
   }));
 }
 
-export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
+async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return [];
+
+  const response = await fetchMeritJson<
+    Array<{
+      Id?: string;
+      Code?: string;
+      Name?: string;
+      NameEN?: string;
+      TaxPct?: number;
+    }>
+  >(env, "/v1/gettaxes", {});
+
+  return response
+    .filter((tax) => tax.Id && Number.isFinite(Number(tax.TaxPct)))
+    .map((tax) => ({
+      id: tax.Id!,
+      code: tax.Code?.trim() || "VAT",
+      name: tax.NameEN?.trim() || tax.Name?.trim() || tax.Code?.trim() || "Merit tax",
+      taxPct: Number(tax.TaxPct)
+    }))
+    .sort((left, right) => left.taxPct - right.taxPct || left.name.localeCompare(right.name));
+}
+
+export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload, tax: MeritTax): Promise<Invoice> {
   assertMeritWriteConfiguration(env);
+  const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
 
   const invoiceNo = `FD-${Date.now()}`;
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(
@@ -1014,19 +1043,19 @@ export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload
       InvoiceRow: [
         {
           Item: {
-            Code: env.MERIT_DEFAULT_ITEM_CODE || "SERVICES",
+            Code: meritItemCode(env, tax),
             Description: payload.description.slice(0, 150),
             Type: 2
           },
           Quantity: 1,
           Price: payload.amount,
-          TaxId: env.MERIT_DEFAULT_TAX_ID!
+          TaxId: tax.id
         }
       ],
       TaxAmount: [
         {
-          TaxId: env.MERIT_DEFAULT_TAX_ID!,
-          Amount: 0
+          TaxId: tax.id,
+          Amount: taxAmount
         }
       ],
       TotalAmount: payload.amount,
@@ -1261,7 +1290,7 @@ function integrationStatus(env: Env, wiseActivity?: WiseActivityResult, revenueP
   ].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
-  const meritWriteEnabled = meritWritesEnabled(env);
+  const meritWriteEnabled = meritWritesEnabled(env) && meritNeeds.length === 0;
   const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
   const tuneNeeds = revenueEnvNames.filter((name) => !envString(env, name));
   const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
@@ -1423,12 +1452,13 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  const [wise, revolut, slash, amex, liveMeritInvoices] = await Promise.all([
+  const [wise, revolut, slash, amex, liveMeritInvoices, meritTaxes] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchMeritInvoices(env).catch(() => [])
+    fetchMeritInvoices(env).catch(() => []),
+    fetchMeritTaxes(env).catch(() => [])
   ]);
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
@@ -1468,6 +1498,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     aiSettings: publicAiSettings(runtimeAiSettings(env, state.aiSettings)),
     transactions,
     invoices,
+    meritTaxes,
     transactionCategoryRules: state.transactionCategoryRules,
     wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
@@ -2006,6 +2037,16 @@ async function sendRevenueInvoice(
     throw new ApiError(400, "Explicit SEND_TO_MERIT confirmation is required.");
   }
   assertMeritWriteConfiguration(env);
+  if (!payload.taxId?.trim()) throw new ApiError(400, "Choose a Merit tax rate before creating the invoice.");
+
+  let meritTaxes: MeritTax[];
+  try {
+    meritTaxes = await fetchMeritTaxes(env);
+  } catch (error) {
+    throw new ApiError(502, "Merit tax rates could not be verified. No invoice was created.", { cause: error });
+  }
+  const selectedTax = meritTaxes.find((tax) => tax.id === payload.taxId);
+  if (!selectedTax) throw new ApiError(400, "The selected Merit tax rate is no longer available.");
 
   const state = await loadPersisted(env);
   const run = state.revenueRuns.find((item) => item.id === runId);
@@ -2028,15 +2069,19 @@ async function sendRevenueInvoice(
 
   const { error: _previousError, ...runWithoutError } = run;
   try {
-    const invoice = await createMeritInvoice(env, {
-      providerId: run.providerId,
-      documentType: "sales_invoice",
-      customerName: partner.meritCustomerName || partner.name,
-      amount: run.revenue,
-      currency: run.currency,
-      dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
-      description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
-    });
+    const invoice = await createMeritInvoice(
+      env,
+      {
+        providerId: run.providerId,
+        documentType: "sales_invoice",
+        customerName: partner.meritCustomerName || partner.name,
+        amount: run.revenue,
+        currency: run.currency,
+        dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
+        description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
+      },
+      selectedTax
+    );
     await finalizeRevenueInvoice(
       env,
       {

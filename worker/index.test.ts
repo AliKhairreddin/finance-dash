@@ -49,7 +49,6 @@ test("Merit invoice creation never calls the API while writes are disabled", asy
           {
             MERIT_API_ID: "api-id",
             MERIT_API_KEY: "api-key",
-            MERIT_DEFAULT_TAX_ID: "tax-id",
             MERIT_WRITES_ENABLED: "false"
           } as never,
           {
@@ -59,11 +58,49 @@ test("Merit invoice creation never calls the API while writes are disabled", asy
             currency: "USD",
             dueDate: "2026-07-31",
             description: "This request must never leave the Worker"
-          }
+          },
+          { id: "tax-id", code: "VAT0", name: "Zero VAT", taxPct: 0 }
         ),
       /disabled by the deployment safety switch/
     );
     assert.equal(meritRequests, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit invoice creation uses the explicitly selected tax", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ InvoiceId: "invoice-123" });
+  };
+
+  try {
+    const invoice = await createMeritInvoice(
+      {
+        MERIT_API_ID: "api-id",
+        MERIT_API_KEY: "api-key",
+        MERIT_WRITES_ENABLED: "true"
+      } as never,
+      {
+        documentType: "sales_invoice",
+        customerName: "Tax test",
+        amount: 125.5,
+        currency: "USD",
+        dueDate: "2026-07-31",
+        description: "Verify selected tax payload"
+      },
+      { id: "tax-20", code: "VAT20", name: "VAT 20%", taxPct: 20 }
+    );
+
+    assert.equal(invoice.externalId, "invoice-123");
+    const rows = requestBody?.InvoiceRow as Array<{ TaxId: string; Item: { Code: string } }>;
+    const taxes = requestBody?.TaxAmount as Array<{ TaxId: string; Amount: number }>;
+    assert.equal(rows[0]?.TaxId, "tax-20");
+    assert.equal(rows[0]?.Item.Code, "SERVICES-VAT20");
+    assert.deepEqual(taxes, [{ TaxId: "tax-20", Amount: 25.1 }]);
   } finally {
     globalThis.fetch = originalFetch;
   }

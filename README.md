@@ -66,7 +66,7 @@ Convex state includes revision-aware write protection so an older browser snapsh
 
 ### Explicit Merit Writes
 
-Revenue pulls and scheduled syncs never create Merit invoices. The separate “Send to Merit” action warns that it creates a real external accounting record, requires an explicit confirmation, and reserves the operation atomically before calling Merit. `MERIT_WRITES_ENABLED` is a hard deployment gate and defaults to `false`.
+Revenue pulls and scheduled syncs never create Merit invoices. The separate “Send to Merit” action warns that it creates a real external accounting record, requires an account-specific Merit tax selection plus explicit confirmation, and reserves the operation atomically before calling Merit. `MERIT_WRITES_ENABLED` is the hard deployment gate; production enables it only for this manual action.
 
 ### Secret Boundaries
 
@@ -142,7 +142,7 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
-| Merit | Read-only invoice sync; explicit invoice creation is guarded by confirmation and a disabled-by-default deployment switch |
+| Merit | Read-only invoice and tax sync; explicit invoice creation is guarded by a tax selection, confirmation, and a deployment switch |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
 

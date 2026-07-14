@@ -14,6 +14,7 @@ import type {
   ImportWiseStatementResult,
   ImportWiseStatementSummary,
   Invoice,
+  MeritTax,
   MatchTransactionPayload,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
@@ -55,6 +56,7 @@ import {
   createMeritInvoice,
   fetchAmexActivity,
   fetchMeritInvoices,
+  fetchMeritTaxes,
   fetchRevolutActivity,
   fetchSlashActivity,
   fetchTuneRevenue,
@@ -83,6 +85,7 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 
 let providers: Provider[] = [];
 let invoices: Invoice[] = [];
+let meritTaxes: MeritTax[] = [];
 let teams: Team[] = [];
 let transactionCategoryRules: TransactionCategoryRule[] = [];
 let revenuePartners: RevenuePartner[] = [];
@@ -427,6 +430,7 @@ export function getSnapshot(): DashboardSnapshot {
     aiSettings: publicAiSettings(runtimeAiSettings()),
     transactions: matchedTransactions,
     invoices,
+    meritTaxes,
     transactionCategoryRules,
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
@@ -876,6 +880,16 @@ export async function sendRevenueInvoice(
     throw new Error("Explicit SEND_TO_MERIT confirmation is required.");
   }
   assertMeritWriteConfiguration();
+  if (!payload.taxId?.trim()) throw new Error("Choose a Merit tax rate before creating the invoice.");
+
+  let liveMeritTaxes: MeritTax[];
+  try {
+    liveMeritTaxes = await fetchMeritTaxes();
+  } catch (error) {
+    throw new Error("Merit tax rates could not be verified. No invoice was created.", { cause: error });
+  }
+  const selectedTax = liveMeritTaxes.find((tax) => tax.id === payload.taxId);
+  if (!selectedTax) throw new Error("The selected Merit tax rate is no longer available.");
 
   const run = revenueRuns.find((item) => item.id === runId);
   if (!run) throw new Error("Revenue run not found.");
@@ -908,15 +922,18 @@ export async function sendRevenueInvoice(
 
   const { error: _previousError, ...runWithoutError } = run;
   try {
-    const invoice = await createMeritInvoice({
-      providerId: run.providerId,
-      documentType: "sales_invoice",
-      customerName: partner.meritCustomerName || partner.name,
-      amount: run.revenue,
-      currency: run.currency,
-      dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
-      description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
-    });
+    const invoice = await createMeritInvoice(
+      {
+        providerId: run.providerId,
+        documentType: "sales_invoice",
+        customerName: partner.meritCustomerName || partner.name,
+        amount: run.revenue,
+        currency: run.currency,
+        dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
+        description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
+      },
+      selectedTax
+    );
     const finalizedRun: RevenueRun = {
       ...runWithoutError,
       status: "invoiced",
@@ -964,12 +981,13 @@ export async function markInvoicePaidLocally(invoiceId: string): Promise<Invoice
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, amex, merit] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, merit, liveMeritTaxes] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(),
     fetchAmexActivity(),
-    fetchMeritInvoices()
+    fetchMeritInvoices(),
+    fetchMeritTaxes()
   ]);
   const liveTransactions: Transaction[] = [];
   const liveSources = new Set<Transaction["source"]>();
@@ -1011,6 +1029,9 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   }
   if (merit.status === "fulfilled" && merit.value.length > 0) {
     invoices = realInvoices(mergeById(merit.value, invoices));
+  }
+  if (liveMeritTaxes.status === "fulfilled") {
+    meritTaxes = liveMeritTaxes.value;
   }
 
   if (liveSources.size > 0) {

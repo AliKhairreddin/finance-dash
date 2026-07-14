@@ -180,6 +180,13 @@ export interface Invoice {
   createdAt: string;
 }
 
+export interface MeritTax {
+  id: string;
+  code: string;
+  name: string;
+  taxPct: number;
+}
+
 export interface Transaction {
   id: string;
   source: DataSource;
@@ -322,6 +329,7 @@ export interface DashboardSnapshot {
   aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
+  meritTaxes: MeritTax[];
   transactionCategoryRules: TransactionCategoryRule[];
   wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementImports: WiseStatementImport[];
@@ -449,6 +457,7 @@ export interface SyncRevenuePayload {
 
 export interface SendRevenueInvoicePayload {
   confirmation: "SEND_TO_MERIT";
+  taxId: string;
 }
 
 export interface SaveAiSettingsPayload {

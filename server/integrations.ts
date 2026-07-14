@@ -4,6 +4,7 @@ import type {
   CreateInvoicePayload,
   IntegrationStatus,
   Invoice,
+  MeritTax,
   RevenuePartner,
   RevenueRun,
   Transaction
@@ -38,7 +39,7 @@ export function assertMeritWriteConfiguration(): void {
     throw new Error("Merit invoice sending is disabled by the deployment safety switch.");
   }
 
-  const missing = ["MERIT_API_ID", "MERIT_API_KEY", "MERIT_DEFAULT_TAX_ID"].filter((name) => !process.env[name]);
+  const missing = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !process.env[name]);
   if (missing.length > 0) {
     throw new Error(`Merit invoice sending is missing ${missing.join(", ")}.`);
   }
@@ -108,7 +109,7 @@ export function getIntegrationStatus(wiseIssue?: string, revenuePartners: Revenu
     "AMEX_TRANSACTIONS_PATH_TEMPLATE"
   ].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !process.env[name]);
-  const meritWriteEnabled = meritWritesEnabled();
+  const meritWriteEnabled = meritWritesEnabled() && meritNeeds.length === 0;
   const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
   const tuneNeeds = revenueEnvNames.filter((name) => !process.env[name]);
   const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
@@ -666,6 +667,12 @@ function meritDate(value: string): string {
   return value.replace(/\D/g, "").slice(0, 8);
 }
 
+function meritItemCode(tax: MeritTax): string {
+  const prefix = (process.env.MERIT_DEFAULT_ITEM_CODE || "SERVICES").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "SERVICES";
+  const taxCode = tax.code.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || String(tax.taxPct).replace(/\D/g, "");
+  return `${prefix}-${taxCode}`.slice(0, 20);
+}
+
 function meritUrl(path: string, body: string): string {
   const apiId = process.env.MERIT_API_ID;
   const apiKey = process.env.MERIT_API_KEY;
@@ -734,9 +741,33 @@ export async function fetchMeritInvoices(): Promise<Invoice[]> {
   }));
 }
 
-export async function createMeritInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
+export async function fetchMeritTaxes(): Promise<MeritTax[]> {
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
+
+  const response = await fetchMeritJson<
+    Array<{
+      Id?: string;
+      Code?: string;
+      Name?: string;
+      NameEN?: string;
+      TaxPct?: number;
+    }>
+  >("/v1/gettaxes", {});
+
+  return response
+    .filter((tax) => tax.Id && Number.isFinite(Number(tax.TaxPct)))
+    .map((tax) => ({
+      id: tax.Id!,
+      code: tax.Code?.trim() || "VAT",
+      name: tax.NameEN?.trim() || tax.Name?.trim() || tax.Code?.trim() || "Merit tax",
+      taxPct: Number(tax.TaxPct)
+    }))
+    .sort((left, right) => left.taxPct - right.taxPct || left.name.localeCompare(right.name));
+}
+
+export async function createMeritInvoice(payload: CreateInvoicePayload, tax: MeritTax): Promise<Invoice> {
   assertMeritWriteConfiguration();
-  const taxId = process.env.MERIT_DEFAULT_TAX_ID!;
+  const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
 
   const invoiceNo = `FD-${Date.now()}`;
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(meritCreateInvoicePath, {
@@ -753,19 +784,19 @@ export async function createMeritInvoice(payload: CreateInvoicePayload): Promise
     InvoiceRow: [
       {
         Item: {
-          Code: process.env.MERIT_DEFAULT_ITEM_CODE || "SERVICES",
+          Code: meritItemCode(tax),
           Description: payload.description.slice(0, 150),
           Type: 2
         },
         Quantity: 1,
         Price: payload.amount,
-        TaxId: taxId
+        TaxId: tax.id
       }
     ],
     TaxAmount: [
       {
-        TaxId: taxId,
-        Amount: 0
+        TaxId: tax.id,
+        Amount: taxAmount
       }
     ],
     TotalAmount: payload.amount,
