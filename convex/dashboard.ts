@@ -218,7 +218,14 @@ const holding = v.object({
   notes: v.optional(v.string()),
   updatedAt: v.string()
 });
-const fxRate = v.object({ asset: v.string(), rateUsd: v.number(), provider: v.literal("yahoo"), asOf: v.string() });
+const fxRate = v.object({
+  asset: v.string(),
+  rateUsd: v.number(),
+  provider: v.union(v.literal("coinbase"), v.literal("yahoo")),
+  asOf: v.string(),
+  checkedAt: v.optional(v.string()),
+  stale: v.optional(v.boolean())
+});
 const automationRun = v.object({
   id: v.string(),
   type: v.literal("weekly-income"),
@@ -273,6 +280,7 @@ export const getState = query({
       paymentAllocations: v.array(paymentAllocation),
       holdings: v.array(holding),
       fxRates: v.array(fxRate),
+      fxTrackedAssets: v.optional(v.array(v.string())),
       automationRuns: v.array(automationRun),
       profitDistributionAdjustments: v.array(profitDistributionAdjustment),
       aiSettings: v.optional(aiSettings),
@@ -298,6 +306,7 @@ export const getState = query({
       paymentAllocations: state.paymentAllocations,
       holdings: state.holdings,
       fxRates: state.fxRates,
+      fxTrackedAssets: state.fxTrackedAssets,
       automationRuns: state.automationRuns,
       profitDistributionAdjustments: state.profitDistributionAdjustments,
       aiSettings: state.aiSettings,
@@ -322,6 +331,7 @@ export const saveState = mutation({
     paymentAllocations: v.array(paymentAllocation),
     holdings: v.array(holding),
     fxRates: v.array(fxRate),
+    fxTrackedAssets: v.optional(v.array(v.string())),
     automationRuns: v.array(automationRun),
     profitDistributionAdjustments: v.array(profitDistributionAdjustment),
     aiSettings: v.optional(aiSettings),
@@ -350,6 +360,7 @@ export const saveState = mutation({
       paymentAllocations: args.paymentAllocations,
       holdings: args.holdings,
       fxRates: args.fxRates,
+      fxTrackedAssets: args.fxTrackedAssets ?? existing?.fxTrackedAssets ?? [],
       automationRuns: args.automationRuns,
       profitDistributionAdjustments: args.profitDistributionAdjustments,
       aiSettings: args.aiSettings,

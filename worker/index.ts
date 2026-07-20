@@ -80,6 +80,7 @@ import {
   isClosedBillingPeriod,
   isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
+  mergeFxRates,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -127,6 +128,7 @@ interface PersistedState {
   paymentAllocations: PaymentAllocation[];
   holdings: Holding[];
   fxRates: FxRate[];
+  fxTrackedAssets: string[];
   automationRuns: AutomationRun[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
@@ -261,7 +263,7 @@ const revolutBaseUrlByEnvironment = {
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
 const defaultSlashBaseUrl = "https://api.slash.com";
-const defaultYahooFinanceChartBaseUrl = "https://query1.finance.yahoo.com/v8/finance/chart";
+const defaultCoinbaseExchangeRatesUrl = "https://api.coinbase.com/v2/exchange-rates";
 const defaultMeritDeliverInvoicePath = "/v2/sendinvoicebyemail";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -1336,6 +1338,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     paymentAllocations: stored?.paymentAllocations ?? [],
     holdings: stored?.holdings ?? [],
     fxRates: stored?.fxRates ?? [],
+    fxTrackedAssets: stored?.fxTrackedAssets ?? [],
     automationRuns: stored?.automationRuns ?? [],
     profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
@@ -1427,8 +1430,10 @@ function integrationStatus(
   wiseActivity?: WiseActivityResult,
   revenuePartners: RevenuePartner[] = [],
   meritIssue?: string,
+  bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {},
   fxRates: FxRate[] = [],
-  missingFxAssets: string[] = []
+  missingFxAssets: string[] = [],
+  staleFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
@@ -1471,34 +1476,37 @@ function integrationStatus(
       id: "revolut" as DataSource,
       label: "Revolut",
       configured: revolutNeeds.length === 0,
-      mode: revolutNeeds.length === 0 ? "live" : "partial",
+      mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
-        revolutNeeds.length === 0
+        bankIssues.revolut ?? (revolutNeeds.length === 0
           ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
-          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured.",
-      needs: revolutNeeds
+          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured."),
+      needs: revolutNeeds,
+      issue: bankIssues.revolut
     },
     {
       id: "slash" as DataSource,
       label: "Slash",
       configured: slashNeeds.length === 0,
-      mode: slashNeeds.length === 0 ? "live" : "partial",
+      mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
-        slashNeeds.length === 0
+        bankIssues.slash ?? (slashNeeds.length === 0
           ? "Slash API key is present."
-          : "Slash rows stay empty until API access is configured.",
-      needs: slashNeeds
+          : "Slash rows stay empty until API access is configured."),
+      needs: slashNeeds,
+      issue: bankIssues.slash
     },
     {
       id: "amex" as DataSource,
       label: "Amex",
       configured: amexNeeds.length === 0,
-      mode: amexNeeds.length === 0 ? "live" : "partial",
+      mode: amexNeeds.length === 0 && !bankIssues.amex ? "live" : "partial",
       message:
-        amexNeeds.length === 0
+        bankIssues.amex ?? (amexNeeds.length === 0
           ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
-          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured.",
-      needs: amexNeeds
+          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured."),
+      needs: amexNeeds,
+      issue: bankIssues.amex
     },
     {
       id: "merit" as DataSource,
@@ -1530,15 +1538,17 @@ function integrationStatus(
       needs: tuneNeeds
     },
     {
-      id: "yahoo",
-      label: "Yahoo Finance",
+      id: "coinbase",
+      label: "Coinbase rates",
       configured: true,
-      mode: missingFxAssets.length === 0 ? "live" : "partial",
+      mode: missingFxAssets.length === 0 && staleFxAssets.length === 0 ? "live" : "partial",
       message:
         missingFxAssets.length > 0
-          ? `USD totals exclude assets without a current Yahoo quote: ${missingFxAssets.join(", ")}.`
+          ? `USD totals exclude assets without a Coinbase quote: ${missingFxAssets.join(", ")}.`
+          : staleFxAssets.length > 0
+          ? `Using last-known approximate rates for: ${staleFxAssets.join(", ")}.`
           : fxRates.length > 0
-          ? `Approximate USD quotes were last refreshed at ${fxRates.reduce((latest, rate) => rate.asOf > latest ? rate.asOf : latest, fxRates[0].asOf)}.`
+          ? `Approximate USD rates were refreshed at ${fxRates.reduce((oldest, rate) => rate.asOf < oldest ? rate.asOf : oldest, fxRates[0].asOf)}.`
           : "All liquid balances are already in USD, so no conversion quote is required.",
       needs: []
     }
@@ -1634,11 +1644,25 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {}): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
+  const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
+  const bankIssue = (label: string, error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${label} balance sync failed: ${message.slice(0, 240)}`;
+  };
   const [wise, revolut, slash, amex, meritResults] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
-    fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] })),
+    fetchRevolutActivity(env).catch((error: unknown) => {
+      bankIssues.revolut = bankIssue("Revolut", error);
+      return { accounts: [], transactions: [] };
+    }),
+    fetchSlashActivity(env).catch((error: unknown) => {
+      bankIssues.slash = bankIssue("Slash", error);
+      return { accounts: [], transactions: [] };
+    }),
+    fetchAmexActivity(env).catch((error: unknown) => {
+      bankIssues.amex = bankIssue("Amex", error);
+      return { accounts: [], transactions: [] };
+    }),
     Promise.allSettled([fetchMeritInvoices(env), fetchMeritTaxes(env)])
   ]);
   const [meritInvoicesResult, meritTaxesResult] = meritResults;
@@ -1651,14 +1675,17 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
         ? meritConnectionIssue(meritTaxesResult.reason)
         : undefined;
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
+  const trackedAssetsBefore = state.fxTrackedAssets.join("|");
+  state.fxTrackedAssets = [...new Set([
+    ...state.fxTrackedAssets,
+    ...state.fxRates.map((rate) => rate.asset),
+    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
+    ...state.holdings.map((holding) => holding.asset)
+  ].map((asset) => asset.trim().toUpperCase()).filter(Boolean))].sort();
+  const fxAssetInventoryChanged = state.fxTrackedAssets.join("|") !== trackedAssetsBefore;
   let fxRatesRefreshed = false;
   if (options.refreshFxRates) {
-    const assets = new Map<string, Holding["assetType"]>();
-    for (const account of accounts.filter(isLiquidAccountBalance)) {
-      assets.set(account.currency.toUpperCase(), "fiat");
-    }
-    for (const holding of state.holdings) assets.set(holding.asset.toUpperCase(), holding.assetType);
-    state.fxRates = await fetchYahooUsdRates(env, assets);
+    await updateCurrentFxRates(env, state, accounts);
     fxRatesRefreshed = true;
   }
   const invoicesBeforeReconciliation = mergeInvoices(liveMeritInvoices, state.invoices);
@@ -1691,7 +1718,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
   });
   const bankStateChanged = JSON.stringify(rawTransactions) !== JSON.stringify(persistedTransactionsBeforeSync);
   const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
-  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged || fxRatesRefreshed) {
+  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged || fxRatesRefreshed || fxAssetInventoryChanged) {
     state.invoices = reconciliation.invoices;
     state.paymentAllocations = reconciliation.allocations;
     state.wiseStatementTransactions = reconciliation.transactions;
@@ -1732,8 +1759,10 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
       wise,
       state.revenuePartners,
       meritIssue,
+      bankIssues,
       state.fxRates,
-      approximateUsdTotals.excludedAssets
+      approximateUsdTotals.excludedAssets,
+      approximateUsdTotals.staleAssets
     ),
     metrics: calculateMetrics(accounts, [], [], [], []),
     profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
@@ -2765,7 +2794,7 @@ async function createHolding(env: Env, payload: CreateHoldingPayload): Promise<D
   };
   state.holdings = [holding, ...state.holdings];
   await savePersisted(env, state);
-  return getSnapshot(env);
+  return getSnapshot(env, { refreshFxRates: true });
 }
 
 async function updateHolding(env: Env, holdingId: string, payload: UpdateHoldingPayload): Promise<DashboardSnapshot> {
@@ -2774,7 +2803,7 @@ async function updateHolding(env: Env, holdingId: string, payload: UpdateHolding
   const updated: Holding = { id: holdingId, ...normalizedHoldingPayload(payload), updatedAt: new Date().toISOString() };
   state.holdings = state.holdings.map((holding) => holding.id === holdingId ? updated : holding);
   await savePersisted(env, state);
-  return getSnapshot(env);
+  return getSnapshot(env, { refreshFxRates: true });
 }
 
 async function deleteHolding(env: Env, holdingId: string): Promise<DashboardSnapshot> {
@@ -2785,53 +2814,69 @@ async function deleteHolding(env: Env, holdingId: string): Promise<DashboardSnap
   return getSnapshot(env);
 }
 
-function yahooSymbol(asset: string, assetType: Holding["assetType"]): string {
-  return assetType === "crypto" ? `${asset}-USD` : `${asset}USD=X`;
+export async function fetchCoinbaseUsdRates(env: Env, assets: Iterable<string>): Promise<FxRate[]> {
+  const uniqueAssets = [...new Set(
+    [...assets].map((asset) => asset.trim().toUpperCase()).filter((asset) => asset && asset !== "USD")
+  )];
+  if (uniqueAssets.length === 0) return [];
+
+  const url = new URL(env.COINBASE_EXCHANGE_RATES_URL || defaultCoinbaseExchangeRatesUrl);
+  url.searchParams.set("currency", "USD");
+  const fetchedAt = new Date().toISOString();
+  const payload = await fetchJson<{ data?: { currency?: string; rates?: Record<string, string> } }>(url.toString(), {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8_000)
+  });
+  if (payload.data?.currency !== "USD" || !payload.data.rates) {
+    throw new ApiError(502, "Coinbase did not return USD-based exchange rates");
+  }
+
+  const rates = uniqueAssets.flatMap((asset): FxRate[] => {
+    const unitsPerUsd = Number(payload.data?.rates?.[asset]);
+    if (!Number.isFinite(unitsPerUsd) || unitsPerUsd <= 0) return [];
+    return [{
+      asset,
+      rateUsd: Number((1 / unitsPerUsd).toPrecision(15)),
+      provider: "coinbase",
+      asOf: fetchedAt,
+      checkedAt: fetchedAt,
+      stale: false
+    }];
+  });
+  if (rates.length === 0) throw new ApiError(502, "Coinbase did not return any requested USD rates");
+  return rates;
 }
 
-export async function fetchYahooUsdRates(env: Env, assets: Map<string, Holding["assetType"]>): Promise<FxRate[]> {
-  const symbolByAsset = new Map(
-    [...assets.entries()].filter(([asset]) => asset !== "USD").map(([asset, assetType]) => [asset, yahooSymbol(asset, assetType)])
-  );
-  if (symbolByAsset.size === 0) return [];
-  const chartBaseUrl = (env.YAHOO_FINANCE_CHART_URL || defaultYahooFinanceChartBaseUrl).replace(/\/+$/, "");
-  const results = await Promise.allSettled(
-    [...symbolByAsset].map(async ([asset, symbol]): Promise<FxRate> => {
-      const chartUrl = new URL(`${chartBaseUrl}/${encodeURIComponent(symbol)}`);
-      chartUrl.searchParams.set("interval", "1d");
-      chartUrl.searchParams.set("range", "1d");
-      const payload = await fetchJson<{
-        chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }> };
-      }>(chartUrl.toString(), {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (compatible; FinanceDashboard/1.0)"
-        }
-      });
-      const quote = payload.chart?.result?.[0]?.meta;
-      if (!quote || !Number.isFinite(quote.regularMarketPrice) || Number(quote.regularMarketPrice) <= 0) {
-        throw new Error(`Yahoo Finance did not return a USD quote for ${asset}`);
-      }
-      return {
-        asset,
-        rateUsd: Number(quote.regularMarketPrice),
-        provider: "yahoo",
-        asOf: quote.regularMarketTime
-          ? new Date(quote.regularMarketTime * 1000).toISOString()
-          : new Date().toISOString()
-      };
-    })
-  );
-  const rates = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-  if (rates.length === 0) {
-    const reason = results.find((result) => result.status === "rejected");
-    throw new ApiError(502, reason?.status === "rejected" && reason.reason instanceof Error ? reason.reason.message : "Yahoo Finance returned no USD quotes");
+async function updateCurrentFxRates(
+  env: Env,
+  state: PersistedState,
+  accounts: AccountBalance[] = []
+): Promise<void> {
+  const trackedAssets = new Set([
+    ...state.fxTrackedAssets,
+    ...state.fxRates.map((rate) => rate.asset),
+    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
+    ...state.holdings.map((holding) => holding.asset)
+  ]);
+  const checkedAt = new Date().toISOString();
+  state.fxTrackedAssets = [...trackedAssets].map((asset) => asset.trim().toUpperCase()).filter(Boolean).sort();
+  let refreshedRates: FxRate[] = [];
+  try {
+    refreshedRates = await fetchCoinbaseUsdRates(env, trackedAssets);
+  } catch {
+    // Conversion availability is independent from bank/invoice sync; last-known values stay visible as stale.
   }
-  return rates;
+  state.fxRates = mergeFxRates(state.fxRates, refreshedRates, trackedAssets, checkedAt);
 }
 
 async function refreshFxRates(env: Env): Promise<DashboardSnapshot> {
   return getSnapshot(env, { refreshFxRates: true });
+}
+
+async function refreshStoredFxRates(env: Env): Promise<void> {
+  const state = await loadPersisted(env);
+  await updateCurrentFxRates(env, state);
+  await savePersisted(env, state);
 }
 
 function upsertRevenueRun(state: PersistedState, run: RevenueRun): void {
@@ -3260,7 +3305,7 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (controller.cron === "17 * * * *") {
       try {
-        await refreshFxRates(env);
+        await refreshStoredFxRates(env);
       } catch (error) {
         console.error(JSON.stringify({
           event: "fx_rate_refresh_failed",

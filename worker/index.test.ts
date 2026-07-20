@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Invoice } from "../shared/types";
-import worker, { createMeritInvoice, deliverMeritInvoice, fetchYahooUsdRates, mergeInvoices } from "./index";
+import worker, { createMeritInvoice, deliverMeritInvoice, fetchCoinbaseUsdRates, mergeInvoices } from "./index";
 
 test("dashboard API fails closed when Convex storage is not configured", async () => {
   let assetRequests = 0;
@@ -221,25 +221,20 @@ test("live Merit refresh only updates the read-only Merit status for a persisted
   assert.deepEqual(mergeInvoices([live], [persisted]), [{ ...persisted, meritStatus: "paid" }]);
 });
 
-test("Yahoo quote refresh keeps successful assets when another chart request fails", async () => {
+test("Coinbase quote refresh converts EUR, GBP, and BTC from one USD-base response", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
-    const url = String(input);
-    if (url.includes("BTC-USD")) {
-      return Response.json({ chart: { result: [{ meta: { regularMarketPrice: 120000, regularMarketTime: 1784505600 } }] } });
-    }
-    return new Response("rate limited", { status: 429, statusText: "Too Many Requests" });
+    const url = new URL(String(input));
+    assert.equal(url.searchParams.get("currency"), "USD");
+    return Response.json({ data: { currency: "USD", rates: { EUR: "0.8", GBP: "0.5", BTC: "0.00001" } } });
   };
 
   try {
-    const rates = await fetchYahooUsdRates(
-      { YAHOO_FINANCE_CHART_URL: "https://query1.finance.yahoo.com/v8/finance/chart" } as never,
-      new Map([
-        ["BTC", "crypto"],
-        ["CAD", "fiat"]
-      ])
+    const rates = await fetchCoinbaseUsdRates(
+      { COINBASE_EXCHANGE_RATES_URL: "https://api.coinbase.com/v2/exchange-rates" } as never,
+      ["EUR", "GBP", "BTC"]
     );
-    assert.deepEqual(rates.map((rate) => [rate.asset, rate.rateUsd]), [["BTC", 120000]]);
+    assert.deepEqual(rates.map((rate) => [rate.asset, rate.rateUsd]), [["EUR", 1.25], ["GBP", 2], ["BTC", 100000]]);
   } finally {
     globalThis.fetch = originalFetch;
   }

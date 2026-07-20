@@ -266,8 +266,10 @@ export interface Holding {
 export interface FxRate {
   asset: string;
   rateUsd: number;
-  provider: "yahoo";
+  provider: "coinbase" | "yahoo";
   asOf: string;
+  checkedAt?: string;
+  stale?: boolean;
 }
 
 export interface ApproximateUsdTotals {
@@ -275,6 +277,7 @@ export interface ApproximateUsdTotals {
   holdingsUsd: number;
   totalUsd: number;
   excludedAssets: string[];
+  staleAssets: string[];
   asOf?: string;
 }
 
@@ -330,7 +333,7 @@ export interface WiseStatementImport {
 }
 
 export interface IntegrationStatus {
-  id: DataSource | "openrouter" | "yahoo";
+  id: DataSource | "openrouter" | "coinbase";
   label: string;
   configured: boolean;
   mode: "live" | "partial";

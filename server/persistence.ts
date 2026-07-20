@@ -30,6 +30,7 @@ export interface PersistedState {
   paymentAllocations: PaymentAllocation[];
   holdings: Holding[];
   fxRates: FxRate[];
+  fxTrackedAssets: string[];
   automationRuns: AutomationRun[];
   teams: Team[];
   transactionCategoryRules: TransactionCategoryRule[];

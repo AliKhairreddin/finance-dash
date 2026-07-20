@@ -247,8 +247,10 @@ const holding = v.object({
 const fxRate = v.object({
   asset: v.string(),
   rateUsd: v.number(),
-  provider: v.literal("yahoo"),
-  asOf: v.string()
+  provider: v.union(v.literal("coinbase"), v.literal("yahoo")),
+  asOf: v.string(),
+  checkedAt: v.optional(v.string()),
+  stale: v.optional(v.boolean())
 });
 
 const automationRun = v.object({
@@ -312,6 +314,7 @@ export default defineSchema({
     paymentAllocations: v.array(paymentAllocation),
     holdings: v.array(holding),
     fxRates: v.array(fxRate),
+    fxTrackedAssets: v.optional(v.array(v.string())),
     automationRuns: v.array(automationRun),
     profitDistributionAdjustments: v.array(profitDistributionAdjustment),
     aiSettings: v.optional(aiSettings),

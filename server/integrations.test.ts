@@ -4,8 +4,8 @@ import type { Invoice } from "../shared/types";
 import {
   createMeritInvoice,
   deliverMeritInvoice,
-  fetchMeritInvoices,
-  fetchYahooUsdRates
+  fetchCoinbaseUsdRates,
+  fetchMeritInvoices
 } from "./integrations";
 
 const invoice: Invoice = {
@@ -114,52 +114,34 @@ test("Merit paid state is exposed read-only and never marks a local invoice paid
   }
 });
 
-test("Yahoo USD adapter uses chart symbols and keeps partial successes", async () => {
+test("Coinbase USD adapter inverts one USD-base response for EUR, GBP, and crypto", async () => {
   const previousFetch = globalThis.fetch;
   try {
-    const requestedSymbols: string[] = [];
     globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
-      const symbol = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-      requestedSymbols.push(symbol);
-      assert.equal(url.origin, "https://query1.finance.yahoo.com");
-      assert.equal(url.searchParams.get("interval"), "1d");
-      assert.equal(url.searchParams.get("range"), "1d");
-      assert.match(new Headers(init?.headers).get("User-Agent") ?? "", /Mozilla/);
-      if (symbol === "ETH-USD") return new Response("unavailable", { status: 404, statusText: "Not Found" });
-      const regularMarketPrice = symbol === "CADUSD=X" ? 0.74 : 120000;
-      return Response.json({
-        chart: {
-          result: [{ meta: { regularMarketPrice, regularMarketTime: 1784505600 } }]
-        }
-      });
+      assert.equal(url.origin, "https://api.coinbase.com");
+      assert.equal(url.pathname, "/v2/exchange-rates");
+      assert.equal(url.searchParams.get("currency"), "USD");
+      assert.equal(new Headers(init?.headers).get("Accept"), "application/json");
+      return Response.json({ data: { currency: "USD", rates: { EUR: "0.8", GBP: "0.5", BTC: "0.00001" } } });
     };
-    const rates = await fetchYahooUsdRates([
-      { asset: "cad", assetType: "fiat" },
-      { asset: "BTC", assetType: "crypto" },
-      { asset: "ETH", assetType: "crypto" },
-      { asset: "USD", assetType: "fiat" }
-    ]);
-    assert.deepEqual(requestedSymbols.sort(), ["BTC-USD", "CADUSD=X", "ETH-USD"]);
+    const rates = await fetchCoinbaseUsdRates(["eur", "GBP", "BTC", "ETH", "USD"]);
     assert.deepEqual(
       rates.map((rate) => [rate.asset, rate.rateUsd]),
-      [
-        ["CAD", 0.74],
-        ["BTC", 120000]
-      ]
+      [["EUR", 1.25], ["GBP", 2], ["BTC", 100000]]
     );
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
 
-test("Yahoo USD adapter errors when every requested chart fails", async () => {
+test("Coinbase USD adapter errors when the feed request fails", async () => {
   const previousFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () => new Response("rate limited", { status: 429, statusText: "Too Many Requests" });
     await assert.rejects(
-      fetchYahooUsdRates([{ asset: "CAD", assetType: "fiat" }]),
-      /did not return any requested USD rates/
+      fetchCoinbaseUsdRates(["EUR"]),
+      /429 Too Many Requests/
     );
   } finally {
     globalThis.fetch = previousFetch;

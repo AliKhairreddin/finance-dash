@@ -32,7 +32,7 @@ The system follows three rules:
 - Match exact incoming bank payments to open invoices and predict collection dates from the latest five confirmed matches.
 - Record partial or combined payments with source and notes while keeping dashboard paid state independent from Merit.
 - Record cash, exchange, and wallet holdings, including fiat and crypto assets.
-- Show a clearly labeled approximate USD total from Yahoo quotes while retaining exact native balances.
+- Show a clearly labeled approximate USD total from keyless Coinbase rates while retaining exact native balances.
 - Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
 - Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
@@ -60,7 +60,7 @@ flowchart LR
 
 ### Exact and Approximate Currency Views
 
-Derived cash, revenue, payable, distribution, and profit metrics stay grouped by native currency. A secondary approximate USD view uses timestamped Yahoo quotes and discloses assets without a quote.
+Derived cash, revenue, payable, distribution, and profit metrics stay grouped by native currency. A secondary approximate USD view uses timestamped Coinbase rates, retains last-known rates during a feed interruption, and discloses stale or unsupported assets.
 
 ### Learned Matching Without Silent Mutation
 
@@ -130,7 +130,7 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 - Amex OAuth, account IDs, and approved API paths;
 - Merit invoice creation and email-delivery settings;
 - TUNE network and revenue-stream credentials;
-- Yahoo quote endpoint for approximate USD conversion;
+- Coinbase exchange-rate endpoint for approximate USD conversion;
 - server-only OpenRouter configuration.
 
 Missing credentials should produce unavailable/empty integration states rather than seeded financial numbers.
@@ -154,7 +154,7 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
 | Merit | Read-only invoice/tax sync; explicit save or save-and-email actions guarded by stored tax rules, confirmation, and a deployment switch |
-| Yahoo Finance | Approximate fiat and crypto USD quotes; native balances remain authoritative |
+| Coinbase rates | Keyless approximate fiat and crypto USD rates; native balances remain authoritative |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
 

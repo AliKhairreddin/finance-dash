@@ -334,24 +334,38 @@ export function calculateApproximateUsdTotals(
 ): ApproximateUsdTotals {
   const rateByAsset = new Map(rates.map((rate) => [rate.asset.toUpperCase(), rate]));
   const excludedAssets = new Set<string>();
+  const staleAssets = new Set<string>();
+  const usedRates = new Map<string, FxRate>();
   let accountsUsd = 0;
   let holdingsUsd = 0;
 
   for (const account of accounts.filter(isLiquidAccountBalance)) {
     const asset = account.currency.toUpperCase();
-    const rate = asset === "USD" ? 1 : rateByAsset.get(asset)?.rateUsd;
-    if (rate === undefined) excludedAssets.add(asset);
-    else accountsUsd += account.balance * rate;
+    const quote = rateByAsset.get(asset);
+    const rate = asset === "USD" ? 1 : quote?.rateUsd;
+    if (rate === undefined) {
+      excludedAssets.add(asset);
+    } else {
+      accountsUsd += account.balance * rate;
+      if (quote) usedRates.set(asset, quote);
+      if (quote?.stale) staleAssets.add(asset);
+    }
   }
   for (const holding of holdings) {
     const asset = holding.asset.toUpperCase();
-    const rate = asset === "USD" ? 1 : rateByAsset.get(asset)?.rateUsd;
-    if (rate === undefined) excludedAssets.add(asset);
-    else holdingsUsd += holding.balance * rate;
+    const quote = rateByAsset.get(asset);
+    const rate = asset === "USD" ? 1 : quote?.rateUsd;
+    if (rate === undefined) {
+      excludedAssets.add(asset);
+    } else {
+      holdingsUsd += holding.balance * rate;
+      if (quote) usedRates.set(asset, quote);
+      if (quote?.stale) staleAssets.add(asset);
+    }
   }
 
-  const asOf = rates.reduce<string | undefined>(
-    (latest, rate) => (!latest || rate.asOf > latest ? rate.asOf : latest),
+  const asOf = [...usedRates.values()].reduce<string | undefined>(
+    (oldest, rate) => (!oldest || rate.asOf < oldest ? rate.asOf : oldest),
     undefined
   );
   return {
@@ -359,8 +373,29 @@ export function calculateApproximateUsdTotals(
     holdingsUsd: roundMoney(holdingsUsd),
     totalUsd: roundMoney(accountsUsd + holdingsUsd),
     excludedAssets: [...excludedAssets].sort(),
+    staleAssets: [...staleAssets].sort(),
     asOf
   };
+}
+
+export function mergeFxRates(
+  previousRates: FxRate[],
+  refreshedRates: FxRate[],
+  trackedAssets: Iterable<string>,
+  checkedAt = new Date().toISOString()
+): FxRate[] {
+  const previousByAsset = new Map(previousRates.map((rate) => [rate.asset.toUpperCase(), rate]));
+  const refreshedByAsset = new Map(refreshedRates.map((rate) => [rate.asset.toUpperCase(), rate]));
+  const assets = [...new Set([...trackedAssets].map((asset) => asset.trim().toUpperCase()).filter((asset) => asset && asset !== "USD"))];
+
+  return assets.flatMap((asset): FxRate[] => {
+    const refreshed = refreshedByAsset.get(asset);
+    if (refreshed) {
+      return [{ ...refreshed, asset, checkedAt, stale: false }];
+    }
+    const previous = previousByAsset.get(asset);
+    return previous ? [{ ...previous, asset, checkedAt, stale: true }] : [];
+  });
 }
 
 export function isLiquidAccountBalance(account: AccountBalance): boolean {

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import type {
   AccountBalance,
   FxRate,
-  HoldingAssetType,
   IntegrationStatus,
   Invoice,
   MeritTax,
@@ -19,7 +18,7 @@ const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.
 const meritGetInvoicesPath = process.env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices";
 const meritCreateInvoicePath = process.env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice";
 const meritDeliverInvoicePath = process.env.MERIT_DELIVER_INVOICE_PATH || "/v2/sendinvoicebyemail";
-const yahooChartBaseUrl = process.env.YAHOO_FINANCE_CHART_URL || "https://query1.finance.yahoo.com/v8/finance/chart";
+const coinbaseExchangeRatesUrl = process.env.COINBASE_EXCHANGE_RATES_URL || "https://api.coinbase.com/v2/exchange-rates";
 const amexApiBaseUrl = process.env.AMEX_API_BASE_URL;
 const amexTokenUrl = process.env.AMEX_TOKEN_URL;
 const amexAccountPathTemplate = process.env.AMEX_ACCOUNT_PATH_TEMPLATE;
@@ -109,7 +108,11 @@ function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
 export function getIntegrationStatus(
   wiseIssue?: string,
   revenuePartners: RevenuePartner[] = [],
-  meritIssue?: string
+  meritIssue?: string,
+  bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {},
+  fxRates: FxRate[] = [],
+  missingFxAssets: string[] = [],
+  staleFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !process.env[name]);
   if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
@@ -151,34 +154,37 @@ export function getIntegrationStatus(
       id: "revolut",
       label: "Revolut",
       configured: revolutNeeds.length === 0,
-      mode: revolutNeeds.length === 0 ? "live" : "partial",
+      mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
-        revolutNeeds.length === 0
+        bankIssues.revolut ?? (revolutNeeds.length === 0
           ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
-          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured.",
-      needs: revolutNeeds
+          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured."),
+      needs: revolutNeeds,
+      issue: bankIssues.revolut
     },
     {
       id: "slash",
       label: "Slash",
       configured: slashNeeds.length === 0,
-      mode: slashNeeds.length === 0 ? "live" : "partial",
+      mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
-        slashNeeds.length === 0
+        bankIssues.slash ?? (slashNeeds.length === 0
           ? "Ready to pull accounts, card activity, and transactions."
-          : "Slash rows stay empty until API access is configured.",
-      needs: slashNeeds
+          : "Slash rows stay empty until API access is configured."),
+      needs: slashNeeds,
+      issue: bankIssues.slash
     },
     {
       id: "amex",
       label: "Amex",
       configured: amexNeeds.length === 0,
-      mode: amexNeeds.length === 0 ? "live" : "partial",
+      mode: amexNeeds.length === 0 && !bankIssues.amex ? "live" : "partial",
       message:
-        amexNeeds.length === 0
+        bankIssues.amex ?? (amexNeeds.length === 0
           ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
-          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured.",
-      needs: amexNeeds
+          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured."),
+      needs: amexNeeds,
+      issue: bankIssues.amex
     },
     {
       id: "merit",
@@ -210,11 +216,18 @@ export function getIntegrationStatus(
       needs: tuneNeeds
     },
     {
-      id: "yahoo",
-      label: "Yahoo Finance",
+      id: "coinbase",
+      label: "Coinbase rates",
       configured: true,
-      mode: "live",
-      message: "Approximate USD quotes refresh with bank sync and can also be refreshed manually.",
+      mode: missingFxAssets.length === 0 && staleFxAssets.length === 0 ? "live" : "partial",
+      message:
+        missingFxAssets.length > 0
+          ? `USD totals exclude assets without a Coinbase quote: ${missingFxAssets.join(", ")}.`
+          : staleFxAssets.length > 0
+            ? `Using last-known approximate rates for: ${staleFxAssets.join(", ")}.`
+            : fxRates.length > 0
+              ? "Keyless approximate USD rates refresh hourly, with bank sync, and on demand."
+              : "All liquid balances are already in USD, so no conversion quote is required.",
       needs: []
     }
   ];
@@ -911,60 +924,36 @@ export async function deliverMeritInvoice(externalId: string): Promise<void> {
   });
 }
 
-export interface YahooUsdAsset {
-  asset: string;
-  assetType: HoldingAssetType;
-}
-
-function yahooUsdSymbol(asset: YahooUsdAsset): string {
-  return asset.assetType === "crypto" ? `${asset.asset}-USD` : `${asset.asset}USD=X`;
-}
-
-export async function fetchYahooUsdRates(assets: YahooUsdAsset[]): Promise<FxRate[]> {
-  const uniqueAssets = [...new Map(
-    assets
-      .map((asset) => ({ ...asset, asset: asset.asset.trim().toUpperCase() }))
-      .filter((asset) => asset.asset && asset.asset !== "USD")
-      .map((asset) => [`${asset.assetType}:${asset.asset}`, asset] as const)
-  ).values()];
+export async function fetchCoinbaseUsdRates(assets: Iterable<string>): Promise<FxRate[]> {
+  const uniqueAssets = [...new Set(
+    [...assets].map((asset) => asset.trim().toUpperCase()).filter((asset) => asset && asset !== "USD")
+  )];
   if (uniqueAssets.length === 0) return [];
 
+  const url = new URL(coinbaseExchangeRatesUrl);
+  url.searchParams.set("currency", "USD");
   const fetchedAt = new Date().toISOString();
-  const results = await Promise.allSettled(
-    uniqueAssets.map(async (asset): Promise<FxRate> => {
-      const symbol = yahooUsdSymbol(asset);
-      const url = `${yahooChartBaseUrl.replace(/\/+$/, "")}/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-      const response = await fetchJson<{
-        chart?: {
-          result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }>;
-        };
-      }>(url, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36"
-        }
-      });
-      const meta = response.chart?.result?.[0]?.meta;
-      const rateUsd = Number(meta?.regularMarketPrice);
-      if (!Number.isFinite(rateUsd) || rateUsd <= 0) {
-        throw new Error(`Yahoo Finance did not return a USD chart quote for ${asset.asset}`);
-      }
-      return {
-        asset: asset.asset,
-        rateUsd,
-        provider: "yahoo",
-        asOf: meta?.regularMarketTime
-          ? new Date(meta.regularMarketTime * 1000).toISOString()
-          : fetchedAt
-      };
-    })
-  );
-  const rates = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-  if (rates.length === 0) {
-    const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    const detail = firstFailure?.reason instanceof Error ? firstFailure.reason.message : "no usable chart results";
-    throw new Error(`Yahoo Finance did not return any requested USD rates: ${detail}`);
+  const response = await fetchJson<{ data?: { currency?: string; rates?: Record<string, string> } }>(url.toString(), {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8_000)
+  });
+  if (response.data?.currency !== "USD" || !response.data.rates) {
+    throw new Error("Coinbase did not return USD-based exchange rates");
   }
+
+  const rates = uniqueAssets.flatMap((asset): FxRate[] => {
+    const unitsPerUsd = Number(response.data?.rates?.[asset]);
+    if (!Number.isFinite(unitsPerUsd) || unitsPerUsd <= 0) return [];
+    return [{
+      asset,
+      rateUsd: Number((1 / unitsPerUsd).toPrecision(15)),
+      provider: "coinbase",
+      asOf: fetchedAt,
+      checkedAt: fetchedAt,
+      stale: false
+    }];
+  });
+  if (rates.length === 0) throw new Error("Coinbase did not return any requested USD rates");
   return rates;
 }
 

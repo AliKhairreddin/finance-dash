@@ -8,6 +8,7 @@ import {
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   isLebanonIncomeAutomationTime,
+  mergeFxRates,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -332,4 +333,37 @@ test("approximate USD totals retain missing-quote disclosure", () => {
   assert.equal(totals.holdingsUsd, 1200);
   assert.equal(totals.totalUsd, 1375);
   assert.deepEqual(totals.excludedAssets, ["ETH"]);
+  assert.deepEqual(totals.staleAssets, []);
+});
+
+test("approximate USD total converts EUR, GBP, USD, and crypto into one number", () => {
+  const totals = calculateApproximateUsdTotals(
+    [
+      { id: "eur", name: "EUR", source: "wise", balance: 100, currency: "EUR", updatedAt: "2026-07-20", status: "live" },
+      { id: "gbp", name: "GBP", source: "revolut", balance: 100, currency: "GBP", updatedAt: "2026-07-20", status: "live" },
+      { id: "usd", name: "USD", source: "slash", balance: 50, currency: "USD", updatedAt: "2026-07-20", status: "live" }
+    ],
+    [{ id: "btc", name: "Kraken", kind: "exchange", assetType: "crypto", asset: "BTC", balance: 0.01, updatedAt: "2026-07-20" }],
+    [
+      { asset: "EUR", rateUsd: 1.1, provider: "coinbase", asOf: "2026-07-20T01:00:00.000Z" },
+      { asset: "GBP", rateUsd: 1.25, provider: "coinbase", asOf: "2026-07-20T02:00:00.000Z" },
+      { asset: "BTC", rateUsd: 100000, provider: "coinbase", asOf: "2026-07-20T03:00:00.000Z" }
+    ]
+  );
+
+  assert.equal(totals.accountsUsd, 285);
+  assert.equal(totals.holdingsUsd, 1000);
+  assert.equal(totals.totalUsd, 1285);
+  assert.equal(totals.asOf, "2026-07-20T01:00:00.000Z");
+});
+
+test("rate refresh keeps an unavailable last-known rate and marks it stale", () => {
+  const rates = mergeFxRates(
+    [{ asset: "EUR", rateUsd: 1.1, provider: "coinbase", asOf: "2026-07-19T00:00:00.000Z" }],
+    [{ asset: "GBP", rateUsd: 1.25, provider: "coinbase", asOf: "2026-07-20T00:00:00.000Z" }],
+    ["EUR", "GBP"],
+    "2026-07-20T01:00:00.000Z"
+  );
+
+  assert.deepEqual(rates.map((rate) => [rate.asset, rate.stale]), [["EUR", true], ["GBP", false]]);
 });

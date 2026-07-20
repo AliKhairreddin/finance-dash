@@ -68,6 +68,7 @@ import {
   isClosedBillingPeriod,
   isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
+  mergeFxRates,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -91,7 +92,7 @@ import {
   fetchSlashActivity,
   fetchTuneRevenue,
   fetchWiseActivity,
-  fetchYahooUsdRates,
+  fetchCoinbaseUsdRates,
   getIntegrationStatus,
   meritConnectionIssue,
   summarizeWiseStatementIssues,
@@ -120,6 +121,7 @@ let invoices: Invoice[] = [];
 let paymentAllocations: PaymentAllocation[] = [];
 let holdings: Holding[] = [];
 let fxRates: FxRate[] = [];
+let fxTrackedAssets: string[] = [];
 let automationRuns: AutomationRun[] = [];
 let meritTaxes: MeritTax[] = [];
 let teams: Team[] = [];
@@ -138,6 +140,7 @@ let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseSyncIssue: string | undefined;
 let meritSyncIssue: string | undefined;
+let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
 
 function runtimeAiSettings(): StoredAiSettings {
   return {
@@ -242,6 +245,7 @@ export async function initializeStore(): Promise<void> {
   invoices = applyPaymentState(persisted.invoices ?? [], paymentAllocations);
   holdings = persisted.holdings ?? [];
   fxRates = persisted.fxRates ?? [];
+  fxTrackedAssets = persisted.fxTrackedAssets ?? [];
   automationRuns = persisted.automationRuns ?? [];
   teams = mergeTeamDirectory(persisted.teams ?? []);
   transactionCategoryRules = persisted.transactionCategoryRules ?? [];
@@ -264,6 +268,7 @@ async function persist(): Promise<void> {
     paymentAllocations,
     holdings,
     fxRates,
+    fxTrackedAssets,
     automationRuns,
     teams,
     transactionCategoryRules,
@@ -512,6 +517,7 @@ export function getSnapshot(): DashboardSnapshot {
   const metrics = calculateMetrics(accounts, [], [], [], []);
   const matchedTransactions = getMatchedTransactions();
   const paymentAwareInvoices = applyPaymentState(invoices, paymentAllocations);
+  const approximateUsdTotals = calculateApproximateUsdTotals(accounts, holdings, fxRates);
   return {
     asOf: new Date().toISOString(),
     accounts,
@@ -532,13 +538,21 @@ export function getSnapshot(): DashboardSnapshot {
     invoicePredictions: calculateInvoicePredictions(paymentAwareInvoices, paymentAllocations),
     holdings,
     fxRates,
-    approximateUsdTotals: calculateApproximateUsdTotals(accounts, holdings, fxRates),
+    approximateUsdTotals,
     automationRuns,
     meritTaxes,
     transactionCategoryRules,
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
-    integrationStatus: getIntegrationStatus(wiseSyncIssue, revenuePartners, meritSyncIssue),
+    integrationStatus: getIntegrationStatus(
+      wiseSyncIssue,
+      revenuePartners,
+      meritSyncIssue,
+      bankSyncIssues,
+      fxRates,
+      approximateUsdTotals.excludedAssets,
+      approximateUsdTotals.staleAssets
+    ),
     metrics,
     profitDistribution: calculateProfitDistribution(matchedTransactions, profitDistributionAdjustments),
     lastSync
@@ -1165,6 +1179,7 @@ function holdingFromPayload(id: string, payload: CreateHoldingPayload | UpdateHo
 
 export async function createHolding(payload: CreateHoldingPayload): Promise<DashboardSnapshot> {
   holdings = [holdingFromPayload(`holding-${crypto.randomUUID()}`, payload), ...holdings];
+  await updateCurrentFxRates();
   await persist();
   return getSnapshot();
 }
@@ -1173,6 +1188,7 @@ export async function updateHolding(holdingId: string, payload: UpdateHoldingPay
   if (!holdings.some((holding) => holding.id === holdingId)) throw new Error("Holding not found");
   const updated = holdingFromPayload(holdingId, payload);
   holdings = holdings.map((holding) => (holding.id === holdingId ? updated : holding));
+  await updateCurrentFxRates();
   await persist();
   return getSnapshot();
 }
@@ -1185,11 +1201,21 @@ export async function deleteHolding(holdingId: string): Promise<DashboardSnapsho
 }
 
 async function updateCurrentFxRates(): Promise<void> {
-  const fiatAssets = accounts
-    .filter(isLiquidAccountBalance)
-    .map((account) => ({ asset: account.currency, assetType: "fiat" as const }));
-  const holdingAssets = holdings.map((holding) => ({ asset: holding.asset, assetType: holding.assetType }));
-  fxRates = await fetchYahooUsdRates([...fiatAssets, ...holdingAssets]);
+  const trackedAssets = new Set([
+    ...fxTrackedAssets,
+    ...fxRates.map((rate) => rate.asset),
+    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
+    ...holdings.map((holding) => holding.asset)
+  ]);
+  const checkedAt = new Date().toISOString();
+  fxTrackedAssets = [...trackedAssets].map((asset) => asset.trim().toUpperCase()).filter(Boolean).sort();
+  let refreshedRates: FxRate[] = [];
+  try {
+    refreshedRates = await fetchCoinbaseUsdRates(trackedAssets);
+  } catch {
+    // A conversion feed outage must not block bank/invoice sync; retained rates are visibly marked stale.
+  }
+  fxRates = mergeFxRates(fxRates, refreshedRates, trackedAssets, checkedAt);
 }
 
 export async function refreshFxRates(): Promise<DashboardSnapshot> {
@@ -1743,6 +1769,15 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     fetchMeritTaxes()
   ]);
   const liveTransactions: Transaction[] = [];
+  const bankIssue = (label: string, error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${label} balance sync failed: ${message.slice(0, 240)}`;
+  };
+  bankSyncIssues = {
+    ...(revolut.status === "rejected" ? { revolut: bankIssue("Revolut", revolut.reason) } : {}),
+    ...(slash.status === "rejected" ? { slash: bankIssue("Slash", slash.reason) } : {}),
+    ...(amex.status === "rejected" ? { amex: bankIssue("Amex", amex.reason) } : {})
+  };
 
   if (wise.status === "fulfilled") {
     wiseSyncIssue = summarizeWiseStatementIssues(wise.value.statementIssues);

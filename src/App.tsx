@@ -1144,8 +1144,13 @@ function App() {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message || "Conversion rates could not be refreshed");
     }
-    setDashboard((await response.json()) as DashboardSnapshot);
-    setNotice("Yahoo conversion rates refreshed. USD totals remain approximate.");
+    const nextDashboard = (await response.json()) as DashboardSnapshot;
+    setDashboard(nextDashboard);
+    setNotice(
+      nextDashboard.approximateUsdTotals.staleAssets.length > 0 || nextDashboard.approximateUsdTotals.excludedAssets.length > 0
+        ? "Conversion refresh completed with stale or unsupported assets; review the warning below the total."
+        : "Coinbase conversion rates refreshed. USD totals remain approximate."
+    );
   }
 
   if (isLoading) {
@@ -1186,6 +1191,9 @@ function App() {
   const liquidAccounts = dashboard.accounts.filter(isLiquidAccountBalance);
   const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
   const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
+  const incompleteLiquiditySources = dashboard.integrationStatus
+    .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash") && status.mode === "partial")
+    .map((status) => status.label);
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
   const pageHeader = pageHeaderContent[activeTab];
 
@@ -1238,7 +1246,7 @@ function App() {
               <div className="liquidity-hero-title"><CircleDollarSign size={20} /><span>Approximate liquid assets</span></div>
               <strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong>
               <p>One USD view across connected bank balances, manual cash, exchanges, and crypto wallets.</p>
-              <small>{dashboard.approximateUsdTotals.asOf ? `Yahoo quotes updated ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync</small>
+              <small>{dashboard.approximateUsdTotals.asOf ? `Oldest included rate ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync</small>
             </div>
             <div className="liquidity-breakdown">
               <article><span>Liquid bank accounts</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>{groupedAccountMoney(liquidAccounts)}</small></article>
@@ -1246,7 +1254,9 @@ function App() {
               <article className="liability"><span>Card liabilities · excluded</span><strong>{hasCurrencyTotals(cardLiabilities) ? formatCurrencyTotals(cardLiabilities) : "—"}</strong><small>Shown separately and never deducted from liquid assets.</small></article>
             </div>
           </section>
-          {dashboard.approximateUsdTotals.excludedAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Not included because Yahoo did not return a current USD quote: <strong>{dashboard.approximateUsdTotals.excludedAssets.join(", ")}</strong>.</span></div>}
+          {incompleteLiquiditySources.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>The total only includes currently available balances. Incomplete bank sources: <strong>{incompleteLiquiditySources.join(", ")}</strong>.</span></div>}
+          {dashboard.approximateUsdTotals.staleAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Using last-known conversion rates for <strong>{dashboard.approximateUsdTotals.staleAssets.join(", ")}</strong>; the total remains approximate.</span></div>}
+          {dashboard.approximateUsdTotals.excludedAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Not included because Coinbase did not return a USD rate: <strong>{dashboard.approximateUsdTotals.excludedAssets.join(", ")}</strong>.</span></div>}
           <section className="metric-grid" aria-label="Finance summary">
             <MetricCard
               icon={<Banknote />}
@@ -1860,7 +1870,7 @@ function BanksView({
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
   for (const status of dashboard.integrationStatus) {
     const source = status.id as DataSource;
-    if (status.id !== "openrouter" && status.id !== "yahoo" && isBankSource(source)) {
+    if (status.id !== "openrouter" && status.id !== "coinbase" && isBankSource(source)) {
       statusBySource.set(source, status);
     }
   }
@@ -2362,7 +2372,7 @@ function AnalyticsView({
   for (const account of dashboard.accounts) sourceIds.add(account.source);
   for (const invoice of dashboard.invoices) sourceIds.add(invoice.source);
   for (const status of dashboard.integrationStatus) {
-    if (status.id !== "openrouter" && status.id !== "yahoo") sourceIds.add(status.id);
+    if (status.id !== "openrouter" && status.id !== "coinbase") sourceIds.add(status.id);
   }
   const sourceRows = [...sourceIds]
     .map((source) => {
