@@ -316,7 +316,8 @@ test("approximate USD totals retain missing-quote disclosure", () => {
   const totals = calculateApproximateUsdTotals(
     [
       { id: "usd", name: "USD", source: "wise", balance: 100, currency: "USD", updatedAt: "2026-07-20", status: "live" },
-      { id: "cad", name: "CAD", source: "wise", balance: 100, currency: "CAD", updatedAt: "2026-07-20", status: "live" }
+      { id: "cad", name: "CAD", source: "wise", balance: 100, currency: "CAD", updatedAt: "2026-07-20", status: "live" },
+      { id: "amex", name: "Amex", source: "amex", balance: -500, currency: "EUR", updatedAt: "2026-07-20", status: "live" }
     ],
     [
       { id: "btc", name: "Trust", kind: "wallet", assetType: "crypto", asset: "BTC", balance: 0.01, updatedAt: "2026-07-20" },

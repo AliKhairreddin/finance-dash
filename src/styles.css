@@ -557,6 +557,99 @@ textarea:focus-visible {
   margin-bottom: 16px;
 }
 
+.liquidity-hero {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.65fr);
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid var(--info-border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.liquidity-hero-main {
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 20px;
+  border-right: 1px solid var(--info-border);
+  background: var(--blue-soft);
+}
+
+.liquidity-hero-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--info-text);
+  font-size: 0.75rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.liquidity-hero-main > strong {
+  color: var(--ink);
+  font-size: clamp(2rem, 3.2vw, 3rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+}
+
+.liquidity-hero-main > p,
+.liquidity-hero-main > small,
+.liquidity-breakdown small {
+  color: var(--app-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.liquidity-hero-main > p {
+  margin: 0;
+  max-width: 52ch;
+}
+
+.liquidity-breakdown {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.liquidity-breakdown article {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 17px;
+  border-left: 1px solid var(--line);
+}
+
+.liquidity-breakdown article:first-child {
+  border-left: 0;
+}
+
+.liquidity-breakdown span {
+  color: var(--app-muted);
+  font-size: 0.7rem;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.liquidity-breakdown strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1.12rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.liquidity-breakdown .liability strong {
+  color: var(--red);
+}
+
+.liquidity-warning {
+  margin-bottom: 12px;
+}
+
 .metric-card {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);
@@ -3364,6 +3457,15 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1180px) {
+  .liquidity-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .liquidity-hero-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--info-border);
+  }
+
   .income-schedule-strip {
     grid-template-columns: auto minmax(0, 1fr) minmax(210px, 0.7fr);
   }
@@ -3428,6 +3530,19 @@ textarea:focus-visible {
 }
 
 @media (max-width: 760px) {
+  .liquidity-breakdown {
+    grid-template-columns: 1fr;
+  }
+
+  .liquidity-breakdown article {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .liquidity-breakdown article:first-child {
+    border-top: 0;
+  }
+
   .app-shell {
     width: min(100vw - 18px, 1540px);
     padding-top: 12px;

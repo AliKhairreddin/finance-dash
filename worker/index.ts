@@ -78,6 +78,7 @@ import {
   incomeAutomationTimezone,
   invoiceOutstanding,
   isClosedBillingPeriod,
+  isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
   previousCalendarMonth,
   previousCompletedWeek,
@@ -260,7 +261,7 @@ const revolutBaseUrlByEnvironment = {
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
 const defaultSlashBaseUrl = "https://api.slash.com";
-const defaultYahooFinanceChartBaseUrl = "https://query2.finance.yahoo.com/v8/finance/chart";
+const defaultYahooFinanceChartBaseUrl = "https://query1.finance.yahoo.com/v8/finance/chart";
 const defaultMeritDeliverInvoicePath = "/v2/sendinvoicebyemail";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -1532,13 +1533,13 @@ function integrationStatus(
       id: "yahoo",
       label: "Yahoo Finance",
       configured: true,
-      mode: fxRates.length > 0 && missingFxAssets.length === 0 ? "live" : "partial",
+      mode: missingFxAssets.length === 0 ? "live" : "partial",
       message:
         missingFxAssets.length > 0
           ? `USD totals exclude assets without a current Yahoo quote: ${missingFxAssets.join(", ")}.`
           : fxRates.length > 0
           ? `Approximate USD quotes were last refreshed at ${fxRates.reduce((latest, rate) => rate.asOf > latest ? rate.asOf : latest, fxRates[0].asOf)}.`
-          : "Refresh approximate USD rates after adding a non-USD account or holding.",
+          : "All liquid balances are already in USD, so no conversion quote is required.",
       needs: []
     }
   ];
@@ -1631,7 +1632,7 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
   };
 }
 
-async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
+async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {}): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
   const [wise, revolut, slash, amex, meritResults] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
@@ -1650,6 +1651,16 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
         ? meritConnectionIssue(meritTaxesResult.reason)
         : undefined;
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
+  let fxRatesRefreshed = false;
+  if (options.refreshFxRates) {
+    const assets = new Map<string, Holding["assetType"]>();
+    for (const account of accounts.filter(isLiquidAccountBalance)) {
+      assets.set(account.currency.toUpperCase(), "fiat");
+    }
+    for (const holding of state.holdings) assets.set(holding.asset.toUpperCase(), holding.assetType);
+    state.fxRates = await fetchYahooUsdRates(env, assets);
+    fxRatesRefreshed = true;
+  }
   const invoicesBeforeReconciliation = mergeInvoices(liveMeritInvoices, state.invoices);
   const persistedTransactionsBeforeSync = state.wiseStatementTransactions;
   const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
@@ -1680,7 +1691,7 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
   });
   const bankStateChanged = JSON.stringify(rawTransactions) !== JSON.stringify(persistedTransactionsBeforeSync);
   const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
-  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged) {
+  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged || fxRatesRefreshed) {
     state.invoices = reconciliation.invoices;
     state.paymentAllocations = reconciliation.allocations;
     state.wiseStatementTransactions = reconciliation.transactions;
@@ -2820,20 +2831,7 @@ export async function fetchYahooUsdRates(env: Env, assets: Map<string, Holding["
 }
 
 async function refreshFxRates(env: Env): Promise<DashboardSnapshot> {
-  const state = await loadPersisted(env);
-  const [wise, revolut, slash, amex] = await Promise.all([
-    fetchWiseActivity(env),
-    fetchRevolutActivity(env),
-    fetchSlashActivity(env),
-    fetchAmexActivity(env)
-  ]);
-  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
-  const assets = new Map<string, Holding["assetType"]>();
-  for (const account of accounts) assets.set(account.currency.toUpperCase(), "fiat");
-  for (const holding of state.holdings) assets.set(holding.asset.toUpperCase(), holding.assetType);
-  state.fxRates = await fetchYahooUsdRates(env, assets);
-  await savePersisted(env, state);
-  return getSnapshot(env);
+  return getSnapshot(env, { refreshFxRates: true });
 }
 
 function upsertRevenueRun(state: PersistedState, run: RevenueRun): void {
@@ -3114,7 +3112,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
-      return json(await getSnapshot(env));
+      return json(await getSnapshot(env, { refreshFxRates: true }));
     }
 
     if (url.pathname === "/api/wise/import-statement" && request.method === "POST") {
@@ -3260,6 +3258,19 @@ export default {
     return env.ASSETS.fetch(request);
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    if (controller.cron === "17 * * * *") {
+      try {
+        await refreshFxRates(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "fx_rate_refresh_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        throw error;
+      }
+      return;
+    }
     if (!isLebanonIncomeAutomationTime(controller.scheduledTime)) return;
     try {
       await runIncomeAutomation(env, new Date(controller.scheduledTime));

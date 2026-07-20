@@ -28,12 +28,13 @@
     // Merit writes only occur after an explicit dashboard save/deliver action; scheduled revenue work creates local drafts.
     "MERIT_WRITES_ENABLED": "true",
     "REVENUE_TIMEZONE": "Asia/Beirut",
-    "YAHOO_FINANCE_CHART_URL": "https://query2.finance.yahoo.com/v8/finance/chart",
+    "YAHOO_FINANCE_CHART_URL": "https://query1.finance.yahoo.com/v8/finance/chart",
     "PUBLIC_APP_URL": "https://finance.thatcanadian.dev"
   },
   "triggers": {
     "crons": [
-      "0 6,7 * * 1"
+      "0 6,7 * * 1",
+      "17 * * * *"
     ]
   },
   "observability": {

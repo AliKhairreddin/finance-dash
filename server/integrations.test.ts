@@ -122,7 +122,7 @@ test("Yahoo USD adapter uses chart symbols and keeps partial successes", async (
       const url = new URL(String(input));
       const symbol = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
       requestedSymbols.push(symbol);
-      assert.equal(url.origin, "https://query2.finance.yahoo.com");
+      assert.equal(url.origin, "https://query1.finance.yahoo.com");
       assert.equal(url.searchParams.get("interval"), "1d");
       assert.equal(url.searchParams.get("range"), "1d");
       assert.match(new Headers(init?.headers).get("User-Agent") ?? "", /Mozilla/);

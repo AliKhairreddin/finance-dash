@@ -100,6 +100,7 @@ import {
   profitDistributionBucketLabels,
   profitDistributionPartners
 } from "../shared/distribution";
+import { isLiquidAccountBalance } from "../shared/income";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
@@ -342,6 +343,22 @@ function groupedAccountMoney(rows: DashboardSnapshot["accounts"]): string {
   }
   const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+}
+
+function groupedHoldingMoney(rows: DashboardSnapshot["holdings"]): string {
+  const totals = new Map<string, { balance: number; assetType: DashboardSnapshot["holdings"][number]["assetType"] }>();
+  for (const row of rows) {
+    const asset = row.asset.toUpperCase();
+    const current = totals.get(asset);
+    totals.set(asset, { balance: (current?.balance ?? 0) + row.balance, assetType: row.assetType });
+  }
+  const values = [...totals.entries()].sort(([left], [right]) => left.localeCompare(right));
+  return values.length > 0
+    ? values.map(([asset, total]) => total.assetType === "fiat"
+      ? money(total.balance, asset)
+      : `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(total.balance)} ${asset}`
+    ).join(" · ")
+    : "—";
 }
 
 const categoryChartPalette = [
@@ -1166,6 +1183,9 @@ function App() {
   const hasInvestments = dashboard.investments.length > 0;
   const hasProfit = hasCurrencyTotals(dashboard.metrics.profit);
   const profitTone = currencyTotalsTone(dashboard.metrics.profit);
+  const liquidAccounts = dashboard.accounts.filter(isLiquidAccountBalance);
+  const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
+  const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
   const pageHeader = pageHeaderContent[activeTab];
 
@@ -1213,6 +1233,20 @@ function App() {
 
       {activeTab === "overview" && (
         <>
+          <section className="liquidity-hero" aria-label="Approximate total liquidity in US dollars">
+            <div className="liquidity-hero-main">
+              <div className="liquidity-hero-title"><CircleDollarSign size={20} /><span>Approximate liquid assets</span></div>
+              <strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong>
+              <p>One USD view across connected bank balances, manual cash, exchanges, and crypto wallets.</p>
+              <small>{dashboard.approximateUsdTotals.asOf ? `Yahoo quotes updated ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync</small>
+            </div>
+            <div className="liquidity-breakdown">
+              <article><span>Liquid bank accounts</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>{groupedAccountMoney(liquidAccounts)}</small></article>
+              <article><span>Cash & crypto</span><strong>{money(dashboard.approximateUsdTotals.holdingsUsd, "USD")}</strong><small>{groupedHoldingMoney(dashboard.holdings)}</small></article>
+              <article className="liability"><span>Card liabilities · excluded</span><strong>{hasCurrencyTotals(cardLiabilities) ? formatCurrencyTotals(cardLiabilities) : "—"}</strong><small>Shown separately and never deducted from liquid assets.</small></article>
+            </div>
+          </section>
+          {dashboard.approximateUsdTotals.excludedAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Not included because Yahoo did not return a current USD quote: <strong>{dashboard.approximateUsdTotals.excludedAssets.join(", ")}</strong>.</span></div>}
           <section className="metric-grid" aria-label="Finance summary">
             <MetricCard
               icon={<Banknote />}

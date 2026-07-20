@@ -124,9 +124,9 @@ export function HoldingsView({
   return (
     <div className="holdings-stack">
       <section className="holding-summary-band">
-        <article className="holding-total-card"><span>Bank accounts · approx.</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>Converted to USD for orientation</small></article>
+        <article className="holding-total-card"><span>Liquid bank accounts · approx.</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>Converted to USD; card liabilities excluded</small></article>
         <article className="holding-total-card"><span>Cash & wallets · approx.</span><strong>{money(dashboard.approximateUsdTotals.holdingsUsd, "USD")}</strong><small>{dashboard.holdings.length} manually tracked holdings</small></article>
-        <article className="holding-total-card total"><span>Total available · approx.</span><strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong><small>{dashboard.approximateUsdTotals.asOf ? `Quotes ${dateLabel(dashboard.approximateUsdTotals.asOf)}` : "Refresh quotes to value holdings"}</small></article>
+        <article className="holding-total-card total"><span>Total available · approx.</span><strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong><small>{dashboard.approximateUsdTotals.asOf ? `Quotes ${dateLabel(dashboard.approximateUsdTotals.asOf)}` : dashboard.approximateUsdTotals.excludedAssets.length > 0 ? "Refresh quotes to include every asset" : "No non-USD quote required"}</small></article>
       </section>
 
       <section className="panel">

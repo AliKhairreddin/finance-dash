@@ -66,6 +66,7 @@ import {
   incomeAutomationTimezone,
   invoiceOutstanding,
   isClosedBillingPeriod,
+  isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
   previousCalendarMonth,
   previousCompletedWeek,
@@ -1183,10 +1184,16 @@ export async function deleteHolding(holdingId: string): Promise<DashboardSnapsho
   return getSnapshot();
 }
 
-export async function refreshFxRates(): Promise<DashboardSnapshot> {
-  const fiatAssets = accounts.map((account) => ({ asset: account.currency, assetType: "fiat" as const }));
+async function updateCurrentFxRates(): Promise<void> {
+  const fiatAssets = accounts
+    .filter(isLiquidAccountBalance)
+    .map((account) => ({ asset: account.currency, assetType: "fiat" as const }));
   const holdingAssets = holdings.map((holding) => ({ asset: holding.asset, assetType: holding.assetType }));
   fxRates = await fetchYahooUsdRates([...fiatAssets, ...holdingAssets]);
+}
+
+export async function refreshFxRates(): Promise<DashboardSnapshot> {
+  await updateCurrentFxRates();
   await persist();
   return getSnapshot();
 }
@@ -1800,6 +1807,7 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   }
 
   reconcileStoredPayments();
+  await updateCurrentFxRates();
   lastSync = new Date().toISOString();
   await persist();
   return getSnapshot();

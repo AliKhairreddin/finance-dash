@@ -337,7 +337,7 @@ export function calculateApproximateUsdTotals(
   let accountsUsd = 0;
   let holdingsUsd = 0;
 
-  for (const account of accounts) {
+  for (const account of accounts.filter(isLiquidAccountBalance)) {
     const asset = account.currency.toUpperCase();
     const rate = asset === "USD" ? 1 : rateByAsset.get(asset)?.rateUsd;
     if (rate === undefined) excludedAssets.add(asset);
@@ -361,6 +361,10 @@ export function calculateApproximateUsdTotals(
     excludedAssets: [...excludedAssets].sort(),
     asOf
   };
+}
+
+export function isLiquidAccountBalance(account: AccountBalance): boolean {
+  return account.source !== "amex";
 }
 
 function isPaymentSource(source: Transaction["source"]): source is Extract<PaymentSource, Transaction["source"]> {

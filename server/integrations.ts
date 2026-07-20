@@ -19,7 +19,7 @@ const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.
 const meritGetInvoicesPath = process.env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices";
 const meritCreateInvoicePath = process.env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice";
 const meritDeliverInvoicePath = process.env.MERIT_DELIVER_INVOICE_PATH || "/v2/sendinvoicebyemail";
-const yahooChartBaseUrl = process.env.YAHOO_FINANCE_CHART_URL || "https://query2.finance.yahoo.com/v8/finance/chart";
+const yahooChartBaseUrl = process.env.YAHOO_FINANCE_CHART_URL || "https://query1.finance.yahoo.com/v8/finance/chart";
 const amexApiBaseUrl = process.env.AMEX_API_BASE_URL;
 const amexTokenUrl = process.env.AMEX_TOKEN_URL;
 const amexAccountPathTemplate = process.env.AMEX_ACCOUNT_PATH_TEMPLATE;
@@ -214,7 +214,7 @@ export function getIntegrationStatus(
       label: "Yahoo Finance",
       configured: true,
       mode: "live",
-      message: "Ready to refresh approximate USD conversion quotes for fiat and crypto holdings.",
+      message: "Approximate USD quotes refresh with bank sync and can also be refreshed manually.",
       needs: []
     }
   ];

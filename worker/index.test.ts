@@ -233,7 +233,7 @@ test("Yahoo quote refresh keeps successful assets when another chart request fai
 
   try {
     const rates = await fetchYahooUsdRates(
-      { YAHOO_FINANCE_CHART_URL: "https://query2.finance.yahoo.com/v8/finance/chart" } as never,
+      { YAHOO_FINANCE_CHART_URL: "https://query1.finance.yahoo.com/v8/finance/chart" } as never,
       new Map([
         ["BTC", "crypto"],
         ["CAD", "fiat"]
