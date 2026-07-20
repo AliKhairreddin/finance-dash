@@ -2,6 +2,7 @@
 
 - Source visual truth: `/Users/alikheireddine/.codex/generated_images/019f81d6-812c-7c10-a985-9b0f9c6afbb6/exec-b0fa9131-4c2a-4c7c-8916-a3b60fd3ccaa.png`
 - Implementation screenshot: `/tmp/finance-dash-mobile-final-2.png`
+- Live-data implementation screenshot: `/tmp/finance-dash-live-mobile-fixed.png`
 - Normalized side-by-side comparison: `/tmp/finance-dash-option3-comparison-final.png` (source left, implementation right)
 - Viewport: browser `390 × 844`; browser screenshot content capture `375 × 812`
 - State: light theme, Overview selected, mobile navigation closed, empty financial data with live incomplete-source warning
@@ -27,6 +28,7 @@
 - Theme toggles successfully in the compact command bar and was restored to light mode.
 - Overview, Revenue, Invoices, and Companies were visually inspected at the mobile viewport; desktop Overview was inspected at the default `1280 × 720` browser viewport.
 - Browser console errors checked: none.
+- The deployed page was rechecked with real multi-currency balances; long values wrap within their value track without squeezing labels or creating horizontal overflow.
 - Automated checks: TypeScript lint, 48 tests, and production build passed.
 
 ## Comparison History
@@ -37,6 +39,10 @@
    - Fixes: reduced the mobile heading scale, tightened liquidity padding/gaps/type, shortened supporting-row height, reduced metric-row height, and removed side margins from the live warning.
 2. Post-fix comparison: `/tmp/finance-dash-option3-comparison-final.png`
    - The heading, primary summary proportions, row rhythm, control sizing, and overall visual density now match the selected direction without sacrificing production data or truthful affordances.
+3. Live-data responsive check: `/tmp/finance-dash-live-mobile-fixed.png`
+   - [P1] The first deployed pass exposed a multi-currency total that consumed the metric row's intrinsic-width value track and squeezed its label.
+   - Fix: changed the mobile metric row to bounded fractional label/value tracks and allowed the value to wrap inside its assigned track.
+   - Post-fix evidence: the full label, supporting copy, and `€51,891.36 · £0.00 · $18,757.44` value remain readable with no horizontal overflow or console errors.
 
 ## Focused Region Comparison
 
