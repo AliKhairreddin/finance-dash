@@ -6,6 +6,7 @@ import {
   BarChart3,
   Building2,
   Check,
+  ChevronDown,
   CircleAlert,
   CircleDollarSign,
   CreditCard,
@@ -1199,7 +1200,18 @@ function App() {
 
   return (
     <main className="app-shell">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        themeMode={themeMode}
+        onToggleTheme={toggleThemeMode}
+        onAddCompany={() => {
+          setEditingProvider(null);
+          setProviderModalOpen(true);
+        }}
+        onSync={syncNow}
+        isSyncing={isSyncing}
+      />
       <div className="main-column">
         <header className="topbar">
           <div>
@@ -1207,6 +1219,7 @@ function App() {
             <h1>{pageHeader.title}</h1>
             <div className="meta-row">
               <span>Data as of: {maybeDate(dashboard.asOf)}</span>
+              <span className="meta-separator" aria-hidden="true">·</span>
               <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
             </div>
           </div>
@@ -1258,6 +1271,7 @@ function App() {
           {dashboard.approximateUsdTotals.staleAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Using last-known conversion rates for <strong>{dashboard.approximateUsdTotals.staleAssets.join(", ")}</strong>; the total remains approximate.</span></div>}
           {dashboard.approximateUsdTotals.excludedAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Not included because Coinbase did not return a USD rate: <strong>{dashboard.approximateUsdTotals.excludedAssets.join(", ")}</strong>.</span></div>}
           <section className="metric-grid" aria-label="Finance summary">
+            <div className="metric-grid-heading">Finance summary</div>
             <MetricCard
               icon={<Banknote />}
               label="Cash in accounts"
@@ -1504,11 +1518,23 @@ function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: 
 
 function Sidebar({
   activeTab,
-  setActiveTab
+  setActiveTab,
+  themeMode,
+  onToggleTheme,
+  onAddCompany,
+  onSync,
+  isSyncing
 }: {
   activeTab: ActiveTab;
   setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
+  themeMode: ThemeMode;
+  onToggleTheme: () => void;
+  onAddCompany: () => void;
+  onSync: () => void;
+  isSyncing: boolean;
 }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileNavRef = useRef<HTMLDivElement>(null);
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
@@ -1523,15 +1549,42 @@ function Sidebar({
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
+  const activeItem = [...items, ...incomeItems, ...directoryItems].find((item) => item.id === activeTab) ?? items[0];
 
-  function navigationButton(item: { id: ActiveTab; label: string; icon: React.ReactNode }, nested = false) {
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    function closeOnOutsidePress(event: PointerEvent) {
+      if (!mobileNavRef.current?.contains(event.target as Node)) setMobileMenuOpen(false);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileMenuOpen]);
+
+  function selectTab(id: ActiveTab) {
+    setActiveTab(id);
+    setMobileMenuOpen(false);
+  }
+
+  function navigationButton(item: { id: ActiveTab; label: string; icon: React.ReactNode }, nested = false, mobile = false) {
     return (
       <Button
         key={item.id}
         className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""}`}
-        onClick={() => setActiveTab(item.id)}
+        onClick={() => selectTab(item.id)}
         aria-current={activeTab === item.id ? "page" : undefined}
+        role={mobile ? "menuitem" : undefined}
         title={item.label}
+        type="button"
       >
         {item.icon}
         <span>{item.label}</span>
@@ -1541,6 +1594,39 @@ function Sidebar({
 
   return (
     <aside className="sidebar" aria-label="Finance dashboard navigation">
+      <div className="mobile-command-bar">
+        <div className="mobile-nav-shell" ref={mobileNavRef}>
+          <Button
+            aria-controls="mobile-navigation-menu"
+            aria-expanded={mobileMenuOpen}
+            aria-haspopup="menu"
+            className="mobile-nav-trigger"
+            data-testid="mobile-nav-trigger"
+            onClick={() => setMobileMenuOpen((current) => !current)}
+            type="button"
+          >
+            <span className="mobile-nav-current">{activeItem.icon}<span>{activeItem.label}</span></span>
+            <ChevronDown className={mobileMenuOpen ? "open" : ""} size={18} />
+          </Button>
+          {mobileMenuOpen && (
+            <div className="mobile-nav-menu" data-testid="mobile-nav-menu" id="mobile-navigation-menu" role="menu">
+              <div className="mobile-nav-group-label">Workspace</div>
+              {items.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Income</div>
+              {incomeItems.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Business</div>
+              {directoryItems.map((item) => navigationButton(item, false, true))}
+            </div>
+          )}
+        </div>
+        <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
+        <Button className="mobile-command-button" onClick={onAddCompany} type="button" aria-label="Add company" title="Add company">
+          <Plus size={18} />
+        </Button>
+        <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Sync dashboard" title="Sync dashboard">
+          {isSyncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+        </Button>
+      </div>
       <div className="sidebar-brand">
         <Banknote size={19} />
         <strong>Finance</strong>
