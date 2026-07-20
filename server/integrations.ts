@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import type {
   AccountBalance,
-  CreateInvoicePayload,
+  FxRate,
+  HoldingAssetType,
   IntegrationStatus,
   Invoice,
   MeritTax,
+  Provider,
   RevenuePartner,
   RevenueRun,
   Transaction
@@ -16,6 +18,8 @@ const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
 const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.ee/api";
 const meritGetInvoicesPath = process.env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices";
 const meritCreateInvoicePath = process.env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice";
+const meritDeliverInvoicePath = process.env.MERIT_DELIVER_INVOICE_PATH || "/v2/sendinvoicebyemail";
+const yahooChartBaseUrl = process.env.YAHOO_FINANCE_CHART_URL || "https://query2.finance.yahoo.com/v8/finance/chart";
 const amexApiBaseUrl = process.env.AMEX_API_BASE_URL;
 const amexTokenUrl = process.env.AMEX_TOKEN_URL;
 const amexAccountPathTemplate = process.env.AMEX_ACCOUNT_PATH_TEMPLATE;
@@ -204,6 +208,14 @@ export function getIntegrationStatus(
             ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
+    },
+    {
+      id: "yahoo",
+      label: "Yahoo Finance",
+      configured: true,
+      mode: "live",
+      message: "Ready to refresh approximate USD conversion quotes for fiat and crypto holdings.",
+      needs: []
     }
   ];
 }
@@ -690,6 +702,22 @@ function meritItemCode(tax: MeritTax): string {
   return `${prefix}-${taxCode}`.slice(0, 20);
 }
 
+function configuredMeritItemCode(value: string | undefined, tax: MeritTax): string {
+  const configured = value?.replace(/[^A-Za-z0-9-]/g, "").slice(0, 20);
+  return configured || meritItemCode(tax);
+}
+
+function meritResponseDate(value: unknown, defaultDate: string): string {
+  if (typeof value !== "string" && typeof value !== "number") return defaultDate;
+  const raw = String(value).trim();
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const dotNet = raw.match(/\/Date\((\d+)\)\//);
+  if (dotNet) return new Date(Number(dotNet[1])).toISOString().slice(0, 10);
+  const parsed = new Date(raw);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : defaultDate;
+}
+
 function meritUrl(path: string, body: string): string {
   const apiId = process.env.MERIT_API_ID;
   const apiKey = process.env.MERIT_API_KEY;
@@ -702,7 +730,7 @@ function meritUrl(path: string, body: string): string {
     .createHmac("sha256", Buffer.from(apiKey, "ascii"))
     .update(Buffer.from(`${apiId}${timestamp}${body}`, "utf8"))
     .digest("base64");
-  const params = new URLSearchParams({ apiId, timestamp, signature });
+  const params = new URLSearchParams({ ApiId: apiId, timestamp, signature });
   return `${meritApiBaseUrl}${path}?${params.toString()}`;
 }
 
@@ -728,6 +756,7 @@ export async function fetchMeritInvoices(): Promise<Invoice[]> {
       SIHId?: string;
       InvoiceNo?: string;
       CustomerName?: string;
+      DocumentDate?: string;
       DueDate?: string;
       CurrencyCode?: string;
       TotalSum?: number;
@@ -735,27 +764,42 @@ export async function fetchMeritInvoices(): Promise<Invoice[]> {
       Paid?: boolean;
     }>
   >(meritGetInvoicesPath, {
-    Periodstart: meritDate(periodStart.toISOString()),
+    PeriodStart: meritDate(periodStart.toISOString()),
     PeriodEnd: meritDate(periodEnd.toISOString()),
     UnPaid: false
   });
 
-  return response.map((invoice) => ({
-    id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
-    documentType: "sales_invoice" as const,
-    customerName: invoice.CustomerName ?? "Merit invoice",
-    amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
-    currency: invoice.CurrencyCode ?? "USD",
-    status: invoice.Paid ? "paid" : "open",
-    approvalStatus: "approved",
-    paidLocally: false,
-    meritPaid: Boolean(invoice.Paid),
-    dueDate: invoice.DueDate ? String(invoice.DueDate) : new Date().toISOString().slice(0, 10),
-    source: "merit",
-    externalId: invoice.SIHId ?? invoice.InvoiceNo,
-    description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
-    createdAt: new Date().toISOString()
-  }));
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+  return response.flatMap((invoice): Invoice[] => {
+    const externalId = invoice.SIHId ?? invoice.InvoiceNo;
+    if (!externalId) return [];
+    const invoiceNumber = invoice.InvoiceNo ?? invoice.SIHId!;
+    return [
+      {
+        id: `merit-${externalId}`,
+        documentType: "sales_invoice",
+        origin: "merit",
+        customerName: invoice.CustomerName ?? "Merit invoice",
+        amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
+        currency: (invoice.CurrencyCode ?? "USD").toUpperCase(),
+        // Merit is authoritative only for the read-only meritStatus field. Local
+        // allocations are the sole authority for the dashboard paid status.
+        status: "open",
+        meritStatus: invoice.Paid ? "paid" : "open",
+        meritDeliveryStatus: "saved",
+        invoiceNumber,
+        issueDate: meritResponseDate(invoice.DocumentDate, today),
+        dueDate: meritResponseDate(invoice.DueDate, today),
+        source: "merit",
+        externalId,
+        description: `Merit invoice ${invoiceNumber}`,
+        revenueRunIds: [],
+        createdAt: now,
+        updatedAt: now
+      }
+    ];
+  });
 }
 
 export async function fetchMeritTaxes(): Promise<MeritTax[]> {
@@ -782,31 +826,59 @@ export async function fetchMeritTaxes(): Promise<MeritTax[]> {
     .sort((left, right) => left.taxPct - right.taxPct || left.name.localeCompare(right.name));
 }
 
-export async function createMeritInvoice(payload: CreateInvoicePayload, tax: MeritTax): Promise<Invoice> {
-  assertMeritWriteConfiguration();
-  const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
+export interface MeritCreatedInvoice {
+  externalId: string;
+  invoiceNumber: string;
+}
 
-  const invoiceNo = `FD-${Date.now()}`;
+export interface MeritInvoiceOptions {
+  itemCode?: string;
+  provider?: Provider;
+}
+
+function meritCustomer(invoice: Invoice, provider?: Provider): Record<string, unknown> {
+  const meritCustomerId = provider?.meritCustomerId?.trim();
+  if (meritCustomerId) return { Id: meritCustomerId };
+
+  const email = provider?.email?.trim();
+  const address = provider?.address?.trim();
+  const configuredCountry = provider?.country?.trim().toUpperCase();
+  const countryCode = /^[A-Z]{2}$/.test(configuredCountry ?? "")
+    ? configuredCountry
+    : process.env.MERIT_DEFAULT_COUNTRY_CODE || "CA";
+  return {
+    Name: provider?.legalName?.trim() || invoice.customerName,
+    NotTDCustomer: true,
+    CountryCode: countryCode,
+    ...(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? { Email: email } : {}),
+    ...(address ? { Address: address } : {})
+  };
+}
+
+export async function createMeritInvoice(
+  invoice: Invoice,
+  tax: MeritTax,
+  options: MeritInvoiceOptions = {}
+): Promise<MeritCreatedInvoice> {
+  assertMeritWriteConfiguration();
+  const taxAmount = Number(((invoice.amount * tax.taxPct) / 100).toFixed(2));
+
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(meritCreateInvoicePath, {
-    Customer: {
-      Name: payload.customerName,
-      NotTDCustomer: true,
-      CountryCode: process.env.MERIT_DEFAULT_COUNTRY_CODE || "CA"
-    },
+    Customer: meritCustomer(invoice, options.provider),
     AccountingDoc: 1,
-    DocDate: meritDate(new Date().toISOString()),
-    DueDate: meritDate(payload.dueDate),
-    InvoiceNo: invoiceNo,
-    CurrencyCode: payload.currency,
+    DocDate: meritDate(invoice.issueDate),
+    DueDate: meritDate(invoice.dueDate),
+    InvoiceNo: invoice.invoiceNumber,
+    CurrencyCode: invoice.currency,
     InvoiceRow: [
       {
         Item: {
-          Code: meritItemCode(tax),
-          Description: payload.description.slice(0, 150),
+          Code: configuredMeritItemCode(options.itemCode, tax),
+          Description: invoice.description.slice(0, 150),
           Type: 2
         },
         Quantity: 1,
-        Price: payload.amount,
+        Price: invoice.amount,
         TaxId: tax.id
       }
     ],
@@ -816,28 +888,84 @@ export async function createMeritInvoice(payload: CreateInvoicePayload, tax: Mer
         Amount: taxAmount
       }
     ],
-    TotalAmount: payload.amount,
-    Hcomment: "Created from finance dashboard. Payment status is managed by accounting in Merit."
+    TotalAmount: invoice.amount,
+    Hcomment: "Created from finance dashboard. Paid status is managed locally and is not written back to Merit."
   });
 
+  const externalId = response.InvoiceId ?? response.SIHId ?? response.Id;
+  if (!externalId) {
+    throw new Error("Merit accepted the invoice request without returning an invoice ID; review Merit before retrying.");
+  }
   return {
-    id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
-    providerId: payload.providerId,
-    documentType: payload.documentType,
-    customerName: payload.customerName,
-    amount: payload.amount,
-    currency: payload.currency,
-    status: "created",
-    approvalStatus: "pending",
-    paidLocally: false,
-    meritPaid: false,
-    dueDate: payload.dueDate,
-    source: "merit",
-    externalId: response.InvoiceId ?? response.SIHId ?? response.Id ?? response.InvoiceNo ?? invoiceNo,
-    description: payload.description,
-    transactionId: payload.transactionId,
-    createdAt: new Date().toISOString()
+    externalId,
+    invoiceNumber: response.InvoiceNo ?? invoice.invoiceNumber
   };
+}
+
+export async function deliverMeritInvoice(externalId: string): Promise<void> {
+  assertMeritWriteConfiguration();
+  if (!externalId.trim()) throw new Error("A Merit invoice ID is required for delivery");
+  await fetchMeritJson<unknown>(meritDeliverInvoicePath, {
+    Id: externalId,
+    DelivNote: false
+  });
+}
+
+export interface YahooUsdAsset {
+  asset: string;
+  assetType: HoldingAssetType;
+}
+
+function yahooUsdSymbol(asset: YahooUsdAsset): string {
+  return asset.assetType === "crypto" ? `${asset.asset}-USD` : `${asset.asset}USD=X`;
+}
+
+export async function fetchYahooUsdRates(assets: YahooUsdAsset[]): Promise<FxRate[]> {
+  const uniqueAssets = [...new Map(
+    assets
+      .map((asset) => ({ ...asset, asset: asset.asset.trim().toUpperCase() }))
+      .filter((asset) => asset.asset && asset.asset !== "USD")
+      .map((asset) => [`${asset.assetType}:${asset.asset}`, asset] as const)
+  ).values()];
+  if (uniqueAssets.length === 0) return [];
+
+  const fetchedAt = new Date().toISOString();
+  const results = await Promise.allSettled(
+    uniqueAssets.map(async (asset): Promise<FxRate> => {
+      const symbol = yahooUsdSymbol(asset);
+      const url = `${yahooChartBaseUrl.replace(/\/+$/, "")}/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+      const response = await fetchJson<{
+        chart?: {
+          result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }>;
+        };
+      }>(url, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36"
+        }
+      });
+      const meta = response.chart?.result?.[0]?.meta;
+      const rateUsd = Number(meta?.regularMarketPrice);
+      if (!Number.isFinite(rateUsd) || rateUsd <= 0) {
+        throw new Error(`Yahoo Finance did not return a USD chart quote for ${asset.asset}`);
+      }
+      return {
+        asset: asset.asset,
+        rateUsd,
+        provider: "yahoo",
+        asOf: meta?.regularMarketTime
+          ? new Date(meta.regularMarketTime * 1000).toISOString()
+          : fetchedAt
+      };
+    })
+  );
+  const rates = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+  if (rates.length === 0) {
+    const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    const detail = firstFailure?.reason instanceof Error ? firstFailure.reason.message : "no usable chart results";
+    throw new Error(`Yahoo Finance did not return any requested USD rates: ${detail}`);
+  }
+  return rates;
 }
 
 export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
@@ -865,6 +993,8 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
   params.append("fields[1]", "Stat.payout");
   params.append("fields[2]", "Stat.conversions");
   params.append("fields[3]", "Stat.clicks");
+  params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
+  params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
   params.append("filters[Stat.date][conditional]", "BETWEEN");
   params.append("filters[Stat.date][values][0]", period.periodStart);
   params.append("filters[Stat.date][values][1]", period.periodEnd);

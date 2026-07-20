@@ -2,7 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "finance-dash",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-06-19",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -23,13 +24,21 @@
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
     "MERIT_CREATE_INVOICE_PATH": "/v2/sendinvoice",
-    // Allows only the separately confirmed dashboard action; revenue pulls and scheduled syncs remain read-only.
+    "MERIT_DELIVER_INVOICE_PATH": "/v2/sendinvoicebyemail",
+    // Merit writes only occur after an explicit dashboard save/deliver action; scheduled revenue work creates local drafts.
     "MERIT_WRITES_ENABLED": "true",
-    "REVENUE_TIMEZONE": "UTC"
+    "REVENUE_TIMEZONE": "Asia/Beirut",
+    "YAHOO_FINANCE_CHART_URL": "https://query2.finance.yahoo.com/v8/finance/chart",
+    "PUBLIC_APP_URL": "https://finance.thatcanadian.dev"
   },
   "triggers": {
     "crons": [
-      "0 12 * * 1"
+      "0 6,7 * * 1"
     ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
   }
 }

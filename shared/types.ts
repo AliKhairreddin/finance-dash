@@ -1,16 +1,28 @@
-export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "mock" | "tune";
+export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "tune";
 
 export type Direction = "in" | "out";
 
 export type ProviderType = "client" | "supplier";
 
-export type InvoiceStatus = "draft" | "open" | "paid" | "created";
+export type InvoiceStatus = "draft" | "open" | "paid";
 
 export type InvoiceDocumentType = "sales_invoice" | "supplier_bill";
 
-export type RevenuePeriodPreset = "last-week" | "last-7-days" | "this-month" | "custom";
+export type RevenuePeriodPreset = "last-week" | "this-week" | "last-7-days" | "this-month" | "custom";
 
-export type RevenueRunStatus = "pulled" | "invoicing" | "invoiced" | "failed" | "mock" | "skipped";
+export type RevenueRunStatus = "pulled" | "drafted" | "invoicing" | "invoiced" | "failed" | "skipped";
+
+export type BillingCadence = "weekly" | "monthly";
+
+export type MeritSendMode = "save" | "deliver";
+
+export type MeritDeliveryStatus = "not-sent" | "saved" | "delivered" | "delivery-failed";
+
+export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "cash" | "kraken" | "trust" | "other";
+
+export type HoldingKind = "cash" | "exchange" | "wallet";
+
+export type HoldingAssetType = "fiat" | "crypto";
 
 export type CurrencyTotals = Record<string, number>;
 
@@ -80,7 +92,7 @@ export interface Team {
 
 export interface RevenuePartner {
   id: string;
-  providerId?: string;
+  providerId: string;
   teamId?: string;
   name: string;
   revenueCategory?: string;
@@ -95,6 +107,11 @@ export interface RevenuePartner {
   apiBaseUrlEnv?: string;
   meritCustomerName?: string;
   invoiceDueDays: number;
+  billingCadence: BillingCadence;
+  billingTimezone: string;
+  autoDraft: boolean;
+  defaultMeritTaxId?: string;
+  defaultMeritItemCode?: string;
   enabled: boolean;
   createdAt: string;
 }
@@ -139,6 +156,23 @@ export interface RevenueRun {
   createdAt: string;
 }
 
+export interface RevenueAccrual {
+  id: string;
+  partnerId: string;
+  providerId?: string;
+  partnerName: string;
+  billingCadence: BillingCadence;
+  periodStart: string;
+  periodEnd: string;
+  accruedThrough: string;
+  amount: number;
+  currency: string;
+  status: "accruing" | "drafted";
+  revenueRunId: string;
+  invoiceId?: string;
+  updatedAt: string;
+}
+
 export interface TransactionTeamAssignment {
   transactionId: string;
   teamId: string;
@@ -163,21 +197,97 @@ export interface TransactionCategoryRule {
 export interface Invoice {
   id: string;
   providerId?: string;
-  documentType?: InvoiceDocumentType;
+  documentType: InvoiceDocumentType;
+  origin: "manual" | "revenue" | "merit";
   customerName: string;
   amount: number;
   currency: string;
   status: InvoiceStatus;
-  approvalStatus?: "pending" | "approved" | "denied";
-  paidLocally?: boolean;
-  paidLocallyAt?: string;
-  meritPaid?: boolean;
+  meritStatus?: "open" | "paid";
+  meritDeliveryStatus: MeritDeliveryStatus;
+  meritDeliveryError?: string;
+  sendError?: string;
+  meritCreationReservedAt?: string;
+  invoiceNumber: string;
+  issueDate: string;
   dueDate: string;
   source: DataSource;
   externalId?: string;
   description: string;
   transactionId?: string;
+  billingRuleId?: string;
+  revenueRunIds: string[];
+  periodStart?: string;
+  periodEnd?: string;
+  taxId?: string;
+  sentAt?: string;
+  paidAt?: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaymentAllocation {
+  id: string;
+  invoiceId: string;
+  transactionId?: string;
+  amount: number;
+  currency: string;
+  source: PaymentSource;
+  accountName?: string;
+  reference?: string;
+  note?: string;
+  mode: "automatic" | "manual";
+  confidence?: number;
+  matchReason?: string;
+  paidAt: string;
+  createdAt: string;
+}
+
+export interface InvoicePaymentPrediction {
+  invoiceId: string;
+  sampleSize: number;
+  predictedDate?: string;
+  medianDays?: number;
+  earliestDays?: number;
+  latestDays?: number;
+}
+
+export interface Holding {
+  id: string;
+  name: string;
+  kind: HoldingKind;
+  assetType: HoldingAssetType;
+  asset: string;
+  balance: number;
+  notes?: string;
+  updatedAt: string;
+}
+
+export interface FxRate {
+  asset: string;
+  rateUsd: number;
+  provider: "yahoo";
+  asOf: string;
+}
+
+export interface ApproximateUsdTotals {
+  accountsUsd: number;
+  holdingsUsd: number;
+  totalUsd: number;
+  excludedAssets: string[];
+  asOf?: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  type: "weekly-income";
+  periodStart: string;
+  periodEnd: string;
+  timezone: "Asia/Beirut";
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  completedAt?: string;
+  error?: string;
 }
 
 export interface MeritTax {
@@ -220,10 +330,10 @@ export interface WiseStatementImport {
 }
 
 export interface IntegrationStatus {
-  id: DataSource | "openrouter";
+  id: DataSource | "openrouter" | "yahoo";
   label: string;
   configured: boolean;
-  mode: "live" | "mock" | "partial";
+  mode: "live" | "partial";
   message: string;
   needs: string[];
   issue?: string;
@@ -325,10 +435,17 @@ export interface DashboardSnapshot {
   teams: Team[];
   revenuePartners: RevenuePartner[];
   revenueRuns: RevenueRun[];
+  revenueAccruals: RevenueAccrual[];
   revenueMetrics: RevenueMetrics;
   aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
+  paymentAllocations: PaymentAllocation[];
+  invoicePredictions: InvoicePaymentPrediction[];
+  holdings: Holding[];
+  fxRates: FxRate[];
+  approximateUsdTotals: ApproximateUsdTotals;
+  automationRuns: AutomationRun[];
   meritTaxes: MeritTax[];
   transactionCategoryRules: TransactionCategoryRule[];
   wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
@@ -368,7 +485,62 @@ export interface CreateInvoicePayload {
   currency: string;
   dueDate: string;
   description: string;
+  issueDate?: string;
+  taxId?: string;
+  periodStart?: string;
+  periodEnd?: string;
 }
+
+export interface UpdateInvoicePayload {
+  providerId?: string;
+  customerName: string;
+  amount: number;
+  currency: string;
+  issueDate: string;
+  dueDate: string;
+  description: string;
+  taxId?: string;
+  periodStart?: string;
+  periodEnd?: string;
+}
+
+export interface SendInvoicesPayload {
+  invoiceIds: string[];
+  mode: MeritSendMode;
+  confirmation: "SEND_TO_MERIT";
+}
+
+export interface SendInvoiceOutcome {
+  invoiceId: string;
+  status: "saved" | "delivered" | "failed";
+  message?: string;
+}
+
+export interface SendInvoicesResult {
+  dashboard: DashboardSnapshot;
+  outcomes: SendInvoiceOutcome[];
+}
+
+export interface RecordInvoicePaymentPayload {
+  amount: number;
+  paidAt: string;
+  source: PaymentSource;
+  accountName?: string;
+  transactionId?: string;
+  reference?: string;
+  note?: string;
+}
+
+export interface CreateHoldingPayload {
+  name: string;
+  kind: HoldingKind;
+  assetType: HoldingAssetType;
+  asset: string;
+  balance: number;
+  notes?: string;
+}
+
+export interface UpdateHoldingPayload extends CreateHoldingPayload {}
 
 export interface MatchTransactionPayload {
   transactionId: string;
@@ -442,8 +614,15 @@ export interface UpdateRevenuePartnerPayload {
   apiBaseUrlEnv?: string;
   meritCustomerName?: string;
   invoiceDueDays: number;
+  billingCadence: BillingCadence;
+  billingTimezone: string;
+  autoDraft: boolean;
+  defaultMeritTaxId?: string;
+  defaultMeritItemCode?: string;
   enabled: boolean;
 }
+
+export interface CreateRevenuePartnerPayload extends UpdateRevenuePartnerPayload {}
 
 export interface SyncRevenuePayload {
   partnerId?: string;

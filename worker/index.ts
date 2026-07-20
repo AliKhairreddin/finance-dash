@@ -1,15 +1,25 @@
 import type {
+  WorkerEnv as Env,
+  WorkerExportedHandler,
+  WorkerScheduledController as ScheduledController
+} from "../worker-configuration";
+import type {
   AccountBalance,
   AiPromptPayload,
   AssignTransactionTeamPayload,
   AssignWiseCardHolderTeamPayload,
+  AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  CreateHoldingPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
+  CreateRevenuePartnerPayload,
   CreateTeamPayload,
   DashboardSnapshot,
   DataSource,
+  FxRate,
+  Holding,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   ImportWiseStatementSummary,
@@ -17,14 +27,18 @@ import type {
   Invoice,
   MeritTax,
   MatchTransactionPayload,
+  PaymentAllocation,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
   Provider,
+  RecordInvoicePaymentPayload,
+  RevenueAccrual,
   RevenuePartner,
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
-  SendRevenueInvoicePayload,
+  SendInvoicesPayload,
+  SendInvoicesResult,
   StoredAiSettings,
   SyncRevenuePayload,
   Team,
@@ -32,6 +46,8 @@ import type {
   Transaction,
   TransactionCategoryRule,
   UpdateProviderPayload,
+  UpdateHoldingPayload,
+  UpdateInvoicePayload,
   UpdateTransactionCategoryPayload,
   UpdateRevenuePartnerPayload,
   WiseCardHolderTeamAssignment,
@@ -46,13 +62,28 @@ import {
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import {
-  calculateInvoiceDueDate,
   calculateRevenueMetrics,
   calculateTuneHourOffset,
   mergeRevenuePartnerDirectory,
   resolveRevenuePeriod
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import {
+  applyPaymentState,
+  buildRevenueDraft,
+  calculateApproximateUsdTotals,
+  calculateInvoicePredictions,
+  currentMonthAccrualPeriod,
+  currentWeekAccrualPeriod,
+  incomeAutomationTimezone,
+  invoiceOutstanding,
+  isClosedBillingPeriod,
+  isLebanonIncomeAutomationTime,
+  previousCalendarMonth,
+  previousCompletedWeek,
+  pruneSupersededAccrualRun,
+  reconcileExactInvoicePayments
+} from "../shared/income";
 import {
   calculateProfitDistribution,
   profitDistributionAdjustmentFromPayload,
@@ -79,48 +110,6 @@ import {
   uniqueProviderTags
 } from "../server/matching";
 
-interface Fetcher {
-  fetch(request: Request): Promise<Response>;
-}
-
-interface Env {
-  ASSETS: Fetcher;
-  CONVEX_URL?: string;
-  CONVEX_SERVICE_TOKEN?: string;
-  WISE_API_TOKEN?: string;
-  WISE_PROFILE_ID?: string;
-  WISE_BALANCE_IDS?: string;
-  WISE_ENVIRONMENT?: string;
-  REVOLUT_REFRESH_TOKEN?: string;
-  REVOLUT_CLIENT_ASSERTION_JWT?: string;
-  REVOLUT_ENVIRONMENT?: string;
-  SLASH_API_KEY?: string;
-  SLASH_LEGAL_ENTITY_ID?: string;
-  SLASH_BASE_URL?: string;
-  AMEX_TOKEN_URL?: string;
-  AMEX_API_BASE_URL?: string;
-  AMEX_CLIENT_ID?: string;
-  AMEX_CLIENT_SECRET?: string;
-  AMEX_REFRESH_TOKEN?: string;
-  AMEX_ACCOUNT_IDS?: string;
-  AMEX_ACCOUNT_PATH_TEMPLATE?: string;
-  AMEX_TRANSACTIONS_PATH_TEMPLATE?: string;
-  MERIT_API_ID?: string;
-  MERIT_API_BASE_URL?: string;
-  MERIT_GET_INVOICES_PATH?: string;
-  MERIT_CREATE_INVOICE_PATH?: string;
-  MERIT_API_KEY?: string;
-  MERIT_WRITES_ENABLED?: string;
-  MERIT_DEFAULT_ITEM_CODE?: string;
-  MERIT_DEFAULT_COUNTRY_CODE?: string;
-  REVENUE_TIMEZONE?: string;
-  KISSTERRA_TUNE_NETWORK_ID?: string;
-  KISSTERRA_TUNE_API_KEY?: string;
-  KISSTERRA_TUNE_API_BASE_URL?: string;
-  OPENROUTER_API_KEY?: string;
-  PUBLIC_APP_URL?: string;
-}
-
 interface PersistedState {
   revision: string | null;
   providers: Provider[];
@@ -133,6 +122,11 @@ interface PersistedState {
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  revenueAccruals: RevenueAccrual[];
+  paymentAllocations: PaymentAllocation[];
+  holdings: Holding[];
+  fxRates: FxRate[];
+  automationRuns: AutomationRun[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
 }
@@ -153,6 +147,43 @@ function cleanOptional(value?: string): string | undefined {
 
 function cleanOptionalNumber(value?: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function calendarMonthEnd(periodStart: string): string {
+  const [year, month] = periodStart.split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
+
+function openAccrualPeriodEnd(partner: RevenuePartner, run: RevenueRun, now = new Date()): string | undefined {
+  if (run.status !== "pulled") return undefined;
+  if (partner.billingCadence === "weekly") {
+    const currentWeek = currentWeekAccrualPeriod(now, partner.billingTimezone);
+    return run.periodStart === currentWeek.periodStart &&
+      run.periodEnd >= run.periodStart &&
+      run.periodEnd <= currentWeek.accruedThrough
+      ? currentWeek.periodEnd
+      : undefined;
+  }
+  const currentMonth = resolveRevenuePeriod({ periodPreset: "this-month", timezone: partner.billingTimezone, now });
+  return run.periodStart === currentMonth.periodStart &&
+    run.periodEnd >= run.periodStart &&
+    run.periodEnd <= currentMonth.periodEnd
+    ? calendarMonthEnd(run.periodStart)
+    : undefined;
+}
+
+function isEnvironmentVariableName(value: string | undefined): boolean {
+  return Boolean(value && /^[A-Z][A-Z0-9_]*$/.test(value));
+}
+
+function isValidTimezone(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function meritWritesEnabled(env: Env): boolean {
@@ -229,6 +260,8 @@ const revolutBaseUrlByEnvironment = {
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
 const defaultSlashBaseUrl = "https://api.slash.com";
+const defaultYahooFinanceChartBaseUrl = "https://query2.finance.yahoo.com/v8/finance/chart";
+const defaultMeritDeliverInvoicePath = "/v2/sendinvoicebyemail";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store"
@@ -252,6 +285,17 @@ function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] 
   return [...map.values()];
 }
 
+export function mergeInvoices(liveInvoices: Invoice[], persistedInvoices: Invoice[]): Invoice[] {
+  const invoiceKey = (invoice: Invoice): string => invoice.externalId ? `external:${invoice.externalId}` : `id:${invoice.id}`;
+  const map = new Map(liveInvoices.map((invoice) => [invoiceKey(invoice), invoice]));
+  for (const invoice of persistedInvoices) {
+    const key = invoiceKey(invoice);
+    const live = map.get(key);
+    map.set(key, live ? { ...invoice, meritStatus: live.meritStatus } : invoice);
+  }
+  return [...map.values()];
+}
+
 function normalizedTransactionText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -259,6 +303,7 @@ function normalizedTransactionText(value: string): string {
 function wiseStatementTransactionKey(transaction: Transaction): string {
   const sourceId = transaction.id.match(/^wise-(?:csv|pdf)-[^-]+-(.+)$/)?.[1];
   if (sourceId) return `${transaction.currency}:${sourceId}`;
+  if (transaction.id) return `id:${transaction.id}`;
 
   return [
     transaction.date,
@@ -272,10 +317,28 @@ function wiseStatementTransactionKey(transaction: Transaction): string {
 
 function mergeWiseStatementTransactions(initial: Transaction[], incoming: Transaction[]): Transaction[] {
   const map = new Map<string, Transaction>();
-  for (const transaction of [...initial, ...incoming]) {
+  for (const transaction of initial) {
     map.set(wiseStatementTransactionKey(transaction), transaction);
   }
+  for (const transaction of incoming) {
+    const key = wiseStatementTransactionKey(transaction);
+    const existing = map.get(key);
+    map.set(key, existing ? mergeBankTransaction(existing, transaction) : transaction);
+  }
   return [...map.values()];
+}
+
+function mergeBankTransaction(existing: Transaction, fresh: Transaction): Transaction {
+  return {
+    ...existing,
+    ...fresh,
+    category: existing.category,
+    matchedProviderId: existing.matchedProviderId ?? fresh.matchedProviderId,
+    matchedInvoiceId: existing.matchedInvoiceId ?? fresh.matchedInvoiceId,
+    teamId: existing.teamId ?? fresh.teamId,
+    confidence: existing.confidence ?? fresh.confidence,
+    matchReason: existing.matchReason ?? fresh.matchReason
+  };
 }
 
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
@@ -299,16 +362,6 @@ function summarizeWiseStatementImport(existing: Transaction[], incoming: Transac
     newTransactions,
     duplicateTransactions
   };
-}
-
-function realInvoices(invoices?: Invoice[]): Invoice[] {
-  return (invoices ?? []).filter(
-    (invoice) => invoice.source !== "mock" && !invoice.id.startsWith("mock-invoice-") && invoice.externalId !== "seed-open-invoices"
-  );
-}
-
-function realRevenueRuns(runs?: RevenueRun[]): RevenueRun[] {
-  return (runs ?? []).filter((run) => run.status !== "mock");
 }
 
 function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
@@ -465,9 +518,11 @@ async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
       }
     }).catch((error: unknown) => {
       statementIssues.push(wiseStatementIssue(error));
-      console.warn(
-        `Wise statement fetch failed for balance ${balance.id}: ${error instanceof Error ? error.message : "Unknown Wise statement error"}`
-      );
+      console.warn(JSON.stringify({
+        event: "wise_statement_fetch_failed",
+        balanceId: balance.id,
+        error: error instanceof Error ? error.message : "Unknown Wise statement error"
+      }));
       return { transactions: [] };
     });
 
@@ -876,10 +931,6 @@ function mergeLiveAccounts(...accountGroups: AccountBalance[][]): AccountBalance
   return accountGroups.flat();
 }
 
-async function fetchInvoiceForLocalUpdate(env: Env, invoiceId: string): Promise<Invoice | undefined> {
-  return (await fetchMeritInvoices(env).catch(() => [])).find((invoice) => invoice.id === invoiceId);
-}
-
 function findPersistedTransaction(state: PersistedState, transactionId: string): Transaction | undefined {
   return state.wiseStatementTransactions.find((transaction) => transaction.id === transactionId);
 }
@@ -923,10 +974,23 @@ function meritDate(value: string): string {
   return value.replace(/\D/g, "").slice(0, 8);
 }
 
-function meritItemCode(env: Env, tax: MeritTax): string {
-  const prefix = (env.MERIT_DEFAULT_ITEM_CODE || "SERVICES").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "SERVICES";
+function meritIsoDate(value: unknown, fallback: string): string {
+  const compact = typeof value === "string" || typeof value === "number" ? String(value).replace(/\D/g, "").slice(0, 8) : "";
+  return compact.length === 8 ? `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}` : fallback;
+}
+
+function meritItemCode(env: Env, tax: MeritTax, itemCode?: string): string {
+  const prefix = (itemCode || env.MERIT_DEFAULT_ITEM_CODE || "SERVICES").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "SERVICES";
   const taxCode = tax.code.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || String(tax.taxPct).replace(/\D/g, "");
   return `${prefix}-${taxCode}`.slice(0, 20);
+}
+
+function meritCountryCode(providerCountry: string | undefined, configuredDefault: string | undefined): string {
+  for (const candidate of [providerCountry, configuredDefault]) {
+    const normalized = candidate?.trim().toUpperCase();
+    if (normalized && /^[A-Z]{2}$/.test(normalized)) return normalized;
+  }
+  return "CA";
 }
 
 function base64(bytes: ArrayBuffer): string {
@@ -947,7 +1011,7 @@ async function meritUrl(env: Env, path: string, body: string): Promise<string> {
     ["sign"]
   );
   const signature = base64(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${env.MERIT_API_ID}${timestamp}${body}`)));
-  const params = new URLSearchParams({ apiId: env.MERIT_API_ID, timestamp, signature });
+  const params = new URLSearchParams({ ApiId: env.MERIT_API_ID, timestamp, signature });
   return `${env.MERIT_API_BASE_URL || defaultMeritApiBaseUrl}${path}?${params.toString()}`;
 }
 
@@ -979,33 +1043,46 @@ async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
       InvoiceNo?: string;
       CustomerName?: string;
       DueDate?: string;
+      InvoiceDate?: string;
+      DocumentDate?: string;
+      DocDate?: string;
       CurrencyCode?: string;
       TotalSum?: number;
       TotalAmount?: number;
       Paid?: boolean;
     }>
   >(env, env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices", {
-    Periodstart: meritDate(periodStart.toISOString()),
+    PeriodStart: meritDate(periodStart.toISOString()),
     PeriodEnd: meritDate(periodEnd.toISOString()),
     UnPaid: false
   });
 
-  return response.map((invoice) => ({
-    id: `merit-${invoice.SIHId ?? invoice.InvoiceNo ?? crypto.randomUUID()}`,
+  const fetchedAt = new Date().toISOString();
+  return response.flatMap((invoice) => {
+    const externalId = invoice.SIHId ?? invoice.InvoiceNo;
+    if (!externalId) return [];
+    const issueDate = meritIsoDate(invoice.DocumentDate ?? invoice.InvoiceDate ?? invoice.DocDate, fetchedAt.slice(0, 10));
+    return [{
+    id: `merit-${externalId}`,
     documentType: "sales_invoice" as const,
+    origin: "merit" as const,
     customerName: invoice.CustomerName ?? "Merit invoice",
     amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
     currency: invoice.CurrencyCode ?? "USD",
-    status: invoice.Paid ? "paid" : "open",
-    approvalStatus: "approved",
-    paidLocally: false,
-    meritPaid: Boolean(invoice.Paid),
-    dueDate: invoice.DueDate ? String(invoice.DueDate) : new Date().toISOString().slice(0, 10),
-    source: "merit",
-    externalId: invoice.SIHId ?? invoice.InvoiceNo,
+    status: "open" as const,
+    meritStatus: invoice.Paid ? ("paid" as const) : ("open" as const),
+    meritDeliveryStatus: "saved" as const,
+    invoiceNumber: invoice.InvoiceNo ?? externalId,
+    issueDate,
+    dueDate: meritIsoDate(invoice.DueDate, fetchedAt.slice(0, 10)),
+    source: "merit" as const,
+    externalId,
     description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
-    createdAt: new Date().toISOString()
-  }));
+    revenueRunIds: [],
+    createdAt: `${issueDate}T00:00:00.000Z`,
+    updatedAt: `${issueDate}T00:00:00.000Z`
+  }];
+  });
 }
 
 async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
@@ -1032,29 +1109,42 @@ async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
     .sort((left, right) => left.taxPct - right.taxPct || left.name.localeCompare(right.name));
 }
 
-export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload, tax: MeritTax): Promise<Invoice> {
+export async function createMeritInvoice(
+  env: Env,
+  payload: CreateInvoicePayload,
+  tax: MeritTax,
+  itemCode?: string,
+  provider?: Provider,
+  requestedInvoiceNumber?: string
+): Promise<Invoice> {
   assertMeritWriteConfiguration(env);
   const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
 
-  const invoiceNo = `FD-${Date.now()}`;
+  const issueDate = payload.issueDate ?? new Date().toISOString().slice(0, 10);
+  const invoiceNo = requestedInvoiceNumber || `FD-${Date.now()}`;
+  const providerEmail = provider?.email?.trim();
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(
     env,
     env.MERIT_CREATE_INVOICE_PATH || "/v2/sendinvoice",
     {
-      Customer: {
-        Name: payload.customerName,
-        NotTDCustomer: true,
-        CountryCode: env.MERIT_DEFAULT_COUNTRY_CODE || "CA"
-      },
+      Customer: provider?.meritCustomerId
+        ? { Id: provider.meritCustomerId }
+        : {
+            Name: provider?.legalName?.trim() || payload.customerName,
+            NotTDCustomer: true,
+            CountryCode: meritCountryCode(provider?.country, env.MERIT_DEFAULT_COUNTRY_CODE),
+            ...(providerEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(providerEmail) ? { Email: providerEmail } : {}),
+            ...(provider?.address?.trim() ? { Address: provider.address.trim() } : {})
+          },
       AccountingDoc: 1,
-      DocDate: meritDate(new Date().toISOString()),
+      DocDate: meritDate(issueDate),
       DueDate: meritDate(payload.dueDate),
       InvoiceNo: invoiceNo,
       CurrencyCode: payload.currency,
       InvoiceRow: [
         {
           Item: {
-            Code: meritItemCode(env, tax),
+            Code: meritItemCode(env, tax, itemCode),
             Description: payload.description.slice(0, 150),
             Type: 2
           },
@@ -1070,28 +1160,49 @@ export async function createMeritInvoice(env: Env, payload: CreateInvoicePayload
         }
       ],
       TotalAmount: payload.amount,
-      Hcomment: "Created from finance dashboard. Payment status is managed by accounting in Merit."
+      Hcomment: "Created from finance dashboard. Paid status is managed locally in finance dashboard and is not written back to Merit."
     }
   );
 
+  const createdAt = new Date().toISOString();
+  const externalId = response.SIHId ?? response.InvoiceId ?? response.Id;
+  if (!externalId) {
+    throw new ApiError(502, "Merit accepted the invoice request without returning a stable invoice ID; review Merit before retrying");
+  }
   return {
-    id: `merit-${response.InvoiceId ?? response.SIHId ?? response.Id ?? crypto.randomUUID()}`,
+    id: `merit-${externalId}`,
     providerId: payload.providerId,
     documentType: payload.documentType,
+    origin: "manual",
     customerName: payload.customerName,
     amount: payload.amount,
     currency: payload.currency,
-    status: "created",
-    approvalStatus: "pending",
-    paidLocally: false,
-    meritPaid: false,
+    status: "open",
+    meritStatus: "open",
+    meritDeliveryStatus: "saved",
+    invoiceNumber: response.InvoiceNo ?? invoiceNo,
+    issueDate,
     dueDate: payload.dueDate,
     source: "merit",
-    externalId: response.InvoiceId ?? response.SIHId ?? response.Id ?? response.InvoiceNo ?? invoiceNo,
+    externalId,
     description: payload.description,
     transactionId: payload.transactionId,
-    createdAt: new Date().toISOString()
+    revenueRunIds: [],
+    periodStart: payload.periodStart,
+    periodEnd: payload.periodEnd,
+    taxId: tax.id,
+    createdAt,
+    updatedAt: createdAt
   };
+}
+
+export async function deliverMeritInvoice(env: Env, externalId: string): Promise<void> {
+  assertMeritWriteConfiguration(env);
+  await fetchMeritJson<Record<string, unknown>>(
+    env,
+    env.MERIT_DELIVER_INVOICE_PATH || defaultMeritDeliverInvoicePath,
+    { Id: externalId, DelivNote: false }
+  );
 }
 
 async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
@@ -1119,6 +1230,8 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
   params.append("fields[1]", "Stat.payout");
   params.append("fields[2]", "Stat.conversions");
   params.append("fields[3]", "Stat.clicks");
+  params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
+  params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
   params.append("filters[Stat.date][conditional]", "BETWEEN");
   params.append("filters[Stat.date][values][0]", period.periodStart);
   params.append("filters[Stat.date][values][1]", period.periodEnd);
@@ -1209,7 +1322,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
   return {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
-    invoices: realInvoices(stored?.invoices),
+    invoices: stored?.invoices ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
@@ -1217,7 +1330,12 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
     wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
     wiseStatementImports: stored?.wiseStatementImports ?? [],
-    revenueRuns: realRevenueRuns(stored?.revenueRuns),
+    revenueRuns: stored?.revenueRuns ?? [],
+    revenueAccruals: stored?.revenueAccruals ?? [],
+    paymentAllocations: stored?.paymentAllocations ?? [],
+    holdings: stored?.holdings ?? [],
+    fxRates: stored?.fxRates ?? [],
+    automationRuns: stored?.automationRuns ?? [],
     profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
@@ -1242,28 +1360,49 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   }
 }
 
-async function reserveRevenueInvoice(env: Env, run: RevenueRun): Promise<boolean> {
+async function reserveIncomeAutomation(env: Env, run: AutomationRun): Promise<boolean> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   try {
-    const result = await convex.mutation(api.dashboard.reserveRevenueInvoice, { serviceToken, run });
+    const result = await convex.mutation(api.dashboard.reserveIncomeAutomation, {
+      serviceToken,
+      run,
+      staleBefore: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    });
     return result.reserved;
   } catch (error) {
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   }
 }
 
-async function finalizeRevenueInvoice(env: Env, run: RevenueRun, invoice?: Invoice): Promise<void> {
+async function reserveInvoiceCreation(env: Env, invoiceId: string, reservedAt: string): Promise<boolean> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   try {
-    await convex.mutation(api.dashboard.finalizeRevenueInvoice, { serviceToken, run, invoice });
+    const result = await convex.mutation(api.dashboard.reserveInvoiceCreation, {
+      serviceToken,
+      invoiceId,
+      reservedAt
+    });
+    return result.reserved;
   } catch (error) {
-    if (error instanceof ConvexError && isRecord(error.data) && error.data.code === "REVENUE_RESERVATION_CONFLICT") {
-      throw new ApiError(409, "Revenue invoice reservation changed before it could be finalized.", { cause: error });
-    }
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   }
+}
+
+async function finalizeInvoiceCreation(env: Env, invoice: Invoice): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await convex.mutation(api.dashboard.finalizeInvoiceCreation, { serviceToken, invoice });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: lastError });
 }
 
 function runtimeAiSettings(env: Env, settings?: PersistedAiSettings): StoredAiSettings {
@@ -1286,7 +1425,9 @@ function integrationStatus(
   env: Env,
   wiseActivity?: WiseActivityResult,
   revenuePartners: RevenuePartner[] = [],
-  meritIssue?: string
+  meritIssue?: string,
+  fxRates: FxRate[] = [],
+  missingFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
   if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
@@ -1386,6 +1527,19 @@ function integrationStatus(
             ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
+    },
+    {
+      id: "yahoo",
+      label: "Yahoo Finance",
+      configured: true,
+      mode: fxRates.length > 0 && missingFxAssets.length === 0 ? "live" : "partial",
+      message:
+        missingFxAssets.length > 0
+          ? `USD totals exclude assets without a current Yahoo quote: ${missingFxAssets.join(", ")}.`
+          : fxRates.length > 0
+          ? `Approximate USD quotes were last refreshed at ${fxRates.reduce((latest, rate) => rate.asOf > latest ? rate.asOf : latest, fxRates[0].asOf)}.`
+          : "Refresh approximate USD rates after adding a non-USD account or holding.",
+      needs: []
     }
   ];
 }
@@ -1436,7 +1590,7 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
   if (!payload.balanceId || !payload.currency || !payload.periodStart || !payload.periodEnd || !payload.fileName) {
     throw new Error("balanceId, currency, periodStart, periodEnd, and fileName are required");
   }
-  const state = await loadPersisted(env);
+  let state = await loadPersisted(env);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
   const summary = summarizeWiseStatementImport(state.wiseStatementTransactions, importedTransactions);
   const importedAt = new Date().toISOString();
@@ -1461,6 +1615,15 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
     transactionIds: importedTransactions.map((transaction) => transaction.id),
     useAi: true
   });
+  const reconciliation = reconcileExactInvoicePayments({
+    invoices: state.invoices,
+    transactions: state.wiseStatementTransactions,
+    allocations: state.paymentAllocations,
+    providers: state.providers
+  });
+  state.invoices = reconciliation.invoices;
+  state.paymentAllocations = reconciliation.allocations;
+  state.wiseStatementTransactions = reconciliation.transactions;
   await savePersisted(env, state);
   return {
     dashboard: await getSnapshot(env),
@@ -1487,17 +1650,18 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
         ? meritConnectionIssue(meritTaxesResult.reason)
         : undefined;
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
-  const invoices = realInvoices(mergeById(liveMeritInvoices, state.invoices));
-  const rawTransactions = mergeById(state.wiseStatementTransactions, [
+  const invoicesBeforeReconciliation = mergeInvoices(liveMeritInvoices, state.invoices);
+  const persistedTransactionsBeforeSync = state.wiseStatementTransactions;
+  const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
     ...wise.transactions,
     ...revolut.transactions,
     ...slash.transactions,
     ...amex.transactions
-  ]);
-  const transactions = enrichTransactions(
+  ]).sort((left, right) => right.date.localeCompare(left.date));
+  const enrichedTransactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {
-        const invoice = invoices.find((item) => item.transactionId === transaction.id);
+        const invoice = invoicesBeforeReconciliation.find((item) => item.transactionId === transaction.id);
         return invoice
           ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
           : transaction;
@@ -1508,6 +1672,23 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     state.providers,
     state.transactionCategoryRules
   );
+  const reconciliation = reconcileExactInvoicePayments({
+    invoices: invoicesBeforeReconciliation,
+    transactions: enrichedTransactions,
+    allocations: state.paymentAllocations,
+    providers: state.providers
+  });
+  const bankStateChanged = JSON.stringify(rawTransactions) !== JSON.stringify(persistedTransactionsBeforeSync);
+  const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
+  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged) {
+    state.invoices = reconciliation.invoices;
+    state.paymentAllocations = reconciliation.allocations;
+    state.wiseStatementTransactions = reconciliation.transactions;
+    await savePersisted(env, state);
+  }
+  const invoices = reconciliation.invoices;
+  const transactions = reconciliation.transactions;
+  const approximateUsdTotals = calculateApproximateUsdTotals(accounts, state.holdings, state.fxRates);
 
   return {
     asOf: new Date().toISOString(),
@@ -1520,15 +1701,29 @@ async function getSnapshot(env: Env): Promise<DashboardSnapshot> {
     teams: state.teams,
     revenuePartners: state.revenuePartners,
     revenueRuns: state.revenueRuns,
+    revenueAccruals: state.revenueAccruals,
     revenueMetrics: calculateRevenueMetrics(state.revenuePartners, state.revenueRuns),
     aiSettings: publicAiSettings(runtimeAiSettings(env, state.aiSettings)),
     transactions,
     invoices,
+    paymentAllocations: reconciliation.allocations,
+    invoicePredictions: calculateInvoicePredictions(invoices, reconciliation.allocations),
+    holdings: state.holdings,
+    fxRates: state.fxRates,
+    approximateUsdTotals,
+    automationRuns: state.automationRuns,
     meritTaxes,
     transactionCategoryRules: state.transactionCategoryRules,
     wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
-    integrationStatus: integrationStatus(env, wise, state.revenuePartners, meritIssue),
+    integrationStatus: integrationStatus(
+      env,
+      wise,
+      state.revenuePartners,
+      meritIssue,
+      state.fxRates,
+      approximateUsdTotals.excludedAssets
+    ),
     metrics: calculateMetrics(accounts, [], [], [], []),
     profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()
@@ -1608,15 +1803,25 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
     !payload.name?.trim() ||
     !payload.providerId?.trim() ||
     !payload.revenueCategory?.trim() ||
-    !payload.networkIdEnv?.trim() ||
-    !payload.apiKeyEnv?.trim()
+    !payload.affiliateId?.trim() ||
+    !payload.currency?.trim() ||
+    !payload.timezone?.trim() ||
+    !payload.networkTimezone?.trim() ||
+    !isEnvironmentVariableName(payload.networkIdEnv) ||
+    !isEnvironmentVariableName(payload.apiKeyEnv) ||
+    (Boolean(payload.apiBaseUrlEnv?.trim()) && !isEnvironmentVariableName(payload.apiBaseUrlEnv)) ||
+    !isValidTimezone(payload.timezone) ||
+    !isValidTimezone(payload.networkTimezone) ||
+    !isValidTimezone(payload.billingTimezone) ||
+    !Number.isFinite(payload.invoiceDueDays) ||
+    payload.invoiceDueDays < 0 ||
+    (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
   ) {
-    throw new Error("name, providerId, revenueCategory, networkIdEnv, and apiKeyEnv are required");
+    throw new Error("Revenue rule fields are invalid; API environment names must be uppercase and timezones must be valid IANA names");
   }
   const state = await loadPersisted(env);
-  if (!state.providers.some((provider) => provider.id === payload.providerId)) {
-    throw new Error("Revenue partner company not found");
-  }
+  const selectedProvider = state.providers.find((provider) => provider.id === payload.providerId);
+  if (!selectedProvider || selectedProvider.type !== "client") throw new Error("Revenue rules require a client company");
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue partner team not found");
   }
@@ -1634,14 +1839,19 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
       revenueCategory,
       affiliateId: payload.affiliateId.trim(),
       externalId: payload.externalId?.trim() || undefined,
-      currency: payload.currency.trim() || "USD",
-      timezone: payload.timezone,
-      networkTimezone: payload.networkTimezone,
+      currency: payload.currency.trim().toUpperCase(),
+      timezone: payload.timezone.trim(),
+      networkTimezone: payload.networkTimezone.trim(),
       networkIdEnv: payload.networkIdEnv.trim(),
       apiKeyEnv: payload.apiKeyEnv.trim(),
       apiBaseUrlEnv: payload.apiBaseUrlEnv?.trim() || undefined,
       meritCustomerName: payload.meritCustomerName?.trim() || undefined,
       invoiceDueDays: payload.invoiceDueDays,
+      billingCadence: payload.billingCadence,
+      billingTimezone: payload.billingTimezone.trim(),
+      autoDraft: payload.autoDraft,
+      defaultMeritTaxId: payload.defaultMeritTaxId?.trim() || undefined,
+      defaultMeritItemCode: payload.defaultMeritItemCode?.trim() || undefined,
       enabled: payload.enabled
     };
     if (payload.teamId) {
@@ -1656,6 +1866,67 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
   state.revenuePartners = mergeRevenuePartnerDirectory(state.revenuePartners);
   await savePersisted(env, state);
   return updated;
+}
+
+async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPayload): Promise<RevenuePartner> {
+  if (
+    !payload.name?.trim() ||
+    !payload.providerId?.trim() ||
+    !payload.revenueCategory?.trim() ||
+    !payload.affiliateId?.trim() ||
+    !payload.currency?.trim() ||
+    !payload.timezone?.trim() ||
+    !payload.networkTimezone?.trim() ||
+    !isEnvironmentVariableName(payload.networkIdEnv) ||
+    !isEnvironmentVariableName(payload.apiKeyEnv) ||
+    (Boolean(payload.apiBaseUrlEnv?.trim()) && !isEnvironmentVariableName(payload.apiBaseUrlEnv)) ||
+    !isValidTimezone(payload.timezone) ||
+    !isValidTimezone(payload.networkTimezone) ||
+    !isValidTimezone(payload.billingTimezone) ||
+    !Number.isFinite(payload.invoiceDueDays) ||
+    payload.invoiceDueDays < 0 ||
+    (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
+  ) {
+    throw new ApiError(400, "name, client, revenue category, affiliate ID, API environment names, cadence, and billing timezone are required");
+  }
+  const state = await loadPersisted(env);
+  const provider = state.providers.find((item) => item.id === payload.providerId);
+  if (!provider || provider.type !== "client") throw new ApiError(400, "Revenue rules require a client company");
+  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+    throw new ApiError(400, "Revenue rule team not found");
+  }
+  const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
+  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+    throw new ApiError(400, `Category "${revenueCategory}" is not valid for money in`);
+  }
+  const partner: RevenuePartner = {
+    id: `revenue-rule-${crypto.randomUUID()}`,
+    providerId: provider.id,
+    teamId: cleanOptional(payload.teamId),
+    name: payload.name.trim(),
+    revenueCategory,
+    source: "tune",
+    affiliateId: payload.affiliateId.trim(),
+    externalId: cleanOptional(payload.externalId),
+    currency: payload.currency.trim().toUpperCase() || "USD",
+    timezone: payload.timezone.trim(),
+    networkTimezone: payload.networkTimezone.trim(),
+    networkIdEnv: payload.networkIdEnv.trim(),
+    apiKeyEnv: payload.apiKeyEnv.trim(),
+    apiBaseUrlEnv: cleanOptional(payload.apiBaseUrlEnv),
+    meritCustomerName: cleanOptional(payload.meritCustomerName),
+    invoiceDueDays: payload.invoiceDueDays,
+    billingCadence: payload.billingCadence,
+    billingTimezone: payload.billingTimezone.trim(),
+    autoDraft: payload.autoDraft,
+    defaultMeritTaxId: cleanOptional(payload.defaultMeritTaxId),
+    defaultMeritItemCode: cleanOptional(payload.defaultMeritItemCode),
+    enabled: payload.enabled,
+    createdAt: new Date().toISOString()
+  };
+  state.revenuePartners = mergeRevenuePartnerDirectory([...state.revenuePartners, partner]);
+  await savePersisted(env, state);
+  return partner;
 }
 
 async function deleteRevenuePartner(env: Env, partnerId: string): Promise<RevenuePartner> {
@@ -1928,7 +2199,9 @@ async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
 async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
   if (
     !payload.customerName?.trim() ||
-    !payload.amount ||
+    !Number.isFinite(payload.amount) ||
+    payload.amount <= 0 ||
+    !payload.currency?.trim() ||
     !payload.dueDate ||
     (payload.documentType !== "sales_invoice" && payload.documentType !== "supplier_bill")
   ) {
@@ -1944,22 +2217,30 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
       `${payload.documentType === "sales_invoice" ? "Sales invoice" : "Supplier bill"} requires a ${providerTypeForInvoiceDocument(payload.documentType)}`
     );
   }
+  const createdAt = new Date().toISOString();
+  const issueDate = payload.issueDate || createdAt.slice(0, 10);
   const invoice: Invoice = {
     id: `local-${payload.documentType}-${crypto.randomUUID()}`,
     providerId: payload.providerId,
     documentType: payload.documentType,
+    origin: "manual",
     customerName: payload.customerName.trim(),
     amount: payload.amount,
-    currency: payload.currency,
+    currency: payload.currency.trim().toUpperCase(),
     status: "draft",
-    approvalStatus: "pending",
-    paidLocally: false,
-    meritPaid: false,
+    meritDeliveryStatus: "not-sent",
+    invoiceNumber: `FD-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+    issueDate,
     dueDate: payload.dueDate,
     source: "manual",
     description: payload.description.trim(),
     transactionId: payload.transactionId,
-    createdAt: new Date().toISOString()
+    revenueRunIds: [],
+    periodStart: cleanOptional(payload.periodStart),
+    periodEnd: cleanOptional(payload.periodEnd),
+    taxId: cleanOptional(payload.taxId),
+    createdAt,
+    updatedAt: createdAt
   };
   if (payload.transactionId && selectedProvider) {
     const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
@@ -1984,6 +2265,48 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   return invoice;
 }
 
+async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
+  if (
+    !payload.customerName?.trim() ||
+    !Number.isFinite(payload.amount) ||
+    payload.amount <= 0 ||
+    !payload.currency?.trim() ||
+    !payload.issueDate ||
+    !payload.dueDate
+  ) {
+    throw new ApiError(400, "customerName, positive amount, currency, issueDate, and dueDate are required");
+  }
+  const state = await loadPersisted(env);
+  const invoice = state.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) throw new ApiError(404, "Invoice not found");
+  if (invoice.status !== "draft" || invoice.externalId) {
+    throw new ApiError(409, "Only local drafts that have not been saved to Merit can be edited");
+  }
+  const provider = payload.providerId ? state.providers.find((item) => item.id === payload.providerId) : undefined;
+  if (payload.providerId && !provider) throw new ApiError(400, "Company not found");
+  if (provider && provider.type !== providerTypeForInvoiceDocument(invoice.documentType)) {
+    throw new ApiError(400, `${invoice.documentType === "sales_invoice" ? "Sales invoice" : "Supplier bill"} requires a ${providerTypeForInvoiceDocument(invoice.documentType)}`);
+  }
+  const { meritCreationReservedAt: _reservation, sendError: _sendError, ...editableInvoice } = invoice;
+  const updated: Invoice = {
+    ...editableInvoice,
+    providerId: payload.providerId,
+    customerName: payload.customerName.trim(),
+    amount: payload.amount,
+    currency: payload.currency.trim().toUpperCase(),
+    issueDate: payload.issueDate,
+    dueDate: payload.dueDate,
+    description: payload.description.trim(),
+    taxId: cleanOptional(payload.taxId),
+    periodStart: cleanOptional(payload.periodStart),
+    periodEnd: cleanOptional(payload.periodEnd),
+    updatedAt: new Date().toISOString()
+  };
+  state.invoices = state.invoices.map((item) => item.id === invoiceId ? updated : item);
+  await savePersisted(env, state);
+  return updated;
+}
+
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
   const initialState = await loadPersisted(env);
   const selectedPartners = initialState.revenuePartners.filter(
@@ -2003,7 +2326,11 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
       periodPreset: payload.periodPreset,
       periodStart: payload.periodStart,
       periodEnd: payload.periodEnd,
-      timezone: payload.timezone || partner.timezone || env.REVENUE_TIMEZONE || "UTC"
+      timezone:
+        payload.timezone ||
+        (payload.periodPreset === "this-week" ? partner.billingTimezone : partner.timezone) ||
+        env.REVENUE_TIMEZONE ||
+        "UTC"
     });
 
     try {
@@ -2044,126 +2371,734 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
   if (nextRuns.length > 0) {
     const latestState = await loadPersisted(env);
     const protectedRunIds = new Set(
-      latestState.revenueRuns.filter((run) => run.status === "invoicing" || run.status === "invoiced").map((run) => run.id)
+      latestState.revenueRuns
+        .filter((run) => run.status === "drafted" || run.status === "invoicing" || run.status === "invoiced")
+        .map((run) => run.id)
     );
     const safeNextRuns = nextRuns.filter((run) => !protectedRunIds.has(run.id));
-    const nextRunIds = new Set(safeNextRuns.map((run) => run.id));
-    latestState.revenueRuns = [...safeNextRuns, ...latestState.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
+    const acceptedNextRuns: RevenueRun[] = [];
+    for (const run of safeNextRuns) {
+      const partner = latestState.revenuePartners.find((item) => item.id === run.partnerId);
+      if (!partner || run.status === "failed") {
+        acceptedNextRuns.push(run);
+        continue;
+      }
+      if (isClosedBillingPeriod(partner, run)) {
+        removeClosedRevenueAccrual(latestState, partner, run);
+        acceptedNextRuns.push(run);
+        continue;
+      }
+      const accrualPeriodEnd = openAccrualPeriodEnd(partner, run);
+      if (!accrualPeriodEnd) {
+        acceptedNextRuns.push(run);
+        continue;
+      }
+      if (upsertRevenueAccrual(latestState, {
+        id: `revenue-accrual-${partner.id}-${run.periodStart}-${accrualPeriodEnd}`,
+        partnerId: partner.id,
+        providerId: partner.providerId,
+        partnerName: partner.name,
+        billingCadence: partner.billingCadence,
+        periodStart: run.periodStart,
+        periodEnd: accrualPeriodEnd,
+        accruedThrough: run.periodEnd,
+        amount: run.revenue,
+        currency: run.currency,
+        status: "accruing",
+        revenueRunId: run.id,
+        updatedAt: run.createdAt
+      })) {
+        acceptedNextRuns.push(run);
+      }
+    }
+    const nextRunIds = new Set(acceptedNextRuns.map((run) => run.id));
+    latestState.revenueRuns = [...acceptedNextRuns, ...latestState.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
     await savePersisted(env, latestState);
   }
   return getSnapshot(env);
 }
 
-async function sendRevenueInvoice(
-  env: Env,
-  runId: string,
-  payload: SendRevenueInvoicePayload
-): Promise<DashboardSnapshot> {
-  if (payload.confirmation !== "SEND_TO_MERIT") {
-    throw new ApiError(400, "Explicit SEND_TO_MERIT confirmation is required.");
-  }
-  assertMeritWriteConfiguration(env);
-  if (!payload.taxId?.trim()) throw new ApiError(400, "Choose a Merit tax rate before creating the invoice.");
-
-  let meritTaxes: MeritTax[];
-  try {
-    meritTaxes = await fetchMeritTaxes(env);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "Unknown Merit API error";
-    throw new ApiError(502, `Merit tax rates could not be verified (${detail}). No invoice was created.`, { cause: error });
-  }
-  const selectedTax = meritTaxes.find((tax) => tax.id === payload.taxId);
-  if (!selectedTax) throw new ApiError(400, "The selected Merit tax rate is no longer available.");
-
+async function draftRevenueRun(env: Env, runId: string): Promise<Invoice> {
   const state = await loadPersisted(env);
   const run = state.revenueRuns.find((item) => item.id === runId);
-  if (!run) throw new ApiError(404, "Revenue run not found.");
+  if (!run) throw new ApiError(404, "Revenue run not found");
   if (run.status !== "pulled" || run.revenue <= 0) {
-    throw new ApiError(409, "Only a positive, pulled revenue run can be sent to Merit.");
+    throw new ApiError(409, "Only a positive pulled revenue period can be drafted");
   }
-
   const partner = state.revenuePartners.find((item) => item.id === run.partnerId);
-  if (!partner) throw new ApiError(409, "The revenue client for this run no longer exists.");
-
-  const reservation: RevenueRun = {
-    ...run,
-    status: "invoicing",
-    error: "Merit invoice creation in progress"
-  };
-  if (!(await reserveRevenueInvoice(env, reservation))) {
-    throw new ApiError(409, "This revenue period already has a Merit invoice or an invoice creation in progress.");
-  }
-
-  const { error: _previousError, ...runWithoutError } = run;
-  try {
-    const invoice = await createMeritInvoice(
-      env,
-      {
-        providerId: run.providerId,
-        documentType: "sales_invoice",
-        customerName: partner.meritCustomerName || partner.name,
-        amount: run.revenue,
-        currency: run.currency,
-        dueDate: calculateInvoiceDueDate(run.periodEnd, partner.invoiceDueDays),
-        description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd} (${run.timezone})`
-      },
-      selectedTax
-    );
-    await finalizeRevenueInvoice(
-      env,
-      {
-        ...runWithoutError,
-        status: "invoiced",
-        invoiceId: invoice.id,
-        externalInvoiceId: invoice.externalId
-      },
-      invoice
-    );
-  } catch (error) {
-    await finalizeRevenueInvoice(env, {
-      ...reservation,
-      error: `Merit invoice outcome needs review before retrying: ${error instanceof Error ? error.message : "Unknown error"}`
+  if (!partner) throw new ApiError(409, "Revenue rule no longer exists");
+  if (!isClosedBillingPeriod(partner, run)) throw new ApiError(409, "Revenue period is not closed yet");
+  const existing = state.invoices.find(
+    (invoice) => invoice.billingRuleId === partner.id && invoice.periodStart === run.periodStart && invoice.periodEnd === run.periodEnd
+  );
+  if (existing) return existing;
+  const draft = buildRevenueDraft({ ...partner, autoDraft: true }, run);
+  state.invoices = [draft, ...state.invoices];
+  upsertRevenueRun(state, { ...run, status: "drafted", invoiceId: draft.id });
+  if (partner.billingCadence === "monthly") {
+    upsertRevenueAccrual(state, {
+      id: `revenue-accrual-${partner.id}-${run.periodStart}-${run.periodEnd}`,
+      partnerId: partner.id,
+      providerId: partner.providerId,
+      partnerName: partner.name,
+      billingCadence: "monthly",
+      periodStart: run.periodStart,
+      periodEnd: run.periodEnd,
+      accruedThrough: run.periodEnd,
+      amount: run.revenue,
+      currency: run.currency,
+      status: "drafted",
+      revenueRunId: run.id,
+      invoiceId: draft.id,
+      updatedAt: draft.updatedAt
     });
-    throw error;
+  } else {
+    removeClosedRevenueAccrual(state, partner, run);
+  }
+  await savePersisted(env, state);
+  return draft;
+}
+
+function replaceInvoice(state: PersistedState, updated: Invoice): void {
+  state.invoices = state.invoices.map((invoice) => invoice.id === updated.id ? updated : invoice);
+}
+
+async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<SendInvoicesResult> {
+  if (payload.confirmation !== "SEND_TO_MERIT") {
+    throw new ApiError(400, "Explicit SEND_TO_MERIT confirmation is required");
+  }
+  if (payload.mode !== "save" && payload.mode !== "deliver") throw new ApiError(400, "mode must be save or deliver");
+  const invoiceIds = [...new Set(payload.invoiceIds?.filter((id) => typeof id === "string" && id.trim()))];
+  if (invoiceIds.length === 0) throw new ApiError(400, "Select at least one invoice");
+  assertMeritWriteConfiguration(env);
+
+  let state = await loadPersisted(env);
+  const outcomes: SendInvoicesResult["outcomes"] = [];
+  let meritTaxes: MeritTax[] | undefined;
+
+  for (const invoiceId of invoiceIds) {
+    let current = state.invoices.find((invoice) => invoice.id === invoiceId);
+    if (!current) {
+      outcomes.push({ invoiceId, status: "failed", message: "Invoice not found" });
+      continue;
+    }
+    if (current.documentType !== "sales_invoice") {
+      outcomes.push({ invoiceId, status: "failed", message: "Only sales invoices can be sent to Merit" });
+      continue;
+    }
+    if (current.status === "paid") {
+      outcomes.push({ invoiceId, status: "failed", message: "Paid invoices cannot be sent" });
+      continue;
+    }
+
+    if (!current.externalId) {
+      const reservedAt = new Date().toISOString();
+      if (!(await reserveInvoiceCreation(env, current.id, reservedAt))) {
+        state = await loadPersisted(env);
+        current = state.invoices.find((invoice) => invoice.id === invoiceId);
+        if (!current?.externalId) {
+          outcomes.push({
+            invoiceId,
+            status: "failed",
+            message: current?.meritCreationReservedAt
+              ? `Merit creation reserved at ${current.meritCreationReservedAt}. Check Merit, then edit the draft before retrying.`
+              : current?.sendError
+                ? `${current.sendError} Edit the draft after reviewing Merit before retrying.`
+              : "Merit invoice creation is already in progress"
+          });
+          continue;
+        }
+      }
+    }
+
+    if (!current.externalId) {
+      state = await loadPersisted(env);
+      current = state.invoices.find((invoice) => invoice.id === invoiceId);
+      if (!current) {
+        outcomes.push({ invoiceId, status: "failed", message: "Invoice not found after reservation" });
+        continue;
+      }
+      let createdInMerit: Invoice | undefined;
+      try {
+        if (!current.taxId) throw new ApiError(400, "Choose a Merit tax rate before sending this invoice");
+        meritTaxes ??= await fetchMeritTaxes(env);
+        const tax = meritTaxes.find((item) => item.id === current?.taxId);
+        if (!tax) throw new ApiError(400, "The saved Merit tax rate is no longer available");
+        const billingRule = current.billingRuleId
+          ? state.revenuePartners.find((partner) => partner.id === current?.billingRuleId)
+          : undefined;
+        const provider = current.providerId ? state.providers.find((item) => item.id === current?.providerId) : undefined;
+        const created = await createMeritInvoice(
+          env,
+          {
+            transactionId: current.transactionId,
+            providerId: current.providerId,
+            documentType: current.documentType,
+            customerName: current.customerName,
+            amount: current.amount,
+            currency: current.currency,
+            issueDate: current.issueDate,
+            dueDate: current.dueDate,
+            description: current.description,
+            taxId: current.taxId,
+            periodStart: current.periodStart,
+            periodEnd: current.periodEnd
+          },
+          tax,
+          billingRule?.defaultMeritItemCode,
+          provider,
+          current.invoiceNumber
+        );
+        createdInMerit = created;
+        const {
+          sendError: _sendError,
+          meritDeliveryError: _deliveryError,
+          meritCreationReservedAt: _reservation,
+          ...cleanCurrent
+        } = current;
+        current = {
+          ...cleanCurrent,
+          source: "merit",
+          status: "open",
+          meritStatus: "open",
+          meritDeliveryStatus: "saved",
+          externalId: created.externalId,
+          invoiceNumber: created.invoiceNumber,
+          updatedAt: created.updatedAt
+        };
+        await finalizeInvoiceCreation(env, current);
+        state = await loadPersisted(env);
+        current = state.invoices.find((invoice) => invoice.id === invoiceId) ?? current;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Merit invoice creation failed";
+        if (createdInMerit?.externalId) {
+          outcomes.push({
+            invoiceId,
+            status: "failed",
+            message: `Merit created invoice ${createdInMerit.externalId}, but local persistence failed. Retry persistence before sending again.`
+          });
+          continue;
+        }
+        const { meritCreationReservedAt: _reservation, ...cleanCurrent } = current;
+        const failed = { ...cleanCurrent, sendError: message, updatedAt: new Date().toISOString() };
+        await finalizeInvoiceCreation(env, failed);
+        state = await loadPersisted(env);
+        outcomes.push({ invoiceId, status: "failed", message });
+        continue;
+      }
+    }
+
+    if (payload.mode === "save") {
+      outcomes.push({ invoiceId, status: "saved" });
+      continue;
+    }
+    if (current.meritDeliveryStatus === "delivered") {
+      outcomes.push({ invoiceId, status: "delivered" });
+      continue;
+    }
+
+    const externalId = current.externalId;
+    if (!externalId) {
+      outcomes.push({ invoiceId, status: "failed", message: "Merit invoice ID is missing after creation" });
+      continue;
+    }
+    try {
+      await deliverMeritInvoice(env, externalId);
+      const { meritDeliveryError: _deliveryError, ...cleanCurrent } = current;
+      const deliveredAt = new Date().toISOString();
+      current = {
+        ...cleanCurrent,
+        meritDeliveryStatus: "delivered",
+        sentAt: cleanCurrent.sentAt ?? deliveredAt,
+        updatedAt: deliveredAt
+      };
+      replaceInvoice(state, current);
+      await savePersisted(env, state);
+      outcomes.push({ invoiceId, status: "delivered" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Merit invoice delivery failed";
+      current = {
+        ...current,
+        meritDeliveryStatus: "delivery-failed",
+        meritDeliveryError: message,
+        updatedAt: new Date().toISOString()
+      };
+      replaceInvoice(state, current);
+      await savePersisted(env, state);
+      outcomes.push({ invoiceId, status: "failed", message });
+    }
   }
 
+  return { dashboard: await getSnapshot(env), outcomes };
+}
+
+const paymentSources = new Set(["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"]);
+
+function isIsoCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+async function recordInvoicePayment(
+  env: Env,
+  invoiceId: string,
+  payload: RecordInvoicePaymentPayload
+): Promise<DashboardSnapshot> {
+  if (!Number.isFinite(payload.amount) || payload.amount <= 0 || !isIsoCalendarDate(payload.paidAt) || !paymentSources.has(payload.source)) {
+    throw new ApiError(400, "positive amount, paidAt, and a valid payment source are required");
+  }
+  const state = await loadPersisted(env);
+  const invoice = state.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) throw new ApiError(404, "Invoice not found");
+  if (invoice.status === "draft") throw new ApiError(409, "Save the invoice to Merit before recording payment");
+  const outstanding = invoiceOutstanding(invoice, state.paymentAllocations);
+  if (payload.amount - outstanding > 0.01) throw new ApiError(409, `Payment exceeds the ${outstanding.toFixed(2)} ${invoice.currency} outstanding balance`);
+  const transaction = payload.transactionId
+    ? await fetchTransactionForUpdate(env, payload.transactionId, state)
+    : undefined;
+  if (payload.transactionId && !transaction) throw new ApiError(400, "Bank transaction not found");
+  if (
+    transaction &&
+    (transaction.currency.toUpperCase() !== invoice.currency.toUpperCase() ||
+      transaction.direction !== "in" ||
+      (transaction.status !== "posted" && transaction.status !== "settled"))
+  ) {
+    throw new ApiError(400, "The selected transaction must be posted or settled, incoming, and use the invoice currency");
+  }
+  if (transaction && transaction.source !== payload.source) {
+    throw new ApiError(400, "Payment source must match the selected bank transaction");
+  }
+  if (transaction) {
+    const allocated = state.paymentAllocations
+      .filter((allocation) => allocation.transactionId === transaction.id)
+      .reduce((total, allocation) => total + allocation.amount, 0);
+    if (allocated + payload.amount - transaction.amount > 0.01) {
+      throw new ApiError(409, `Allocations exceed the transaction's ${transaction.amount.toFixed(2)} ${transaction.currency} amount`);
+    }
+  }
+
+  const createdAt = new Date().toISOString();
+  const allocation: PaymentAllocation = {
+    id: `payment-${crypto.randomUUID()}`,
+    invoiceId,
+    transactionId: payload.transactionId,
+    amount: Number(payload.amount.toFixed(2)),
+    currency: invoice.currency,
+    source: payload.source,
+    accountName: cleanOptional(payload.accountName) ?? transaction?.accountName,
+    reference: cleanOptional(payload.reference) ?? transaction?.description,
+    note: cleanOptional(payload.note),
+    mode: "manual",
+    paidAt: transaction?.date ?? payload.paidAt,
+    createdAt
+  };
+  state.paymentAllocations = [allocation, ...state.paymentAllocations];
+  state.invoices = applyPaymentState(state.invoices, state.paymentAllocations).map((item) =>
+    item.id === invoiceId ? { ...item, updatedAt: createdAt } : item
+  );
+  if (transaction) {
+    if (invoice.providerId) {
+      state.providers = state.providers.map((provider) =>
+        provider.id === invoice.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
+      );
+    }
+    const linkedInvoiceIds = new Set(
+      state.paymentAllocations
+        .filter((item) => item.transactionId === transaction.id)
+        .map((item) => item.invoiceId)
+    );
+    const { matchedInvoiceId: _matchedInvoiceId, ...transactionWithoutInvoice } = transaction;
+    const updatedTransaction: Transaction = {
+      ...transactionWithoutInvoice,
+      ...(linkedInvoiceIds.size === 1 ? { matchedInvoiceId: invoiceId } : {}),
+      matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
+      confidence: 1,
+      matchReason: linkedInvoiceIds.size === 1 ? "Manually allocated to invoice" : "Manually split across invoices"
+    };
+    if (!updatePersistedTransaction(state, updatedTransaction)) {
+      state.wiseStatementTransactions = [updatedTransaction, ...state.wiseStatementTransactions];
+    }
+  }
+  await savePersisted(env, state);
   return getSnapshot(env);
 }
 
-async function setInvoiceApproval(env: Env, invoiceId: string, approvalStatus: "approved" | "denied"): Promise<Invoice> {
-  const state = await loadPersisted(env);
-  let updated: Invoice | undefined;
-  state.invoices = state.invoices.map((invoice) => {
-    if (invoice.id !== invoiceId) return invoice;
-    updated = { ...invoice, approvalStatus };
-    return updated;
-  });
-  if (!updated) {
-    const liveInvoice = await fetchInvoiceForLocalUpdate(env, invoiceId);
-    if (!liveInvoice) throw new Error("Invoice not found");
-    updated = { ...liveInvoice, approvalStatus };
-    state.invoices = [updated, ...state.invoices];
+function normalizedHoldingPayload(payload: CreateHoldingPayload | UpdateHoldingPayload): Omit<Holding, "id" | "updatedAt"> {
+  if (
+    !payload.name?.trim() ||
+    !payload.asset?.trim() ||
+    !Number.isFinite(payload.balance) ||
+    payload.balance < 0 ||
+    (payload.kind !== "cash" && payload.kind !== "exchange" && payload.kind !== "wallet") ||
+    (payload.assetType !== "fiat" && payload.assetType !== "crypto")
+  ) {
+    throw new ApiError(400, "name, kind, assetType, asset, and a non-negative finite balance are required");
   }
-  await savePersisted(env, state);
-  return updated;
+  return {
+    name: payload.name.trim(),
+    kind: payload.kind,
+    assetType: payload.assetType,
+    asset: payload.asset.trim().toUpperCase(),
+    balance: payload.balance,
+    notes: cleanOptional(payload.notes)
+  };
 }
 
-async function markInvoicePaidLocally(env: Env, invoiceId: string): Promise<Invoice> {
+async function createHolding(env: Env, payload: CreateHoldingPayload): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
-  let updated: Invoice | undefined;
-  state.invoices = state.invoices.map((invoice) => {
-    if (invoice.id !== invoiceId) return invoice;
-    updated = { ...invoice, paidLocally: true, paidLocallyAt: new Date().toISOString() };
-    return updated;
-  });
-  if (!updated) {
-    const liveInvoice = await fetchInvoiceForLocalUpdate(env, invoiceId);
-    if (!liveInvoice) throw new Error("Invoice not found");
-    updated = { ...liveInvoice, paidLocally: true, paidLocallyAt: new Date().toISOString() };
-    state.invoices = [updated, ...state.invoices];
-  }
+  const holding: Holding = {
+    id: `holding-${crypto.randomUUID()}`,
+    ...normalizedHoldingPayload(payload),
+    updatedAt: new Date().toISOString()
+  };
+  state.holdings = [holding, ...state.holdings];
   await savePersisted(env, state);
-  return updated;
+  return getSnapshot(env);
+}
+
+async function updateHolding(env: Env, holdingId: string, payload: UpdateHoldingPayload): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  if (!state.holdings.some((holding) => holding.id === holdingId)) throw new ApiError(404, "Holding not found");
+  const updated: Holding = { id: holdingId, ...normalizedHoldingPayload(payload), updatedAt: new Date().toISOString() };
+  state.holdings = state.holdings.map((holding) => holding.id === holdingId ? updated : holding);
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
+async function deleteHolding(env: Env, holdingId: string): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  if (!state.holdings.some((holding) => holding.id === holdingId)) throw new ApiError(404, "Holding not found");
+  state.holdings = state.holdings.filter((holding) => holding.id !== holdingId);
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
+function yahooSymbol(asset: string, assetType: Holding["assetType"]): string {
+  return assetType === "crypto" ? `${asset}-USD` : `${asset}USD=X`;
+}
+
+export async function fetchYahooUsdRates(env: Env, assets: Map<string, Holding["assetType"]>): Promise<FxRate[]> {
+  const symbolByAsset = new Map(
+    [...assets.entries()].filter(([asset]) => asset !== "USD").map(([asset, assetType]) => [asset, yahooSymbol(asset, assetType)])
+  );
+  if (symbolByAsset.size === 0) return [];
+  const chartBaseUrl = (env.YAHOO_FINANCE_CHART_URL || defaultYahooFinanceChartBaseUrl).replace(/\/+$/, "");
+  const results = await Promise.allSettled(
+    [...symbolByAsset].map(async ([asset, symbol]): Promise<FxRate> => {
+      const chartUrl = new URL(`${chartBaseUrl}/${encodeURIComponent(symbol)}`);
+      chartUrl.searchParams.set("interval", "1d");
+      chartUrl.searchParams.set("range", "1d");
+      const payload = await fetchJson<{
+        chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }> };
+      }>(chartUrl.toString(), {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (compatible; FinanceDashboard/1.0)"
+        }
+      });
+      const quote = payload.chart?.result?.[0]?.meta;
+      if (!quote || !Number.isFinite(quote.regularMarketPrice) || Number(quote.regularMarketPrice) <= 0) {
+        throw new Error(`Yahoo Finance did not return a USD quote for ${asset}`);
+      }
+      return {
+        asset,
+        rateUsd: Number(quote.regularMarketPrice),
+        provider: "yahoo",
+        asOf: quote.regularMarketTime
+          ? new Date(quote.regularMarketTime * 1000).toISOString()
+          : new Date().toISOString()
+      };
+    })
+  );
+  const rates = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+  if (rates.length === 0) {
+    const reason = results.find((result) => result.status === "rejected");
+    throw new ApiError(502, reason?.status === "rejected" && reason.reason instanceof Error ? reason.reason.message : "Yahoo Finance returned no USD quotes");
+  }
+  return rates;
+}
+
+async function refreshFxRates(env: Env): Promise<DashboardSnapshot> {
+  const state = await loadPersisted(env);
+  const [wise, revolut, slash, amex] = await Promise.all([
+    fetchWiseActivity(env),
+    fetchRevolutActivity(env),
+    fetchSlashActivity(env),
+    fetchAmexActivity(env)
+  ]);
+  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
+  const assets = new Map<string, Holding["assetType"]>();
+  for (const account of accounts) assets.set(account.currency.toUpperCase(), "fiat");
+  for (const holding of state.holdings) assets.set(holding.asset.toUpperCase(), holding.assetType);
+  state.fxRates = await fetchYahooUsdRates(env, assets);
+  await savePersisted(env, state);
+  return getSnapshot(env);
+}
+
+function upsertRevenueRun(state: PersistedState, run: RevenueRun): void {
+  const existing = state.revenueRuns.find((item) => item.id === run.id);
+  if (existing && (existing.status === "drafted" || existing.status === "invoicing" || existing.status === "invoiced")) {
+    return;
+  }
+  state.revenueRuns = [run, ...state.revenueRuns.filter((item) => item.id !== run.id)].slice(0, 250);
+}
+
+function upsertFailedRevenueRun(state: PersistedState, run: RevenueRun, failedAt: Date): void {
+  const existing = state.revenueRuns.find((item) => item.id === run.id);
+  upsertRevenueRun(
+    state,
+    existing && existing.status !== "failed" ? { ...run, id: `${run.id}-failed-${failedAt.getTime()}` } : run
+  );
+}
+
+function upsertRevenueAccrual(state: PersistedState, accrual: RevenueAccrual): boolean {
+  const previousAccrual = state.revenueAccruals.find((item) => item.id === accrual.id);
+  if (
+    previousAccrual &&
+    !accrual.invoiceId &&
+    (previousAccrual.invoiceId || previousAccrual.accruedThrough > accrual.accruedThrough)
+  ) {
+    return false;
+  }
+  state.revenueRuns = pruneSupersededAccrualRun(state.revenueRuns, previousAccrual, accrual.revenueRunId);
+  state.revenueAccruals = [accrual, ...state.revenueAccruals.filter((item) => item.id !== accrual.id)].slice(0, 250);
+  return true;
+}
+
+function removeClosedRevenueAccrual(state: PersistedState, partner: RevenuePartner, run: RevenueRun): void {
+  const id = `revenue-accrual-${partner.id}-${run.periodStart}-${run.periodEnd}`;
+  const previousAccrual = state.revenueAccruals.find((item) => item.id === id);
+  state.revenueRuns = pruneSupersededAccrualRun(state.revenueRuns, previousAccrual, run.id);
+  state.revenueAccruals = state.revenueAccruals.filter((item) => item.id !== id);
+}
+
+async function pullAutomatedRevenue(
+  env: Env,
+  state: PersistedState,
+  partner: RevenuePartner,
+  periodStart: string,
+  periodEnd: string,
+  scheduledAt: Date
+): Promise<RevenueRun> {
+  const period: RevenuePeriod = { preset: "custom", periodStart, periodEnd, timezone: partner.timezone };
+  try {
+    const run = await fetchTuneRevenue(env, partner, period);
+    return partner.teamId
+      ? { ...run, teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
+      : run;
+  } catch (error) {
+    return {
+      id: `revenue-${partner.id}-${periodStart}-${periodEnd}`,
+      partnerId: partner.id,
+      providerId: partner.providerId,
+      partnerName: partner.name,
+      revenueCategory: partner.revenueCategory,
+      teamId: partner.teamId,
+      teamName: partner.teamId ? state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId : undefined,
+      source: "tune",
+      periodStart,
+      periodEnd,
+      timezone: partner.timezone,
+      revenue: 0,
+      currency: partner.currency,
+      status: "failed",
+      error: error instanceof Error ? error.message : "Revenue pull failed",
+      createdAt: scheduledAt.toISOString()
+    };
+  }
+}
+
+async function automateClosedRevenuePeriod(
+  env: Env,
+  state: PersistedState,
+  partner: RevenuePartner,
+  periodStart: string,
+  periodEnd: string,
+  scheduledAt: Date
+): Promise<boolean> {
+  let run = await pullAutomatedRevenue(env, state, partner, periodStart, periodEnd, scheduledAt);
+  if (run.status === "failed") {
+    upsertFailedRevenueRun(state, run, scheduledAt);
+    return false;
+  }
+  removeClosedRevenueAccrual(state, partner, run);
+  if (partner.billingCadence === "monthly") {
+    state.revenueRuns = state.revenueRuns.filter(
+      (item) => !(item.partnerId === partner.id && item.periodStart === periodStart && item.periodEnd !== periodEnd)
+    );
+  }
+  const existingInvoice = state.invoices.find(
+    (invoice) => invoice.billingRuleId === partner.id && invoice.periodStart === periodStart && invoice.periodEnd === periodEnd
+  );
+  if (existingInvoice) {
+    run = { ...run, status: existingInvoice.externalId ? "invoiced" : "drafted", invoiceId: existingInvoice.id, externalInvoiceId: existingInvoice.externalId };
+  } else if (partner.autoDraft && run.revenue > 0) {
+    const draft = buildRevenueDraft(partner, run, scheduledAt);
+    state.invoices = [draft, ...state.invoices.filter((invoice) => invoice.id !== draft.id)];
+    run = { ...run, status: "drafted", invoiceId: draft.id };
+  }
+  upsertRevenueRun(state, run);
+  if (partner.billingCadence === "monthly" && (run.status === "drafted" || run.status === "invoiced")) {
+    upsertRevenueAccrual(state, {
+      id: `revenue-accrual-${partner.id}-${periodStart}-${periodEnd}`,
+      partnerId: partner.id,
+      providerId: partner.providerId,
+      partnerName: partner.name,
+      billingCadence: "monthly",
+      periodStart,
+      periodEnd,
+      accruedThrough: periodEnd,
+      amount: run.revenue,
+      currency: run.currency,
+      status: "drafted",
+      revenueRunId: run.id,
+      invoiceId: run.invoiceId,
+      updatedAt: scheduledAt.toISOString()
+    });
+  }
+  return true;
+}
+
+async function automateCurrentRevenueAccrual(
+  env: Env,
+  state: PersistedState,
+  partner: RevenuePartner,
+  period: { periodStart: string; periodEnd: string; accruedThrough: string },
+  scheduledAt: Date
+): Promise<boolean> {
+  const run = await pullAutomatedRevenue(
+    env,
+    state,
+    partner,
+    period.periodStart,
+    period.accruedThrough,
+    scheduledAt
+  );
+  if (run.status === "failed") {
+    upsertFailedRevenueRun(state, run, scheduledAt);
+    return false;
+  }
+  upsertRevenueRun(state, run);
+  upsertRevenueAccrual(state, {
+    id: `revenue-accrual-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+    partnerId: partner.id,
+    providerId: partner.providerId,
+    partnerName: partner.name,
+    billingCadence: partner.billingCadence,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    accruedThrough: period.accruedThrough,
+    amount: run.revenue,
+    currency: run.currency,
+    status: "accruing",
+    revenueRunId: run.id,
+    updatedAt: scheduledAt.toISOString()
+  });
+  return true;
+}
+
+function periodKey(periodStart: string, periodEnd: string): string {
+  return `${periodStart}:${periodEnd}`;
+}
+
+export async function runIncomeAutomation(env: Env, scheduledAt: Date): Promise<"already-ran" | "completed"> {
+  const completedWeek = previousCompletedWeek(scheduledAt);
+  const automation: AutomationRun = {
+    id: `weekly-income-${completedWeek.periodStart}-${completedWeek.periodEnd}`,
+    type: "weekly-income",
+    periodStart: completedWeek.periodStart,
+    periodEnd: completedWeek.periodEnd,
+    timezone: incomeAutomationTimezone,
+    status: "running",
+    startedAt: new Date().toISOString()
+  };
+  if (!(await reserveIncomeAutomation(env, automation))) return "already-ran";
+
+  try {
+    const state = await loadPersisted(env);
+    const failures: string[] = [];
+    for (const partner of state.revenuePartners.filter((item) => item.enabled)) {
+      const closedPeriods = new Map<string, { periodStart: string; periodEnd: string }>();
+      if (partner.billingCadence === "weekly") {
+        const partnerWeek = previousCompletedWeek(scheduledAt, partner.billingTimezone);
+        closedPeriods.set(periodKey(partnerWeek.periodStart, partnerWeek.periodEnd), partnerWeek);
+      } else {
+        const previousMonth = previousCalendarMonth(scheduledAt, partner.billingTimezone);
+        const previousMonthHandled = state.revenueRuns.some(
+          (run) =>
+            run.partnerId === partner.id &&
+            run.periodStart === previousMonth.periodStart &&
+            run.periodEnd === previousMonth.periodEnd &&
+            run.status !== "failed" &&
+            (!partner.autoDraft || run.status === "drafted" || run.status === "invoiced")
+        );
+        if (!previousMonthHandled) closedPeriods.set(periodKey(previousMonth.periodStart, previousMonth.periodEnd), previousMonth);
+      }
+      for (const failed of state.revenueRuns.filter(
+        (run) => run.partnerId === partner.id && run.status === "failed" && isClosedBillingPeriod(partner, run, scheduledAt)
+      )) {
+        closedPeriods.set(periodKey(failed.periodStart, failed.periodEnd), {
+          periodStart: failed.periodStart,
+          periodEnd: failed.periodEnd
+        });
+      }
+      for (const period of closedPeriods.values()) {
+        if (!(await automateClosedRevenuePeriod(env, state, partner, period.periodStart, period.periodEnd, scheduledAt))) {
+          failures.push(`${partner.name} ${period.periodStart}–${period.periodEnd}`);
+        }
+      }
+
+      if (partner.billingCadence === "weekly") {
+        const accrualPeriod = currentWeekAccrualPeriod(scheduledAt, partner.billingTimezone);
+        if (!(await automateCurrentRevenueAccrual(env, state, partner, accrualPeriod, scheduledAt))) {
+          failures.push(`${partner.name} accrual through ${accrualPeriod.accruedThrough}`);
+        }
+      }
+
+      if (partner.billingCadence === "monthly") {
+        const accrualPeriod = currentMonthAccrualPeriod(scheduledAt, partner.billingTimezone);
+        if (accrualPeriod) {
+          if (!(await automateCurrentRevenueAccrual(env, state, partner, accrualPeriod, scheduledAt))) {
+            failures.push(`${partner.name} accrual through ${accrualPeriod.accruedThrough}`);
+          }
+        }
+      }
+    }
+    if (failures.length > 0) {
+      const error = `Income automation failed for ${failures.join(", ")}`;
+      state.automationRuns = state.automationRuns.map((run) =>
+        run.id === automation.id
+          ? { ...run, status: "failed", completedAt: new Date().toISOString(), error }
+          : run
+      );
+      await savePersisted(env, state);
+      throw new ApiError(502, error);
+    }
+    state.automationRuns = state.automationRuns.map((run) =>
+      run.id === automation.id ? { ...run, status: "completed", completedAt: new Date().toISOString() } : run
+    );
+    await savePersisted(env, state);
+    return "completed";
+  } catch (error) {
+    try {
+      const state = await loadPersisted(env);
+      state.automationRuns = state.automationRuns.map((run) =>
+        run.id === automation.id
+          ? {
+              ...run,
+              status: "failed",
+              completedAt: new Date().toISOString(),
+              error: error instanceof Error ? error.message : "Income automation failed"
+            }
+          : run
+      );
+      await savePersisted(env, state);
+    } catch (finalizeError) {
+      console.error(JSON.stringify({ event: "income_automation_finalize_failed", error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError) }));
+    }
+    throw error;
+  }
 }
 
 async function handleApi(request: Request, env: Env): Promise<Response> {
@@ -2198,15 +3133,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await syncRevenue(env, (await request.json()) as SyncRevenuePayload));
     }
 
-    const revenueInvoiceMatch = url.pathname.match(/^\/api\/revenue\/runs\/([^/]+)\/merit-invoice$/);
-    if (revenueInvoiceMatch && request.method === "POST") {
-      return json(
-        await sendRevenueInvoice(
-          env,
-          decodeURIComponent(revenueInvoiceMatch[1]),
-          (await request.json()) as SendRevenueInvoicePayload
-        )
-      );
+    const revenueDraftMatch = url.pathname.match(/^\/api\/revenue\/runs\/([^/]+)\/draft$/);
+    if (revenueDraftMatch && request.method === "POST") {
+      return json(await draftRevenueRun(env, decodeURIComponent(revenueDraftMatch[1])), { status: 201 });
     }
 
     if (url.pathname === "/api/providers" && request.method === "POST") {
@@ -2222,6 +3151,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     const revenuePartnerMatch = url.pathname.match(/^\/api\/revenue-partners\/([^/]+)$/);
+    if (url.pathname === "/api/revenue-partners" && request.method === "POST") {
+      return json(await createRevenuePartner(env, (await request.json()) as CreateRevenuePartnerPayload), { status: 201 });
+    }
     if (revenuePartnerMatch && request.method === "PUT") {
       return json(await updateRevenuePartner(env, revenuePartnerMatch[1], (await request.json()) as UpdateRevenuePartnerPayload));
     }
@@ -2275,23 +3207,46 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
     }
 
-    const approvalMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/approval$/);
-    if (approvalMatch && request.method === "POST") {
-      const body = (await request.json()) as { approvalStatus?: "approved" | "denied" };
-      if (body.approvalStatus !== "approved" && body.approvalStatus !== "denied") {
-        return json({ message: "approvalStatus must be approved or denied" }, { status: 400 });
-      }
-      return json(await setInvoiceApproval(env, approvalMatch[1], body.approvalStatus));
+    if (url.pathname === "/api/invoices/send" && request.method === "POST") {
+      return json(await sendInvoices(env, (await request.json()) as SendInvoicesPayload));
     }
 
-    const localPaidMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/local-paid$/);
-    if (localPaidMatch && request.method === "POST") {
-      return json(await markInvoicePaidLocally(env, localPaidMatch[1]));
+    const invoicePaymentMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/payments$/);
+    if (invoicePaymentMatch && request.method === "POST") {
+      return json(
+        await recordInvoicePayment(
+          env,
+          decodeURIComponent(invoicePaymentMatch[1]),
+          (await request.json()) as RecordInvoicePaymentPayload
+        )
+      );
+    }
+
+    const invoiceMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
+    if (invoiceMatch && request.method === "PUT") {
+      return json(await updateInvoice(env, decodeURIComponent(invoiceMatch[1]), (await request.json()) as UpdateInvoicePayload));
+    }
+
+    if (url.pathname === "/api/holdings" && request.method === "POST") {
+      return json(await createHolding(env, (await request.json()) as CreateHoldingPayload), { status: 201 });
+    }
+
+    const holdingMatch = url.pathname.match(/^\/api\/holdings\/([^/]+)$/);
+    if (holdingMatch && request.method === "PUT") {
+      return json(await updateHolding(env, decodeURIComponent(holdingMatch[1]), (await request.json()) as UpdateHoldingPayload));
+    }
+    if (holdingMatch && request.method === "DELETE") {
+      return json(await deleteHolding(env, decodeURIComponent(holdingMatch[1])));
+    }
+
+    if (url.pathname === "/api/fx/refresh" && request.method === "POST") {
+      return json(await refreshFxRates(env));
     }
 
     return json({ message: "Not found" }, { status: 404 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown server error";
+    console.error(JSON.stringify({ event: "api_request_failed", method: request.method, path: url.pathname, message }));
     return json({ message }, { status: error instanceof ApiError ? error.status : 500 });
   }
 }
@@ -2304,10 +3259,17 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
-  async scheduled(_controller: unknown, env: Env): Promise<void> {
-    await syncRevenue(env, {
-      periodPreset: "last-week",
-      timezone: env.REVENUE_TIMEZONE || "UTC"
-    });
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    if (!isLebanonIncomeAutomationTime(controller.scheduledTime)) return;
+    try {
+      await runIncomeAutomation(env, new Date(controller.scheduledTime));
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "income_automation_failed",
+        scheduledTime: controller.scheduledTime,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+      throw error;
+    }
   }
-};
+} satisfies WorkerExportedHandler;

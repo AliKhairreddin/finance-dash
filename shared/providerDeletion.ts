@@ -19,12 +19,6 @@ function clearInvoiceProvider(invoice: Invoice, providerId: string): Invoice {
   return nextInvoice;
 }
 
-function clearRevenuePartnerProvider(partner: RevenuePartner, providerId: string): RevenuePartner {
-  if (partner.providerId !== providerId) return partner;
-  const { providerId: _providerId, ...nextPartner } = partner;
-  return nextPartner;
-}
-
 function clearRevenueRunProvider(run: RevenueRun, providerId: string): RevenueRun {
   if (run.providerId !== providerId) return run;
   const { providerId: _providerId, ...nextRun } = run;
@@ -45,7 +39,7 @@ export function deleteProviderReferences(state: ProviderReferenceState, provider
     deletedProvider,
     providers: state.providers.filter((provider) => provider.id !== providerId),
     invoices: state.invoices.map((invoice) => clearInvoiceProvider(invoice, providerId)),
-    revenuePartners: state.revenuePartners.map((partner) => clearRevenuePartnerProvider(partner, providerId)),
+    revenuePartners: state.revenuePartners.filter((partner) => partner.providerId !== providerId),
     revenueRuns: state.revenueRuns.map((run) => clearRevenueRunProvider(run, providerId)),
     transactions: state.transactions.map((transaction) => clearTransactionProvider(transaction, providerId)),
     wiseStatementTransactions: state.wiseStatementTransactions.map((transaction) => clearTransactionProvider(transaction, providerId))

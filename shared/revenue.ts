@@ -1,12 +1,5 @@
 import type { RevenueMetrics, RevenuePartner, RevenuePeriodPreset, RevenueRun } from "./types";
 import { sumCurrencyTotals } from "./currencyTotals";
-import {
-  canonicalCreatedAt,
-  cognitiveTeamId,
-  kissterraProviderId,
-  leadEconomyProviderId,
-  wagnerTeamId
-} from "./business";
 
 const dayMs = 24 * 60 * 60 * 1000;
 
@@ -27,153 +20,10 @@ export interface RevenuePeriod {
   timezone: string;
 }
 
-export const canonicalRevenuePartners: RevenuePartner[] = [
-  {
-    id: "revenue-kissterra",
-    name: "Kissterra",
-    providerId: kissterraProviderId,
-    revenueCategory: "Partner network revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "KISSTERRA_TUNE_NETWORK_ID",
-    apiKeyEnv: "KISSTERRA_TUNE_API_KEY",
-    apiBaseUrlEnv: "KISSTERRA_TUNE_API_BASE_URL",
-    meritCustomerName: "Kissterra",
-    invoiceDueDays: 7,
-    enabled: true,
-    createdAt: canonicalCreatedAt
-  },
-  {
-    id: "revenue-cognitive-kissterra",
-    name: "Kissterra",
-    providerId: kissterraProviderId,
-    teamId: cognitiveTeamId,
-    revenueCategory: "Partner network revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "KISSTERRA_COGNITIVE_TUNE_NETWORK_ID",
-    apiKeyEnv: "KISSTERRA_COGNITIVE_TUNE_API_KEY",
-    apiBaseUrlEnv: "KISSTERRA_COGNITIVE_TUNE_API_BASE_URL",
-    meritCustomerName: "Kissterra",
-    invoiceDueDays: 7,
-    enabled: false,
-    createdAt: canonicalCreatedAt
-  },
-  {
-    id: "revenue-wagner-kissterra",
-    name: "Kissterra",
-    providerId: kissterraProviderId,
-    teamId: wagnerTeamId,
-    revenueCategory: "Affiliate team revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "KISSTERRA_WAGNER_TUNE_NETWORK_ID",
-    apiKeyEnv: "KISSTERRA_WAGNER_TUNE_API_KEY",
-    apiBaseUrlEnv: "KISSTERRA_WAGNER_TUNE_API_BASE_URL",
-    meritCustomerName: "Kissterra",
-    invoiceDueDays: 7,
-    enabled: false,
-    createdAt: canonicalCreatedAt
-  },
-  {
-    id: "revenue-lead-economy",
-    name: "Lead Economy",
-    providerId: leadEconomyProviderId,
-    revenueCategory: "Partner network revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "LEAD_ECONOMY_TUNE_NETWORK_ID",
-    apiKeyEnv: "LEAD_ECONOMY_TUNE_API_KEY",
-    apiBaseUrlEnv: "LEAD_ECONOMY_TUNE_API_BASE_URL",
-    meritCustomerName: "Lead Economy",
-    invoiceDueDays: 7,
-    enabled: false,
-    createdAt: canonicalCreatedAt
-  },
-  {
-    id: "revenue-cognitive-lead-economy",
-    name: "Lead Economy",
-    providerId: leadEconomyProviderId,
-    teamId: cognitiveTeamId,
-    revenueCategory: "Partner network revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_NETWORK_ID",
-    apiKeyEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_API_KEY",
-    apiBaseUrlEnv: "LEAD_ECONOMY_COGNITIVE_TUNE_API_BASE_URL",
-    meritCustomerName: "Lead Economy",
-    invoiceDueDays: 7,
-    enabled: false,
-    createdAt: canonicalCreatedAt
-  },
-  {
-    id: "revenue-wagner-lead-economy",
-    name: "Lead Economy",
-    providerId: leadEconomyProviderId,
-    teamId: wagnerTeamId,
-    revenueCategory: "Affiliate team revenue",
-    source: "tune",
-    affiliateId: "",
-    currency: "USD",
-    timezone: "UTC",
-    networkTimezone: "UTC",
-    networkIdEnv: "LEAD_ECONOMY_WAGNER_TUNE_NETWORK_ID",
-    apiKeyEnv: "LEAD_ECONOMY_WAGNER_TUNE_API_KEY",
-    apiBaseUrlEnv: "LEAD_ECONOMY_WAGNER_TUNE_API_BASE_URL",
-    meritCustomerName: "Lead Economy",
-    invoiceDueDays: 7,
-    enabled: false,
-    createdAt: canonicalCreatedAt
-  }
-];
-
-function revenuePartnerSignature(partner: RevenuePartner): string {
-  return [
-    partner.name.trim().toLowerCase(),
-    partner.teamId ?? "partner-level",
-    partner.networkIdEnv.trim(),
-    partner.apiKeyEnv.trim()
-  ].join(":");
-}
-
 export function mergeRevenuePartnerDirectory(partners: RevenuePartner[]): RevenuePartner[] {
-  const consumedIds = new Set<string>();
-  const next: RevenuePartner[] = [];
-
-  for (const canonical of canonicalRevenuePartners) {
-    const signature = revenuePartnerSignature(canonical);
-    const matches = partners.filter(
-      (partner) => partner.id === canonical.id || revenuePartnerSignature(partner) === signature
-    );
-    const persisted = matches.find((partner) => partner.id === canonical.id) ?? matches[0];
-    for (const match of matches) consumedIds.add(match.id);
-
-    next.push({
-      ...canonical,
-      ...persisted,
-      id: canonical.id,
-      providerId: persisted?.providerId || canonical.providerId,
-      teamId: canonical.teamId,
-      revenueCategory: persisted?.revenueCategory || canonical.revenueCategory
-    });
-  }
-
-  next.push(...partners.filter((partner) => !consumedIds.has(partner.id)));
+  const next = partners.map((partner) =>
+    partner.affiliateId.trim() ? partner : { ...partner, enabled: false }
+  );
 
   return next.sort((left, right) => {
     const teamOrder = (left.teamId ?? "").localeCompare(right.teamId ?? "");
@@ -220,6 +70,14 @@ export function resolveRevenuePeriod({
 
   const daysSinceMonday = (current.weekday + 6) % 7;
   const thisMonday = addDays(current.date, -daysSinceMonday);
+  if (periodPreset === "this-week") {
+    return {
+      preset: periodPreset,
+      periodStart: thisMonday,
+      periodEnd: current.date,
+      timezone
+    };
+  }
   return {
     preset: "last-week",
     periodStart: addDays(thisMonday, -7),
@@ -241,7 +99,7 @@ export function calculateTuneHourOffset(timezone: string, networkTimezone: strin
 export function calculateRevenueMetrics(partners: RevenuePartner[], runs: RevenueRun[]): RevenueMetrics {
   const billableRuns = runs.filter((run) => run.status !== "failed" && run.status !== "skipped");
   const invoicedRuns = runs.filter((run) => run.status === "invoiced");
-  const pendingRuns = runs.filter((run) => run.status === "pulled");
+  const pendingRuns = runs.filter((run) => run.status === "pulled" || run.status === "drafted");
   const lastRunAt = runs.reduce<string | undefined>((latest, run) => (!latest || run.createdAt > latest ? run.createdAt : latest), undefined);
 
   return {

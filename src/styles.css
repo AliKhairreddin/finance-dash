@@ -2603,7 +2603,787 @@ textarea:focus-visible {
   }
 }
 
+/* Income operations */
+.sidebar-section-label {
+  padding: 12px 11px 3px;
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.sidebar-income-group {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 4px;
+  padding-left: 8px;
+}
+
+.sidebar-income-group::before {
+  position: absolute;
+  inset: 4px auto 4px 2px;
+  width: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.sidebar-nav button.nested {
+  min-height: 38px;
+  padding-left: 10px;
+}
+
+.income-page-stack,
+.holdings-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.income-schedule-strip {
+  display: grid;
+  grid-template-columns: auto minmax(300px, 1.5fr) minmax(220px, 0.75fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.schedule-icon,
+.holding-card-icon,
+.send-option-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--subtle-bg);
+}
+
+.schedule-primary,
+.schedule-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.schedule-primary .eyebrow {
+  margin: 0;
+}
+
+.schedule-primary small,
+.schedule-meta span,
+.schedule-meta small {
+  color: var(--app-muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.schedule-meta {
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.automation-state {
+  width: max-content;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+
+.automation-state.completed {
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
+.automation-state.failed {
+  color: var(--red);
+  border-color: var(--red-border);
+  background: var(--red-soft);
+}
+
+.income-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--control-bg);
+}
+
+.income-filter-bar label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--label-text);
+  font-size: 0.74rem;
+  font-weight: 690;
+}
+
+.revenue-pull-bar {
+  grid-template-columns: repeat(5, minmax(128px, 1fr)) auto;
+}
+
+.income-pull-button {
+  min-height: 38px;
+}
+
+.income-summary-grid,
+.invoice-total-band,
+.holding-summary-band {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.income-summary-grid {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.income-summary-card,
+.holding-total-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.income-summary-card > span,
+.holding-total-card > span {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.income-summary-card > strong,
+.holding-total-card > strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1.06rem;
+  line-height: 1.25;
+}
+
+.income-summary-card > small,
+.holding-total-card > small {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.income-summary-card.open,
+.income-summary-card.expected,
+.holding-total-card.total {
+  border-color: var(--info-border);
+  background: var(--blue-soft);
+}
+
+.income-summary-card.draft {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.income-summary-card.accruing {
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
+.income-summary-card.warning {
+  border-color: var(--red-border);
+  background: var(--red-soft);
+}
+
+.table-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.table-section-heading h3,
+.company-rule-heading,
+.revenue-rule-section h3 {
+  margin: 0;
+}
+
+.table-section-heading p {
+  margin: 3px 0 0;
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
+.modern-income-table {
+  min-width: 920px;
+}
+
+.modern-income-table td {
+  vertical-align: top;
+}
+
+.cadence-badge,
+.bank-source-badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--label-text);
+  background: var(--subtle-bg);
+  font-size: 0.72rem;
+  font-weight: 720;
+  text-transform: capitalize;
+}
+
+.invoice-status-paid,
+.invoice-status-invoiced,
+.invoice-status-delivered {
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
+.invoice-status-draft,
+.invoice-status-drafted,
+.invoice-status-pulled {
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.invoice-status-accruing,
+.invoice-status-open {
+  color: var(--info-text);
+  border-color: var(--info-border);
+  background: var(--info-bg);
+}
+
+.invoice-status-failed,
+.invoice-status-skipped {
+  color: var(--red);
+  border-color: var(--red-border);
+  background: var(--red-soft);
+}
+
+.text-link-button {
+  height: auto;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 720;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.accrual-explainer,
+.income-callout,
+.merit-unchanged-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 12px 16px;
+  padding: 10px 11px;
+  border: 1px solid var(--info-border);
+  border-radius: 8px;
+  color: var(--info-text);
+  background: var(--info-bg);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.income-callout.warning {
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.invoice-total-band {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.invoice-tabs-row {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.invoice-tabs {
+  flex: 0 0 auto;
+}
+
+.selection-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.invoice-filter-bar {
+  grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(120px, 0.8fr)) auto;
+}
+
+.income-search-field {
+  position: relative;
+  display: flex !important;
+  align-items: center;
+}
+
+.income-search-field > svg {
+  position: absolute;
+  z-index: 1;
+  left: 11px;
+  bottom: 11px;
+  color: var(--app-muted);
+}
+
+.income-search-field input {
+  padding-left: 34px;
+}
+
+.clear-filter-button {
+  min-height: 38px;
+}
+
+.selection-column {
+  width: 42px;
+  text-align: center !important;
+}
+
+.invoice-control-table {
+  min-width: 1160px;
+}
+
+.invoice-control-table .amount strong,
+.invoice-control-table .amount small,
+.forecast-copy strong,
+.forecast-copy small {
+  display: block;
+}
+
+.invoice-row-actions {
+  flex-wrap: nowrap;
+}
+
+.forecast-copy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 6px;
+  align-items: center;
+  min-width: 146px;
+  color: var(--info-text);
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
+.forecast-copy svg {
+  grid-row: 1 / span 2;
+}
+
+.forecast-copy small {
+  color: var(--app-muted);
+}
+
+.forecast-copy.learning {
+  color: var(--amber);
+}
+
+.forecast-copy.good {
+  color: var(--green);
+}
+
+.forecast-copy.muted,
+.paid-source-copy {
+  color: var(--app-muted);
+}
+
+.paid-allocation-list,
+.paid-allocation-entry {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.paid-allocation-entry + .paid-allocation-entry {
+  border-top: 1px solid var(--app-border);
+  padding-top: 0.4rem;
+}
+
+.paid-allocation-entry small {
+  color: var(--app-text);
+  max-width: 18rem;
+  overflow-wrap: anywhere;
+}
+
+.accrual-row {
+  background: color-mix(in srgb, var(--green-soft) 42%, transparent);
+}
+
+.form-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.modal-body-stack {
+  display: grid;
+  gap: 2px;
+}
+
+.invoice-editor-modal {
+  width: min(780px, calc(100vw - 30px));
+}
+
+.send-choice-modal {
+  width: min(700px, calc(100vw - 30px));
+}
+
+.send-review-summary {
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
+.send-review-summary span,
+.send-review-summary small {
+  color: var(--app-muted);
+  font-size: 0.76rem;
+}
+
+.send-review-summary strong {
+  font-size: 1.1rem;
+}
+
+.send-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.send-option-grid.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.send-option-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--control-bg);
+  text-align: left;
+}
+
+.send-option-card:hover:not(:disabled) {
+  border-color: var(--control-border-hover);
+  box-shadow: var(--card-hover-shadow-soft);
+  transform: translateY(-1px);
+}
+
+.send-option-card.primary {
+  border-color: var(--ink);
+}
+
+.send-option-card .send-option-icon {
+  grid-row: 1 / span 3;
+}
+
+.send-option-card small {
+  color: var(--app-muted);
+  line-height: 1.35;
+}
+
+.send-option-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.payment-modal {
+  width: min(640px, calc(100vw - 30px));
+}
+
+.merit-unchanged-banner {
+  margin: 0 0 12px;
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.merit-unchanged-banner div {
+  display: grid;
+  gap: 2px;
+}
+
+.payment-balance-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  font-size: 0.78rem;
+}
+
+.payment-balance-line strong {
+  margin-left: auto;
+}
+
+.field-help {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 450;
+  line-height: 1.35;
+}
+
+/* Unified banking and manually tracked cash */
+.all-bank-filter-bar {
+  grid-template-columns: minmax(240px, 1.5fr) repeat(3, minmax(130px, 0.7fr));
+}
+
+.unified-bank-table {
+  min-width: 980px;
+}
+
+.bank-source-badge.source-wise {
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
+.bank-source-badge.source-revolut,
+.bank-source-badge.source-slash,
+.bank-source-badge.source-amex {
+  color: var(--info-text);
+  border-color: var(--info-border);
+  background: var(--info-bg);
+}
+
+.holding-summary-band {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.holding-total-card {
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.holding-total-card > strong {
+  font-size: 1.25rem;
+}
+
+.holding-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.holding-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px 11px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+.holding-card-title {
+  display: grid;
+  gap: 2px;
+}
+
+.holding-card-title span,
+.holding-updated,
+.holding-usd-value small {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.holding-card-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.holding-native-balance,
+.holding-usd-value,
+.holding-card p,
+.holding-updated {
+  grid-column: 1 / -1;
+}
+
+.holding-native-balance {
+  margin-top: 5px;
+  font-size: 1.2rem;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.holding-usd-value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: var(--app-muted);
+  font-size: 0.8rem;
+}
+
+.holding-card p {
+  margin: 0;
+  color: var(--label-text);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.holding-empty-state {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.company-revenue-rules {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.company-rule-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.company-rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--subtle-bg);
+  text-align: left;
+}
+
+.company-rule-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: stretch;
+}
+
+.company-rule-delete {
+  width: 36px;
+  min-width: 36px;
+  height: auto;
+}
+
+.company-rule-row > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.company-rule-row small {
+  color: var(--app-muted);
+  font-size: 0.7rem;
+  text-transform: capitalize;
+}
+
+.company-add-rule-button {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  color: var(--label-text);
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 720;
+}
+
+.company-add-rule-button:hover {
+  border-color: var(--control-border-hover);
+  color: var(--ink);
+  background: var(--hover-bg);
+}
+
+.revenue-rule-section {
+  display: grid;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+}
+
 @media (max-width: 1180px) {
+  .income-schedule-strip {
+    grid-template-columns: auto minmax(0, 1fr) minmax(210px, 0.7fr);
+  }
+
+  .income-schedule-strip > .secondary-button {
+    grid-column: 2 / -1;
+    justify-self: end;
+    width: max-content;
+  }
+
+  .revenue-pull-bar,
+  .invoice-filter-bar {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
+  .income-summary-grid,
+  .invoice-total-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2671,6 +3451,22 @@ textarea:focus-visible {
     padding-bottom: 2px;
   }
 
+  .sidebar-section-label {
+    display: none;
+  }
+
+  .sidebar-income-group {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+  }
+
+  .sidebar-income-group::before {
+    display: none;
+  }
+
   .sidebar-nav button {
     width: auto;
     flex: 0 0 auto;
@@ -2714,6 +3510,59 @@ textarea:focus-visible {
   .card-holder-rule,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .income-schedule-strip,
+  .income-summary-grid,
+  .invoice-total-band,
+  .holding-summary-band,
+  .send-option-grid,
+  .form-grid.three,
+  .revenue-pull-bar,
+  .invoice-filter-bar,
+  .all-bank-filter-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .income-schedule-strip {
+    align-items: start;
+  }
+
+  .income-schedule-strip > .secondary-button {
+    grid-column: auto;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .schedule-meta {
+    padding: 10px 0 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .invoice-tabs-row,
+  .table-section-heading {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .invoice-tabs,
+  .selection-action-bar {
+    width: 100%;
+  }
+
+  .selection-action-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .holding-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-balance-line strong {
+    width: 100%;
+    margin-left: 0;
   }
 
   .provider-modal {

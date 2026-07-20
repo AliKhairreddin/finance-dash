@@ -1,6 +1,6 @@
 # Finance Operations Dashboard
 
-Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, team-attributed revenue, invoice review, profit distribution, and currency-aware operating views.
+Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, team-attributed revenue, invoice drafting and collection, profit distribution, holdings, and currency-aware operating views.
 
 **Showcase:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
 
@@ -13,7 +13,7 @@ The original workflow required manually combining bank activity, partner revenue
 The system follows three rules:
 
 1. Never invent balances when an integration is unavailable.
-2. Never add unlike currencies into a misleading total.
+2. Keep exact native-currency totals visible and label converted USD totals as approximate.
 3. Keep external accounting state separate from local review decisions.
 
 ## Core Workflows
@@ -26,7 +26,13 @@ The system follows three rules:
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
 - Pull partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
-- Create a Merit invoice only through a separate, explicitly confirmed dashboard action.
+- Run income automation every Monday at 09:00 in `Asia/Beirut`, with DST-aware scheduling and idempotent local drafts.
+- Track weekly and monthly current-period revenue as accruing future invoices without double-counting after drafts are created.
+- Create a Merit invoice only through a separately confirmed action, with distinct “Save in Merit” and “Save & deliver” choices.
+- Match exact incoming bank payments to open invoices and predict collection dates from the latest five confirmed matches.
+- Record partial or combined payments with source and notes while keeping dashboard paid state independent from Merit.
+- Record cash, exchange, and wallet holdings, including fiat and crypto assets.
+- Show a clearly labeled approximate USD total from Yahoo quotes while retaining exact native balances.
 - Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
 - Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
@@ -52,21 +58,25 @@ flowchart LR
 
 ## Reliability and Data Integrity
 
-### Currency Isolation
+### Exact and Approximate Currency Views
 
-Derived cash, revenue, payable, distribution, and profit metrics stay grouped by currency. If records contain multiple currencies, the dashboard does not invent a single converted total.
+Derived cash, revenue, payable, distribution, and profit metrics stay grouped by native currency. A secondary approximate USD view uses timestamped Yahoo quotes and discloses assets without a quote.
 
 ### Learned Matching Without Silent Mutation
 
-Counterparty and category aliases are created from reviewed matches. Deleting a company clears references without deleting the underlying financial history.
+Counterparty and category aliases are created from reviewed matches. Revenue rules are persisted child records under client companies: deleting a client removes its future pull rules and clears company references without deleting the underlying invoice, revenue-run, or transaction history.
 
 ### Stale-Write Protection
 
 Convex state includes revision-aware write protection so an older browser snapshot cannot silently overwrite newer decisions.
 
-### Explicit Merit Writes
+### Explicit Merit Writes and Delivery
 
-Revenue pulls and scheduled syncs never create Merit invoices. The separate “Send to Merit” action warns that it creates a real external accounting record, requires an account-specific Merit tax selection plus explicit confirmation, and reserves the operation atomically before calling Merit. `MERIT_WRITES_ENABLED` is the hard deployment gate; production enables it only for this manual action.
+Revenue pulls and scheduled jobs create editable local drafts but never call Merit. A confirmed operator action can either save an invoice in Merit or save and deliver it by email. The invoice becomes open immediately after Merit creation, before delivery is attempted, so retrying delivery cannot duplicate the accounting document. `MERIT_WRITES_ENABLED` is the hard deployment gate for both actions.
+
+### Local Payment State
+
+Invoices follow the dashboard lifecycle `draft → open → paid`. Merit payment status is read-only metadata and never controls or receives a local paid action. Payment allocations record source, date, amount, reference, and notes; allocations can cover part of an invoice or combine several payments.
 
 ### Secret Boundaries
 
@@ -118,8 +128,9 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 - Revolut Business credentials;
 - Slash API credentials;
 - Amex OAuth, account IDs, and approved API paths;
-- Merit invoice settings;
+- Merit invoice creation and email-delivery settings;
 - TUNE network and revenue-stream credentials;
+- Yahoo quote endpoint for approximate USD conversion;
 - server-only OpenRouter configuration.
 
 Missing credentials should produce unavailable/empty integration states rather than seeded financial numbers.
@@ -142,7 +153,8 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
-| Merit | Read-only invoice and tax sync; explicit invoice creation is guarded by a tax selection, confirmation, and a deployment switch |
+| Merit | Read-only invoice/tax sync; explicit save or save-and-email actions guarded by stored tax rules, confirmation, and a deployment switch |
+| Yahoo Finance | Approximate fiat and crypto USD quotes; native balances remain authoritative |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.
 

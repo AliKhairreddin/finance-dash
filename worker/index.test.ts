@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import worker, { createMeritInvoice } from "./index";
+import type { Invoice } from "../shared/types";
+import worker, { createMeritInvoice, deliverMeritInvoice, fetchYahooUsdRates, mergeInvoices } from "./index";
 
 test("dashboard API fails closed when Convex storage is not configured", async () => {
   let assetRequests = 0;
@@ -104,4 +105,149 @@ test("Merit invoice creation uses the explicitly selected tax", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("Merit delivery uses the distinct email endpoint and never recreates the invoice", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), body: JSON.parse(String(init?.body)) as unknown });
+    return Response.json({ Success: true });
+  };
+
+  try {
+    await deliverMeritInvoice(
+      {
+        MERIT_API_ID: "api-id",
+        MERIT_API_KEY: "api-key",
+        MERIT_WRITES_ENABLED: "true",
+        MERIT_API_BASE_URL: "https://merit.example/api",
+        MERIT_DELIVER_INVOICE_PATH: "/v2/sendinvoicebyemail"
+      } as never,
+      "sih-123"
+    );
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].url, /\/v2\/sendinvoicebyemail\?/);
+    assert.equal(new URL(requests[0].url).searchParams.get("ApiId"), "api-id");
+    assert.deepEqual(requests[0].body, { Id: "sih-123", DelivNote: false });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit invoice creation sends saved provider delivery details", async () => {
+  const originalFetch = globalThis.fetch;
+  let customer: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { Customer?: Record<string, unknown> };
+    customer = body.Customer;
+    return Response.json({ SIHId: "sih-456", InvoiceNo: "FD-MANUAL" });
+  };
+
+  try {
+    const created = await createMeritInvoice(
+      { MERIT_API_ID: "api-id", MERIT_API_KEY: "api-key", MERIT_WRITES_ENABLED: "true" } as never,
+      {
+        documentType: "sales_invoice",
+        customerName: "Client LLC",
+        amount: 100,
+        currency: "USD",
+        dueDate: "2026-07-31",
+        description: "Services"
+      },
+      { id: "tax-zero", code: "VAT0", name: "Zero", taxPct: 0 },
+      undefined,
+      {
+        id: "client",
+        name: "Client",
+        legalName: "Client LLC",
+        email: "billing@client.example",
+        address: "1 Main Street",
+        country: "LB",
+        type: "client",
+        tags: [],
+        aliases: [],
+        source: "manual",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }
+    );
+    assert.equal(created.externalId, "sih-456");
+    assert.deepEqual(customer, {
+      Name: "Client LLC",
+      NotTDCustomer: true,
+      CountryCode: "LB",
+      Email: "billing@client.example",
+      Address: "1 Main Street"
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("live Merit refresh only updates the read-only Merit status for a persisted invoice", () => {
+  const persisted: Invoice = {
+    id: "local-invoice",
+    documentType: "sales_invoice",
+    origin: "manual",
+    customerName: "Client LLC",
+    amount: 100,
+    currency: "USD",
+    status: "paid",
+    meritStatus: "open",
+    meritDeliveryStatus: "delivery-failed",
+    meritDeliveryError: "Mailbox rejected",
+    invoiceNumber: "INV-100",
+    issueDate: "2026-07-01",
+    dueDate: "2026-07-31",
+    source: "manual",
+    externalId: "sih-100",
+    description: "Services",
+    revenueRunIds: [],
+    paidAt: "2026-07-18",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-18T00:00:00.000Z"
+  };
+  const live: Invoice = {
+    ...persisted,
+    id: "merit-sih-100",
+    status: "open",
+    meritStatus: "paid",
+    meritDeliveryStatus: "saved",
+    meritDeliveryError: undefined,
+    paidAt: undefined,
+    updatedAt: "2026-07-20T00:00:00.000Z"
+  };
+
+  assert.deepEqual(mergeInvoices([live], [persisted]), [{ ...persisted, meritStatus: "paid" }]);
+});
+
+test("Yahoo quote refresh keeps successful assets when another chart request fails", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("BTC-USD")) {
+      return Response.json({ chart: { result: [{ meta: { regularMarketPrice: 120000, regularMarketTime: 1784505600 } }] } });
+    }
+    return new Response("rate limited", { status: 429, statusText: "Too Many Requests" });
+  };
+
+  try {
+    const rates = await fetchYahooUsdRates(
+      { YAHOO_FINANCE_CHART_URL: "https://query2.finance.yahoo.com/v8/finance/chart" } as never,
+      new Map([
+        ["BTC", "crypto"],
+        ["CAD", "fiat"]
+      ])
+    );
+    assert.deepEqual(rates.map((rate) => [rate.asset, rate.rateUsd]), [["BTC", 120000]]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("scheduled handler ignores the non-09:00 Lebanon cron occurrence", async () => {
+  await worker.scheduled?.(
+    { scheduledTime: Date.parse("2026-07-20T07:00:00.000Z"), cron: "0 6,7 * * 1", noRetry() {} },
+    { ASSETS: { fetch: async () => new Response("asset") } } as never
+  );
 });

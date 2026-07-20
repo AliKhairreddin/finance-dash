@@ -1,9 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type {
+  AutomationRun,
+  FxRate,
+  Holding,
   Invoice,
+  PaymentAllocation,
   PersistedAiSettings,
   Provider,
+  RevenueAccrual,
   RevenuePartner,
   RevenueRun,
   ProfitDistributionAdjustment,
@@ -15,19 +20,27 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 
-const storePath = resolve(process.cwd(), ".local", "finance-dashboard-store.json");
+function storePath(): string {
+  return resolve(process.cwd(), ".local", "finance-dashboard-store.json");
+}
 
 export interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
+  paymentAllocations: PaymentAllocation[];
+  holdings: Holding[];
+  fxRates: FxRate[];
+  automationRuns: AutomationRun[];
   teams: Team[];
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
   wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
+  transactions: Transaction[];
   wiseStatementTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
+  revenueAccruals: RevenueAccrual[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
 }
@@ -58,11 +71,12 @@ export function sanitizePersistedState(value: unknown): Partial<PersistedState> 
 
 export async function loadPersistedState(): Promise<Partial<PersistedState>> {
   try {
-    const raw = await readFile(storePath, "utf8");
+    const path = storePath();
+    const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     const sanitized = sanitizePersistedState(parsed);
     if (isRecord(parsed) && isRecord(parsed.aiSettings) && Object.prototype.hasOwnProperty.call(parsed.aiSettings, "openRouterApiKey")) {
-      await writeFile(storePath, JSON.stringify(sanitized, null, 2), "utf8");
+      await writeFile(path, JSON.stringify(sanitized, null, 2), "utf8");
     }
     return sanitized;
   } catch (error) {
@@ -72,6 +86,7 @@ export async function loadPersistedState(): Promise<Partial<PersistedState>> {
 }
 
 export async function savePersistedState(state: PersistedState): Promise<void> {
-  await mkdir(dirname(storePath), { recursive: true });
-  await writeFile(storePath, JSON.stringify(state, null, 2), "utf8");
+  const path = storePath();
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(state, null, 2), "utf8");
 }

@@ -8,8 +8,6 @@ import {
   cognitiveTeamId,
   ishanTeamId,
   aminTeamId,
-  kissterraProviderId,
-  leadEconomyProviderId,
   wagnerTeamId,
   wagnerTeamName
 } from "../shared/business";
@@ -130,20 +128,6 @@ const canonicalProviderDrafts: ProviderDraft[] = [
     tags: ["Bank fees", "Internal"],
     aliases: ["wise fee", "wise fees", "transfer fee"]
   },
-  {
-    id: kissterraProviderId,
-    name: "Kissterra",
-    type: "client",
-    tags: ["Revenue partner"],
-    aliases: ["kissterra", "kisterra", "tune kissterra", "hasoffers kissterra"]
-  },
-  {
-    id: leadEconomyProviderId,
-    name: "Lead Economy",
-    type: "client",
-    tags: ["Revenue partner"],
-    aliases: ["lead economy", "leadeconomy", "lead-economy", "tune lead economy", "hasoffers lead economy"]
-  }
 ];
 
 export const canonicalProviders: Provider[] = canonicalProviderDrafts.map((provider) => ({

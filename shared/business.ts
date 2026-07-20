@@ -10,9 +10,6 @@ export const wagnerTeamName = "Wagner";
 export const wagnerTeamAliasIds = ["team-wgnr"];
 export const wagnerTeamAliasNames = ["WGNR"];
 
-export const kissterraProviderId = "partner-kissterra";
-export const leadEconomyProviderId = "partner-lead-economy";
-
 function normalizedBusinessName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }

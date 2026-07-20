@@ -5,40 +5,52 @@ import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
   AutoCategorizeTransactionsPayload,
+  CreateHoldingPayload,
   CreateInvoicePayload,
   CreateProviderPayload,
+  CreateRevenuePartnerPayload,
   CreateTeamPayload,
   AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
+  RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
-  SendRevenueInvoicePayload,
+  SendInvoicesPayload,
   SyncRevenuePayload,
+  UpdateHoldingPayload,
+  UpdateInvoicePayload,
   UpdateTransactionCategoryPayload
 } from "../shared/types";
 import {
   assignTransactionTeam,
   assignWiseCardHolderTeam,
   autoCategorizeTransactions,
+  createHolding,
   createInvoice,
   createProvider,
+  createRevenuePartner,
   createTeam,
   deleteProvider,
   deleteRevenuePartner,
+  deleteHolding,
+  draftRevenueRun,
   getSnapshot,
   initializeStore,
   importWiseStatement,
-  markInvoicePaidLocally,
   matchTransaction,
+  recordInvoicePayment,
+  refreshFxRates,
+  runIncomeAutomation,
   runAiPrompt,
   saveAiSettings,
   saveProfitDistributionAdjustment,
-  sendRevenueInvoice,
-  setInvoiceApproval,
+  sendInvoices,
   syncExternalActivity,
   syncRevenue,
   updateTransactionCategory,
+  updateHolding,
+  updateInvoice,
   updateProvider,
   updateRevenuePartner
 } from "./store";
@@ -94,9 +106,22 @@ app.post("/api/revenue/sync", async (request, response, next) => {
   }
 });
 
-app.post("/api/revenue/runs/:runId/merit-invoice", async (request, response, next) => {
+app.post("/api/revenue/runs/:runId/draft", async (request, response, next) => {
   try {
-    response.json(await sendRevenueInvoice(request.params.runId, request.body as SendRevenueInvoicePayload));
+    response.status(201).json(await draftRevenueRun(request.params.runId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/revenue/automation", async (request, response, next) => {
+  try {
+    const scheduledTime = request.body?.scheduledTime ? new Date(String(request.body.scheduledTime)) : new Date();
+    if (!Number.isFinite(scheduledTime.getTime())) {
+      response.status(400).json({ message: "scheduledTime is invalid" });
+      return;
+    }
+    response.json(await runIncomeAutomation(scheduledTime, request.body?.force === true));
   } catch (error) {
     next(error);
   }
@@ -131,6 +156,14 @@ app.put("/api/providers/:providerId", async (request, response, next) => {
 app.delete("/api/providers/:providerId", async (request, response, next) => {
   try {
     response.json(await deleteProvider(request.params.providerId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/revenue-partners", async (request, response, next) => {
+  try {
+    response.status(201).json(await createRevenuePartner(request.body as CreateRevenuePartnerPayload));
   } catch (error) {
     next(error);
   }
@@ -273,22 +306,59 @@ app.post("/api/invoices", async (request, response, next) => {
   }
 });
 
-app.post("/api/invoices/:invoiceId/approval", async (request, response, next) => {
+app.put("/api/invoices/:invoiceId", async (request, response, next) => {
   try {
-    const approvalStatus = request.body?.approvalStatus;
-    if (approvalStatus !== "approved" && approvalStatus !== "denied") {
-      response.status(400).json({ message: "approvalStatus must be approved or denied" });
-      return;
-    }
-    response.json(await setInvoiceApproval(request.params.invoiceId, approvalStatus));
+    response.json(await updateInvoice(request.params.invoiceId, request.body as UpdateInvoicePayload));
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/api/invoices/:invoiceId/local-paid", async (request, response, next) => {
+app.post("/api/invoices/send", async (request, response, next) => {
   try {
-    response.json(await markInvoicePaidLocally(request.params.invoiceId));
+    response.json(await sendInvoices(request.body as SendInvoicesPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/invoices/:invoiceId/payments", async (request, response, next) => {
+  try {
+    response.json(
+      await recordInvoicePayment(request.params.invoiceId, request.body as RecordInvoicePaymentPayload)
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/holdings", async (request, response, next) => {
+  try {
+    response.status(201).json(await createHolding(request.body as CreateHoldingPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/holdings/:holdingId", async (request, response, next) => {
+  try {
+    response.json(await updateHolding(request.params.holdingId, request.body as UpdateHoldingPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/holdings/:holdingId", async (request, response, next) => {
+  try {
+    response.json(await deleteHolding(request.params.holdingId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/fx/refresh", async (_request, response, next) => {
+  try {
+    response.json(await refreshFxRates());
   } catch (error) {
     next(error);
   }

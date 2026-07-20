@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RevenuePartner, RevenueRun } from "./types";
-import { calculateRevenueMetrics, canonicalRevenuePartners, mergeRevenuePartnerDirectory } from "./revenue";
+import {
+  calculateRevenueMetrics,
+  mergeRevenuePartnerDirectory,
+  resolveRevenuePeriod
+} from "./revenue";
 
 const partner = (id: string, enabled = true): RevenuePartner => ({
   id,
+  providerId: `provider-${id}`,
   name: id,
   source: "tune",
   affiliateId: id,
@@ -14,6 +19,9 @@ const partner = (id: string, enabled = true): RevenuePartner => ({
   networkIdEnv: "NETWORK_ID",
   apiKeyEnv: "API_KEY",
   invoiceDueDays: 30,
+  billingCadence: "weekly",
+  billingTimezone: "Asia/Beirut",
+  autoDraft: true,
   enabled,
   createdAt: "2026-07-01T00:00:00.000Z"
 });
@@ -51,27 +59,41 @@ test("calculateRevenueMetrics does not add unlike currencies", () => {
   assert.equal(metrics.lastRunAt, "2026-07-09T00:00:00.000Z");
 });
 
-test("mergeRevenuePartnerDirectory collapses obsolete canonical duplicates without dropping configuration", () => {
-  const legacyKissterra: RevenuePartner = {
-    ...canonicalRevenuePartners[0],
-    id: "tune-kissterra",
+test("revenue rules are ordinary persisted child records and are never injected or re-parented at runtime", () => {
+  assert.deepEqual(mergeRevenuePartnerDirectory([]), []);
+
+  const first = partner("first");
+  const configured: RevenuePartner = {
+    ...partner("configured-kissterra"),
+    id: "user-created-kissterra-rule",
+    providerId: "provider-user-kissterra",
     affiliateId: "configured-affiliate",
-    revenueCategory: undefined
+    enabled: true
   };
-  const custom = {
-    ...partner("custom-network"),
-    networkIdEnv: "CUSTOM_NETWORK_ID",
-    apiKeyEnv: "CUSTOM_API_KEY"
-  };
+  const merged = mergeRevenuePartnerDirectory([first, configured]);
 
-  const merged = mergeRevenuePartnerDirectory([legacyKissterra, custom]);
-  const partnerLevelKissterra = merged.filter(
-    (item) => item.name === "Kissterra" && !item.teamId && item.networkIdEnv === "KISSTERRA_TUNE_NETWORK_ID"
-  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((item) => item.id === first.id)?.providerId, "provider-first");
+  assert.equal(merged.find((item) => item.id === configured.id)?.providerId, "provider-user-kissterra");
+});
 
-  assert.equal(partnerLevelKissterra.length, 1);
-  assert.equal(partnerLevelKissterra[0].id, "revenue-kissterra");
-  assert.equal(partnerLevelKissterra[0].affiliateId, "configured-affiliate");
-  assert.equal(partnerLevelKissterra[0].revenueCategory, "Partner network revenue");
-  assert.ok(merged.some((item) => item.id === custom.id));
+test("revenue rules without an affiliate ID stay disabled until configured", () => {
+  const custom = { ...partner("unconfigured"), affiliateId: "", enabled: true };
+  const merged = mergeRevenuePartnerDirectory([custom]);
+
+  assert.equal(merged.find((item) => item.id === custom.id)?.enabled, false);
+  assert.equal(merged.length, 1);
+});
+
+test("this-week revenue pulls are cumulative from Monday through the current local date", () => {
+  assert.deepEqual(resolveRevenuePeriod({
+    periodPreset: "this-week",
+    timezone: "Asia/Beirut",
+    now: new Date("2026-07-23T18:00:00.000Z")
+  }), {
+    preset: "this-week",
+    periodStart: "2026-07-20",
+    periodEnd: "2026-07-23",
+    timezone: "Asia/Beirut"
+  });
 });

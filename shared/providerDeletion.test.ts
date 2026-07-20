@@ -29,16 +29,17 @@ const transaction = {
   matchedProviderId: provider.id
 } satisfies Transaction;
 
-test("deleteProviderReferences removes the company and clears references without deleting financial history", () => {
+test("deleteProviderReferences removes the company and its revenue rules without deleting financial history", () => {
   const invoice = { id: "invoice-1", providerId: provider.id } as Invoice;
   const partner = { id: "partner-1", providerId: provider.id } as RevenuePartner;
+  const unrelatedPartner = { id: "partner-2", providerId: "another-provider" } as RevenuePartner;
   const run = { id: "run-1", providerId: provider.id } as RevenueRun;
 
   const result = deleteProviderReferences(
     {
       providers: [provider],
       invoices: [invoice],
-      revenuePartners: [partner],
+      revenuePartners: [partner, unrelatedPartner],
       revenueRuns: [run],
       transactions: [transaction],
       wiseStatementTransactions: [transaction]
@@ -50,7 +51,7 @@ test("deleteProviderReferences removes the company and clears references without
   assert.deepEqual(result?.providers, []);
   assert.equal(result?.invoices.length, 1);
   assert.equal(result?.invoices[0].providerId, undefined);
-  assert.equal(result?.revenuePartners[0].providerId, undefined);
+  assert.deepEqual(result?.revenuePartners, [unrelatedPartner]);
   assert.equal(result?.revenueRuns[0].providerId, undefined);
   assert.equal(result?.transactions[0].matchedProviderId, undefined);
   assert.equal(result?.wiseStatementTransactions[0].matchedProviderId, undefined);

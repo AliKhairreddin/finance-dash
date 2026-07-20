@@ -13,7 +13,6 @@ import {
   Filter,
   Info,
   KeyRound,
-  Link2,
   Loader2,
   Moon,
   Pencil,
@@ -48,14 +47,15 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   AiPromptPayload,
   AiPromptResult,
   AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsResult,
+  CreateHoldingPayload,
   CreateInvoicePayload,
+  CreateRevenuePartnerPayload,
   CreateProviderPayload,
   CreateTeamPayload,
   CurrencyTotals,
@@ -64,6 +64,7 @@ import type {
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   InvoiceDocumentType,
+  MeritSendMode,
   MeritTax,
   ProfitDistributionAdjustment,
   ProfitDistributionBucket,
@@ -72,13 +73,16 @@ import type {
   Provider,
   ProviderType,
   RevenuePartner,
-  RevenuePeriodPreset,
-  RevenueRun,
+  RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SendInvoicesPayload,
+  SendInvoicesResult,
   SyncRevenuePayload,
   Team,
   Transaction,
+  UpdateHoldingPayload,
+  UpdateInvoicePayload,
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload
 } from "../shared/types";
@@ -97,10 +101,12 @@ import {
   profitDistributionPartners
 } from "../shared/distribution";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
+import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
+import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 type ActiveTab = "overview" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
-type BankTab = "wise" | "revolut" | "slash";
+type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
@@ -124,13 +130,18 @@ type DirectoryDeleteTarget =
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
 
+async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = (await response.json().catch(() => null)) as { message?: string } | null;
+  return body?.message || fallback;
+}
+
 const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
   overview: { eyebrow: "Finance operations", title: "Cash flow and open balance control" },
   banks: { eyebrow: "Banking", title: "Reconcile account activity" },
   analytics: { eyebrow: "Analytics", title: "Review spend, revenue, teams, and categories" },
   distribution: { eyebrow: "Distribution", title: "Track partner payables and adjustments" },
-  revenue: { eyebrow: "Revenue", title: "Pull, review, and invoice partner revenue" },
-  invoices: { eyebrow: "Invoices", title: "Approval and payment control" },
+  revenue: { eyebrow: "Income · Revenue", title: "Track earned income before invoicing" },
+  invoices: { eyebrow: "Income · Invoices", title: "Prepare, deliver, and reconcile invoices" },
   providers: { eyebrow: "Business directory", title: "Clients and suppliers" },
   settings: { eyebrow: "Configuration", title: "Teams, integrations, and AI" }
 };
@@ -147,6 +158,7 @@ const timezoneOptions = [
   { label: "GMT zero", value: "UTC" },
   { label: "Eastern Time", value: "America/New_York" },
   { label: "London", value: "Europe/London" },
+  { label: "Lebanon", value: "Asia/Beirut" },
   { label: "Dubai", value: "Asia/Dubai" },
   { label: "Los Angeles", value: "America/Los_Angeles" }
 ];
@@ -311,12 +323,6 @@ function bankInvoiceName(transaction: Transaction): string {
 
 function sourceLabel(value: DataSource | string): string {
   return bankSourceLabel(value as DataSource);
-}
-
-function revenuePartnerLabel(partner: RevenuePartner, teamsById: Map<string, Team>): string {
-  if (!partner.teamId) return partner.name;
-  const teamName = teamsById.get(partner.teamId)?.name ?? partner.teamId;
-  return `${teamName} / ${partner.name}`;
 }
 
 function revenueTeamLabel(teamId: string | undefined, teamName: string | undefined, teamsById: Map<string, Team>): string {
@@ -575,7 +581,7 @@ function App() {
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
-  const [bankTab, setBankTab] = useState<BankSource>("wise");
+  const [bankTab, setBankTab] = useState<BankTab>("all");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
   const [isLoading, setIsLoading] = useState(true);
@@ -592,6 +598,7 @@ function App() {
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
+  const [creatingRevenueRuleProviderId, setCreatingRevenueRuleProviderId] = useState<string | null>(null);
   const [directoryDeleteTarget, setDirectoryDeleteTarget] = useState<DirectoryDeleteTarget | null>(null);
 
   useEffect(() => {
@@ -712,8 +719,7 @@ function App() {
     try {
       const response = await fetch(`${apiBase}/sync`, { method: "POST" });
       if (!response.ok) {
-        const body = await response.json();
-        throw new Error(body.message || "Sync failed");
+        throw new Error(await apiErrorMessage(response, "Sync failed"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       setNotice("Sync complete. Connected integrations refreshed.");
@@ -749,8 +755,7 @@ function App() {
             body: JSON.stringify(payload)
           });
           if (!response.ok) {
-            const body = await response.json();
-            throw new Error(body.message || `${file.name} could not be imported`);
+            throw new Error(await apiErrorMessage(response, `${file.name} could not be imported`));
           }
           const result = (await response.json()) as ImportWiseStatementResult;
           nextDashboard = result.dashboard;
@@ -782,27 +787,23 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Revenue sync failed");
+      throw new Error(await apiErrorMessage(response, "Revenue sync failed"));
     }
     setDashboard((await response.json()) as DashboardSnapshot);
     setNotice("Revenue pulled. Nothing was sent to Merit.");
   }
 
-  async function sendRevenueInvoice(runId: string, taxId: string) {
+  async function draftRevenueRun(runId: string) {
     setNotice(null);
     setError(null);
-    const response = await fetch(`${apiBase}/revenue/runs/${encodeURIComponent(runId)}/merit-invoice`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmation: "SEND_TO_MERIT", taxId })
+    const response = await fetch(`${apiBase}/revenue/runs/${encodeURIComponent(runId)}/draft`, {
+      method: "POST"
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Invoice could not be sent to Merit");
+      throw new Error(await apiErrorMessage(response, "Revenue draft could not be prepared"));
     }
-    setDashboard((await response.json()) as DashboardSnapshot);
-    setNotice("Invoice created in Merit.");
+    await loadDashboard();
+    setNotice("Invoice draft prepared from the closed revenue period. Nothing was sent to Merit.");
   }
 
   async function matchTransaction(transaction: Transaction, providerId?: string) {
@@ -823,8 +824,7 @@ function App() {
       })
     });
     if (!response.ok) {
-      const body = await response.json();
-      setError(body.message || "Match failed");
+      setError(await apiErrorMessage(response, "Match failed"));
       return;
     }
     await loadDashboard();
@@ -839,8 +839,7 @@ function App() {
       body: JSON.stringify({ category, rememberAlias: true })
     });
     if (!response.ok) {
-      const body = await response.json();
-      setError(body.message || "Category update failed");
+      setError(await apiErrorMessage(response, "Category update failed"));
       return;
     }
     await loadDashboard();
@@ -855,8 +854,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Distribution adjustment could not be saved");
+      throw new Error(await apiErrorMessage(response, "Distribution adjustment could not be saved"));
     }
     setDashboard((await response.json()) as DashboardSnapshot);
     setNotice("Distribution adjustment saved.");
@@ -870,8 +868,7 @@ function App() {
       body: JSON.stringify({ teamId: teamId || null })
     });
     if (!response.ok) {
-      const body = await response.json();
-      setError(body.message || "Team assignment failed");
+      setError(await apiErrorMessage(response, "Team assignment failed"));
       return;
     }
     await loadDashboard();
@@ -885,8 +882,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Card holder team assignment failed");
+      throw new Error(await apiErrorMessage(response, "Card holder team assignment failed"));
     }
     setDashboard((await response.json()) as DashboardSnapshot);
     setNotice(`Assigned ${payload.cardHolderName.trim()} to ${teamsById.get(payload.teamId)?.name ?? "team"}.`);
@@ -899,8 +895,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Team could not be created");
+      throw new Error(await apiErrorMessage(response, "Team could not be created"));
     }
     await loadDashboard();
     setNotice(`${payload.name.trim()} team added.`);
@@ -913,8 +908,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Provider could not be created");
+      throw new Error(await apiErrorMessage(response, "Provider could not be created"));
     }
     await loadDashboard();
   }
@@ -926,8 +920,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Provider could not be saved");
+      throw new Error(await apiErrorMessage(response, "Provider could not be saved"));
     }
     await loadDashboard();
   }
@@ -935,8 +928,7 @@ function App() {
   async function removeProvider(provider: Provider) {
     const response = await fetch(`${apiBase}/providers/${provider.id}`, { method: "DELETE" });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Company could not be deleted");
+      throw new Error(await apiErrorMessage(response, "Company could not be deleted"));
     }
     await loadDashboard();
     setNotice(`${provider.name} deleted. Existing financial records were kept and company matches were cleared.`);
@@ -949,8 +941,19 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Revenue partner could not be saved");
+      throw new Error(await apiErrorMessage(response, "Revenue partner could not be saved"));
+    }
+    await loadDashboard();
+  }
+
+  async function createRevenuePartner(payload: CreateRevenuePartnerPayload) {
+    const response = await fetch(`${apiBase}/revenue-partners`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Revenue rule could not be created"));
     }
     await loadDashboard();
   }
@@ -958,8 +961,7 @@ function App() {
   async function removeRevenuePartner(partner: RevenuePartner) {
     const response = await fetch(`${apiBase}/revenue-partners/${partner.id}`, { method: "DELETE" });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Revenue client could not be deleted");
+      throw new Error(await apiErrorMessage(response, "Revenue client could not be deleted"));
     }
     await loadDashboard();
     setNotice(`${partner.name} deleted from the revenue client directory. Existing run and invoice history was kept.`);
@@ -972,8 +974,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "AI settings could not be saved");
+      throw new Error(await apiErrorMessage(response, "AI settings could not be saved"));
     }
     setDashboard((await response.json()) as DashboardSnapshot);
   }
@@ -985,8 +986,7 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "AI prompt failed");
+      throw new Error(await apiErrorMessage(response, "AI prompt failed"));
     }
     return (await response.json()) as AiPromptResult;
   }
@@ -1002,8 +1002,7 @@ function App() {
         body: JSON.stringify({ transactionIds, useAi: true })
       });
       if (!response.ok) {
-        const body = await response.json();
-        throw new Error(body.message || "Auto-categorization failed");
+        throw new Error(await apiErrorMessage(response, "Auto-categorization failed"));
       }
       const result = (await response.json()) as AutoCategorizeTransactionsResult;
       setDashboard(result.dashboard);
@@ -1024,35 +1023,112 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Document draft could not be created");
+      throw new Error(await apiErrorMessage(response, "Document draft could not be created"));
     }
     await loadDashboard();
     setNotice(payload.documentType === "sales_invoice" ? "Sales invoice draft created." : "Supplier bill draft recorded.");
   }
 
-  async function updateInvoiceApproval(invoiceId: string, approvalStatus: "approved" | "denied") {
-    const response = await fetch(`${apiBase}/invoices/${invoiceId}/approval`, {
-      method: "POST",
+  async function updateInvoiceDraft(invoiceId: string, payload: UpdateInvoicePayload) {
+    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approvalStatus })
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Invoice approval could not be saved");
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Invoice draft could not be updated");
     }
     await loadDashboard();
-    setNotice(`Invoice ${approvalStatus}.`);
+    setNotice("Invoice draft updated. Nothing was written to Merit.");
   }
 
-  async function markInvoicePaidLocally(invoiceId: string) {
-    const response = await fetch(`${apiBase}/invoices/${invoiceId}/local-paid`, { method: "POST" });
+  async function sendInvoices(invoiceIds: string[], mode: MeritSendMode) {
+    const payload: SendInvoicesPayload = { invoiceIds, mode, confirmation: "SEND_TO_MERIT" };
+    const response = await fetch(`${apiBase}/invoices/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
     if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.message || "Invoice could not be marked paid locally");
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Invoices could not be sent to Merit");
+    }
+    const result = (await response.json()) as SendInvoicesResult;
+    setDashboard(result.dashboard);
+    const failed = result.outcomes.filter((outcome) => outcome.status === "failed");
+    if (failed.length > 0) {
+      throw new Error(
+        `${failed.length} invoice${failed.length === 1 ? "" : "s"} failed to send. ${failed.map((outcome) => outcome.message).filter(Boolean).join(" · ")}`
+      );
+    }
+    setNotice(
+      mode === "deliver"
+        ? `${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"} saved and queued for client delivery through Merit.`
+        : `${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"} saved in Merit without client delivery.`
+    );
+  }
+
+  async function recordInvoicePayment(invoiceId: string, payload: RecordInvoicePaymentPayload) {
+    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Payment could not be recorded");
     }
     await loadDashboard();
-    setNotice("Marked paid in this dashboard only. Merit is unchanged for the accountant.");
+    setNotice("Payment recorded in this dashboard only. Merit was not changed.");
+  }
+
+  async function createHolding(payload: CreateHoldingPayload) {
+    const response = await fetch(`${apiBase}/holdings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Holding could not be created");
+    }
+    await loadDashboard();
+    setNotice("Holding added to cash and wallets.");
+  }
+
+  async function updateHolding(holdingId: string, payload: UpdateHoldingPayload) {
+    const response = await fetch(`${apiBase}/holdings/${encodeURIComponent(holdingId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Holding could not be updated");
+    }
+    await loadDashboard();
+    setNotice("Holding updated.");
+  }
+
+  async function deleteHolding(holdingId: string) {
+    const response = await fetch(`${apiBase}/holdings/${encodeURIComponent(holdingId)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Holding could not be deleted");
+    }
+    await loadDashboard();
+    setNotice("Holding deleted from the dashboard.");
+  }
+
+  async function refreshFxRates() {
+    const response = await fetch(`${apiBase}/fx/refresh`, { method: "POST" });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || "Conversion rates could not be refreshed");
+    }
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice("Yahoo conversion rates refreshed. USD totals remain approximate.");
   }
 
   if (isLoading) {
@@ -1213,6 +1289,10 @@ function App() {
           onAssignTeam={assignTransactionTeam}
           onUpdateCategory={updateTransactionCategory}
           onOpenInvoice={setInvoiceTransaction}
+          onCreateHolding={createHolding}
+          onUpdateHolding={updateHolding}
+          onDeleteHolding={deleteHolding}
+          onRefreshRates={refreshFxRates}
         />
       )}
 
@@ -1231,15 +1311,22 @@ function App() {
       )}
 
       {activeTab === "revenue" && (
-        <RevenueView dashboard={dashboard} onSyncRevenue={syncRevenue} onSendRevenueInvoice={sendRevenueInvoice} />
+        <IncomeRevenueView
+          dashboard={dashboard}
+          onSyncRevenue={syncRevenue}
+          onDraftRevenueRun={draftRevenueRun}
+          onOpenInvoices={() => setActiveTab("invoices")}
+        />
       )}
 
       {activeTab === "invoices" && (
-        <InvoicesView
+        <IncomeInvoicesView
           dashboard={dashboard}
           providersById={providersById}
-          onApprove={updateInvoiceApproval}
-          onMarkPaid={markInvoicePaidLocally}
+          onCreateDraft={submitInvoice}
+          onUpdateDraft={updateInvoiceDraft}
+          onSendInvoices={sendInvoices}
+          onRecordPayment={recordInvoicePayment}
         />
       )}
 
@@ -1257,6 +1344,10 @@ function App() {
             setProviderModalOpen(true);
           }}
           onEditRevenuePartner={setEditingRevenuePartner}
+          onAddRevenuePartner={(provider) => {
+            setEditingRevenuePartner(null);
+            setCreatingRevenueRuleProviderId(provider.id);
+          }}
           onDeleteProvider={(provider) => setDirectoryDeleteTarget({ kind: "provider", provider })}
           onDeleteRevenuePartner={(partner) => setDirectoryDeleteTarget({ kind: "revenue-partner", partner })}
         />
@@ -1304,16 +1395,23 @@ function App() {
           }}
         />
       )}
-      {editingRevenuePartner && (
+      {(editingRevenuePartner || creatingRevenueRuleProviderId) && (
         <RevenuePartnerModal
-          partner={editingRevenuePartner}
+          partner={editingRevenuePartner ?? undefined}
+          initialProviderId={creatingRevenueRuleProviderId ?? undefined}
           providers={dashboard.providers}
           teams={dashboard.teams}
-          onClose={() => setEditingRevenuePartner(null)}
-          onSubmit={async (payload) => {
-            await saveRevenuePartner(editingRevenuePartner.id, payload);
+          taxes={dashboard.meritTaxes}
+          onClose={() => {
             setEditingRevenuePartner(null);
-            setNotice("Revenue partner saved.");
+            setCreatingRevenueRuleProviderId(null);
+          }}
+          onSubmit={async (payload) => {
+            if (editingRevenuePartner) await saveRevenuePartner(editingRevenuePartner.id, payload);
+            else await createRevenuePartner(payload);
+            setEditingRevenuePartner(null);
+            setCreatingRevenueRuleProviderId(null);
+            setNotice(editingRevenuePartner ? "Revenue rule saved." : "Revenue rule added to the client.");
           }}
         />
       )}
@@ -1371,12 +1469,31 @@ function Sidebar({
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
-    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> },
+    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
+  ];
+  const incomeItems: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
-    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
+    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> }
+  ];
+  const directoryItems: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
+
+  function navigationButton(item: { id: ActiveTab; label: string; icon: React.ReactNode }, nested = false) {
+    return (
+      <Button
+        key={item.id}
+        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""}`}
+        onClick={() => setActiveTab(item.id)}
+        aria-current={activeTab === item.id ? "page" : undefined}
+        title={item.label}
+      >
+        {item.icon}
+        <span>{item.label}</span>
+      </Button>
+    );
+  }
 
   return (
     <aside className="sidebar" aria-label="Finance dashboard navigation">
@@ -1385,18 +1502,12 @@ function Sidebar({
         <strong>Finance</strong>
       </div>
       <nav className="sidebar-nav">
-        {items.map((item) => (
-          <Button
-            key={item.id}
-            className={activeTab === item.id ? "active" : ""}
-            onClick={() => setActiveTab(item.id)}
-            aria-current={activeTab === item.id ? "page" : undefined}
-            title={item.label}
-          >
-            {item.icon}
-            <span>{item.label}</span>
-          </Button>
-        ))}
+        {items.map((item) => navigationButton(item))}
+        <div className="sidebar-section-label">Income</div>
+        <div className="sidebar-income-group">
+          {incomeItems.map((item) => navigationButton(item, true))}
+        </div>
+        {directoryItems.map((item) => navigationButton(item))}
       </nav>
     </aside>
   );
@@ -1426,305 +1537,6 @@ function MetricCard({
         <small>{detail}</small>
       </div>
     </article>
-  );
-}
-
-function BankingView({
-  activeBankTab,
-  dashboard,
-  isCategorizing,
-  isImportingWise,
-  matchFilter,
-  providersById,
-  revolutTransactions,
-  searchTerm,
-  slashTransactions,
-  teamFilter,
-  teamsById,
-  transactionSortDirection,
-  transactionSortKey,
-  wiseDirection,
-  wiseStatusIssue,
-  wiseTeamSummary,
-  wiseTransactions,
-  onActiveBankTabChange,
-  onAssignTeam,
-  onAutoCategorize,
-  onImportWiseStatements,
-  onMatch,
-  onOpenInvoice,
-  onSearchTermChange,
-  onSetMatchFilter,
-  onSetTeamFilter,
-  onSetTransactionSortDirection,
-  onSetTransactionSortKey,
-  onSetWiseDirection,
-  onUpdateCategory
-}: {
-  activeBankTab: BankTab;
-  dashboard: DashboardSnapshot;
-  isCategorizing: boolean;
-  isImportingWise: boolean;
-  matchFilter: string;
-  providersById: Map<string, Provider>;
-  revolutTransactions: Transaction[];
-  searchTerm: string;
-  slashTransactions: Transaction[];
-  teamFilter: string;
-  teamsById: Map<string, Team>;
-  transactionSortDirection: SortDirection;
-  transactionSortKey: TransactionSortKey;
-  wiseDirection: "in" | "out";
-  wiseStatusIssue?: string;
-  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
-  wiseTransactions: Transaction[];
-  onActiveBankTabChange: React.Dispatch<React.SetStateAction<BankTab>>;
-  onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
-  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
-  onImportWiseStatements: (files: FileList | null) => Promise<void>;
-  onMatch: (transaction: Transaction, providerId?: string) => Promise<void>;
-  onOpenInvoice: (transaction: Transaction) => void;
-  onSearchTermChange: React.Dispatch<React.SetStateAction<string>>;
-  onSetMatchFilter: React.Dispatch<React.SetStateAction<string>>;
-  onSetTeamFilter: React.Dispatch<React.SetStateAction<string>>;
-  onSetTransactionSortDirection: React.Dispatch<React.SetStateAction<SortDirection>>;
-  onSetTransactionSortKey: React.Dispatch<React.SetStateAction<TransactionSortKey>>;
-  onSetWiseDirection: React.Dispatch<React.SetStateAction<"in" | "out">>;
-  onUpdateCategory: (transaction: Transaction, category: string) => Promise<void>;
-}) {
-  return (
-    <Tabs
-      className="banking-page"
-      value={activeBankTab}
-      onValueChange={(value) => onActiveBankTabChange(value as BankTab)}
-    >
-      <div className="banking-page-header">
-        <div>
-          <p className="eyebrow">Banking</p>
-          <h2>Bank accounts, cards, and reconciliation</h2>
-        </div>
-        <TabsList className="banking-tabs-list">
-          <TabsTrigger value="wise">
-            <Link2 size={15} />
-            Wise
-            <span>{wiseTeamSummary.count}</span>
-          </TabsTrigger>
-          <TabsTrigger value="revolut">
-            <Banknote size={15} />
-            Revolut
-            <span>{revolutTransactions.length}</span>
-          </TabsTrigger>
-          <TabsTrigger value="slash">
-            <WalletCards size={15} />
-            Slash
-            <span>{slashTransactions.length}</span>
-          </TabsTrigger>
-        </TabsList>
-      </div>
-
-      <TabsContent value="wise">
-        <WiseBankingTab
-          dashboard={dashboard}
-          isCategorizing={isCategorizing}
-          isImportingWise={isImportingWise}
-          matchFilter={matchFilter}
-          providersById={providersById}
-          searchTerm={searchTerm}
-          teamFilter={teamFilter}
-          teamsById={teamsById}
-          transactionSortDirection={transactionSortDirection}
-          transactionSortKey={transactionSortKey}
-          wiseDirection={wiseDirection}
-          wiseStatusIssue={wiseStatusIssue}
-          wiseTeamSummary={wiseTeamSummary}
-          wiseTransactions={wiseTransactions}
-          onAssignTeam={onAssignTeam}
-          onAutoCategorize={onAutoCategorize}
-          onImportWiseStatements={onImportWiseStatements}
-          onMatch={onMatch}
-          onOpenInvoice={onOpenInvoice}
-          onSearchTermChange={onSearchTermChange}
-          onSetMatchFilter={onSetMatchFilter}
-          onSetTeamFilter={onSetTeamFilter}
-          onSetTransactionSortDirection={onSetTransactionSortDirection}
-          onSetTransactionSortKey={onSetTransactionSortKey}
-          onSetWiseDirection={onSetWiseDirection}
-          onUpdateCategory={onUpdateCategory}
-        />
-      </TabsContent>
-      <TabsContent value="revolut">
-        <RevolutView dashboard={dashboard} rows={revolutTransactions} />
-      </TabsContent>
-      <TabsContent value="slash">
-        <SlashView dashboard={dashboard} rows={slashTransactions} />
-      </TabsContent>
-    </Tabs>
-  );
-}
-
-function WiseBankingTab({
-  dashboard,
-  isCategorizing,
-  isImportingWise,
-  matchFilter,
-  providersById,
-  searchTerm,
-  teamFilter,
-  teamsById,
-  transactionSortDirection,
-  transactionSortKey,
-  wiseDirection,
-  wiseStatusIssue,
-  wiseTeamSummary,
-  wiseTransactions,
-  onAssignTeam,
-  onAutoCategorize,
-  onImportWiseStatements,
-  onMatch,
-  onOpenInvoice,
-  onSearchTermChange,
-  onSetMatchFilter,
-  onSetTeamFilter,
-  onSetTransactionSortDirection,
-  onSetTransactionSortKey,
-  onSetWiseDirection,
-  onUpdateCategory
-}: {
-  dashboard: DashboardSnapshot;
-  isCategorizing: boolean;
-  isImportingWise: boolean;
-  matchFilter: string;
-  providersById: Map<string, Provider>;
-  searchTerm: string;
-  teamFilter: string;
-  teamsById: Map<string, Team>;
-  transactionSortDirection: SortDirection;
-  transactionSortKey: TransactionSortKey;
-  wiseDirection: "in" | "out";
-  wiseStatusIssue?: string;
-  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
-  wiseTransactions: Transaction[];
-  onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
-  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
-  onImportWiseStatements: (files: FileList | null) => Promise<void>;
-  onMatch: (transaction: Transaction, providerId?: string) => Promise<void>;
-  onOpenInvoice: (transaction: Transaction) => void;
-  onSearchTermChange: React.Dispatch<React.SetStateAction<string>>;
-  onSetMatchFilter: React.Dispatch<React.SetStateAction<string>>;
-  onSetTeamFilter: React.Dispatch<React.SetStateAction<string>>;
-  onSetTransactionSortDirection: React.Dispatch<React.SetStateAction<SortDirection>>;
-  onSetTransactionSortKey: React.Dispatch<React.SetStateAction<TransactionSortKey>>;
-  onSetWiseDirection: React.Dispatch<React.SetStateAction<"in" | "out">>;
-  onUpdateCategory: (transaction: Transaction, category: string) => Promise<void>;
-}) {
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">Wise reconciliation</p>
-          <h2>Match incoming payments and outgoing spend</h2>
-        </div>
-        <div className="filters">
-          <div className="segmented-control" aria-label="Wise transaction direction">
-            <Button className={wiseDirection === "in" ? "active" : ""} onClick={() => onSetWiseDirection("in")}>
-              <ArrowUpRight size={15} />
-              In
-            </Button>
-            <Button className={wiseDirection === "out" ? "active" : ""} onClick={() => onSetWiseDirection("out")}>
-              <ArrowDownRight size={15} />
-              Out
-            </Button>
-          </div>
-          <label className="search-box">
-            <Search size={15} />
-            <Input value={searchTerm} onChange={(event) => onSearchTermChange(event.target.value)} placeholder="Search transactions" />
-          </label>
-          <label>
-            <Filter size={15} />
-            <NativeSelect value={matchFilter} onChange={(event) => onSetMatchFilter(event.target.value)}>
-              <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
-              <NativeSelectOption value="matched">Matched</NativeSelectOption>
-              <NativeSelectOption value="all">All rows</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            <SlidersHorizontal size={15} />
-            <NativeSelect value={transactionSortKey} onChange={(event) => onSetTransactionSortKey(event.target.value as TransactionSortKey)}>
-              <NativeSelectOption value="match">% match</NativeSelectOption>
-              <NativeSelectOption value="date">Date</NativeSelectOption>
-              <NativeSelectOption value="period">Period</NativeSelectOption>
-              <NativeSelectOption value="amount">Amount</NativeSelectOption>
-              <NativeSelectOption value="category">Category</NativeSelectOption>
-              <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            Order
-            <NativeSelect value={transactionSortDirection} onChange={(event) => onSetTransactionSortDirection(event.target.value as SortDirection)}>
-              <NativeSelectOption value="desc">Descending</NativeSelectOption>
-              <NativeSelectOption value="asc">Ascending</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            Team
-            <NativeSelect value={teamFilter} onChange={(event) => onSetTeamFilter(event.target.value)}>
-              <NativeSelectOption value="all">All teams</NativeSelectOption>
-              <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
-              {dashboard.teams.map((team) => (
-                <NativeSelectOption key={team.id} value={team.id}>
-                  {team.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
-          <Button
-            className="secondary-button"
-            onClick={() => void onAutoCategorize(wiseTransactions.map((transaction) => transaction.id))}
-            disabled={isCategorizing || wiseTransactions.length === 0}
-          >
-            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-            Auto
-          </Button>
-          <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-            {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-            CSV
-            <Input
-              type="file"
-              accept=".csv,text/csv"
-              multiple
-              disabled={isImportingWise}
-              onChange={(event) => {
-                void onImportWiseStatements(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
-        </div>
-      </div>
-      <div className="wise-summary-grid">
-        <SummaryTile label="Visible volume" value={formatCurrencyTotals(wiseTeamSummary.volume)} />
-        <SummaryTile label="Transactions" value={String(wiseTeamSummary.count)} />
-        <SummaryTile label="Matched rows" value={String(wiseTeamSummary.matched)} />
-        <SummaryTile label="No team" value={String(wiseTeamSummary.unassigned)} />
-      </div>
-      {wiseStatusIssue && (
-        <div className="integration-alert">
-          <CircleAlert size={16} />
-          <span>{wiseStatusIssue}</span>
-        </div>
-      )}
-      <TransactionTable
-        rows={wiseTransactions}
-        teams={dashboard.teams}
-        providers={dashboard.providers}
-        teamsById={teamsById}
-        providersById={providersById}
-        onMatch={onMatch}
-        onAssignTeam={onAssignTeam}
-        onUpdateCategory={onUpdateCategory}
-        onOpenInvoice={onOpenInvoice}
-      />
-    </section>
   );
 }
 
@@ -1969,11 +1781,15 @@ function BanksView({
   onMatch,
   onAssignTeam,
   onUpdateCategory,
-  onOpenInvoice
+  onOpenInvoice,
+  onCreateHolding,
+  onUpdateHolding,
+  onDeleteHolding,
+  onRefreshRates
 }: {
   dashboard: DashboardSnapshot;
-  activeBank: BankSource;
-  setActiveBank: (source: BankSource) => void;
+  activeBank: BankTab;
+  setActiveBank: (source: BankTab) => void;
   wiseDirection: "in" | "out";
   setWiseDirection: (direction: "in" | "out") => void;
   teamFilter: string;
@@ -2000,13 +1816,18 @@ function BanksView({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  onCreateHolding: (payload: CreateHoldingPayload) => Promise<void>;
+  onUpdateHolding: (holdingId: string, payload: UpdateHoldingPayload) => Promise<void>;
+  onDeleteHolding: (holdingId: string) => Promise<void>;
+  onRefreshRates: () => Promise<void>;
 }) {
   const rowsBySource = new Map<BankSource, Transaction[]>();
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
   for (const status of dashboard.integrationStatus) {
-    if (status.id !== "openrouter" && isBankSource(status.id)) {
-      statusBySource.set(status.id, status);
+    const source = status.id as DataSource;
+    if (status.id !== "openrouter" && status.id !== "yahoo" && isBankSource(source)) {
+      statusBySource.set(source, status);
     }
   }
   for (const source of bankSources) {
@@ -2029,6 +1850,14 @@ function BanksView({
             <h2>Connected bank, card, and reconciliation activity</h2>
           </div>
           <div className="segmented-control bank-tabs" aria-label="Bank source">
+            <button
+              className={activeBank === "all" ? "active" : ""}
+              onClick={() => setActiveBank("all")}
+              type="button"
+            >
+              <WalletCards size={15} />
+              All
+            </button>
             {bankSources.map((source) => (
               <button
                 className={activeBank === source.id ? "active" : ""}
@@ -2040,6 +1869,14 @@ function BanksView({
                 {source.label}
               </button>
             ))}
+            <button
+              className={activeBank === "holdings" ? "active" : ""}
+              onClick={() => setActiveBank("holdings")}
+              type="button"
+            >
+              <CircleDollarSign size={15} />
+              Cash & wallets
+            </button>
           </div>
         </div>
         <div className="wise-summary-grid bank-source-summary">
@@ -2058,6 +1895,7 @@ function BanksView({
         </div>
       </section>
 
+      {activeBank === "all" && <AllBankTransactionsView dashboard={dashboard} providersById={providersById} />}
       {activeBank === "wise" && (
         <WiseBankView
           dashboard={dashboard}
@@ -2089,6 +1927,15 @@ function BanksView({
       {activeBank === "revolut" && <RevolutView dashboard={dashboard} rows={revolutTransactions} />}
       {activeBank === "slash" && <SlashView dashboard={dashboard} rows={slashTransactions} />}
       {activeBank === "amex" && <AmexView dashboard={dashboard} rows={amexTransactions} />}
+      {activeBank === "holdings" && (
+        <HoldingsView
+          dashboard={dashboard}
+          onCreate={onCreateHolding}
+          onUpdate={onUpdateHolding}
+          onDelete={onDeleteHolding}
+          onRefreshRates={onRefreshRates}
+        />
+      )}
     </div>
   );
 }
@@ -2481,7 +2328,7 @@ function AnalyticsView({
   for (const account of dashboard.accounts) sourceIds.add(account.source);
   for (const invoice of dashboard.invoices) sourceIds.add(invoice.source);
   for (const status of dashboard.integrationStatus) {
-    if (status.id !== "openrouter") sourceIds.add(status.id);
+    if (status.id !== "openrouter" && status.id !== "yahoo") sourceIds.add(status.id);
   }
   const sourceRows = [...sourceIds]
     .map((source) => {
@@ -3893,370 +3740,6 @@ function DistributionAdjustmentModal({
   );
 }
 
-function RevenueView({
-  dashboard,
-  onSyncRevenue,
-  onSendRevenueInvoice
-}: {
-  dashboard: DashboardSnapshot;
-  onSyncRevenue: (payload: SyncRevenuePayload) => Promise<void>;
-  onSendRevenueInvoice: (runId: string, taxId: string) => Promise<void>;
-}) {
-  const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
-  const [partnerId, setPartnerId] = useState("all");
-  const [revenueTeamId, setRevenueTeamId] = useState("all");
-  const [timezone, setTimezone] = useState(dashboard.revenuePartners[0]?.timezone ?? "UTC");
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
-  const [meritInvoiceTarget, setMeritInvoiceTarget] = useState<RevenueRun | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const teamsById = useMemo(() => {
-    const map = new Map<string, Team>();
-    for (const team of dashboard.teams) map.set(team.id, team);
-    return map;
-  }, [dashboard.teams]);
-  const visibleRuns = dashboard.revenueRuns.filter(
-    (run) =>
-      (partnerId === "all" || run.partnerId === partnerId) &&
-      (revenueTeamId === "all" ||
-        (revenueTeamId === "partner-level" && !run.teamId) ||
-        run.teamId === revenueTeamId)
-  );
-  const latestRun = visibleRuns[0];
-  const totalRevenue = sumCurrencyTotals(
-    visibleRuns.filter((run) => run.status !== "failed" && run.status !== "skipped"),
-    (run) => run.revenue
-  );
-  const invoicedRevenue = sumCurrencyTotals(
-    visibleRuns.filter((run) => run.status === "invoiced"),
-    (run) => run.revenue
-  );
-  const pendingRevenue = sumCurrencyTotals(
-    visibleRuns.filter((run) => run.status === "pulled"),
-    (run) => run.revenue
-  );
-  const revenuePartnersById = useMemo(() => {
-    const map = new Map<string, RevenuePartner>();
-    for (const partner of dashboard.revenuePartners) map.set(partner.id, partner);
-    return map;
-  }, [dashboard.revenuePartners]);
-  const visiblePartners = dashboard.revenuePartners.filter(
-    (partner) =>
-      (partnerId === "all" || partner.id === partnerId) &&
-      (revenueTeamId === "all" ||
-        (revenueTeamId === "partner-level" && !partner.teamId) ||
-        partner.teamId === revenueTeamId)
-  );
-  const meritIntegration = dashboard.integrationStatus.find((integration) => integration.id === "merit");
-  const meritWriteEnabled = meritIntegration?.writeEnabled === true;
-  const meritSendReady = meritWriteEnabled && dashboard.meritTaxes.length > 0;
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await onSyncRevenue({
-        partnerId: partnerId === "all" ? undefined : partnerId,
-        teamId: revenueTeamId !== "all" && revenueTeamId !== "partner-level" ? revenueTeamId : undefined,
-        partnerLevelOnly: revenueTeamId === "partner-level" ? true : undefined,
-        periodPreset,
-        periodStart: periodPreset === "custom" ? periodStart : undefined,
-        periodEnd: periodPreset === "custom" ? periodEnd : undefined,
-        timezone
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Revenue sync failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">Partner revenue</p>
-          <h2>Revenue pulls and Merit invoices</h2>
-        </div>
-        <span className="total-pill">{dashboard.revenuePartners.length} partners</span>
-      </div>
-
-      <form className="revenue-controls" onSubmit={handleSubmit}>
-        <label>
-          Partner
-          <NativeSelect value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
-            <NativeSelectOption value="all">All partners</NativeSelectOption>
-            {dashboard.revenuePartners.map((partner) => (
-              <NativeSelectOption key={partner.id} value={partner.id}>
-                {revenuePartnerLabel(partner, teamsById)}
-                {partner.affiliateId ? ` · ${partner.affiliateId}` : ""}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
-        <label>
-          Team
-          <select value={revenueTeamId} onChange={(event) => setRevenueTeamId(event.target.value)}>
-            <option value="all">All teams</option>
-            <option value="partner-level">Partner-level</option>
-            {dashboard.teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Period
-          <NativeSelect value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value as RevenuePeriodPreset)}>
-            <NativeSelectOption value="last-week">Last week</NativeSelectOption>
-            <NativeSelectOption value="last-7-days">Last 7 days</NativeSelectOption>
-            <NativeSelectOption value="this-month">This month</NativeSelectOption>
-            <NativeSelectOption value="custom">Custom</NativeSelectOption>
-          </NativeSelect>
-        </label>
-        <label className="timezone-field">
-          Timezone
-          <NativeSelect value={timezone} onChange={(event) => setTimezone(event.target.value)}>
-            {timezoneOptions.map((option) => (
-              <NativeSelectOption key={option.value} value={option.value}>
-                {option.label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
-        {periodPreset === "custom" && (
-          <>
-            <label>
-              Start
-              <Input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} />
-            </label>
-            <label>
-              End
-              <Input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} />
-            </label>
-          </>
-        )}
-        <Button className="primary-button" type="submit" disabled={busy}>
-          {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          Pull
-        </Button>
-      </form>
-
-      <div className={`merit-write-warning ${meritSendReady ? "" : "disabled"}`}>
-        <CircleAlert size={19} aria-hidden="true" />
-        <div>
-          <strong>“Send to Merit” creates a real sales invoice in Merit</strong>
-          <span>
-            Revenue pulls are read-only and never create invoices. Invoice sending is currently{" "}
-            {meritIntegration?.issue
-              ? `blocked because ${meritIntegration.issue}`
-              : meritSendReady
-              ? "enabled; every send requires choosing a Merit tax rate and confirming the external write"
-              : meritWriteEnabled
-                ? "enabled, but Merit tax rates could not be loaded—click Sync before sending"
-                : "disabled by the deployment safety switch"}.
-          </span>
-        </div>
-      </div>
-
-      <div className="revenue-partner-strip">
-        {visiblePartners.map((partner) => (
-          <div className="revenue-partner-chip" key={partner.id}>
-            <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
-            <span>{partner.revenueCategory} · Affiliate ID {partner.affiliateId || "Not set"}</span>
-          </div>
-        ))}
-      </div>
-
-      {error && <div className="inline-error revenue-error">{error}</div>}
-
-      <div className="wise-summary-grid revenue-summary">
-        <SummaryTile label="Revenue" value={formatCurrencyTotals(totalRevenue)} />
-        <SummaryTile label="Invoiced" value={formatCurrencyTotals(invoicedRevenue)} />
-        <SummaryTile label="Pending" value={formatCurrencyTotals(pendingRevenue)} />
-        <SummaryTile label="Last run" value={latestRun ? dateLabel(latestRun.createdAt) : "None"} />
-      </div>
-
-      <div className="table-wrap">
-        <table className="data-table revenue-table">
-          <thead>
-            <tr>
-              <th>Partner</th>
-              <th>Team</th>
-              <th>Category</th>
-              <th>Period</th>
-              <th>Timezone</th>
-              <th>Revenue</th>
-              <th>Conversions</th>
-              <th>Status</th>
-              <th>Invoice</th>
-              <th>Merit action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRuns.length > 0 ? (
-              visibleRuns.map((run) => (
-                <tr key={`${run.id}-${run.createdAt}`}>
-                  <td>
-                    <strong>{run.partnerName}</strong>
-                    <small>TUNE · Affiliate ID {revenuePartnersById.get(run.partnerId)?.affiliateId || "Not set"}</small>
-                  </td>
-                  <td>{revenueTeamLabel(run.teamId, run.teamName, teamsById)}</td>
-                  <td>{run.revenueCategory}</td>
-                  <td>
-                    {dateLabel(run.periodStart)} - {dateLabel(run.periodEnd)}
-                  </td>
-                  <td>{run.timezone}</td>
-                  <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
-                  <td>{run.status === "failed" ? "—" : run.conversions ?? 0}</td>
-                  <td>
-                    <span
-                      className={`status-pill ${
-                        run.status === "invoiced"
-                          ? "good"
-                          : run.status === "invoicing" || run.status === "failed" || run.status === "skipped"
-                            ? "warning"
-                            : ""
-                      }`}
-                    >
-                      {run.status}
-                    </span>
-                    {run.error && <small>{run.error}</small>}
-                  </td>
-                  <td>{run.invoiceId ? run.externalInvoiceId ?? run.invoiceId : "None"}</td>
-                  <td>
-                    {run.status === "pulled" && run.revenue > 0 && !run.invoiceId ? (
-                      <Button
-                        className="icon-text-button"
-                        disabled={!meritSendReady}
-                        title={
-                          meritSendReady
-                            ? "Review and create this sales invoice in Merit"
-                            : meritWriteEnabled
-                              ? "Sync the dashboard to load Merit tax rates before sending"
-                              : "Invoice sending is disabled by the deployment safety switch"
-                        }
-                        onClick={() => setMeritInvoiceTarget(run)}
-                      >
-                        <FilePlus2 size={15} />
-                        Send to Merit
-                      </Button>
-                    ) : (
-                      <span className="muted-cell">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={10}>No revenue runs yet</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {meritInvoiceTarget && (
-        <MeritInvoiceDialog
-          run={meritInvoiceTarget}
-          taxes={dashboard.meritTaxes}
-          onClose={() => setMeritInvoiceTarget(null)}
-          onConfirm={async (taxId) => {
-            await onSendRevenueInvoice(meritInvoiceTarget.id, taxId);
-            setMeritInvoiceTarget(null);
-          }}
-        />
-      )}
-    </section>
-  );
-}
-
-function MeritInvoiceDialog({
-  run,
-  taxes,
-  onClose,
-  onConfirm
-}: {
-  run: RevenueRun;
-  taxes: MeritTax[];
-  onClose: () => void;
-  onConfirm: (taxId: string) => Promise<void>;
-}) {
-  const [acknowledged, setAcknowledged] = useState(false);
-  const [taxId, setTaxId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const selectedTax = taxes.find((tax) => tax.id === taxId);
-  const taxAmount = selectedTax ? Number(((run.revenue * selectedTax.taxPct) / 100).toFixed(2)) : 0;
-
-  async function handleConfirm(event: FormEvent) {
-    event.preventDefault();
-    if (!acknowledged || !taxId) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await onConfirm(taxId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Invoice could not be sent to Merit");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <form
-        className="modal confirmation-modal merit-confirmation-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="send-merit-invoice-title"
-        onSubmit={handleConfirm}
-      >
-        <div className="confirmation-icon" aria-hidden="true">
-          <CircleAlert size={20} />
-        </div>
-        <div>
-          <p className="eyebrow">External accounting write</p>
-          <h2 id="send-merit-invoice-title">Create this invoice in Merit?</h2>
-        </div>
-        <p className="confirmation-copy">
-          This action sends a real sales invoice for {run.partnerName} into Merit. The net amount is {money(run.revenue, run.currency)}
-          {selectedTax ? `, tax is ${money(taxAmount, run.currency)}, and the total is ${money(run.revenue + taxAmount, run.currency)}` : ""}. It writes outside this dashboard and cannot be undone here. It does not email the invoice.
-        </p>
-        <label>
-          Merit tax rate
-          <NativeSelect value={taxId} onChange={(event) => setTaxId(event.target.value)}>
-            <NativeSelectOption value="" disabled>
-              Choose the tax rate for this invoice
-            </NativeSelectOption>
-            {taxes.map((tax) => (
-              <NativeSelectOption key={tax.id} value={tax.id}>
-                {tax.name} · {tax.taxPct}% ({tax.code})
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </label>
-        <label className="merit-confirmation-check">
-          <Checkbox checked={acknowledged} onCheckedChange={(checked) => setAcknowledged(checked === true)} />
-          I understand this creates an invoice in Merit.
-        </label>
-        {error && <div className="inline-error">{error}</div>}
-        <div className="modal-actions">
-          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button type="submit" className="destructive-button" disabled={submitting || !acknowledged || !taxId}>
-            {submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />}
-            Create in Merit
-          </Button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const revolutAccounts = dashboard.accounts.filter((account) => account.source === "revolut");
 
@@ -4456,118 +3939,6 @@ function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
   );
 }
 
-function InvoicesView({
-  dashboard,
-  providersById,
-  onApprove,
-  onMarkPaid
-}: {
-  dashboard: DashboardSnapshot;
-  providersById: Map<string, Provider>;
-  onApprove: (invoiceId: string, approvalStatus: "approved" | "denied") => Promise<void>;
-  onMarkPaid: (invoiceId: string) => Promise<void>;
-}) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  async function runAction(invoiceId: string, action: () => Promise<void>) {
-    setBusyId(invoiceId);
-    try {
-      await action();
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="eyebrow">Finance documents</p>
-          <h2>Match, create, approve, deny, and locally mark paid</h2>
-        </div>
-        <span className="total-pill">{dashboard.invoices.length} invoices</span>
-      </div>
-      <div className="table-wrap">
-        <table className="data-table invoice-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Document</th>
-              <th>Amount</th>
-              <th>Company</th>
-              <th>Merit status</th>
-              <th>Dashboard status</th>
-              <th>Linked transaction</th>
-              <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {dashboard.invoices.length > 0 ? (
-              dashboard.invoices.map((invoice) => {
-              const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
-              return (
-                <tr key={invoice.id}>
-                  <td className="counterparty-cell">
-                    <strong>{invoice.customerName}</strong>
-                    <small>{invoice.description}</small>
-                  </td>
-                  <td>{invoice.documentType === "supplier_bill" ? "Supplier bill" : "Sales invoice"}</td>
-                  <td className="amount">{money(invoice.amount, invoice.currency)}</td>
-                  <td>{providerLabel(provider)}</td>
-                  <td>
-                    <span className={`status-pill ${invoice.meritPaid ? "good" : ""}`}>
-                      {invoice.meritPaid ? "Paid in Merit" : invoice.source === "merit" ? "Open in Merit" : "Local draft"}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`status-pill ${invoice.approvalStatus === "approved" ? "good" : invoice.approvalStatus === "denied" ? "warning" : ""}`}>
-                      {invoice.paidLocally ? "Paid locally" : invoice.approvalStatus ?? "pending"}
-                    </span>
-                  </td>
-                  <td>{invoice.transactionId ? invoice.transactionId : "Not linked"}</td>
-                  <td>
-                    <div className="row-actions">
-                      <Button
-                        className="icon-button"
-                        title="Approve invoice match"
-                        disabled={busyId === invoice.id}
-                        onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "approved"))}
-                      >
-                        <Check size={16} />
-                      </Button>
-                      <Button
-                        className="icon-button"
-                        title="Deny invoice match"
-                        disabled={busyId === invoice.id}
-                        onClick={() => runAction(invoice.id, () => onApprove(invoice.id, "denied"))}
-                      >
-                        <X size={16} />
-                      </Button>
-                      <Button
-                        className="icon-text-button"
-                        disabled={busyId === invoice.id || invoice.paidLocally}
-                        onClick={() => runAction(invoice.id, () => onMarkPaid(invoice.id))}
-                      >
-                        <Check size={15} />
-                        Paid here
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              );
-              })
-            ) : (
-              <tr>
-                <td colSpan={8}>No live invoices</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
 function ProvidersView({
   providers,
   revenuePartners,
@@ -4575,6 +3946,7 @@ function ProvidersView({
   onAdd,
   onEditProvider,
   onEditRevenuePartner,
+  onAddRevenuePartner,
   onDeleteProvider,
   onDeleteRevenuePartner
 }: {
@@ -4584,6 +3956,7 @@ function ProvidersView({
   onAdd: () => void;
   onEditProvider: (provider: Provider) => void;
   onEditRevenuePartner: (partner: RevenuePartner) => void;
+  onAddRevenuePartner: (provider: Provider) => void;
   onDeleteProvider: (provider: Provider) => void;
   onDeleteRevenuePartner: (partner: RevenuePartner) => void;
 }) {
@@ -4592,8 +3965,7 @@ function ProvidersView({
     if (scope === "all") return true;
     return provider.type === scope;
   });
-  const showRevenuePartners = scope === "all" || scope === "client";
-  const clientCount = providers.filter((provider) => provider.type === "client").length + revenuePartners.length;
+  const clientCount = providers.filter((provider) => provider.type === "client").length;
   const supplierCount = providers.filter((provider) => provider.type === "supplier").length;
 
   return (
@@ -4663,53 +4035,38 @@ function ProvidersView({
                 <span className="muted-chip">No known bank aliases</span>
               )}
             </div>
+            {provider.type === "client" && (
+              <div className="company-revenue-rules">
+                <div className="company-rule-heading">
+                  <span>Revenue rules</span>
+                  <strong>{revenuePartners.filter((partner) => partner.providerId === provider.id).length}</strong>
+                </div>
+                {revenuePartners.filter((partner) => partner.providerId === provider.id).length > 0 ? (
+                  revenuePartners.filter((partner) => partner.providerId === provider.id).map((partner) => (
+                    <div className="company-rule-entry" key={partner.id}>
+                      <button type="button" className="company-rule-row" onClick={() => onEditRevenuePartner(partner)}>
+                        <span>
+                          <strong>{partner.name}</strong>
+                          <small>{partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown team" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
+                        </span>
+                        <span className={`status-pill ${partner.autoDraft ? "good" : ""}`}>{partner.autoDraft ? "Auto-draft" : "Manual draft"}</span>
+                      </button>
+                      <Button className="icon-button destructive-icon-button company-rule-delete" type="button" aria-label={`Delete revenue rule ${partner.name}`} title="Delete revenue rule" onClick={() => onDeleteRevenuePartner(partner)}>
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <span className="muted-chip">No revenue pull rule linked</span>
+                )}
+                <Button className="company-add-rule-button" type="button" onClick={() => onAddRevenuePartner(provider)}>
+                  <Plus size={14} /> Add revenue rule
+                </Button>
+              </div>
+            )}
           </article>
         ))}
-        {showRevenuePartners &&
-          revenuePartners.map((partner) => (
-            <article className="provider-card revenue-partner-card" key={partner.id}>
-              <div className="provider-card-head">
-                <div className="provider-avatar">
-                  <BarChart3 size={18} />
-                </div>
-                <div>
-                  <strong>{revenuePartnerLabel(partner, teamsById)}</strong>
-                  <span>{partner.revenueCategory || "Revenue"} · Affiliate ID {partner.affiliateId || "Not set"}</span>
-                </div>
-                <div className="provider-card-actions">
-                  <Button
-                    className="icon-button"
-                    aria-label={`Edit revenue client ${partner.name} (${partner.networkIdEnv})`}
-                    title="Edit revenue partner"
-                    onClick={() => onEditRevenuePartner(partner)}
-                  >
-                    <Pencil size={15} />
-                  </Button>
-                  <Button
-                    className="icon-button destructive-icon-button"
-                    aria-label={`Delete revenue client ${partner.name} (${partner.networkIdEnv})`}
-                    title="Delete revenue client"
-                    onClick={() => onDeleteRevenuePartner(partner)}
-                  >
-                    <Trash2 size={15} />
-                  </Button>
-                </div>
-              </div>
-              <div className="tag-list">
-                <span>Revenue</span>
-                <span>TUNE</span>
-              </div>
-              <div className="alias-list">
-                <span>Affiliate ID {partner.affiliateId || "Not set"}</span>
-                <span>{partner.currency}</span>
-                <span>{partner.timezone}</span>
-                <span>{partner.enabled ? "Enabled" : "Disabled"}</span>
-                <span>{partner.networkIdEnv}</span>
-                <span>{partner.apiKeyEnv}</span>
-              </div>
-            </article>
-          ))}
-        {visibleProviders.length === 0 && (!showRevenuePartners || revenuePartners.length === 0) && <div className="empty-state">No companies in this filter</div>}
+        {visibleProviders.length === 0 && <div className="empty-state">No companies in this filter</div>}
       </div>
     </section>
   );
@@ -4727,7 +4084,7 @@ function DeleteCompanyDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = target.kind === "provider" ? target.provider.name : target.partner.name;
-  const relationship = target.kind === "provider" ? providerTypeLabel(target.provider.type).toLowerCase() : "revenue client";
+  const relationship = target.kind === "provider" ? providerTypeLabel(target.provider.type).toLowerCase() : "revenue rule";
 
   async function handleConfirm(event: FormEvent) {
     event.preventDefault();
@@ -4736,7 +4093,7 @@ function DeleteCompanyDialog({
     try {
       await onConfirm();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Company could not be deleted");
+      setError(err instanceof Error ? err.message : target.kind === "provider" ? "Company could not be deleted" : "Revenue rule could not be deleted");
     } finally {
       setSubmitting(false);
     }
@@ -4760,7 +4117,7 @@ function DeleteCompanyDialog({
         </div>
         <p className="confirmation-copy">
           {target.kind === "provider"
-            ? "This removes the company from the directory and clears it from matched transactions and invoices. Financial records stay in place."
+            ? "This removes the company and its revenue rules, stopping future pulls. References are cleared from matched transactions, invoices, and revenue history, but the financial records stay in place."
             : "This removes the TUNE revenue client and stops future syncs. Existing revenue runs and invoice history stay in place."}
         </p>
         {error && <div className="inline-error">{error}</div>}
@@ -4770,7 +4127,7 @@ function DeleteCompanyDialog({
           </Button>
           <Button type="submit" className="destructive-button" disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
-            Delete company
+            {target.kind === "provider" ? "Delete company" : "Delete rule"}
           </Button>
         </div>
       </form>
@@ -5409,32 +4766,42 @@ function ProviderModal({
 
 function RevenuePartnerModal({
   partner,
+  initialProviderId,
   providers,
   teams,
+  taxes,
   onClose,
   onSubmit
 }: {
-  partner: RevenuePartner;
+  partner?: RevenuePartner;
+  initialProviderId?: string;
   providers: Provider[];
   teams: Team[];
+  taxes: MeritTax[];
   onClose: () => void;
   onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
 }) {
-  const [name, setName] = useState(partner.name);
-  const [providerId, setProviderId] = useState(partner.providerId ?? "");
-  const [teamId, setTeamId] = useState(partner.teamId ?? "");
-  const [revenueCategory, setRevenueCategory] = useState(partner.revenueCategory ?? "Revenue");
-  const [affiliateId, setAffiliateId] = useState(partner.affiliateId);
-  const [externalId, setExternalId] = useState(partner.externalId ?? "");
-  const [currency, setCurrency] = useState(partner.currency);
-  const [timezone, setTimezone] = useState(partner.timezone);
-  const [networkTimezone, setNetworkTimezone] = useState(partner.networkTimezone);
-  const [networkIdEnv, setNetworkIdEnv] = useState(partner.networkIdEnv);
-  const [apiKeyEnv, setApiKeyEnv] = useState(partner.apiKeyEnv);
-  const [apiBaseUrlEnv, setApiBaseUrlEnv] = useState(partner.apiBaseUrlEnv ?? "");
-  const [meritCustomerName, setMeritCustomerName] = useState(partner.meritCustomerName ?? "");
-  const [invoiceDueDays, setInvoiceDueDays] = useState(String(partner.invoiceDueDays));
-  const [enabled, setEnabled] = useState(partner.enabled);
+  const initialProvider = providers.find((provider) => provider.id === (partner?.providerId ?? initialProviderId));
+  const [name, setName] = useState(partner?.name ?? initialProvider?.name ?? "");
+  const [providerId, setProviderId] = useState(partner?.providerId ?? initialProviderId ?? "");
+  const [teamId, setTeamId] = useState(partner?.teamId ?? "");
+  const [revenueCategory, setRevenueCategory] = useState(partner?.revenueCategory ?? "Partner network revenue");
+  const [affiliateId, setAffiliateId] = useState(partner?.affiliateId ?? "");
+  const [externalId, setExternalId] = useState(partner?.externalId ?? "");
+  const [currency, setCurrency] = useState(partner?.currency ?? initialProvider?.defaultCurrency ?? "USD");
+  const [timezone, setTimezone] = useState(partner?.timezone ?? "UTC");
+  const [networkTimezone, setNetworkTimezone] = useState(partner?.networkTimezone ?? "UTC");
+  const [networkIdEnv, setNetworkIdEnv] = useState(partner?.networkIdEnv ?? "");
+  const [apiKeyEnv, setApiKeyEnv] = useState(partner?.apiKeyEnv ?? "");
+  const [apiBaseUrlEnv, setApiBaseUrlEnv] = useState(partner?.apiBaseUrlEnv ?? "");
+  const [meritCustomerName, setMeritCustomerName] = useState(partner?.meritCustomerName ?? initialProvider?.legalName ?? initialProvider?.name ?? "");
+  const [invoiceDueDays, setInvoiceDueDays] = useState(String(partner?.invoiceDueDays ?? initialProvider?.paymentTermsDays ?? 30));
+  const [billingCadence, setBillingCadence] = useState(partner?.billingCadence ?? "weekly");
+  const [billingTimezone, setBillingTimezone] = useState(partner?.billingTimezone ?? "Asia/Beirut");
+  const [autoDraft, setAutoDraft] = useState(partner?.autoDraft ?? true);
+  const [defaultMeritTaxId, setDefaultMeritTaxId] = useState(partner?.defaultMeritTaxId ?? "");
+  const [defaultMeritItemCode, setDefaultMeritItemCode] = useState(partner?.defaultMeritItemCode ?? "");
+  const [enabled, setEnabled] = useState(partner?.enabled ?? true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -5458,6 +4825,11 @@ function RevenuePartnerModal({
         apiBaseUrlEnv: apiBaseUrlEnv.trim() || undefined,
         meritCustomerName: meritCustomerName.trim() || undefined,
         invoiceDueDays: Number(invoiceDueDays),
+        billingCadence,
+        billingTimezone,
+        autoDraft,
+        defaultMeritTaxId: defaultMeritTaxId || undefined,
+        defaultMeritItemCode: defaultMeritItemCode.trim() || undefined,
         enabled
       });
     } catch (err) {
@@ -5469,11 +4841,11 @@ function RevenuePartnerModal({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <form className="modal wide-modal" onSubmit={handleSubmit}>
+      <form className="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="revenue-rule-modal-title" onSubmit={handleSubmit}>
         <div className="modal-header">
           <div>
-            <p className="eyebrow">Revenue partner</p>
-            <h2>Edit {partner.name}</h2>
+            <p className="eyebrow">Company revenue rule</p>
+            <h2 id="revenue-rule-modal-title">{partner ? `Edit ${partner.name}` : `Add rule for ${initialProvider?.name ?? "client"}`}</h2>
           </div>
           <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -5493,7 +4865,21 @@ function RevenuePartnerModal({
         <div className="form-grid">
           <label>
             Company
-            <select value={providerId} onChange={(event) => setProviderId(event.target.value)}>
+            <select
+              value={providerId}
+              onChange={(event) => {
+                const nextProviderId = event.target.value;
+                const nextProvider = providers.find((provider) => provider.id === nextProviderId);
+                setProviderId(nextProviderId);
+                if (!partner && nextProvider) {
+                  setName(nextProvider.name);
+                  setMeritCustomerName(nextProvider.legalName ?? nextProvider.name);
+                  setCurrency(nextProvider.defaultCurrency ?? "USD");
+                  setInvoiceDueDays(String(nextProvider.paymentTermsDays ?? 30));
+                }
+              }}
+            >
+              <option value="">Choose a client</option>
               {providers
                 .filter((provider) => provider.type === "client")
                 .map((provider) => (
@@ -5581,6 +4967,48 @@ function RevenuePartnerModal({
             <Input type="number" min="0" step="1" value={invoiceDueDays} onChange={(event) => setInvoiceDueDays(event.target.value)} />
           </label>
         </div>
+        <div className="revenue-rule-section">
+          <div className="form-section-heading">
+            <h3>Invoice creation rule</h3>
+            <p>Controls when this revenue becomes a draft and the defaults used when it is sent to Merit.</p>
+          </div>
+          <div className="form-grid">
+            <label>
+              Billing cadence
+              <NativeSelect value={billingCadence} onChange={(event) => setBillingCadence(event.target.value as "weekly" | "monthly")}>
+                <NativeSelectOption value="weekly">Weekly · prior Monday–Sunday</NativeSelectOption>
+                <NativeSelectOption value="monthly">Monthly · calendar month</NativeSelectOption>
+              </NativeSelect>
+            </label>
+            <label>
+              Billing timezone
+              <NativeSelect value={billingTimezone} onChange={(event) => setBillingTimezone(event.target.value)}>
+                {timezoneOptions.map((option) => (
+                  <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+          </div>
+          <div className="form-grid">
+            <label>
+              Default Merit tax
+              <NativeSelect value={defaultMeritTaxId} onChange={(event) => setDefaultMeritTaxId(event.target.value)}>
+                <NativeSelectOption value="">Choose before sending</NativeSelectOption>
+                {taxes.map((tax) => (
+                  <NativeSelectOption key={tax.id} value={tax.id}>{tax.name} · {tax.taxPct}%</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            <label>
+              Default Merit item
+              <Input value={defaultMeritItemCode} onChange={(event) => setDefaultMeritItemCode(event.target.value)} placeholder="Item code or description" />
+            </label>
+          </div>
+          <label className="check-row modal-check-row">
+            <Checkbox checked={autoDraft} onCheckedChange={(checked) => setAutoDraft(checked === true)} />
+            Automatically prepare a dashboard draft when this billing period closes
+          </label>
+        </div>
         <label className="check-row modal-check-row">
           <Checkbox checked={enabled} onCheckedChange={(checked) => setEnabled(checked === true)} />
           Enabled
@@ -5589,9 +5017,25 @@ function RevenuePartnerModal({
           <Button type="button" className="secondary-button" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" className="primary-button" disabled={submitting}>
+          <Button
+            type="submit"
+            className="primary-button"
+            disabled={
+              submitting ||
+              !providerId ||
+              !name.trim() ||
+              !affiliateId.trim() ||
+              !revenueCategory.trim() ||
+              !currency.trim() ||
+              !timezone ||
+              !networkTimezone ||
+              !networkIdEnv.trim() ||
+              !apiKeyEnv.trim() ||
+              !Number.isFinite(Number(invoiceDueDays))
+            }
+          >
             {submitting ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-            Save
+            {partner ? "Save rule" : "Add rule"}
           </Button>
         </div>
       </form>
