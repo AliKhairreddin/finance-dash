@@ -65,7 +65,7 @@ export function bindRevenuePartnerCompany(
         providerId: provider.id,
         customerName,
         dueDate: calculateInvoiceDueDate(invoice.issueDate, paymentTermsDays),
-        taxId: partner.defaultMeritTaxId ?? invoice.taxId,
+        taxId: invoice.taxId ?? partner.defaultMeritTaxId ?? provider.defaultMeritTaxId,
         updatedAt: new Date().toISOString()
       };
     })

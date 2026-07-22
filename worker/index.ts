@@ -72,6 +72,7 @@ import {
   reconcileMeritInvoices,
   reconcileMeritProviders
 } from "../shared/merit";
+import { inferMeritTaxDefault, type MeritInvoiceTaxSample } from "../shared/meritTaxDefaults";
 import {
   bindRevenuePartnerCompany,
   calculateRevenueMetrics,
@@ -206,7 +207,12 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
   | "paymentTermsDays"
   | "meritCustomerId"
   | "meritSupplierId"
+  | "defaultMeritTaxId"
+  | "defaultMeritTaxSource"
+  | "defaultMeritTaxSampleSize"
+  | "defaultMeritTaxUpdatedAt"
 > {
+  const defaultMeritTaxId = cleanOptional(payload.defaultMeritTaxId);
   return {
     defaultAccount: cleanOptional(payload.defaultAccount),
     legalName: cleanOptional(payload.legalName),
@@ -217,7 +223,11 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
     defaultCurrency: cleanOptional(payload.defaultCurrency),
     paymentTermsDays: cleanOptionalNumber(payload.paymentTermsDays),
     meritCustomerId: cleanOptional(payload.meritCustomerId),
-    meritSupplierId: cleanOptional(payload.meritSupplierId)
+    meritSupplierId: cleanOptional(payload.meritSupplierId),
+    defaultMeritTaxId,
+    defaultMeritTaxSource: defaultMeritTaxId ? "manual" : undefined,
+    defaultMeritTaxSampleSize: undefined,
+    defaultMeritTaxUpdatedAt: defaultMeritTaxId ? new Date().toISOString() : undefined
   };
 }
 
@@ -1013,19 +1023,24 @@ async function meritUrl(env: Env, path: string, body: string): Promise<string> {
 
 async function fetchMeritJson<T>(env: Env, path: string, payload: unknown): Promise<T> {
   const body = JSON.stringify(payload);
-  const response = await fetch(await meritUrl(env, path, body), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json"
-    },
-    body
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Merit API failed: ${response.status} ${response.statusText}`);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(await meritUrl(env, path, body), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body
+    });
+    const text = await response.text();
+    if (response.ok) return text ? (JSON.parse(text) as T) : ({} as T);
+    if (response.status !== 429 || attempt === 3) {
+      throw new Error(`Merit API failed: ${response.status} ${response.statusText}`);
+    }
+    const retryAfterSeconds = Math.max(1, Number(response.headers.get("Retry-After")) || 10);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfterSeconds, 60) * 1000));
   }
-  return text ? (JSON.parse(text) as T) : ({} as T);
+  throw new Error("Merit API request retry limit reached");
 }
 
 interface MeritInvoiceRecord {
@@ -1056,9 +1071,13 @@ export async function fetchMeritInvoices(env: Env, persistedInvoices: Invoice[] 
     )
   );
 
+  return meritInvoicesFromRecords(responses.flat());
+}
+
+function meritInvoicesFromRecords(records: MeritInvoiceRecord[]): Invoice[] {
   const fetchedAt = new Date().toISOString();
   const byExternalId = new Map<string, Invoice>();
-  for (const invoice of responses.flat()) {
+  for (const invoice of records) {
     const externalId = invoice.SIHId ?? invoice.InvoiceNo;
     if (!externalId) continue;
     const issueDate = meritIsoDate(invoice.DocumentDate ?? invoice.InvoiceDate ?? invoice.DocDate, fetchedAt.slice(0, 10));
@@ -1085,6 +1104,11 @@ export async function fetchMeritInvoices(env: Env, persistedInvoices: Invoice[] 
     });
   }
   return [...byExternalId.values()];
+}
+
+async function fetchMeritInvoicesForCustomer(env: Env, customerId: string): Promise<Invoice[]> {
+  const response = await fetchMeritJson<MeritInvoiceRecord[]>(env, "/v2/getinvoices2", { CustId: customerId });
+  return meritInvoicesFromRecords(response);
 }
 
 export async function fetchMeritCustomers(env: Env): Promise<Provider[]> {
@@ -1121,6 +1145,162 @@ async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
       taxPct: Number(tax.TaxPct)
     }))
     .sort((left, right) => left.taxPct - right.taxPct || left.name.localeCompare(right.name));
+}
+
+interface MeritInvoiceDetails {
+  Lines?: Array<{
+    TaxId?: string;
+  }>;
+}
+
+interface MeritTaxDefaultCompanyReport {
+  providerId: string;
+  company: string;
+  status: "inferred" | "ambiguous" | "no-tax-history" | "no-invoices" | "manual-preserved";
+  defaultMeritTaxId?: string;
+  defaultMeritTaxName?: string;
+  sampledInvoiceCount: number;
+  usableInvoiceCount: number;
+  supportingInvoiceCount: number;
+  votes: Record<string, number>;
+}
+
+export async function fetchMeritInvoiceTaxSample(env: Env, invoice: Invoice): Promise<MeritInvoiceTaxSample> {
+  if (!invoice.externalId) throw new Error("Merit invoice ID is required to read its tax");
+  const detail = await fetchMeritJson<MeritInvoiceDetails>(env, "/v2/getinvoice", {
+    Id: invoice.externalId,
+    AddAttachment: false
+  });
+  return {
+    invoiceId: invoice.externalId,
+    invoiceNumber: invoice.invoiceNumber ?? invoice.externalId,
+    issueDate: invoice.issueDate,
+    taxIds: (detail.Lines ?? []).map((line) => line.TaxId?.trim()).filter((taxId): taxId is string => Boolean(taxId))
+  };
+}
+
+async function syncMeritTaxDefaults(env: Env): Promise<{
+  updatedCompanies: number;
+  updatedDrafts: number;
+  companies: MeritTaxDefaultCompanyReport[];
+}> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) {
+    throw new ApiError(503, "Merit is not configured");
+  }
+
+  const state = await loadPersisted(env);
+  const [meritInvoices, meritTaxes, meritCustomers] = await Promise.all([
+    fetchMeritInvoices(env, state.invoices),
+    fetchMeritTaxes(env),
+    fetchMeritCustomers(env)
+  ]);
+  state.providers = mergeProviderDirectory(reconcileMeritProviders(state.providers, meritCustomers, "customer"));
+  const linkedInvoices = linkMeritInvoiceProviders(meritInvoices, state.providers);
+  const invoicesByProviderId = new Map<string, Invoice[]>();
+  for (const invoice of linkedInvoices) {
+    if (!invoice.providerId || !invoice.externalId) continue;
+    const providerInvoices = invoicesByProviderId.get(invoice.providerId) ?? [];
+    providerInvoices.push(invoice);
+    invoicesByProviderId.set(invoice.providerId, providerInvoices);
+  }
+
+  const taxById = new Map(meritTaxes.map((tax) => [tax.id, tax]));
+  const reports: MeritTaxDefaultCompanyReport[] = [];
+  const inferredByProviderId = new Map<string, ReturnType<typeof inferMeritTaxDefault>>();
+
+  for (const provider of state.providers.filter((item) => item.type === "client" && item.meritCustomerId)) {
+    if (provider.defaultMeritTaxSource === "manual") {
+      reports.push({
+        providerId: provider.id,
+        company: provider.name,
+        status: "manual-preserved",
+        defaultMeritTaxId: provider.defaultMeritTaxId,
+        defaultMeritTaxName: provider.defaultMeritTaxId ? taxById.get(provider.defaultMeritTaxId)?.name : undefined,
+        sampledInvoiceCount: 0,
+        usableInvoiceCount: 0,
+        supportingInvoiceCount: 0,
+        votes: {}
+      });
+      continue;
+    }
+    let providerInvoices = [...(invoicesByProviderId.get(provider.id) ?? [])];
+    if (providerInvoices.length < 5) {
+      providerInvoices = (await fetchMeritInvoicesForCustomer(env, provider.meritCustomerId!))
+        .map((invoice) => ({ ...invoice, providerId: provider.id }));
+    }
+    const recentInvoices = providerInvoices
+      .sort((left, right) => right.issueDate.localeCompare(left.issueDate) || (right.invoiceNumber ?? "").localeCompare(left.invoiceNumber ?? ""))
+      .slice(0, 5);
+    if (recentInvoices.length === 0) {
+      reports.push({
+        providerId: provider.id,
+        company: provider.name,
+        status: "no-invoices",
+        sampledInvoiceCount: 0,
+        usableInvoiceCount: 0,
+        supportingInvoiceCount: 0,
+        votes: {}
+      });
+      continue;
+    }
+
+    const samples: MeritInvoiceTaxSample[] = [];
+    for (const invoice of recentInvoices) {
+      const sample = await fetchMeritInvoiceTaxSample(env, invoice);
+      samples.push({ ...sample, taxIds: sample.taxIds.filter((taxId) => taxById.has(taxId)) });
+    }
+    const inference = inferMeritTaxDefault(samples);
+    inferredByProviderId.set(provider.id, inference);
+    reports.push({
+      providerId: provider.id,
+      company: provider.name,
+      status: inference.status,
+      defaultMeritTaxId: inference.defaultMeritTaxId,
+      defaultMeritTaxName: inference.defaultMeritTaxId ? taxById.get(inference.defaultMeritTaxId)?.name : undefined,
+      sampledInvoiceCount: inference.sampledInvoiceCount,
+      usableInvoiceCount: inference.usableInvoiceCount,
+      supportingInvoiceCount: inference.supportingInvoiceCount,
+      votes: inference.votes
+    });
+  }
+
+  const updatedAt = new Date().toISOString();
+  let updatedCompanies = 0;
+  state.providers = state.providers.map((provider) => {
+    const inference = inferredByProviderId.get(provider.id);
+    if (!inference || provider.defaultMeritTaxSource === "manual") return provider;
+    const nextDefaultMeritTaxId = inference.status === "inferred" ? inference.defaultMeritTaxId : undefined;
+    if (
+      provider.defaultMeritTaxId !== nextDefaultMeritTaxId ||
+      provider.defaultMeritTaxSource !== (nextDefaultMeritTaxId ? "merit-history" : undefined) ||
+      provider.defaultMeritTaxSampleSize !== inference.sampledInvoiceCount
+    ) {
+      updatedCompanies += 1;
+    }
+    return {
+      ...provider,
+      defaultMeritTaxId: nextDefaultMeritTaxId,
+      defaultMeritTaxSource: nextDefaultMeritTaxId ? "merit-history" as const : undefined,
+      defaultMeritTaxSampleSize: inference.sampledInvoiceCount,
+      defaultMeritTaxUpdatedAt: updatedAt
+    };
+  });
+
+  const providersById = new Map(state.providers.map((provider) => [provider.id, provider]));
+  const revenuePartnersById = new Map(state.revenuePartners.map((partner) => [partner.id, partner]));
+  let updatedDrafts = 0;
+  state.invoices = state.invoices.map((invoice) => {
+    if (invoice.status !== "draft" || invoice.externalId || invoice.taxId || !invoice.providerId) return invoice;
+    const provider = providersById.get(invoice.providerId);
+    const ruleTaxId = invoice.billingRuleId ? revenuePartnersById.get(invoice.billingRuleId)?.defaultMeritTaxId : undefined;
+    const defaultMeritTaxId = ruleTaxId ?? provider?.defaultMeritTaxId;
+    if (!defaultMeritTaxId) return invoice;
+    updatedDrafts += 1;
+    return { ...invoice, taxId: defaultMeritTaxId, updatedAt };
+  });
+
+  await savePersisted(env, state);
+  return { updatedCompanies, updatedDrafts, companies: reports };
 }
 
 export async function createMeritInvoice(
@@ -2357,7 +2537,7 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     revenueRunIds: [],
     periodStart: cleanOptional(payload.periodStart),
     periodEnd: cleanOptional(payload.periodEnd),
-    taxId: cleanOptional(payload.taxId),
+    taxId: cleanOptional(payload.taxId) ?? (payload.documentType === "sales_invoice" ? selectedProvider?.defaultMeritTaxId : undefined),
     createdAt,
     updatedAt: createdAt
   };
@@ -3222,6 +3402,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
       return json(await getSnapshot(env, { refreshFxRates: true }));
+    }
+
+    if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {
+      return json(await syncMeritTaxDefaults(env));
     }
 
     if (url.pathname === "/api/wise/import-statement" && request.method === "POST") {

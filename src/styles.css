@@ -2821,6 +2821,13 @@ textarea:focus-visible {
   margin: 9px 0;
 }
 
+.field-hint {
+  color: var(--app-muted);
+  font-size: 0.76rem;
+  font-weight: 450;
+  line-height: 1.4;
+}
+
 .provider-modal-footer {
   justify-content: flex-end;
   padding: 12px 18px;

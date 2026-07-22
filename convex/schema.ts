@@ -70,6 +70,10 @@ const provider = v.object({
   paymentTermsDays: v.optional(v.number()),
   meritCustomerId: v.optional(v.string()),
   meritSupplierId: v.optional(v.string()),
+  defaultMeritTaxId: v.optional(v.string()),
+  defaultMeritTaxSource: v.optional(v.union(v.literal("merit-history"), v.literal("manual"))),
+  defaultMeritTaxSampleSize: v.optional(v.number()),
+  defaultMeritTaxUpdatedAt: v.optional(v.string()),
   meritDetails: v.optional(meritCompanyDetails),
   source: dataSource,
   createdAt: v.string()

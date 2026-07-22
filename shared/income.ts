@@ -155,7 +155,7 @@ export function buildRevenueDraft(
     revenueRunIds: [run.id],
     periodStart: run.periodStart,
     periodEnd: run.periodEnd,
-    taxId: partner.defaultMeritTaxId,
+    taxId: partner.defaultMeritTaxId ?? provider.defaultMeritTaxId,
     createdAt,
     updatedAt: createdAt
   };

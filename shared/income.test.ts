@@ -133,6 +133,18 @@ test("closed revenue run creates an idempotent local draft", () => {
   assert.deepEqual(draft.revenueRunIds, [run.id]);
 });
 
+test("revenue drafts inherit the company tax when the revenue rule has no override", () => {
+  const draft = buildRevenueDraft(
+    { ...partner, defaultMeritTaxId: undefined },
+    run,
+    { ...revenueProvider, defaultMeritTaxId: "tax-company" },
+    "2026/1304",
+    new Date("2026-07-13T06:00:00.000Z")
+  );
+
+  assert.equal(draft.taxId, "tax-company");
+});
+
 test("exact invoice reconciliation requires amount, currency, and company evidence", () => {
   const invoice = openInvoice();
   const provider: Provider = {

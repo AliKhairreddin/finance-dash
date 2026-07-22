@@ -689,7 +689,8 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   const [dueDate, setDueDate] = useState(toDateInput(invoice?.dueDate ?? addDays(today, initialProvider?.paymentTermsDays ?? 30)));
   const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? "");
   const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? "");
-  const [taxId, setTaxId] = useState(invoice?.taxId ?? "");
+  const initialRule = initialProvider ? dashboard.revenuePartners.find((item) => item.providerId === initialProvider.id) : undefined;
+  const [taxId, setTaxId] = useState(invoice?.taxId ?? initialRule?.defaultMeritTaxId ?? initialProvider?.defaultMeritTaxId ?? "");
   const [description, setDescription] = useState(invoice?.description ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -712,7 +713,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
     if (provider.defaultCurrency) setCurrency(provider.defaultCurrency);
     setDueDate(addDays(issueDate, provider.paymentTermsDays ?? 30));
     const rule = dashboard.revenuePartners.find((item) => item.providerId === provider.id);
-    if (rule?.defaultMeritTaxId) setTaxId(rule.defaultMeritTaxId);
+    setTaxId(rule?.defaultMeritTaxId ?? provider.defaultMeritTaxId ?? "");
     if (!description && rule?.defaultMeritItemCode) setDescription(rule.defaultMeritItemCode);
   }
 

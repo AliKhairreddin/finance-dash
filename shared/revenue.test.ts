@@ -145,6 +145,46 @@ test("revenue rule IDs are stable and restored drafts bind to the Merit customer
   assert.equal(rebound.invoices[0]?.taxId, "tax-zero");
 });
 
+test("rebinding a revenue draft preserves its invoice tax override", () => {
+  const rule = { ...partner("tax-rule"), defaultMeritTaxId: "tax-rule" };
+  const provider: Provider = {
+    id: rule.providerId,
+    name: "Tax Client",
+    type: "client",
+    tags: [],
+    aliases: [],
+    meritCustomerId: "merit-tax-client",
+    defaultMeritTaxId: "tax-company",
+    source: "merit",
+    createdAt: "2026-07-01T00:00:00.000Z"
+  };
+  const draft: Invoice = {
+    id: "invoice-tax-override",
+    providerId: provider.id,
+    documentType: "sales_invoice",
+    origin: "revenue",
+    customerName: provider.name,
+    amount: 100,
+    currency: "USD",
+    status: "draft",
+    meritDeliveryStatus: "not-sent",
+    invoiceNumber: "2026/1304",
+    issueDate: "2026-07-22",
+    dueDate: "2026-08-21",
+    source: "tune",
+    description: "Revenue",
+    taxId: "tax-invoice",
+    billingRuleId: rule.id,
+    revenueRunIds: [],
+    createdAt: "2026-07-22T00:00:00.000Z",
+    updatedAt: "2026-07-22T00:00:00.000Z"
+  };
+
+  const rebound = bindRevenuePartnerCompany(rule, provider, [], [draft]);
+
+  assert.equal(rebound.invoices[0].taxId, "tax-invoice");
+});
+
 test("this-week revenue pulls are cumulative from Monday through the current local date", () => {
   assert.deepEqual(resolveRevenuePeriod({
     periodPreset: "this-week",

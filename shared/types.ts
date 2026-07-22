@@ -123,6 +123,10 @@ export interface Provider {
   paymentTermsDays?: number;
   meritCustomerId?: string;
   meritSupplierId?: string;
+  defaultMeritTaxId?: string;
+  defaultMeritTaxSource?: "merit-history" | "manual";
+  defaultMeritTaxSampleSize?: number;
+  defaultMeritTaxUpdatedAt?: string;
   meritDetails?: MeritCompanyDetails;
   source: DataSource;
   createdAt: string;
@@ -642,6 +646,7 @@ export interface CreateProviderPayload {
   paymentTermsDays?: number;
   meritCustomerId?: string;
   meritSupplierId?: string;
+  defaultMeritTaxId?: string;
 }
 
 export interface UpdateProviderPayload extends CreateProviderPayload {}

@@ -304,7 +304,12 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
   | "paymentTermsDays"
   | "meritCustomerId"
   | "meritSupplierId"
+  | "defaultMeritTaxId"
+  | "defaultMeritTaxSource"
+  | "defaultMeritTaxSampleSize"
+  | "defaultMeritTaxUpdatedAt"
 > {
+  const defaultMeritTaxId = cleanOptional(payload.defaultMeritTaxId);
   return {
     defaultAccount: cleanOptional(payload.defaultAccount),
     legalName: cleanOptional(payload.legalName),
@@ -315,7 +320,11 @@ function companyDetails(payload: CreateProviderPayload | UpdateProviderPayload):
     defaultCurrency: cleanOptional(payload.defaultCurrency),
     paymentTermsDays: cleanOptionalNumber(payload.paymentTermsDays),
     meritCustomerId: cleanOptional(payload.meritCustomerId),
-    meritSupplierId: cleanOptional(payload.meritSupplierId)
+    meritSupplierId: cleanOptional(payload.meritSupplierId),
+    defaultMeritTaxId,
+    defaultMeritTaxSource: defaultMeritTaxId ? "manual" : undefined,
+    defaultMeritTaxSampleSize: undefined,
+    defaultMeritTaxUpdatedAt: defaultMeritTaxId ? new Date().toISOString() : undefined
   };
 }
 
@@ -1000,7 +1009,7 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
     revenueRunIds: [],
     periodStart: payload.periodStart ? normalizedDate(payload.periodStart, "Period start") : undefined,
     periodEnd: payload.periodEnd ? normalizedDate(payload.periodEnd, "Period end") : undefined,
-    taxId: cleanOptional(payload.taxId),
+    taxId: cleanOptional(payload.taxId) ?? (payload.documentType === "sales_invoice" ? selectedProvider?.defaultMeritTaxId : undefined),
     createdAt,
     updatedAt: createdAt
   };

@@ -1407,6 +1407,7 @@ function App() {
         <ProvidersView
           providers={dashboard.providers}
           revenuePartners={dashboard.revenuePartners}
+          taxes={dashboard.meritTaxes}
           teamsById={teamsById}
           onAdd={() => {
             setEditingProvider(null);
@@ -1452,6 +1453,7 @@ function App() {
       {providerModalOpen && (
         <ProviderModal
           provider={editingProvider ?? undefined}
+          taxes={dashboard.meritTaxes}
           onClose={() => {
             setProviderModalOpen(false);
             setEditingProvider(null);
@@ -4083,6 +4085,7 @@ function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
 function ProvidersView({
   providers,
   revenuePartners,
+  taxes,
   teamsById,
   onAdd,
   onEditProvider,
@@ -4093,6 +4096,7 @@ function ProvidersView({
 }: {
   providers: Provider[];
   revenuePartners: RevenuePartner[];
+  taxes: MeritTax[];
   teamsById: Map<string, Team>;
   onAdd: () => void;
   onEditProvider: (provider: Provider) => void;
@@ -4131,6 +4135,7 @@ function ProvidersView({
   });
   const clientCount = providers.filter((provider) => provider.type === "client").length;
   const supplierCount = providers.filter((provider) => provider.type === "supplier").length;
+  const taxesById = new Map(taxes.map((tax) => [tax.id, tax]));
 
   return (
     <section className="panel">
@@ -4212,6 +4217,13 @@ function ProvidersView({
               {provider.address && <span>{provider.address}</span>}
               {provider.meritDetails?.registrationNumber && <span>Registration: {provider.meritDetails.registrationNumber}</span>}
               {provider.taxId && <span>VAT / tax ID: {provider.taxId}</span>}
+              {provider.defaultMeritTaxId && (
+                <span>
+                  Invoice tax: {taxesById.get(provider.defaultMeritTaxId)?.name ?? provider.defaultMeritTaxId}
+                  {taxesById.has(provider.defaultMeritTaxId) ? ` · ${taxesById.get(provider.defaultMeritTaxId)!.taxPct}%` : ""}
+                  {provider.defaultMeritTaxSource === "merit-history" ? ` · learned from ${provider.defaultMeritTaxSampleSize ?? 0} invoices` : ""}
+                </span>
+              )}
               {provider.defaultCurrency && <span>{provider.defaultCurrency}{provider.paymentTermsDays !== undefined ? ` · ${provider.paymentTermsDays}-day terms` : ""}</span>}
               {provider.meritDetails?.contactName && <span>Contact: {provider.meritDetails.contactName}</span>}
               {provider.meritDetails?.phone && <span>{provider.meritDetails.phone}</span>}
@@ -4780,10 +4792,12 @@ function InvoiceModal({
 
 function ProviderModal({
   provider,
+  taxes,
   onClose,
   onSubmit
 }: {
   provider?: Provider;
+  taxes: MeritTax[];
   onClose: () => void;
   onSubmit: (payload: UpdateProviderPayload) => Promise<void>;
 }) {
@@ -4803,6 +4817,7 @@ function ProviderModal({
   );
   const [meritCustomerId, setMeritCustomerId] = useState(provider?.meritCustomerId ?? "");
   const [meritSupplierId, setMeritSupplierId] = useState(provider?.meritSupplierId ?? "");
+  const [defaultMeritTaxId, setDefaultMeritTaxId] = useState(provider?.defaultMeritTaxId ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -4825,7 +4840,8 @@ function ProviderModal({
         defaultCurrency: defaultCurrency.trim() || undefined,
         paymentTermsDays: paymentTermsDays.trim() ? Number(paymentTermsDays) : undefined,
         meritCustomerId: meritCustomerId.trim() || undefined,
-        meritSupplierId: meritSupplierId.trim() || undefined
+        meritSupplierId: meritSupplierId.trim() || undefined,
+        defaultMeritTaxId: defaultMeritTaxId || undefined
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Provider could not be saved");
@@ -4927,6 +4943,20 @@ function ProviderModal({
                 <Input value={meritSupplierId} onChange={(event) => setMeritSupplierId(event.target.value)} />
               </label>
             </div>
+            <label>
+              Default Merit invoice tax
+              <NativeSelect value={defaultMeritTaxId} onChange={(event) => setDefaultMeritTaxId(event.target.value)}>
+                <NativeSelectOption value="">No default</NativeSelectOption>
+                {taxes.map((tax) => (
+                  <NativeSelectOption key={tax.id} value={tax.id}>
+                    {tax.name} · {tax.taxPct}%
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              {provider?.defaultMeritTaxSource === "merit-history" && provider.defaultMeritTaxSampleSize !== undefined && (
+                <span className="field-hint">Learned from {provider.defaultMeritTaxSampleSize} recent Merit invoices. You can override it here.</span>
+              )}
+            </label>
             <label>
               Default account
               <Input value={defaultAccount} onChange={(event) => setDefaultAccount(event.target.value)} placeholder="Optional payout or spend account" />

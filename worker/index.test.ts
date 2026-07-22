@@ -6,6 +6,7 @@ import worker, {
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
   fetchMeritCustomers,
+  fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
   mergeInvoices
 } from "./index";
@@ -226,6 +227,53 @@ test("Merit company sync uses only the read-only customer and vendor list endpoi
     assert.equal(customers[0]?.paymentTermsDays, 14);
     assert.equal(vendors[0]?.meritSupplierId, "vendor-1");
     assert.equal(vendors[0]?.meritDetails?.vendorType, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit tax learning reads line tax IDs from invoice details", async () => {
+  const originalFetch = globalThis.fetch;
+  let request: { path: string; body: unknown } | undefined;
+  globalThis.fetch = async (input, init) => {
+    request = {
+      path: new URL(String(input)).pathname,
+      body: JSON.parse(String(init?.body)) as unknown
+    };
+    return Response.json({ Lines: [{ TaxId: "tax-zero" }, { TaxId: "tax-zero" }] });
+  };
+
+  try {
+    const invoice: Invoice = {
+      id: "merit-sih-123",
+      documentType: "sales_invoice",
+      origin: "merit",
+      customerName: "Client",
+      amount: 100,
+      currency: "USD",
+      status: "open",
+      meritDeliveryStatus: "saved",
+      invoiceNumber: "2026/123",
+      issueDate: "2026-07-01",
+      dueDate: "2026-07-31",
+      source: "merit",
+      externalId: "sih-123",
+      description: "Merit invoice 2026/123",
+      revenueRunIds: [],
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T00:00:00.000Z"
+    };
+    const sample = await fetchMeritInvoiceTaxSample({
+      MERIT_API_ID: "api-id",
+      MERIT_API_KEY: "api-key",
+      MERIT_API_BASE_URL: "https://merit.example/api"
+    } as never, invoice);
+
+    assert.deepEqual(request, {
+      path: "/api/v2/getinvoice",
+      body: { Id: "sih-123", AddAttachment: false }
+    });
+    assert.deepEqual(sample.taxIds, ["tax-zero", "tax-zero"]);
   } finally {
     globalThis.fetch = originalFetch;
   }
