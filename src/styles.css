@@ -289,21 +289,32 @@ button:disabled {
 
 .sidebar-brand,
 .sidebar-nav button {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
   min-width: 0;
+  text-align: left;
 }
 
 .sidebar-brand {
-  min-height: 42px;
+  min-height: 40px;
   padding: 0 11px;
   color: var(--ink);
 }
 
 .sidebar-brand svg {
-  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  justify-self: center;
   color: var(--blue);
+}
+
+.sidebar-brand strong {
+  font-size: 0.94rem;
+  font-weight: 720;
+  letter-spacing: -0.018em;
+  line-height: 1.2;
 }
 
 .sidebar-brand strong,
@@ -316,22 +327,26 @@ button:disabled {
 
 .sidebar-nav {
   display: grid;
-  gap: 6px;
+  gap: 3px;
 }
 
 .sidebar-nav button {
-  min-height: 42px;
+  min-height: 40px;
   width: 100%;
+  justify-content: stretch;
   padding: 0 11px;
   border: 1px solid transparent;
   border-radius: 7px;
   color: var(--app-muted);
   background: transparent;
-  text-align: left;
+  font-size: 0.875rem;
+  font-weight: 540;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
 }
 
 .sidebar-nav button svg {
-  flex: 0 0 auto;
+  justify-self: center;
 }
 
 .sidebar-nav button:hover {
@@ -344,6 +359,7 @@ button:disabled {
   color: var(--ink);
   background: var(--active-bg);
   border-color: var(--active-border);
+  font-weight: 650;
   box-shadow: inset 2px 0 0 var(--blue);
 }
 
@@ -2779,19 +2795,20 @@ textarea:focus-visible {
 
 /* Income operations */
 .sidebar-section-label {
-  padding: 12px 11px 3px;
+  padding: 14px 11px 4px;
   color: var(--app-muted);
-  font-size: 0.66rem;
-  font-weight: 800;
-  letter-spacing: 0.11em;
+  font-size: 0.625rem;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
   text-transform: uppercase;
 }
 
 .sidebar-income-group {
   position: relative;
   display: grid;
-  gap: 4px;
-  margin-bottom: 4px;
+  gap: 2px;
+  margin-bottom: 6px;
   padding-left: 8px;
 }
 
@@ -2804,7 +2821,7 @@ textarea:focus-visible {
 }
 
 .sidebar-nav button.nested {
-  min-height: 38px;
+  min-height: 36px;
   padding-left: 10px;
 }
 
@@ -3785,32 +3802,43 @@ textarea:focus-visible {
   }
 
   .mobile-nav-menu button {
-    display: flex;
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
     min-height: 40px;
     width: 100%;
     align-items: center;
-    justify-content: flex-start;
-    gap: 10px;
+    justify-content: stretch;
+    column-gap: 9px;
     padding: 0 10px;
     border: 1px solid transparent;
     border-radius: 7px;
     color: var(--app-muted);
     background: transparent;
+    font-size: 0.875rem;
+    font-weight: 540;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
     text-align: left;
+  }
+
+  .mobile-nav-menu button svg {
+    justify-self: center;
   }
 
   .mobile-nav-menu button.active {
     color: var(--ink);
     border-color: var(--active-border);
     background: var(--active-bg);
+    font-weight: 650;
   }
 
   .mobile-nav-group-label {
-    padding: 7px 10px 3px;
+    padding: 9px 10px 3px;
     color: var(--app-muted);
-    font-size: 0.64rem;
-    font-weight: 780;
-    letter-spacing: 0.08em;
+    font-size: 0.625rem;
+    font-weight: 720;
+    letter-spacing: 0.12em;
+    line-height: 1.2;
     text-transform: uppercase;
   }
 
