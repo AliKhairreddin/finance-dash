@@ -110,7 +110,7 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   const first = buildManagementReport(sheets, metadata);
   const second = buildManagementReport(sheets, metadata);
 
-  assert.equal(managementReportParserVersion, "1");
+  assert.equal(managementReportParserVersion, "2");
   assert.deepEqual(first.facts.map((fact) => fact.factId), second.facts.map((fact) => fact.factId));
   assert.deepEqual(first.bankEntries.map((entry) => entry.entryId), second.bankEntries.map((entry) => entry.entryId));
   assert.deepEqual(first.sourceRows.map((row) => row.sourceRowId), second.sourceRows.map((row) => row.sourceRowId));
@@ -154,6 +154,7 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
 
   const publicJson = JSON.stringify(first.dashboard);
   assert.doesNotMatch(publicJson, /SECRET_REFERENCE|SECRET_USER|POST_CLOSE_REFERENCE|SECRET_CARD_USER/);
+  assert.doesNotMatch(publicJson, /sourceRowId/);
   assert.match(JSON.stringify(first.bankEntries), /SECRET_REFERENCE/);
   assert.match(JSON.stringify(first.sourceRows), /SECRET_CARD_USER/);
 });

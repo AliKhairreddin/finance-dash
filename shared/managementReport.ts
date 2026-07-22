@@ -10,7 +10,7 @@ export const managementReportSheetKeys = [
 ] as const;
 
 /** Increment whenever normalized import semantics change. */
-export const managementReportParserVersion = "1" as const;
+export const managementReportParserVersion = "2" as const;
 
 export type ManagementReportSheetKey = (typeof managementReportSheetKeys)[number];
 
@@ -171,7 +171,6 @@ export interface ManagementReportBusinessLine {
   isRatio: boolean;
   sourceSheet: ManagementReportSheetKey;
   sourceRow: number;
-  sourceRowId: string;
 }
 
 export interface ManagementReportBusinessActual {
@@ -731,8 +730,7 @@ function linePercentage(line: ManagementReportBusinessLine | undefined, key: str
 
 function businessUnitFromTable(
   sheetKey: "vb-cp" | "vb-wag" | "vb-acp",
-  records: ManagementReportCsvRecord[],
-  sourceRowsByNumber: Map<number, ManagementReportSourceRow>
+  records: ManagementReportCsvRecord[]
 ): BusinessParseResult {
   const checks: ManagementReportCheck[] = [];
   const header = records.find((record) => normalizedText(rowCell(record, 1)).toLowerCase() === "particulars");
@@ -785,7 +783,6 @@ function businessUnitFromTable(
 
     const metric = standardizedBusinessMetric(label);
     const isRatio = isExplicitRatioRow || (Object.keys(values).length === 0 && Object.keys(percentages).length > 0);
-    const sourceRow = sourceRowsByNumber.get(record.recordNumber)!;
     const lineSection = metric ? "summary" : section;
     lines.push({
       lineId: `business-line:${sheetKey}:${record.recordNumber}:${stableHash(label)}`,
@@ -799,8 +796,7 @@ function businessUnitFromTable(
       isSubtotal: Boolean(metric) || /^total\b/i.test(label),
       isRatio,
       sourceSheet: sheetKey,
-      sourceRow: record.recordNumber,
-      sourceRowId: sourceRow.sourceRowId
+      sourceRow: record.recordNumber
     });
 
     if (metric === "gross-profit") {
@@ -877,7 +873,6 @@ function businessUnitFromTable(
 
 function restBusinessUnits(
   records: ManagementReportCsvRecord[],
-  sourceRowsByNumber: Map<number, ManagementReportSourceRow>,
   reportAsOf: string
 ): BusinessParseResult {
   const sheetKey = "vb-rest" as const;
@@ -947,7 +942,6 @@ function restBusinessUnits(
     ];
     const lines: ManagementReportBusinessLine[] = [...revenueDetails, ...spendDetails].map((record) => {
       const label = normalizedText(rowCell(record, 1));
-      const source = sourceRowsByNumber.get(record.recordNumber)!;
       const isRevenue = /kissterra|revenue/i.test(label);
       const values: Record<string, number> = {};
       const budget = numberFromCell(rowCell(record, budgetIndex));
@@ -968,8 +962,7 @@ function restBusinessUnits(
         isSubtotal: false,
         isRatio: false,
         sourceSheet: sheetKey,
-        sourceRow: record.recordNumber,
-        sourceRowId: source.sourceRowId
+        sourceRow: record.recordNumber
       };
     });
     const summaryLine = (
@@ -980,7 +973,6 @@ function restBusinessUnits(
       performance: number,
       monthlyValues: ManagementReportBusinessMonth[]
     ): ManagementReportBusinessLine => {
-      const sourceRow = sourceRowsByNumber.get(source.recordNumber)!;
       const values: Record<string, number> = { "budget-cy-2026": budget, performance };
       for (const month of monthlyValues) values[normalizedKey(month.label)] = metric === "revenue" ? month.revenue : metric === "marketing-spend" ? month.marketingSpend : month.netProfit;
       return {
@@ -993,8 +985,7 @@ function restBusinessUnits(
         isSubtotal: true,
         isRatio: false,
         sourceSheet: sheetKey,
-        sourceRow: source.recordNumber,
-        sourceRowId: sourceRow.sourceRowId
+        sourceRow: source.recordNumber
       };
     };
     const revenueSource = revenueDetails[0];
@@ -1990,7 +1981,7 @@ export function buildManagementReport(
   for (const key of ["vb-cp", "vb-wag", "vb-acp"] as const) {
     const records = recordsBySheet.get(key);
     if (!records) continue;
-    const result = businessUnitFromTable(key, records, sourceRowsBySheet.get(key)!);
+    const result = businessUnitFromTable(key, records);
     businessUnits.push(...result.units);
     updateSummary(key, result.parsedRecordCount, result.checks);
   }
@@ -2007,7 +1998,7 @@ export function buildManagementReport(
   }
   const restRecords = recordsBySheet.get("vb-rest");
   if (restRecords) {
-    const result = restBusinessUnits(restRecords, sourceRowsBySheet.get("vb-rest")!, reportAsOf);
+    const result = restBusinessUnits(restRecords, reportAsOf);
     businessUnits.push(...result.units);
     updateSummary("vb-rest", result.parsedRecordCount, result.checks);
   }
