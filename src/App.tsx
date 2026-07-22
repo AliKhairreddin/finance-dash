@@ -5084,7 +5084,7 @@ function RevenuePartnerModal({
                 .filter((provider) => provider.type === "client" && provider.meritCustomerId)
                 .map((provider) => (
                   <option key={provider.id} value={provider.id}>
-                    {provider.name} · Merit
+                    {provider.name}
                   </option>
                 ))}
             </select>

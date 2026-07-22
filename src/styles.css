@@ -1617,7 +1617,13 @@ textarea:focus-visible {
 
 .searchable-select-option-indicator {
   display: inline-grid;
+  grid-column: 1;
   place-items: center;
+}
+
+.searchable-select-option > span:last-child {
+  grid-column: 2;
+  min-width: 0;
 }
 
 .searchable-select-empty {
@@ -3482,6 +3488,10 @@ textarea:focus-visible {
   gap: 6px;
   min-width: 0;
   align-content: start;
+}
+
+.invoice-company-field {
+  grid-column: 1 / -1;
 }
 
 .invoice-editor-modal .invoice-field > label {

@@ -683,7 +683,6 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   const today = new Date().toISOString().slice(0, 10);
   const [providerId, setProviderId] = useState(invoice?.providerId ?? "");
   const initialProvider = invoice?.providerId ? dashboard.providers.find((provider) => provider.id === invoice.providerId) : undefined;
-  const [customerName, setCustomerName] = useState(invoice?.customerName ?? initialProvider?.legalName ?? initialProvider?.name ?? "");
   const [amount, setAmount] = useState(invoice ? String(invoice.amount) : "");
   const [currency, setCurrency] = useState(invoice?.currency ?? initialProvider?.defaultCurrency ?? "USD");
   const [issueDate, setIssueDate] = useState(toDateInput(invoice?.issueDate ?? today));
@@ -699,7 +698,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   const officialCustomerName = selectedProvider?.legalName?.trim() || selectedProvider?.name;
   const companyOptions = clients.map((provider) => ({
     value: provider.id,
-    label: `${provider.name}${provider.meritCustomerId ? " · Merit" : ""}`
+    label: provider.name
   }));
   const taxOptions = dashboard.meritTaxes.map((tax) => ({
     value: tax.id,
@@ -710,7 +709,6 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
     setProviderId(nextId);
     const provider = clients.find((item) => item.id === nextId);
     if (!provider) return;
-    setCustomerName(provider.legalName ?? provider.name);
     if (provider.defaultCurrency) setCurrency(provider.defaultCurrency);
     setDueDate(addDays(issueDate, provider.paymentTermsDays ?? 30));
     const rule = dashboard.revenuePartners.find((item) => item.providerId === provider.id);
@@ -720,12 +718,16 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!selectedProvider || !officialCustomerName) {
+      setError("Choose a company before saving this invoice");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
       const core: UpdateInvoicePayload = {
-        providerId: providerId || undefined,
-        customerName: selectedProvider?.meritCustomerId ? officialCustomerName! : customerName.trim(),
+        providerId: selectedProvider.id,
+        customerName: officialCustomerName,
         amount: Number(amount),
         currency: currency.trim().toUpperCase(),
         issueDate,
@@ -751,22 +753,17 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
         <div className="modal-body-stack invoice-editor-body">
           {error && <div className="inline-error">{error}</div>}
           <div className="invoice-form-grid">
-            <div className="invoice-field">
+            <div className="invoice-field invoice-company-field">
               <label htmlFor="invoice-company">Company</label>
               <SearchableSelect
                 id="invoice-company"
                 value={providerId}
                 options={companyOptions}
                 onValueChange={chooseProvider}
-                placeholder="Search or choose a client"
-                emptyMessage="No clients found"
+                placeholder="Search or choose a company"
+                emptyMessage="No companies found"
                 ariaLabel="Company"
               />
-            </div>
-            <div className="invoice-field">
-              <label htmlFor="invoice-customer">Invoice customer</label>
-              <Input id="invoice-customer" value={selectedProvider?.meritCustomerId ? officialCustomerName : customerName} readOnly={Boolean(selectedProvider?.meritCustomerId)} aria-readonly={selectedProvider?.meritCustomerId ? "true" : undefined} onChange={(event) => setCustomerName(event.target.value)} />
-              <small className="field-help">{selectedProvider?.meritCustomerId ? "Locked to the legal name saved in Merit." : "Choose a Merit customer for revenue invoices."}</small>
             </div>
           </div>
           {selectedProvider?.meritCustomerId && (
@@ -810,7 +807,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
           <div className="income-callout"><CircleAlert size={16} /><span>Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action.</span></div>
         </div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !customerName.trim() || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} Save draft</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} Save draft</Button></div>
       </form>
     </div>
   );
