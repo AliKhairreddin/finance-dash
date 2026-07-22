@@ -1214,10 +1214,6 @@ function App() {
         setActiveTab={setActiveTab}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
-        onAddCompany={() => {
-          setEditingProvider(null);
-          setProviderModalOpen(true);
-        }}
         onSync={syncNow}
         isSyncing={isSyncing}
       />
@@ -1240,16 +1236,6 @@ function App() {
           </div>
           <div className="topbar-actions">
             <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
-            <Button
-              className="secondary-button"
-              onClick={() => {
-                setEditingProvider(null);
-                setProviderModalOpen(true);
-              }}
-            >
-              <Plus size={16} />
-              Company
-            </Button>
             <Button className="primary-button" onClick={syncNow} disabled={isSyncing}>
               {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
               {activeTab === "management" ? "Sync live" : "Sync"}
@@ -1538,7 +1524,6 @@ function Sidebar({
   setActiveTab,
   themeMode,
   onToggleTheme,
-  onAddCompany,
   onSync,
   isSyncing
 }: {
@@ -1546,7 +1531,6 @@ function Sidebar({
   setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
-  onAddCompany: () => void;
   onSync: () => void;
   isSyncing: boolean;
 }) {
@@ -1638,9 +1622,6 @@ function Sidebar({
           )}
         </div>
         <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-        <Button className="mobile-command-button" onClick={onAddCompany} type="button" aria-label="Add company" title="Add company">
-          <Plus size={18} />
-        </Button>
         <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Sync dashboard" title="Sync dashboard">
           {isSyncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
         </Button>
@@ -4109,9 +4090,32 @@ function ProvidersView({
   onDeleteRevenuePartner: (partner: RevenuePartner) => void;
 }) {
   const [scope, setScope] = useState<"all" | ProviderType>("all");
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleProviders = providers.filter((provider) => {
-    if (scope === "all") return true;
-    return provider.type === scope;
+    if (scope !== "all" && provider.type !== scope) return false;
+    if (!normalizedQuery) return true;
+
+    const linkedRevenuePartners = revenuePartners.filter((partner) => partner.providerId === provider.id);
+    return [
+      provider.name,
+      providerTypeLabel(provider.type),
+      provider.email,
+      provider.address,
+      provider.defaultCurrency,
+      provider.taxId,
+      provider.meritDetails?.registrationNumber,
+      provider.meritDetails?.contactName,
+      provider.meritDetails?.phone,
+      provider.meritDetails?.bankAccount,
+      ...provider.tags,
+      ...provider.aliases,
+      ...linkedRevenuePartners.flatMap((partner) => [partner.name, teamsById.get(partner.teamId ?? "")?.name])
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(normalizedQuery);
   });
   const clientCount = providers.filter((provider) => provider.type === "client").length;
   const supplierCount = providers.filter((provider) => provider.type === "supplier").length;
@@ -4143,6 +4147,21 @@ function ProvidersView({
               {item.label}
             </Button>
           ))}
+        </div>
+        <div className="search-box directory-search" role="search">
+          <Search size={16} aria-hidden="true" />
+          <input
+            aria-label="Search companies"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search companies"
+            type="search"
+            value={query}
+          />
+          {query && (
+            <Button aria-label="Clear company search" className="directory-search-clear" onClick={() => setQuery("")} type="button">
+              <X size={14} />
+            </Button>
+          )}
         </div>
       </div>
       <div className="provider-grid">
@@ -4227,7 +4246,11 @@ function ProvidersView({
             )}
           </article>
         ))}
-        {visibleProviders.length === 0 && <div className="empty-state">No companies in this filter</div>}
+        {visibleProviders.length === 0 && (
+          <div className="empty-state">
+            {normalizedQuery ? `No companies match “${query.trim()}”` : "No companies in this filter"}
+          </div>
+        )}
       </div>
     </section>
   );

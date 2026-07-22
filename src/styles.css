@@ -1961,11 +1961,43 @@ textarea:focus-visible {
 
 .directory-toolbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--control-bg);
+}
+
+.directory-search {
+  width: min(360px, 100%);
+  min-width: 240px;
+  margin-left: auto;
+}
+
+.directory-search input {
+  min-width: 0;
+  width: 100%;
+}
+
+.directory-search-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 30px;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--app-muted);
+  background: transparent;
+}
+
+.directory-search-clear:hover {
+  color: var(--ink);
+  background: var(--hover-bg);
 }
 
 .settings-stack {
@@ -3675,7 +3707,7 @@ textarea:focus-visible {
 
   .mobile-command-bar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 64px 42px 42px;
+    grid-template-columns: minmax(0, 1fr) 64px 42px;
     gap: 6px;
     align-items: center;
     padding: 5px;
@@ -4035,11 +4067,20 @@ textarea:focus-visible {
   }
 
   .directory-toolbar {
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow: visible;
   }
 
   .directory-toolbar .segmented-control {
     flex: 0 0 auto;
+  }
+
+  .directory-search {
+    order: -1;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    margin-left: 0;
   }
 
   .review-row {
