@@ -15,6 +15,7 @@ import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
   fetchWiseActivityForAccessibleBusinesses,
+  parseWiseProfileIds,
   summarizeWiseStatementIssues,
   type WiseActivityResult
 } from "../shared/wiseApi";
@@ -94,7 +95,7 @@ export function getIntegrationStatus(
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
-  const wiseNeeds = ["WISE_API_TOKEN"].filter((name) => !process.env[name]);
+  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !process.env[name]);
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !process.env[name]);
@@ -124,8 +125,8 @@ export function getIntegrationStatus(
       message:
         activeWiseIssue ??
         (wiseNeeds.length === 0
-          ? "Ready to discover every accessible Wise business profile, balance, and available statement."
-          : "Wise rows stay empty until an API token is configured."),
+          ? "Ready to discover balances and available statements for the selected Wise business profiles."
+          : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: activeWiseIssue
     },
@@ -214,8 +215,9 @@ export function getIntegrationStatus(
 
 export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   const token = process.env.WISE_API_TOKEN;
-  if (!token) return { accounts: [], transactions: [], statementIssues: [] };
-  return fetchWiseActivityForAccessibleBusinesses({ baseUrl: wiseBaseUrl, token });
+  const profileIds = parseWiseProfileIds(process.env.WISE_PROFILE_IDS);
+  if (!token || profileIds.size === 0) return { accounts: [], transactions: [], statementIssues: [] };
+  return fetchWiseActivityForAccessibleBusinesses({ baseUrl: wiseBaseUrl, token, profileIds });
 }
 
 async function fetchRevolutAccessToken(): Promise<string | undefined> {

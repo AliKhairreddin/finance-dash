@@ -85,6 +85,7 @@ import type { RevenuePeriod } from "../shared/revenue";
 import {
   emptyWiseActivity,
   fetchWiseActivityForAccessibleBusinesses,
+  parseWiseProfileIds,
   summarizeWiseStatementIssues,
   wiseSyncIssue,
   type WiseActivityResult
@@ -427,10 +428,12 @@ function meritConnectionIssue(error: unknown): string {
 }
 
 async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
-  if (!env.WISE_API_TOKEN) return emptyWiseActivity();
+  const profileIds = parseWiseProfileIds(env.WISE_PROFILE_IDS);
+  if (!env.WISE_API_TOKEN || profileIds.size === 0) return emptyWiseActivity();
   return fetchWiseActivityForAccessibleBusinesses({
     baseUrl: wiseBaseUrl(env),
-    token: env.WISE_API_TOKEN
+    token: env.WISE_API_TOKEN,
+    profileIds
   });
 }
 
@@ -1510,7 +1513,7 @@ function integrationStatus(
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
-  const wiseNeeds = ["WISE_API_TOKEN"].filter((name) => !env[name as keyof Env]);
+  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !env[name as keyof Env]);
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
@@ -1541,8 +1544,8 @@ function integrationStatus(
       message:
         wiseIssue ??
         (wiseNeeds.length === 0
-          ? "Ready to discover every accessible Wise business profile, balance, and available statement."
-          : "Wise rows stay empty until an API token is configured."),
+          ? "Ready to discover balances and available statements for the selected Wise business profiles."
+          : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: wiseIssue
     },

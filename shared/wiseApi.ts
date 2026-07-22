@@ -42,6 +42,7 @@ interface WiseStatementActivity {
 interface WiseApiOptions {
   baseUrl: string;
   token: string;
+  profileIds: ReadonlySet<number>;
   fetcher?: typeof fetch;
 }
 
@@ -74,6 +75,15 @@ export function emptyWiseActivity(statementIssues: string[] = []): WiseActivityR
   return { accounts: [], transactions: [], statementIssues };
 }
 
+export function parseWiseProfileIds(value: string | undefined): Set<number> {
+  if (!value?.trim()) return new Set();
+  const ids = value.split(",").map((item) => Number(item.trim()));
+  if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    throw new Error("WISE_PROFILE_IDS must contain comma-separated positive integer profile IDs");
+  }
+  return new Set(ids);
+}
+
 export function wiseSyncIssue(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Wise sync error";
   if (/^403\b/.test(message)) {
@@ -95,11 +105,18 @@ export function summarizeWiseStatementIssues(issues: string[]): string | undefin
 export async function fetchWiseActivityForAccessibleBusinesses({
   baseUrl,
   token,
+  profileIds,
   fetcher = fetch
 }: WiseApiOptions): Promise<WiseActivityResult> {
   const headers = { Authorization: `Bearer ${token}` };
   const profiles = await fetchJson<WiseProfile[]>(fetcher, `${baseUrl}/v2/profiles`, { headers });
-  const businessProfiles = profiles.filter((profile): profile is WiseBusinessProfile => profile.type === "BUSINESS");
+  const businessProfiles = profiles.filter(
+    (profile): profile is WiseBusinessProfile => profile.type === "BUSINESS" && profileIds.has(profile.id)
+  );
+  const missingProfileIds = [...profileIds].filter((profileId) => !businessProfiles.some((profile) => profile.id === profileId));
+  if (missingProfileIds.length > 0) {
+    throw new Error(`Wise API token cannot access configured business profile IDs: ${missingProfileIds.join(", ")}`);
+  }
 
   const balancesByProfile = await Promise.all(
     businessProfiles.map(async (profile) => {

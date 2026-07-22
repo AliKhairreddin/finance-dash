@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchWiseActivityForAccessibleBusinesses } from "./wiseApi";
 
-test("discovers and labels balances across every accessible Wise business profile", async () => {
+test("discovers and labels balances across selected accessible Wise business profiles", async () => {
   const requestedUrls: string[] = [];
   const fetcher: typeof fetch = async (input) => {
     const url = String(input);
@@ -12,6 +12,7 @@ test("discovers and labels balances across every accessible Wise business profil
       return Response.json([
         { id: 11, type: "BUSINESS", businessName: "Lovemedo" },
         { id: 22, type: "BUSINESS", businessName: "Digital Nudge" },
+        { id: 44, type: "BUSINESS", businessName: "Unrelated Business" },
         { id: 33, type: "PERSONAL" }
       ]);
     }
@@ -50,6 +51,7 @@ test("discovers and labels balances across every accessible Wise business profil
   const result = await fetchWiseActivityForAccessibleBusinesses({
     baseUrl: "https://api.wise.test",
     token: "test-token",
+    profileIds: new Set([11, 22]),
     fetcher
   });
 
@@ -67,4 +69,5 @@ test("discovers and labels balances across every accessible Wise business profil
   assert.equal(result.statementIssues.length, 1);
   assert.match(result.statementIssues[0], /denied live statement API access/);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/33/balances")), false);
+  assert.equal(requestedUrls.some((url) => url.includes("/profiles/44/balances")), false);
 });

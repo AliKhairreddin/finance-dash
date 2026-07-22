@@ -19,6 +19,7 @@
     // Current showcase/development data store. Switch to famous-oyster-878 only when the app is production-ready.
     "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",
+    "WISE_PROFILE_IDS": "31035977,65909506",
     "REVOLUT_ENVIRONMENT": "production",
     "SLASH_BASE_URL": "https://api.slash.com",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",

@@ -131,7 +131,7 @@ The frontend runs on `http://localhost:5173` and proxies `/api` requests to the 
 Use [`.env.example`](.env.example) as the configuration reference. Integration groups include:
 
 - Convex URL/deployment and `CONVEX_SERVICE_TOKEN`;
-- Wise API token (accessible business profiles and balances are discovered automatically);
+- Wise API token and selected business profile IDs (their visible balances are discovered automatically);
 - Revolut Business credentials;
 - Slash API credentials;
 - Amex OAuth, account IDs, and approved API paths;
@@ -162,7 +162,7 @@ A local `.xlsx` path is also accepted. Imports are idempotent by workbook conten
 
 ## Wise Statement Imports
 
-Wise balances are discovered automatically across every business profile accessible to the API token. When a profile does not expose its live statement feed, CSV import remains the supported reconciliation path:
+Wise balances are discovered automatically across the configured business profiles. When a profile does not expose its live statement feed, CSV import remains the supported reconciliation path:
 
 - export one statement per currency balance;
 - upload monthly, weekly, or daily depending on the desired cadence;
@@ -173,7 +173,7 @@ Wise balances are discovered automatically across every business profile accessi
 
 | Integration | Current role |
 | --- | --- |
-| Wise | Automatic multi-business balance discovery; live statements when permitted, with CSV statement import for restricted profiles |
+| Wise | Selected multi-business balance discovery; live statements when permitted, with CSV statement import for restricted profiles |
 | Revolut | Business API adapter prepared; requires account credentials |
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
