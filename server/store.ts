@@ -112,7 +112,7 @@ import {
   getIntegrationStatus,
   meritConnectionIssue,
   summarizeWiseStatementIssues,
-  wiseStatementIssue
+  wiseSyncIssue as describeWiseSyncIssue
 } from "./integrations";
 import {
   enrichTransactions,
@@ -1774,7 +1774,7 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     }
     liveTransactions.push(...wise.value.transactions);
   } else {
-    wiseSyncIssue = wiseStatementIssue(wise.reason);
+    wiseSyncIssue = describeWiseSyncIssue(wise.reason);
   }
   if (revolut.status === "fulfilled") {
     if (revolut.value.accounts.length > 0) {

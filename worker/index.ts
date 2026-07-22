@@ -83,6 +83,13 @@ import {
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
+  emptyWiseActivity,
+  fetchWiseActivityForAccessibleBusinesses,
+  summarizeWiseStatementIssues,
+  wiseSyncIssue,
+  type WiseActivityResult
+} from "../shared/wiseApi";
+import {
   applyPaymentState,
   buildRevenueDraft,
   calculateApproximateUsdTotals,
@@ -246,12 +253,6 @@ function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): s
   return uniqueProviderTags(Array.isArray(payload.tags) ? payload.tags : []);
 }
 
-interface WiseActivityResult {
-  accounts: AccountBalance[];
-  transactions: Transaction[];
-  statementIssues: string[];
-}
-
 const wiseBaseUrlByEnvironment = {
   production: "https://api.wise.com",
   sandbox: "https://api.wise-sandbox.com"
@@ -393,21 +394,6 @@ async function getManagementReportDashboard(env: Env): Promise<unknown> {
   }
 }
 
-function parseWiseBalanceIds(value: string | undefined): Set<string> {
-  return new Set(parseWiseBalancePairs(value).map((balance) => balance.id));
-}
-
-function parseWiseBalancePairs(value: string | undefined): Array<{ id: string; currency: string }> {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((pair) => {
-      const [id, currency = "USD"] = pair.trim().split(":");
-      return { id: id.trim(), currency: currency.trim() };
-    })
-    .filter((balance) => balance.id);
-}
-
 async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -429,21 +415,6 @@ function parseStatementDate(value: string | undefined): string {
   return (value ?? new Date().toISOString()).slice(0, 10);
 }
 
-function emptyWiseActivity(statementIssues: string[] = []): WiseActivityResult {
-  return { accounts: [], transactions: [], statementIssues };
-}
-
-function wiseStatementIssue(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Unknown Wise statement error";
-  if (/^403\b/.test(message)) {
-    return "Wise denied live statement API access for this business profile. Upload Wise statement CSVs from Wise instead.";
-  }
-  if (/^401\b/.test(message)) {
-    return "Wise rejected the API token. Refresh the Wise token and update WISE_API_TOKEN.";
-  }
-  return `Wise statement fetch failed: ${message.replace(/\s+/g, " ").slice(0, 240)}`;
-}
-
 function meritConnectionIssue(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Merit API error";
   if (/\b401\b/.test(message)) {
@@ -455,104 +426,12 @@ function meritConnectionIssue(error: unknown): string {
   return `Merit read failed: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
 }
 
-function summarizeWiseStatementIssues(issues: string[]): string | undefined {
-  if (issues.length === 0) return undefined;
-  const uniqueIssues = [...new Set(issues)];
-  const suffix = issues.length > 1 ? ` ${issues.length} configured balances were affected.` : "";
-  return `${uniqueIssues[0]}${suffix}`;
-}
-
 async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
-  if (!env.WISE_API_TOKEN || !env.WISE_PROFILE_ID || !env.WISE_BALANCE_IDS) {
-    return emptyWiseActivity();
-  }
-
-  const balances = parseWiseBalancePairs(env.WISE_BALANCE_IDS);
-  const selectedBalanceIds = parseWiseBalanceIds(env.WISE_BALANCE_IDS);
-  const baseUrl = wiseBaseUrl(env);
-  const intervalEnd = new Date().toISOString();
-  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
-
-  const wiseBalances = await fetchJson<
-    Array<{
-      id: number;
-      currency: string;
-      amount?: { value?: number; currency?: string };
-      modificationTime?: string;
-      visible?: boolean;
-    }>
-  >(`${baseUrl}/v4/profiles/${env.WISE_PROFILE_ID}/balances?types=STANDARD,SAVINGS`, {
-    headers: {
-      Authorization: `Bearer ${env.WISE_API_TOKEN}`
-    }
+  if (!env.WISE_API_TOKEN) return emptyWiseActivity();
+  return fetchWiseActivityForAccessibleBusinesses({
+    baseUrl: wiseBaseUrl(env),
+    token: env.WISE_API_TOKEN
   });
-
-  const accounts = wiseBalances
-    .filter((balance) => balance.visible !== false)
-    .filter((balance) => selectedBalanceIds.size === 0 || selectedBalanceIds.has(String(balance.id)))
-    .map((balance) => ({
-      id: `wise-${balance.id}`,
-      name: `Wise ${balance.currency}`,
-      source: "wise" as const,
-      balance: balance.amount?.value ?? 0,
-      currency: balance.amount?.currency ?? balance.currency,
-      updatedAt: balance.modificationTime ?? new Date().toISOString(),
-      status: "live" as const
-    }));
-
-  const transactions: Transaction[] = [];
-  const statementIssues: string[] = [];
-  for (const balance of balances) {
-    const params = new URLSearchParams({
-      currency: balance.currency,
-      intervalStart,
-      intervalEnd,
-      type: "COMPACT",
-      statementLocale: "en"
-    });
-    const statement = await fetchJson<{
-      transactions?: Array<{
-        date?: string;
-        type?: string;
-        details?: { description?: string; senderName?: string; recipientName?: string; referenceNumber?: string };
-        amount?: { value?: number; currency?: string };
-      }>;
-    }>(`${baseUrl}/v1/profiles/${env.WISE_PROFILE_ID}/balance-statements/${balance.id}/statement.json?${params}`, {
-      headers: {
-        Authorization: `Bearer ${env.WISE_API_TOKEN}`,
-        "X-External-Correlation-Id": crypto.randomUUID()
-      }
-    }).catch((error: unknown) => {
-      statementIssues.push(wiseStatementIssue(error));
-      console.warn(JSON.stringify({
-        event: "wise_statement_fetch_failed",
-        balanceId: balance.id,
-        error: error instanceof Error ? error.message : "Unknown Wise statement error"
-      }));
-      return { transactions: [] };
-    });
-
-    for (const [index, activity] of (statement.transactions ?? []).entries()) {
-      const value = activity.amount?.value ?? 0;
-      const counterparty = activity.details?.senderName || activity.details?.recipientName || activity.details?.description || "Wise activity";
-      transactions.push({
-        id: `wise-${balance.id}-${activity.details?.referenceNumber ?? index}`,
-        source: "wise",
-        accountName: `Wise ${balance.currency}`,
-        date: parseStatementDate(activity.date),
-        description: activity.details?.description ?? activity.type ?? "Wise transaction",
-        rawName: counterparty,
-        counterparty,
-        amount: Math.abs(value),
-        currency: activity.amount?.currency ?? balance.currency,
-        direction: value >= 0 ? "in" : "out",
-        status: "posted",
-        category: activity.type ?? "Wise"
-      });
-    }
-  }
-
-  return { accounts, transactions, statementIssues };
 }
 
 async function fetchRevolutAccessToken(env: Env): Promise<string | undefined> {
@@ -958,7 +837,7 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
   }
 
   const [wise, revolut, slash, amex] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseSyncIssue(error)])),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
@@ -1631,8 +1510,7 @@ function integrationStatus(
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
-  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !env[name as keyof Env]);
-  if (!env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
+  const wiseNeeds = ["WISE_API_TOKEN"].filter((name) => !env[name as keyof Env]);
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
@@ -1663,8 +1541,8 @@ function integrationStatus(
       message:
         wiseIssue ??
         (wiseNeeds.length === 0
-          ? "Credentials are present. Live Wise sync can be enabled for statements."
-          : "Wise rows stay empty until API token, profile, and balance IDs are configured."),
+          ? "Ready to discover every accessible Wise business profile, balance, and available statement."
+          : "Wise rows stay empty until an API token is configured."),
       needs: wiseNeeds,
       issue: wiseIssue
     },
@@ -1846,7 +1724,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     return `${label} balance sync failed: ${message.slice(0, 240)}`;
   };
   const [wise, revolut, slash, amex, meritResults] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseStatementIssue(error)])),
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseSyncIssue(error)])),
     fetchRevolutActivity(env).catch((error: unknown) => {
       bankIssues.revolut = bankIssue("Revolut", error);
       return { accounts: [], transactions: [] };

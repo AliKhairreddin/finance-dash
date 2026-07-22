@@ -13,6 +13,13 @@ import type {
 import { meritInvoicePeriods, meritProviderId, meritProvidersFromResponse } from "../shared/merit";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import {
+  fetchWiseActivityForAccessibleBusinesses,
+  summarizeWiseStatementIssues,
+  type WiseActivityResult
+} from "../shared/wiseApi";
+
+export { summarizeWiseStatementIssues, wiseSyncIssue } from "../shared/wiseApi";
 
 const slashBaseUrl = process.env.SLASH_BASE_URL || "https://api.slash.com";
 const meritApiBaseUrl = process.env.MERIT_API_BASE_URL || "https://aktiva.merit.ee/api";
@@ -49,12 +56,6 @@ export function assertMeritWriteConfiguration(): void {
   }
 }
 
-export interface WiseActivityResult {
-  accounts: AccountBalance[];
-  transactions: Transaction[];
-  statementIssues: string[];
-}
-
 async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -62,28 +63,6 @@ async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
   return text ? (JSON.parse(text) as T) : ({} as T);
-}
-
-function emptyWiseActivity(statementIssues: string[] = []): WiseActivityResult {
-  return { accounts: [], transactions: [], statementIssues };
-}
-
-export function wiseStatementIssue(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Unknown Wise statement error";
-  if (/^403\b/.test(message)) {
-    return "Wise denied live statement API access for this business profile. Upload Wise statement CSVs from Wise instead.";
-  }
-  if (/^401\b/.test(message)) {
-    return "Wise rejected the API token. Refresh the Wise token and update WISE_API_TOKEN.";
-  }
-  return `Wise statement fetch failed: ${message.replace(/\s+/g, " ").slice(0, 240)}`;
-}
-
-export function summarizeWiseStatementIssues(issues: string[]): string | undefined {
-  if (issues.length === 0) return undefined;
-  const uniqueIssues = [...new Set(issues)];
-  const suffix = issues.length > 1 ? ` ${issues.length} configured balances were affected.` : "";
-  return `${uniqueIssues[0]}${suffix}`;
 }
 
 export function meritConnectionIssue(error: unknown): string {
@@ -115,8 +94,7 @@ export function getIntegrationStatus(
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
-  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_ID"].filter((name) => !process.env[name]);
-  if (!process.env.WISE_BALANCE_IDS) wiseNeeds.push("WISE_BALANCE_IDS");
+  const wiseNeeds = ["WISE_API_TOKEN"].filter((name) => !process.env[name]);
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !process.env[name]);
@@ -146,8 +124,8 @@ export function getIntegrationStatus(
       message:
         activeWiseIssue ??
         (wiseNeeds.length === 0
-          ? "Ready to pull balances, statements, and transaction activity."
-          : "Wise rows stay empty until API token, profile, and balance IDs are configured."),
+          ? "Ready to discover every accessible Wise business profile, balance, and available statement."
+          : "Wise rows stay empty until an API token is configured."),
       needs: wiseNeeds,
       issue: activeWiseIssue
     },
@@ -236,96 +214,8 @@ export function getIntegrationStatus(
 
 export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   const token = process.env.WISE_API_TOKEN;
-  const profileId = process.env.WISE_PROFILE_ID;
-  const balancePairs = process.env.WISE_BALANCE_IDS;
-  if (!token || !profileId || !balancePairs) return emptyWiseActivity();
-
-  const intervalEnd = new Date().toISOString();
-  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
-  const balances = balancePairs.split(",").map((pair) => {
-    const [id, currency = "USD"] = pair.trim().split(":");
-    return { id: id.trim(), currency: currency.trim() };
-  });
-  const selectedBalanceIds = new Set(balances.map((balance) => balance.id));
-
-  const accounts = await fetchJson<
-    Array<{
-      id: number;
-      currency: string;
-      amount?: { value?: number; currency?: string };
-      modificationTime?: string;
-      visible?: boolean;
-    }>
-  >(`${wiseBaseUrl}/v4/profiles/${profileId}/balances?types=STANDARD,SAVINGS`, {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  }).then((wiseBalances) =>
-    wiseBalances
-      .filter((balance) => balance.visible !== false)
-      .filter((balance) => selectedBalanceIds.has(String(balance.id)))
-      .map((balance) => ({
-        id: `wise-${balance.id}`,
-        name: `Wise ${balance.currency}`,
-        source: "wise" as const,
-        balance: balance.amount?.value ?? 0,
-        currency: balance.amount?.currency ?? balance.currency,
-        updatedAt: balance.modificationTime ?? new Date().toISOString(),
-        status: "live" as const
-      }))
-  );
-
-  const transactions: Transaction[] = [];
-  const statementIssues: string[] = [];
-  for (const balance of balances) {
-    const params = new URLSearchParams({
-      currency: balance.currency,
-      intervalStart,
-      intervalEnd,
-      type: "COMPACT",
-      statementLocale: "en"
-    });
-    const statement = await fetchJson<{
-      transactions?: Array<{
-        date?: string;
-        type?: string;
-        details?: { description?: string; senderName?: string; recipientName?: string; referenceNumber?: string };
-        amount?: { value?: number; currency?: string };
-      }>;
-    }>(`${wiseBaseUrl}/v1/profiles/${profileId}/balance-statements/${balance.id}/statement.json?${params}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-External-Correlation-Id": crypto.randomUUID()
-      }
-    }).catch((error: unknown) => {
-      statementIssues.push(wiseStatementIssue(error));
-      console.warn(
-        `Wise statement fetch failed for balance ${balance.id}: ${error instanceof Error ? error.message : "Unknown Wise statement error"}`
-      );
-      return { transactions: [] };
-    });
-
-    for (const [index, activity] of (statement.transactions ?? []).entries()) {
-      const value = activity.amount?.value ?? 0;
-      const counterparty = activity.details?.senderName || activity.details?.recipientName || activity.details?.description || "Wise activity";
-      transactions.push({
-        id: `wise-${balance.id}-${activity.details?.referenceNumber ?? index}`,
-        source: "wise",
-        accountName: `Wise ${balance.currency}`,
-        date: (activity.date ?? new Date().toISOString()).slice(0, 10),
-        description: activity.details?.description ?? activity.type ?? "Wise transaction",
-        rawName: counterparty,
-        counterparty,
-        amount: Math.abs(value),
-        currency: activity.amount?.currency ?? balance.currency,
-        direction: value >= 0 ? "in" : "out",
-        status: "posted",
-        category: activity.type ?? "Wise"
-      });
-    }
-  }
-
-  return { accounts, transactions, statementIssues };
+  if (!token) return { accounts: [], transactions: [], statementIssues: [] };
+  return fetchWiseActivityForAccessibleBusinesses({ baseUrl: wiseBaseUrl, token });
 }
 
 async function fetchRevolutAccessToken(): Promise<string | undefined> {
