@@ -25,7 +25,7 @@ The system follows three rules:
 - Create local sales-invoice drafts for incoming funds and supplier-bill drafts for outgoing funds.
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
-- Pull partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations with timezone-aware reporting periods.
+- Preview partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations without persisting manual searches.
 - Run income automation every Monday at 09:00 in `Asia/Beirut`, with DST-aware scheduling and idempotent local drafts.
 - Track weekly and monthly current-period revenue as accruing future invoices without double-counting after drafts are created.
 - Create a Merit invoice only through a separately confirmed action, with distinct “Save in Merit” and “Save & deliver” choices.
@@ -75,7 +75,7 @@ Convex state includes revision-aware write protection so an older browser snapsh
 
 ### Explicit Merit Writes and Delivery
 
-Revenue pulls and scheduled jobs create editable local drafts but never call Merit. A confirmed operator action can either save an invoice in Merit or save and deliver it by email. The invoice becomes open immediately after Merit creation, before delivery is attempted, so retrying delivery cannot duplicate the accounting document. `MERIT_WRITES_ENABLED` is the hard deployment gate for both actions.
+Manual revenue pulls are temporary previews. Preparing a draft re-fetches the selected period server-side and persists the revenue run and editable local invoice together; scheduled jobs continue to maintain accruals and configured automatic drafts. Neither path calls Merit. A confirmed operator action can either save an invoice in Merit or save and deliver it by email. The invoice becomes open immediately after Merit creation, before delivery is attempted, so retrying delivery cannot duplicate the accounting document. `MERIT_WRITES_ENABLED` is the hard deployment gate for both actions.
 
 ### Authoritative Merit Reads
 
