@@ -17,7 +17,7 @@ const invoice: Invoice = {
   currency: "USD",
   status: "draft",
   meritDeliveryStatus: "not-sent",
-  invoiceNumber: "FD-100",
+  invoiceNumber: "2026/1304",
   issueDate: "2026-07-20",
   dueDate: "2026-08-03",
   source: "manual",

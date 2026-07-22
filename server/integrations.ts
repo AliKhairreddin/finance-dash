@@ -890,6 +890,9 @@ export async function createMeritInvoice(
 ): Promise<MeritCreatedInvoice> {
   assertMeritWriteConfiguration();
   const taxAmount = Number(((invoice.amount * tax.taxPct) / 100).toFixed(2));
+  if (!new RegExp(`^${invoice.issueDate.slice(0, 4)}/\\d+$`).test(invoice.invoiceNumber)) {
+    throw new Error(`Invoice number must follow the active Merit ${invoice.issueDate.slice(0, 4)}/sequence format`);
+  }
 
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(meritCreateInvoicePath, {
     Customer: meritCustomer(invoice, options.provider),

@@ -63,6 +63,7 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
+import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
   meritInvoicePeriods,
@@ -1126,15 +1127,18 @@ export async function createMeritInvoice(
   env: Env,
   payload: CreateInvoicePayload,
   tax: MeritTax,
+  requestedInvoiceNumber: string,
   itemCode?: string,
-  provider?: Provider,
-  requestedInvoiceNumber?: string
+  provider?: Provider
 ): Promise<Invoice> {
   assertMeritWriteConfiguration(env);
   const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
 
   const issueDate = payload.issueDate ?? new Date().toISOString().slice(0, 10);
-  const invoiceNo = requestedInvoiceNumber || `FD-${Date.now()}`;
+  const invoiceNo = requestedInvoiceNumber.trim();
+  if (!new RegExp(`^${issueDate.slice(0, 4)}/\\d+$`).test(invoiceNo)) {
+    throw new ApiError(400, `Invoice number must follow the active Merit ${issueDate.slice(0, 4)}/sequence format`);
+  }
   const providerEmail = provider?.email?.trim();
   const response = await fetchMeritJson<{ Id?: string; InvoiceId?: string; SIHId?: string; InvoiceNo?: string }>(
     env,
@@ -1721,10 +1725,13 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     await updateCurrentFxRates(env, state, accounts);
     fxRatesRefreshed = true;
   }
-  const invoicesBeforeReconciliation = mergeInvoices(
-    liveMeritInvoices,
-    state.invoices,
-    meritConfigured && meritInvoicesResult.status === "fulfilled"
+  const invoicesBeforeReconciliation = assignMeritStyleDraftNumbers(
+    mergeInvoices(
+      liveMeritInvoices,
+      state.invoices,
+      meritConfigured && meritInvoicesResult.status === "fulfilled"
+    ),
+    liveMeritInvoices
   );
   const liveInvoiceIds = new Set(invoicesBeforeReconciliation.map((invoice) => invoice.id));
   const paymentAllocationsBeforeSync = state.paymentAllocations;
@@ -2325,6 +2332,12 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   }
   const createdAt = new Date().toISOString();
   const issueDate = payload.issueDate || createdAt.slice(0, 10);
+  const liveMeritInvoices = payload.documentType === "sales_invoice"
+    ? await fetchMeritInvoices(env, state.invoices)
+    : [];
+  const invoiceNumber = payload.documentType === "sales_invoice"
+    ? nextMeritInvoiceNumber([...state.invoices, ...liveMeritInvoices], issueDate)
+    : `BILL-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const invoice: Invoice = {
     id: `local-${payload.documentType}-${crypto.randomUUID()}`,
     providerId: payload.providerId,
@@ -2335,7 +2348,7 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     currency: payload.currency.trim().toUpperCase(),
     status: "draft",
     meritDeliveryStatus: "not-sent",
-    invoiceNumber: `FD-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+    invoiceNumber,
     issueDate,
     dueDate: payload.dueDate,
     source: "manual",
@@ -2505,7 +2518,9 @@ async function draftRevenueRun(env: Env, payload: DraftRevenueRunPayload): Promi
   if (existing) return existing;
   const provider = state.providers.find((item) => item.id === partner.providerId);
   if (!provider) throw new ApiError(409, "Revenue rule customer no longer exists");
-  const draft = buildRevenueDraft({ ...partner, autoDraft: true }, run, provider);
+  const draftedAt = new Date();
+  const invoiceNumber = nextMeritInvoiceNumber(state.invoices, draftedAt.toISOString().slice(0, 10));
+  const draft = buildRevenueDraft({ ...partner, autoDraft: true }, run, provider, invoiceNumber, draftedAt);
   state.invoices = [draft, ...state.invoices];
   upsertRevenueRun(state, { ...run, status: "drafted", invoiceId: draft.id });
   if (partner.billingCadence === "monthly") {
@@ -2546,6 +2561,12 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
   assertMeritWriteConfiguration(env);
 
   let state = await loadPersisted(env);
+  const liveMeritInvoices = await fetchMeritInvoices(env, state.invoices);
+  const numberedInvoices = assignMeritStyleDraftNumbers(state.invoices, liveMeritInvoices);
+  if (JSON.stringify(numberedInvoices) !== JSON.stringify(state.invoices)) {
+    state.invoices = numberedInvoices;
+    await savePersisted(env, state);
+  }
   const outcomes: SendInvoicesResult["outcomes"] = [];
   let meritTaxes: MeritTax[] | undefined;
 
@@ -2621,9 +2642,9 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
             periodEnd: current.periodEnd
           },
           tax,
+          current.invoiceNumber,
           billingRule?.defaultMeritItemCode,
-          provider,
-          current.invoiceNumber
+          provider
         );
         createdInMerit = created;
         const {
@@ -3015,7 +3036,8 @@ async function automateClosedRevenuePeriod(
   } else if (partner.autoDraft && run.revenue > 0) {
     const provider = state.providers.find((item) => item.id === partner.providerId);
     if (!provider) throw new Error("Revenue rule customer no longer exists");
-    const draft = buildRevenueDraft(partner, run, provider, scheduledAt);
+    const invoiceNumber = nextMeritInvoiceNumber(state.invoices, scheduledAt.toISOString().slice(0, 10));
+    const draft = buildRevenueDraft(partner, run, provider, invoiceNumber, scheduledAt);
     state.invoices = [draft, ...state.invoices.filter((invoice) => invoice.id !== draft.id)];
     run = { ...run, status: "drafted", invoiceId: draft.id };
   }

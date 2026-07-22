@@ -77,7 +77,8 @@ test("Merit invoice creation never calls the API while writes are disabled", asy
             dueDate: "2026-07-31",
             description: "This request must never leave the Worker"
           },
-          { id: "tax-id", code: "VAT0", name: "Zero VAT", taxPct: 0 }
+          { id: "tax-id", code: "VAT0", name: "Zero VAT", taxPct: 0 },
+          "2026/1304"
         ),
       /disabled by the deployment safety switch/
     );
@@ -110,15 +111,49 @@ test("Merit invoice creation uses the explicitly selected tax", async () => {
         dueDate: "2026-07-31",
         description: "Verify selected tax payload"
       },
-      { id: "tax-20", code: "VAT20", name: "VAT 20%", taxPct: 20 }
+      { id: "tax-20", code: "VAT20", name: "VAT 20%", taxPct: 20 },
+      "2026/1304"
     );
 
     assert.equal(invoice.externalId, "invoice-123");
+    assert.equal(requestBody?.InvoiceNo, "2026/1304");
     const rows = requestBody?.InvoiceRow as Array<{ TaxId: string; Item: { Code: string } }>;
     const taxes = requestBody?.TaxAmount as Array<{ TaxId: string; Amount: number }>;
     assert.equal(rows[0]?.TaxId, "tax-20");
     assert.equal(rows[0]?.Item.Code, "SERVICES-VAT20");
     assert.deepEqual(taxes, [{ TaxId: "tax-20", Amount: 25.1 }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit invoice creation rejects dashboard-only invoice number formats", async () => {
+  const originalFetch = globalThis.fetch;
+  let meritRequests = 0;
+  globalThis.fetch = async () => {
+    meritRequests += 1;
+    return Response.json({ InvoiceId: "unexpected" });
+  };
+
+  try {
+    await assert.rejects(
+      createMeritInvoice(
+        { MERIT_API_ID: "api-id", MERIT_API_KEY: "api-key", MERIT_WRITES_ENABLED: "true" } as never,
+        {
+          documentType: "sales_invoice",
+          customerName: "Number test",
+          amount: 100,
+          currency: "USD",
+          issueDate: "2026-07-22",
+          dueDate: "2026-07-31",
+          description: "Invalid invoice number must not reach Merit"
+        },
+        { id: "tax-zero", code: "VAT0", name: "Zero", taxPct: 0 },
+        "FD-OLD"
+      ),
+      /2026\/sequence format/
+    );
+    assert.equal(meritRequests, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -217,6 +252,7 @@ test("Merit invoice creation sends saved provider delivery details", async () =>
         description: "Services"
       },
       { id: "tax-zero", code: "VAT0", name: "Zero", taxPct: 0 },
+      "2026/1304",
       undefined,
       {
         id: "client",

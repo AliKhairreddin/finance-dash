@@ -34,7 +34,7 @@ test("deliver mode persists Merit creation and retries delivery without recreati
     currency: "USD",
     status: "draft",
     meritDeliveryStatus: "not-sent",
-    invoiceNumber: "FD-TEST-1",
+    invoiceNumber: "2026/1304",
     issueDate: "2026-07-20",
     dueDate: "2026-08-03",
     source: "manual",
@@ -101,7 +101,7 @@ test("deliver mode persists Merit creation and retries delivery without recreati
         createCalls += 1;
         creationStartedResolve?.();
         await creationGate;
-        return Response.json({ InvoiceId: "merit-1", InvoiceNo: "M-100" });
+        return Response.json({ InvoiceId: "merit-1", InvoiceNo: "2026/1304" });
       }
       throw new Error(`Unexpected request ${path}`);
     };
@@ -297,7 +297,26 @@ test("manual pulls stay transient until preparing a draft persists the run and i
           source: "manual",
           createdAt
         }],
-        invoices: [],
+        invoices: [{
+          id: "merit-series-reference",
+          documentType: "sales_invoice",
+          origin: "merit",
+          customerName: "Existing Client",
+          amount: 100,
+          currency: "USD",
+          status: "open",
+          meritStatus: "open",
+          meritDeliveryStatus: "saved",
+          invoiceNumber: "2026/1303",
+          issueDate: "2026-07-01",
+          dueDate: "2026-07-15",
+          source: "merit",
+          externalId: "merit-series-reference",
+          description: "Merit numbering reference",
+          revenueRunIds: [],
+          createdAt,
+          updatedAt: createdAt
+        }],
         paymentAllocations: [],
         holdings: [],
         fxRates: [],
@@ -399,7 +418,7 @@ test("manual pulls stay transient until preparing a draft persists the run and i
     assert.equal(result.runs[0]?.revenue, 900);
     let snapshot = store.getSnapshot();
     assert.deepEqual(snapshot.revenueRuns.map((run) => run.id), ["revenue-rule-monthly-2026-07-01-2026-07-12"]);
-    assert.equal(snapshot.invoices.length, 0);
+    assert.equal(snapshot.invoices.length, 1);
     assert.equal(snapshot.revenueAccruals[0]?.amount, 500);
 
     const invoice = await store.draftRevenueRun({

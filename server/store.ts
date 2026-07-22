@@ -57,6 +57,7 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
+import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
   reconcileMeritInvoices,
@@ -976,6 +977,9 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
   if (!payload.description.trim()) throw new Error("Invoice description is required");
   const createdAt = new Date().toISOString();
   const id = `local-${payload.documentType}-${crypto.randomUUID()}`;
+  const invoiceNumber = payload.documentType === "sales_invoice"
+    ? nextMeritInvoiceNumber(invoices, issueDate)
+    : `BILL-${issueDate.replaceAll("-", "")}-${id.slice(-8).toUpperCase()}`;
 
   const invoice: Invoice = {
     id,
@@ -987,7 +991,7 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
     currency: normalizedCurrency(payload.currency),
     status: "draft",
     meritDeliveryStatus: "not-sent",
-    invoiceNumber: `FD-${issueDate.replaceAll("-", "")}-${id.slice(-8).toUpperCase()}`,
+    invoiceNumber,
     issueDate,
     dueDate,
     source: "manual",
@@ -1298,10 +1302,12 @@ function draftRevenueRunInternal(run: RevenueRun, partner: RevenuePartner, autom
     throw new Error("Only a positive, pulled revenue run can be drafted");
   }
   if (automatic && !partner.autoDraft) throw new Error(`Automatic drafting is disabled for ${partner.name}`);
+  if (!isClosedBillingPeriod(partner, run, now)) throw new Error("Revenue run is not a closed billing period");
 
   const provider = providers.find((item) => item.id === partner.providerId);
   if (!provider) throw new Error("Revenue rule customer no longer exists");
-  const draft = buildRevenueDraft(automatic ? partner : { ...partner, autoDraft: true }, run, provider, now);
+  const invoiceNumber = nextMeritInvoiceNumber(invoices, now.toISOString().slice(0, 10));
+  const draft = buildRevenueDraft(automatic ? partner : { ...partner, autoDraft: true }, run, provider, invoiceNumber, now);
   invoices = [draft, ...invoices];
   const { error: _error, ...withoutError } = run;
   const draftedRun: RevenueRun = { ...withoutError, status: "drafted", invoiceId: draft.id };
@@ -1801,6 +1807,7 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     };
     wiseStatementTransactions = wiseStatementTransactions.map(clearDeletedInvoiceMatch);
     transactions = transactions.map(clearDeletedInvoiceMatch);
+    invoices = assignMeritStyleDraftNumbers(invoices, merit.value);
   }
   if (liveMeritTaxes.status === "fulfilled") {
     meritTaxes = liveMeritTaxes.value;

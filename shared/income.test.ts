@@ -121,12 +121,13 @@ test("billing period helpers close Monday-Sunday and calendar months", () => {
 
 test("closed revenue run creates an idempotent local draft", () => {
   assert.throws(
-    () => buildRevenueDraft(partner, run, revenueProvider, new Date("2026-07-12T18:00:00.000Z")),
+    () => buildRevenueDraft(partner, run, revenueProvider, "2026/1304", new Date("2026-07-12T18:00:00.000Z")),
     /not a closed billing period/
   );
-  const draft = buildRevenueDraft(partner, run, revenueProvider, new Date("2026-07-13T06:00:00.000Z"));
+  const draft = buildRevenueDraft(partner, run, revenueProvider, "2026/1304", new Date("2026-07-13T06:00:00.000Z"));
   assert.equal(draft.id, "invoice-revenue-revenue-client-2026-07-06-2026-07-12");
   assert.equal(draft.status, "draft");
+  assert.equal(draft.invoiceNumber, "2026/1304");
   assert.equal(draft.dueDate, "2026-07-27");
   assert.equal(draft.taxId, "tax-zero");
   assert.deepEqual(draft.revenueRunIds, [run.id]);

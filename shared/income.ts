@@ -120,11 +120,13 @@ export function revenueInvoiceId(partnerId: string, periodStart: string, periodE
   return `invoice-revenue-${slug(partnerId)}-${periodStart}-${periodEnd}`;
 }
 
-export function revenueInvoiceNumber(partnerId: string, periodStart: string, periodEnd: string): string {
-  return `FD-${slug(partnerId).toUpperCase().slice(-12)}-${periodStart.replaceAll("-", "")}-${periodEnd.replaceAll("-", "")}`;
-}
-
-export function buildRevenueDraft(partner: RevenuePartner, run: RevenueRun, provider: Provider, now = new Date()): Invoice {
+export function buildRevenueDraft(
+  partner: RevenuePartner,
+  run: RevenueRun,
+  provider: Provider,
+  invoiceNumber: string,
+  now = new Date()
+): Invoice {
   if (!partner.autoDraft) throw new Error(`Automatic drafting is disabled for ${partner.name}`);
   if (!isClosedBillingPeriod(partner, run, now)) throw new Error("Revenue run is not a closed billing period");
   if (run.revenue <= 0) throw new Error("Revenue draft amount must be positive");
@@ -144,7 +146,7 @@ export function buildRevenueDraft(partner: RevenuePartner, run: RevenueRun, prov
     currency: run.currency.toUpperCase(),
     status: "draft",
     meritDeliveryStatus: "not-sent",
-    invoiceNumber: revenueInvoiceNumber(partner.id, run.periodStart, run.periodEnd),
+    invoiceNumber,
     issueDate,
     dueDate: addDays(issueDate, Math.max(0, provider.paymentTermsDays ?? partner.invoiceDueDays)),
     source: "tune",
