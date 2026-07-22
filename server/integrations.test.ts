@@ -32,14 +32,20 @@ test("Merit creation and delivery use distinct endpoints and payloads", async ()
   const previousWriteSwitch = process.env.MERIT_WRITES_ENABLED;
   const previousApiId = process.env.MERIT_API_ID;
   const previousApiKey = process.env.MERIT_API_KEY;
-  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const requests: Array<{ path: string; body: Record<string, unknown>; apiId: string | null; legacyApiId: string | null }> = [];
   try {
     process.env.MERIT_WRITES_ENABLED = "true";
     process.env.MERIT_API_ID = "api-id";
     process.env.MERIT_API_KEY = "api-key";
     globalThis.fetch = async (input, init) => {
-      const path = new URL(String(input)).pathname;
-      requests.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      const url = new URL(String(input));
+      const path = url.pathname;
+      requests.push({
+        path,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        apiId: url.searchParams.get("apiId"),
+        legacyApiId: url.searchParams.get("ApiId")
+      });
       return path.endsWith("/v2/sendinvoice")
         ? Response.json({ InvoiceId: "merit-id", InvoiceNo: "M-100" })
         : Response.json({ ok: true });
@@ -65,10 +71,14 @@ test("Merit creation and delivery use distinct endpoints and payloads", async ()
     await deliverMeritInvoice(created.externalId);
 
     assert.equal(requests[0]?.path.endsWith("/v2/sendinvoice"), true);
+    assert.equal(requests[0]?.apiId, "api-id");
+    assert.equal(requests[0]?.legacyApiId, null);
     assert.equal(requests[0]?.body.InvoiceNo, invoice.invoiceNumber);
     assert.equal((requests[0]?.body.InvoiceRow as Array<{ Item: { Code: string } }>)[0]?.Item.Code, "REV-USD");
     assert.equal((requests[0]?.body.Customer as { Email?: string }).Email, "billing@example.com");
     assert.equal(requests[1]?.path.endsWith("/v2/sendinvoicebyemail"), true);
+    assert.equal(requests[1]?.apiId, "api-id");
+    assert.equal(requests[1]?.legacyApiId, null);
     assert.deepEqual(requests[1]?.body, { Id: "merit-id", DelivNote: false });
   } finally {
     globalThis.fetch = previousFetch;

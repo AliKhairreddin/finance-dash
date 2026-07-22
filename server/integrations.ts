@@ -743,7 +743,7 @@ function meritUrl(path: string, body: string): string {
     .createHmac("sha256", Buffer.from(apiKey, "ascii"))
     .update(Buffer.from(`${apiId}${timestamp}${body}`, "utf8"))
     .digest("base64");
-  const params = new URLSearchParams({ ApiId: apiId, timestamp, signature });
+  const params = new URLSearchParams({ apiId, timestamp, signature });
   return `${meritApiBaseUrl}${path}?${params.toString()}`;
 }
 

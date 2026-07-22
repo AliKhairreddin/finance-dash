@@ -138,7 +138,9 @@ test("Merit delivery uses the distinct email endpoint and never recreates the in
     );
     assert.equal(requests.length, 1);
     assert.match(requests[0].url, /\/v2\/sendinvoicebyemail\?/);
-    assert.equal(new URL(requests[0].url).searchParams.get("ApiId"), "api-id");
+    const searchParams = new URL(requests[0].url).searchParams;
+    assert.equal(searchParams.get("apiId"), "api-id");
+    assert.equal(searchParams.get("ApiId"), null);
     assert.deepEqual(requests[0].body, { Id: "sih-123", DelivNote: false });
   } finally {
     globalThis.fetch = originalFetch;

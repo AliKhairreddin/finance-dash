@@ -1024,7 +1024,7 @@ async function meritUrl(env: Env, path: string, body: string): Promise<string> {
     ["sign"]
   );
   const signature = base64(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${env.MERIT_API_ID}${timestamp}${body}`)));
-  const params = new URLSearchParams({ ApiId: env.MERIT_API_ID, timestamp, signature });
+  const params = new URLSearchParams({ apiId: env.MERIT_API_ID, timestamp, signature });
   return `${env.MERIT_API_BASE_URL || defaultMeritApiBaseUrl}${path}?${params.toString()}`;
 }
 
