@@ -6,13 +6,18 @@ export interface WiseActivityResult {
   statementIssues: string[];
 }
 
-interface WiseProfile {
+interface WiseBusinessProfile {
   id: number;
-  type: "BUSINESS" | "PERSONAL";
-  details: {
-    name?: string;
-  };
+  type: "BUSINESS";
+  businessName: string;
 }
+
+interface WisePersonalProfile {
+  id: number;
+  type: "PERSONAL";
+}
+
+type WiseProfile = WiseBusinessProfile | WisePersonalProfile;
 
 interface WiseBalance {
   id: number;
@@ -41,7 +46,7 @@ interface WiseApiOptions {
 }
 
 interface ProfileBalance {
-  profile: WiseProfile;
+  profile: WiseBusinessProfile;
   profileName: string;
   balance: WiseBalance;
 }
@@ -55,8 +60,8 @@ async function fetchJson<T>(fetcher: typeof fetch, url: string, init: RequestIni
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
-function businessProfileName(profile: WiseProfile): string {
-  const name = profile.details.name?.trim();
+function businessProfileName(profile: WiseBusinessProfile): string {
+  const name = profile.businessName.trim();
   if (!name) throw new Error(`Wise business profile ${profile.id} did not include a company name`);
   return name;
 }
@@ -94,7 +99,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
 }: WiseApiOptions): Promise<WiseActivityResult> {
   const headers = { Authorization: `Bearer ${token}` };
   const profiles = await fetchJson<WiseProfile[]>(fetcher, `${baseUrl}/v2/profiles`, { headers });
-  const businessProfiles = profiles.filter((profile) => profile.type === "BUSINESS");
+  const businessProfiles = profiles.filter((profile): profile is WiseBusinessProfile => profile.type === "BUSINESS");
 
   const balancesByProfile = await Promise.all(
     businessProfiles.map(async (profile) => {

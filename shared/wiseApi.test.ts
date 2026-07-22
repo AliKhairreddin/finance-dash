@@ -10,9 +10,9 @@ test("discovers and labels balances across every accessible Wise business profil
 
     if (url.endsWith("/v2/profiles")) {
       return Response.json([
-        { id: 11, type: "BUSINESS", details: { name: "Lovemedo" } },
-        { id: 22, type: "BUSINESS", details: { name: "Digital Nudge" } },
-        { id: 33, type: "PERSONAL", details: {} }
+        { id: 11, type: "BUSINESS", businessName: "Lovemedo" },
+        { id: 22, type: "BUSINESS", businessName: "Digital Nudge" },
+        { id: 33, type: "PERSONAL" }
       ]);
     }
     if (url.includes("/v4/profiles/11/balances")) {
