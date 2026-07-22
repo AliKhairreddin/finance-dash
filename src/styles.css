@@ -2370,6 +2370,26 @@ textarea:focus-visible {
   line-height: 1.45;
 }
 
+.provider-detail-list {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--app-surface);
+}
+
+.provider-detail-list span {
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+}
+
+.provider-detail-list .provider-sync-label {
+  color: var(--green);
+  font-weight: 720;
+}
+
 .integration-card .integration-issue {
   color: var(--red);
 }

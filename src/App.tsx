@@ -264,6 +264,12 @@ function providerTypeForDocument(documentType: InvoiceDocumentType): ProviderTyp
   return documentType === "sales_invoice" ? "client" : "supplier";
 }
 
+function providerDueDate(provider?: Provider, issueDate = new Date().toISOString().slice(0, 10)): string {
+  const date = new Date(`${issueDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + (provider?.paymentTermsDays ?? 30));
+  return date.toISOString().slice(0, 10);
+}
+
 function companyTagOptions(providers: Provider[]): string[] {
   return [...new Set(providers.flatMap((provider) => provider.tags))].sort((left, right) => left.localeCompare(right));
 }
@@ -4154,18 +4160,31 @@ function ProvidersView({
                 <Button className="icon-button" aria-label={`Edit ${provider.name}`} title="Edit company" onClick={() => onEditProvider(provider)}>
                   <Pencil size={15} />
                 </Button>
-                <Button
-                  className="icon-button destructive-icon-button"
-                  aria-label={`Delete ${provider.name}`}
-                  title="Delete company"
-                  onClick={() => onDeleteProvider(provider)}
-                >
-                  <Trash2 size={15} />
-                </Button>
+                {provider.source !== "merit" && (
+                  <Button
+                    className="icon-button destructive-icon-button"
+                    aria-label={`Delete ${provider.name}`}
+                    title="Delete company"
+                    onClick={() => onDeleteProvider(provider)}
+                  >
+                    <Trash2 size={15} />
+                  </Button>
+                )}
               </div>
             </div>
             <div className="tag-list">
               {provider.tags.length > 0 ? provider.tags.map((tag) => <span key={tag}>{tag}</span>) : <span>No tags</span>}
+            </div>
+            <div className="provider-detail-list">
+              {provider.source === "merit" && <span className="provider-sync-label">Synced from Merit</span>}
+              {provider.email && <span>{provider.email}</span>}
+              {provider.address && <span>{provider.address}</span>}
+              {provider.meritDetails?.registrationNumber && <span>Registration: {provider.meritDetails.registrationNumber}</span>}
+              {provider.taxId && <span>VAT / tax ID: {provider.taxId}</span>}
+              {provider.defaultCurrency && <span>{provider.defaultCurrency}{provider.paymentTermsDays !== undefined ? ` · ${provider.paymentTermsDays}-day terms` : ""}</span>}
+              {provider.meritDetails?.contactName && <span>Contact: {provider.meritDetails.contactName}</span>}
+              {provider.meritDetails?.phone && <span>{provider.meritDetails.phone}</span>}
+              {provider.meritDetails?.bankAccount && <span>Bank: {provider.meritDetails.bankAccount}</span>}
             </div>
             <div className="alias-list">
               {provider.aliases.filter((alias) => alias.trim().toLowerCase() !== provider.name.trim().toLowerCase()).length > 0 ? (
@@ -4625,7 +4644,7 @@ function InvoiceModal({
   const [providerId, setProviderId] = useState(selectedProvider?.id || "");
   const [customerName, setCustomerName] = useState(selectedProvider?.legalName || selectedProvider?.name || bankInvoiceName(transaction));
   const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
-  const [dueDate, setDueDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(providerDueDate(selectedProvider));
   const [description, setDescription] = useState(transaction.description);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -4678,7 +4697,10 @@ function InvoiceModal({
               const nextProviderId = event.target.value;
               const nextProvider = providerOptions.find((item) => item.id === nextProviderId);
               setProviderId(nextProviderId);
-              if (nextProvider) setCustomerName(nextProvider.legalName || nextProvider.name);
+              if (nextProvider) {
+                setCustomerName(nextProvider.legalName || nextProvider.name);
+                setDueDate(providerDueDate(nextProvider));
+              }
             }}
           >
             <NativeSelectOption value="">No {expectedProviderType} selected</NativeSelectOption>

@@ -77,6 +77,10 @@ Convex state includes revision-aware write protection so an older browser snapsh
 
 Revenue pulls and scheduled jobs create editable local drafts but never call Merit. A confirmed operator action can either save an invoice in Merit or save and deliver it by email. The invoice becomes open immediately after Merit creation, before delivery is attempted, so retrying delivery cannot duplicate the accounting document. `MERIT_WRITES_ENABLED` is the hard deployment gate for both actions.
 
+### Authoritative Merit Reads
+
+Successful read-only Merit syncs import customers and vendors into Companies with their identity, contact, tax, address, currency, payment-term, bank, group, comment, and dimension data. Merit-linked invoices, customers, and vendors that no longer exist in a complete successful Merit response are removed locally. A failed or incomplete endpoint response never triggers deletion, and the sync does not write anything to Merit.
+
 ### Local Payment State
 
 Invoices follow the dashboard lifecycle `draft → open → paid`. Merit payment status is read-only metadata and never controls or receives a local paid action. Payment allocations record source, date, amount, reference, and notes; allocations can cover part of an invoice or combine several payments.
@@ -174,7 +178,7 @@ The current Netherlands Wise Business profile does not expose the required live 
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |
-| Merit | Read-only invoice/tax sync; explicit save or save-and-email actions guarded by stored tax rules, confirmation, and a deployment switch |
+| Merit | Authoritative read-only invoice, customer, vendor, and tax sync; explicit save or save-and-email actions guarded by stored tax rules, confirmation, and a deployment switch |
 | Coinbase rates | Keyless approximate fiat and crypto USD rates; native balances remain authoritative |
 
 Prepared adapters are not presented as active integrations until the required provider access and credentials exist.

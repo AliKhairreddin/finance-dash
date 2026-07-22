@@ -62,6 +62,14 @@ import {
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import {
+  linkMeritInvoiceProviders,
+  meritInvoicePeriods,
+  meritProviderId,
+  meritProvidersFromResponse,
+  reconcileMeritInvoices,
+  reconcileMeritProviders
+} from "../shared/merit";
+import {
   calculateRevenueMetrics,
   calculateTuneHourOffset,
   mergeRevenuePartnerDirectory,
@@ -288,15 +296,8 @@ function mergeById<T extends { id: string }>(initial: T[], incoming?: T[]): T[] 
   return [...map.values()];
 }
 
-export function mergeInvoices(liveInvoices: Invoice[], persistedInvoices: Invoice[]): Invoice[] {
-  const invoiceKey = (invoice: Invoice): string => invoice.externalId ? `external:${invoice.externalId}` : `id:${invoice.id}`;
-  const map = new Map(liveInvoices.map((invoice) => [invoiceKey(invoice), invoice]));
-  for (const invoice of persistedInvoices) {
-    const key = invoiceKey(invoice);
-    const live = map.get(key);
-    map.set(key, live ? { ...invoice, meritStatus: live.meritStatus } : invoice);
-  }
-  return [...map.values()];
+export function mergeInvoices(liveInvoices: Invoice[], persistedInvoices: Invoice[], authoritative = true): Invoice[] {
+  return reconcileMeritInvoices(liveInvoices, persistedInvoices, authoritative);
 }
 
 function normalizedTransactionText(value: string): string {
@@ -1045,57 +1046,75 @@ async function fetchMeritJson<T>(env: Env, path: string, payload: unknown): Prom
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
-async function fetchMeritInvoices(env: Env): Promise<Invoice[]> {
+interface MeritInvoiceRecord {
+  SIHId?: string;
+  InvoiceNo?: string;
+  CustomerId?: string;
+  CustomerName?: string;
+  DueDate?: string;
+  InvoiceDate?: string;
+  DocumentDate?: string;
+  DocDate?: string;
+  CurrencyCode?: string;
+  TotalSum?: number;
+  TotalAmount?: number;
+  Paid?: boolean;
+}
+
+export async function fetchMeritInvoices(env: Env, persistedInvoices: Invoice[] = []): Promise<Invoice[]> {
   if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return [];
 
-  const periodEnd = new Date();
-  const periodStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 89);
-  const response = await fetchMeritJson<
-    Array<{
-      SIHId?: string;
-      InvoiceNo?: string;
-      CustomerName?: string;
-      DueDate?: string;
-      InvoiceDate?: string;
-      DocumentDate?: string;
-      DocDate?: string;
-      CurrencyCode?: string;
-      TotalSum?: number;
-      TotalAmount?: number;
-      Paid?: boolean;
-    }>
-  >(env, env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices", {
-    PeriodStart: meritDate(periodStart.toISOString()),
-    PeriodEnd: meritDate(periodEnd.toISOString()),
-    UnPaid: false
-  });
+  const responses = await Promise.all(
+    meritInvoicePeriods(persistedInvoices).map((period) =>
+      fetchMeritJson<MeritInvoiceRecord[]>(env, env.MERIT_GET_INVOICES_PATH || "/v1/getinvoices", {
+        PeriodStart: meritDate(period.periodStart),
+        PeriodEnd: meritDate(period.periodEnd),
+        UnPaid: false
+      })
+    )
+  );
 
   const fetchedAt = new Date().toISOString();
-  return response.flatMap((invoice) => {
+  const byExternalId = new Map<string, Invoice>();
+  for (const invoice of responses.flat()) {
     const externalId = invoice.SIHId ?? invoice.InvoiceNo;
-    if (!externalId) return [];
+    if (!externalId) continue;
     const issueDate = meritIsoDate(invoice.DocumentDate ?? invoice.InvoiceDate ?? invoice.DocDate, fetchedAt.slice(0, 10));
-    return [{
-    id: `merit-${externalId}`,
-    documentType: "sales_invoice" as const,
-    origin: "merit" as const,
-    customerName: invoice.CustomerName ?? "Merit invoice",
-    amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
-    currency: invoice.CurrencyCode ?? "USD",
-    status: "open" as const,
-    meritStatus: invoice.Paid ? ("paid" as const) : ("open" as const),
-    meritDeliveryStatus: "saved" as const,
-    invoiceNumber: invoice.InvoiceNo ?? externalId,
-    issueDate,
-    dueDate: meritIsoDate(invoice.DueDate, fetchedAt.slice(0, 10)),
-    source: "merit" as const,
-    externalId,
-    description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
-    revenueRunIds: [],
-    createdAt: `${issueDate}T00:00:00.000Z`,
-    updatedAt: `${issueDate}T00:00:00.000Z`
-  }];
-  });
+    byExternalId.set(externalId, {
+      id: `merit-${externalId}`,
+      ...(invoice.CustomerId ? { providerId: meritProviderId("customer", invoice.CustomerId) } : {}),
+      documentType: "sales_invoice",
+      origin: "merit",
+      customerName: invoice.CustomerName ?? "Merit invoice",
+      amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
+      currency: (invoice.CurrencyCode ?? "USD").toUpperCase(),
+      status: "open",
+      meritStatus: invoice.Paid ? "paid" : "open",
+      meritDeliveryStatus: "saved",
+      invoiceNumber: invoice.InvoiceNo ?? externalId,
+      issueDate,
+      dueDate: meritIsoDate(invoice.DueDate, fetchedAt.slice(0, 10)),
+      source: "merit",
+      externalId,
+      description: `Merit invoice ${invoice.InvoiceNo ?? invoice.SIHId ?? ""}`.trim(),
+      revenueRunIds: [],
+      createdAt: `${issueDate}T00:00:00.000Z`,
+      updatedAt: `${issueDate}T00:00:00.000Z`
+    });
+  }
+  return [...byExternalId.values()];
+}
+
+export async function fetchMeritCustomers(env: Env): Promise<Provider[]> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return [];
+  const response = await fetchMeritJson<unknown>(env, "/v1/getcustomers", { WithComments: true });
+  return meritProvidersFromResponse(response, "customer");
+}
+
+export async function fetchMeritVendors(env: Env): Promise<Provider[]> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return [];
+  const response = await fetchMeritJson<unknown>(env, "/v1/getvendors", { WithComments: true });
+  return meritProvidersFromResponse(response, "vendor");
 }
 
 async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
@@ -1673,17 +1692,38 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
       bankIssues.amex = bankIssue("Amex", error);
       return { accounts: [], transactions: [] };
     }),
-    Promise.allSettled([fetchMeritInvoices(env), fetchMeritTaxes(env)])
+    Promise.allSettled([
+      fetchMeritInvoices(env, state.invoices),
+      fetchMeritTaxes(env),
+      fetchMeritCustomers(env),
+      fetchMeritVendors(env)
+    ])
   ]);
-  const [meritInvoicesResult, meritTaxesResult] = meritResults;
-  const liveMeritInvoices = meritInvoicesResult.status === "fulfilled" ? meritInvoicesResult.value : [];
+  const [meritInvoicesResult, meritTaxesResult, meritCustomersResult, meritVendorsResult] = meritResults;
+  const meritConfigured = Boolean(env.MERIT_API_ID && env.MERIT_API_KEY);
   const meritTaxes = meritTaxesResult.status === "fulfilled" ? meritTaxesResult.value : [];
   const meritIssue =
     meritInvoicesResult.status === "rejected"
       ? meritConnectionIssue(meritInvoicesResult.reason)
       : meritTaxesResult.status === "rejected"
         ? meritConnectionIssue(meritTaxesResult.reason)
-        : undefined;
+        : meritCustomersResult.status === "rejected"
+          ? meritConnectionIssue(meritCustomersResult.reason)
+          : meritVendorsResult.status === "rejected"
+            ? meritConnectionIssue(meritVendorsResult.reason)
+            : undefined;
+  const providersBeforeSync = JSON.stringify(state.providers);
+  if (meritConfigured && meritCustomersResult.status === "fulfilled") {
+    state.providers = reconcileMeritProviders(state.providers, meritCustomersResult.value, "customer");
+  }
+  if (meritConfigured && meritVendorsResult.status === "fulfilled") {
+    state.providers = reconcileMeritProviders(state.providers, meritVendorsResult.value, "vendor");
+  }
+  state.providers = mergeProviderDirectory(state.providers);
+  const providerStateChanged = JSON.stringify(state.providers) !== providersBeforeSync;
+  const liveMeritInvoices = meritInvoicesResult.status === "fulfilled"
+    ? linkMeritInvoiceProviders(meritInvoicesResult.value, state.providers)
+    : [];
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const trackedAssetsBefore = state.fxTrackedAssets.join("|");
   state.fxTrackedAssets = [...new Set([
@@ -1698,14 +1738,26 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     await updateCurrentFxRates(env, state, accounts);
     fxRatesRefreshed = true;
   }
-  const invoicesBeforeReconciliation = mergeInvoices(liveMeritInvoices, state.invoices);
+  const invoicesBeforeReconciliation = mergeInvoices(
+    liveMeritInvoices,
+    state.invoices,
+    meritConfigured && meritInvoicesResult.status === "fulfilled"
+  );
+  const liveInvoiceIds = new Set(invoicesBeforeReconciliation.map((invoice) => invoice.id));
+  const paymentAllocationsBeforeSync = state.paymentAllocations;
+  state.paymentAllocations = state.paymentAllocations.filter((allocation) => liveInvoiceIds.has(allocation.invoiceId));
+  const paymentAllocationsChanged = state.paymentAllocations.length !== paymentAllocationsBeforeSync.length;
   const persistedTransactionsBeforeSync = state.wiseStatementTransactions;
   const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
     ...wise.transactions,
     ...revolut.transactions,
     ...slash.transactions,
     ...amex.transactions
-  ]).sort((left, right) => right.date.localeCompare(left.date));
+  ]).map((transaction) => {
+    if (!transaction.matchedInvoiceId || liveInvoiceIds.has(transaction.matchedInvoiceId)) return transaction;
+    const { matchedInvoiceId: _matchedInvoiceId, ...withoutDeletedInvoice } = transaction;
+    return withoutDeletedInvoice;
+  }).sort((left, right) => right.date.localeCompare(left.date));
   const enrichedTransactions = enrichTransactions(
     applyTeamAssignments(
       rawTransactions.map((transaction) => {
@@ -1728,7 +1780,15 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
   });
   const bankStateChanged = JSON.stringify(rawTransactions) !== JSON.stringify(persistedTransactionsBeforeSync);
   const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
-  if (reconciliation.matched > 0 || bankStateChanged || invoiceStateChanged || fxRatesRefreshed || fxAssetInventoryChanged) {
+  if (
+    reconciliation.matched > 0 ||
+    bankStateChanged ||
+    invoiceStateChanged ||
+    providerStateChanged ||
+    paymentAllocationsChanged ||
+    fxRatesRefreshed ||
+    fxAssetInventoryChanged
+  ) {
     state.invoices = reconciliation.invoices;
     state.paymentAllocations = reconciliation.allocations;
     state.wiseStatementTransactions = reconciliation.transactions;

@@ -10,6 +10,7 @@ import type {
   RevenueRun,
   Transaction
 } from "../shared/types";
+import { meritInvoicePeriods, meritProviderId, meritProvidersFromResponse } from "../shared/merit";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 
@@ -759,60 +760,74 @@ async function fetchMeritJson<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
-export async function fetchMeritInvoices(): Promise<Invoice[]> {
+interface MeritInvoiceRecord {
+  SIHId?: string;
+  InvoiceNo?: string;
+  CustomerId?: string;
+  CustomerName?: string;
+  DocumentDate?: string;
+  DueDate?: string;
+  CurrencyCode?: string;
+  TotalSum?: number;
+  TotalAmount?: number;
+  Paid?: boolean;
+}
+
+export async function fetchMeritInvoices(persistedInvoices: Invoice[] = []): Promise<Invoice[]> {
   if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
 
-  const periodEnd = new Date();
-  const periodStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 89);
-  const response = await fetchMeritJson<
-    Array<{
-      SIHId?: string;
-      InvoiceNo?: string;
-      CustomerName?: string;
-      DocumentDate?: string;
-      DueDate?: string;
-      CurrencyCode?: string;
-      TotalSum?: number;
-      TotalAmount?: number;
-      Paid?: boolean;
-    }>
-  >(meritGetInvoicesPath, {
-    PeriodStart: meritDate(periodStart.toISOString()),
-    PeriodEnd: meritDate(periodEnd.toISOString()),
-    UnPaid: false
-  });
+  const responses = await Promise.all(
+    meritInvoicePeriods(persistedInvoices).map((period) =>
+      fetchMeritJson<MeritInvoiceRecord[]>(meritGetInvoicesPath, {
+        PeriodStart: meritDate(period.periodStart),
+        PeriodEnd: meritDate(period.periodEnd),
+        UnPaid: false
+      })
+    )
+  );
 
   const now = new Date().toISOString();
   const today = now.slice(0, 10);
-  return response.flatMap((invoice): Invoice[] => {
+  const byExternalId = new Map<string, Invoice>();
+  for (const invoice of responses.flat()) {
     const externalId = invoice.SIHId ?? invoice.InvoiceNo;
-    if (!externalId) return [];
+    if (!externalId) continue;
     const invoiceNumber = invoice.InvoiceNo ?? invoice.SIHId!;
-    return [
-      {
-        id: `merit-${externalId}`,
-        documentType: "sales_invoice",
-        origin: "merit",
-        customerName: invoice.CustomerName ?? "Merit invoice",
-        amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
-        currency: (invoice.CurrencyCode ?? "USD").toUpperCase(),
-        // Merit is authoritative only for the read-only meritStatus field. Local
-        // allocations are the sole authority for the dashboard paid status.
-        status: "open",
-        meritStatus: invoice.Paid ? "paid" : "open",
-        meritDeliveryStatus: "saved",
-        invoiceNumber,
-        issueDate: meritResponseDate(invoice.DocumentDate, today),
-        dueDate: meritResponseDate(invoice.DueDate, today),
-        source: "merit",
-        externalId,
-        description: `Merit invoice ${invoiceNumber}`,
-        revenueRunIds: [],
-        createdAt: now,
-        updatedAt: now
-      }
-    ];
-  });
+    byExternalId.set(externalId, {
+      id: `merit-${externalId}`,
+      ...(invoice.CustomerId ? { providerId: meritProviderId("customer", invoice.CustomerId) } : {}),
+      documentType: "sales_invoice",
+      origin: "merit",
+      customerName: invoice.CustomerName ?? "Merit invoice",
+      amount: invoice.TotalSum ?? invoice.TotalAmount ?? 0,
+      currency: (invoice.CurrencyCode ?? "USD").toUpperCase(),
+      // Merit is authoritative only for the read-only meritStatus field. Local
+      // allocations are the sole authority for the dashboard paid status.
+      status: "open",
+      meritStatus: invoice.Paid ? "paid" : "open",
+      meritDeliveryStatus: "saved",
+      invoiceNumber,
+      issueDate: meritResponseDate(invoice.DocumentDate, today),
+      dueDate: meritResponseDate(invoice.DueDate, today),
+      source: "merit",
+      externalId,
+      description: `Merit invoice ${invoiceNumber}`,
+      revenueRunIds: [],
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  return [...byExternalId.values()];
+}
+
+export async function fetchMeritCustomers(): Promise<Provider[]> {
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
+  return meritProvidersFromResponse(await fetchMeritJson<unknown>("/v1/getcustomers", { WithComments: true }), "customer");
+}
+
+export async function fetchMeritVendors(): Promise<Provider[]> {
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
+  return meritProvidersFromResponse(await fetchMeritJson<unknown>("/v1/getvendors", { WithComments: true }), "vendor");
 }
 
 export async function fetchMeritTaxes(): Promise<MeritTax[]> {

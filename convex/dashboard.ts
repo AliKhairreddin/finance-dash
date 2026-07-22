@@ -15,6 +15,44 @@ const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("
 const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
 const billingCadence = v.union(v.literal("weekly"), v.literal("monthly"));
 
+const meritCompanyComment = v.object({ date: v.optional(v.string()), text: v.string() });
+const meritCompanyDimension = v.object({
+  id: v.optional(v.string()),
+  dimensionId: v.optional(v.string()),
+  dimensionValueId: v.optional(v.string()),
+  code: v.optional(v.string())
+});
+const meritCompanyDetails = v.object({
+  relationship: v.union(v.literal("customer"), v.literal("vendor")),
+  registrationNumber: v.optional(v.string()),
+  contactName: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  secondaryPhone: v.optional(v.string()),
+  city: v.optional(v.string()),
+  county: v.optional(v.string()),
+  postalCode: v.optional(v.string()),
+  countryName: v.optional(v.string()),
+  fax: v.optional(v.string()),
+  website: v.optional(v.string()),
+  bankName: v.optional(v.string()),
+  bankAccount: v.optional(v.string()),
+  referenceNumber: v.optional(v.string()),
+  invoiceLanguage: v.optional(v.string()),
+  groupId: v.optional(v.string()),
+  groupName: v.optional(v.string()),
+  changedDate: v.optional(v.string()),
+  invoiceSendPreference: v.optional(v.string()),
+  glnCode: v.optional(v.string()),
+  partyCode: v.optional(v.string()),
+  telemaEdi: v.optional(v.string()),
+  vendorType: v.optional(v.number()),
+  notTaxDomesticCustomer: v.optional(v.boolean()),
+  taxRegistered: v.optional(v.boolean()),
+  overdueCharge: v.optional(v.number()),
+  comments: v.optional(v.array(meritCompanyComment)),
+  dimensions: v.optional(v.array(meritCompanyDimension))
+});
+
 const provider = v.object({
   id: v.string(),
   name: v.string(),
@@ -31,6 +69,7 @@ const provider = v.object({
   paymentTermsDays: v.optional(v.number()),
   meritCustomerId: v.optional(v.string()),
   meritSupplierId: v.optional(v.string()),
+  meritDetails: v.optional(meritCompanyDetails),
   source: dataSource,
   createdAt: v.string()
 });

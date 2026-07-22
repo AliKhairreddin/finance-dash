@@ -64,6 +64,49 @@ export interface Investment {
   notes?: string;
 }
 
+export interface MeritCompanyComment {
+  date?: string;
+  text: string;
+}
+
+export interface MeritCompanyDimension {
+  id?: string;
+  dimensionId?: string;
+  dimensionValueId?: string;
+  code?: string;
+}
+
+export interface MeritCompanyDetails {
+  relationship: "customer" | "vendor";
+  registrationNumber?: string;
+  contactName?: string;
+  phone?: string;
+  secondaryPhone?: string;
+  city?: string;
+  county?: string;
+  postalCode?: string;
+  countryName?: string;
+  fax?: string;
+  website?: string;
+  bankName?: string;
+  bankAccount?: string;
+  referenceNumber?: string;
+  invoiceLanguage?: string;
+  groupId?: string;
+  groupName?: string;
+  changedDate?: string;
+  invoiceSendPreference?: string;
+  glnCode?: string;
+  partyCode?: string;
+  telemaEdi?: string;
+  vendorType?: number;
+  notTaxDomesticCustomer?: boolean;
+  taxRegistered?: boolean;
+  overdueCharge?: number;
+  comments?: MeritCompanyComment[];
+  dimensions?: MeritCompanyDimension[];
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -80,6 +123,7 @@ export interface Provider {
   paymentTermsDays?: number;
   meritCustomerId?: string;
   meritSupplierId?: string;
+  meritDetails?: MeritCompanyDetails;
   source: DataSource;
   createdAt: string;
 }

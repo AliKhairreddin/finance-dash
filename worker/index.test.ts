@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Invoice } from "../shared/types";
-import worker, { createMeritInvoice, deliverMeritInvoice, fetchCoinbaseUsdRates, mergeInvoices } from "./index";
+import worker, {
+  createMeritInvoice,
+  deliverMeritInvoice,
+  fetchCoinbaseUsdRates,
+  fetchMeritCustomers,
+  fetchMeritVendors,
+  mergeInvoices
+} from "./index";
 
 test("dashboard API fails closed when Convex storage is not configured", async () => {
   let assetRequests = 0;
@@ -142,6 +149,48 @@ test("Merit delivery uses the distinct email endpoint and never recreates the in
     assert.equal(searchParams.get("apiId"), "api-id");
     assert.equal(searchParams.get("ApiId"), null);
     assert.deepEqual(requests[0].body, { Id: "sih-123", DelivNote: false });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit company sync uses only the read-only customer and vendor list endpoints", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ path: string; body: unknown; apiId: string | null }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    requests.push({
+      path: url.pathname,
+      body: JSON.parse(String(init?.body)) as unknown,
+      apiId: url.searchParams.get("apiId")
+    });
+    return url.pathname.endsWith("/v1/getcustomers")
+      ? Response.json([{ CustomerId: "customer-1", Name: "Client OÜ", PaymentDeadLine: 14 }])
+      : Response.json([{ VendorId: "vendor-1", Name: "Supplier OÜ", VendorType: 2 }]);
+  };
+
+  try {
+    const env = {
+      MERIT_API_ID: "api-id",
+      MERIT_API_KEY: "api-key",
+      MERIT_API_BASE_URL: "https://merit.example/api"
+    } as never;
+    const customers = await fetchMeritCustomers(env);
+    const vendors = await fetchMeritVendors(env);
+
+    assert.deepEqual(requests.map((request) => request.path), [
+      "/api/v1/getcustomers",
+      "/api/v1/getvendors"
+    ]);
+    assert.deepEqual(requests.map((request) => request.body), [
+      { WithComments: true },
+      { WithComments: true }
+    ]);
+    assert.deepEqual(requests.map((request) => request.apiId), ["api-id", "api-id"]);
+    assert.equal(customers[0]?.meritCustomerId, "customer-1");
+    assert.equal(customers[0]?.paymentTermsDays, 14);
+    assert.equal(vendors[0]?.meritSupplierId, "vendor-1");
+    assert.equal(vendors[0]?.meritDetails?.vendorType, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

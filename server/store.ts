@@ -55,6 +55,11 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
+import {
+  linkMeritInvoiceProviders,
+  reconcileMeritInvoices,
+  reconcileMeritProviders
+} from "../shared/merit";
 import { calculateRevenueMetrics, mergeRevenuePartnerDirectory, resolveRevenuePeriod } from "../shared/revenue";
 import {
   applyPaymentState,
@@ -87,7 +92,9 @@ import {
   deliverMeritInvoice,
   fetchAmexActivity,
   fetchMeritInvoices,
+  fetchMeritCustomers,
   fetchMeritTaxes,
+  fetchMeritVendors,
   fetchRevolutActivity,
   fetchSlashActivity,
   fetchTuneRevenue,
@@ -206,29 +213,8 @@ function summarizeWiseStatementImport(existing: Transaction[], incoming: Transac
   };
 }
 
-function mergeMeritInvoiceState(remoteInvoices: Invoice[]): void {
-  const localByExternalId = new Map(
-    invoices.filter((invoice) => invoice.externalId).map((invoice) => [invoice.externalId!, invoice])
-  );
-  const remoteOnly: Invoice[] = [];
-  for (const remote of remoteInvoices) {
-    const local = remote.externalId ? localByExternalId.get(remote.externalId) : undefined;
-    if (!local) {
-      remoteOnly.push(remote);
-      continue;
-    }
-    const merged: Invoice = {
-      ...local,
-      meritStatus: remote.meritStatus,
-      updatedAt: new Date().toISOString()
-    };
-    invoices = invoices.map((invoice) => (invoice.id === local.id ? merged : invoice));
-  }
-  const existingIds = new Set(invoices.map((invoice) => invoice.id));
-  invoices = applyPaymentState(
-    [...remoteOnly.filter((invoice) => !existingIds.has(invoice.id)), ...invoices],
-    paymentAllocations
-  );
+function mergeMeritInvoiceState(remoteInvoices: Invoice[], authoritative: boolean): void {
+  invoices = applyPaymentState(reconcileMeritInvoices(remoteInvoices, invoices, authoritative), paymentAllocations);
 }
 
 function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
@@ -1760,13 +1746,15 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, amex, merit, liveMeritTaxes] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, merit, liveMeritTaxes, meritCustomers, meritVendors] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(),
     fetchAmexActivity(),
-    fetchMeritInvoices(),
-    fetchMeritTaxes()
+    fetchMeritInvoices(invoices),
+    fetchMeritTaxes(),
+    fetchMeritCustomers(),
+    fetchMeritVendors()
   ]);
   const liveTransactions: Transaction[] = [];
   const bankIssue = (label: string, error: unknown): string => {
@@ -1806,8 +1794,28 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
     }
     liveTransactions.push(...amex.value.transactions);
   }
-  if (merit.status === "fulfilled" && merit.value.length > 0) {
-    mergeMeritInvoiceState(merit.value);
+  const meritConfigured = Boolean(process.env.MERIT_API_ID && process.env.MERIT_API_KEY);
+  if (meritConfigured && meritCustomers.status === "fulfilled") {
+    providers = reconcileMeritProviders(providers, meritCustomers.value, "customer");
+  }
+  if (meritConfigured && meritVendors.status === "fulfilled") {
+    providers = reconcileMeritProviders(providers, meritVendors.value, "vendor");
+  }
+  providers = mergeProviderDirectory(providers);
+  if (merit.status === "fulfilled") {
+    mergeMeritInvoiceState(
+      linkMeritInvoiceProviders(merit.value, providers),
+      meritConfigured
+    );
+    const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
+    paymentAllocations = paymentAllocations.filter((allocation) => invoiceIds.has(allocation.invoiceId));
+    const clearDeletedInvoiceMatch = (transaction: Transaction): Transaction => {
+      if (!transaction.matchedInvoiceId || invoiceIds.has(transaction.matchedInvoiceId)) return transaction;
+      const { matchedInvoiceId: _matchedInvoiceId, ...withoutDeletedInvoice } = transaction;
+      return withoutDeletedInvoice;
+    };
+    wiseStatementTransactions = wiseStatementTransactions.map(clearDeletedInvoiceMatch);
+    transactions = transactions.map(clearDeletedInvoiceMatch);
   }
   if (liveMeritTaxes.status === "fulfilled") {
     meritTaxes = liveMeritTaxes.value;
@@ -1817,7 +1825,11 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
       ? meritConnectionIssue(merit.reason)
       : liveMeritTaxes.status === "rejected"
         ? meritConnectionIssue(liveMeritTaxes.reason)
-        : undefined;
+        : meritCustomers.status === "rejected"
+          ? meritConnectionIssue(meritCustomers.reason)
+          : meritVendors.status === "rejected"
+            ? meritConnectionIssue(meritVendors.reason)
+            : undefined;
 
   if (liveTransactions.length > 0) {
     const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
