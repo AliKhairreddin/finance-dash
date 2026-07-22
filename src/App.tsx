@@ -4,6 +4,7 @@ import {
   BadgeDollarSign,
   Banknote,
   BarChart3,
+  BookOpen,
   Building2,
   Check,
   ChevronDown,
@@ -105,9 +106,10 @@ import { isLiquidAccountBalance } from "../shared/income";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
+import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
+type ActiveTab = "overview" | "management" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
@@ -139,6 +141,7 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
 
 const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
   overview: { eyebrow: "Finance operations", title: "Cash flow and open balance control" },
+  management: { eyebrow: "Management report", title: "Closed performance, platforms, and ownership" },
   banks: { eyebrow: "Banking", title: "Reconcile account activity" },
   analytics: { eyebrow: "Analytics", title: "Review spend, revenue, teams, and categories" },
   distribution: { eyebrow: "Distribution", title: "Track partner payables and adjustments" },
@@ -1218,9 +1221,15 @@ function App() {
             <p className="eyebrow">{pageHeader.eyebrow}</p>
             <h1>{pageHeader.title}</h1>
             <div className="meta-row">
-              <span>Data as of: {maybeDate(dashboard.asOf)}</span>
-              <span className="meta-separator" aria-hidden="true">·</span>
-              <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
+              {activeTab === "management" ? (
+                <span>Legacy closed report · imported separately from live operations</span>
+              ) : (
+                <>
+                  <span>Data as of: {maybeDate(dashboard.asOf)}</span>
+                  <span className="meta-separator" aria-hidden="true">·</span>
+                  <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
+                </>
+              )}
             </div>
           </div>
           <div className="topbar-actions">
@@ -1237,7 +1246,7 @@ function App() {
             </Button>
             <Button className="primary-button" onClick={syncNow} disabled={isSyncing}>
               {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              Sync
+              {activeTab === "management" ? "Sync live" : "Sync"}
             </Button>
           </div>
         </header>
@@ -1315,6 +1324,8 @@ function App() {
           <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
         </>
       )}
+
+      {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
       {activeTab === "banks" && (
         <BanksView
@@ -1537,6 +1548,7 @@ function Sidebar({
   const mobileNavRef = useRef<HTMLDivElement>(null);
   const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
+    { id: "management", label: "Management", icon: <BookOpen size={17} /> },
     { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
     { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }

@@ -54,6 +54,7 @@ import {
   updateProvider,
   updateRevenuePartner
 } from "./store";
+import { loadManagementReportDashboard } from "./managementReportStore";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -67,6 +68,14 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/dashboard", (_request, response) => {
   response.json(getSnapshot());
+});
+
+app.get("/api/management-report", async (_request, response, next) => {
+  try {
+    response.json(await loadManagementReportDashboard());
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/sync", async (_request, response, next) => {

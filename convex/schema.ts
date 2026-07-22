@@ -319,5 +319,85 @@ export default defineSchema({
     profitDistributionAdjustments: v.array(profitDistributionAdjustment),
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
-  }).index("by_key", ["key"])
+  }).index("by_key", ["key"]),
+  managementReportImports: defineTable({
+    importId: v.string(),
+    contentHash: v.string(),
+    parserVersion: v.string(),
+    attemptId: v.string(),
+    leaseExpiresAt: v.string(),
+    sourceName: v.string(),
+    sourceUrl: v.optional(v.string()),
+    reportingThrough: v.string(),
+    importedAt: v.string(),
+    status: v.union(v.literal("importing"), v.literal("complete"), v.literal("failed")),
+    sheetSummaries: v.array(
+      v.object({
+        key: v.string(),
+        label: v.string(),
+        rowCount: v.number(),
+        nonEmptyRowCount: v.number(),
+        visibility: v.optional(v.union(v.literal("visible"), v.literal("hidden"))),
+        role: v.optional(v.union(v.literal("report"), v.literal("supporting")))
+      })
+    ),
+    sourceRowCount: v.number(),
+    bankEntryCount: v.number(),
+    factCount: v.number(),
+    dashboard: v.optional(v.any()),
+    error: v.optional(v.string())
+  })
+    .index("by_import_id", ["importId"])
+    .index("by_content_hash", ["contentHash"])
+    .index("by_status_reporting_through_imported_at", ["status", "reportingThrough", "importedAt"]),
+  managementReportSourceRows: defineTable({
+    importId: v.string(),
+    sheetKey: v.string(),
+    rowNumber: v.number(),
+    cells: v.array(v.string())
+  })
+    .index("by_import", ["importId"])
+    .index("by_import_sheet_row", ["importId", "sheetKey", "rowNumber"]),
+  managementReportFacts: defineTable({
+    importId: v.string(),
+    factId: v.string(),
+    scope: v.string(),
+    scopeId: v.string(),
+    metric: v.string(),
+    period: v.string(),
+    value: v.number(),
+    valueDecimal: v.optional(v.string()),
+    unit: v.union(
+      v.literal("currency"),
+      v.literal("percent"),
+      v.literal("count"),
+      v.literal("rate"),
+      v.literal("number")
+    ),
+    currency: v.optional(v.string()),
+    scenario: v.optional(v.string()),
+    section: v.optional(v.string()),
+    dimension: v.optional(v.string()),
+    sourceSheet: v.string(),
+    sourceRow: v.number(),
+    payload: v.optional(v.any())
+  })
+    .index("by_import", ["importId"])
+    .index("by_import_fact", ["importId", "factId"])
+    .index("by_import_scope_period", ["importId", "scope", "period"]),
+  managementReportBankEntries: defineTable({
+    importId: v.string(),
+    entryId: v.string(),
+    date: v.string(),
+    bankName: v.string(),
+    segment: v.string(),
+    amountUsd: v.number(),
+    amountUsdDecimal: v.optional(v.string()),
+    sourceRow: v.number(),
+    payload: v.any()
+  })
+    .index("by_import", ["importId"])
+    .index("by_import_entry", ["importId", "entryId"])
+    .index("by_import_date", ["importId", "date"])
+    .index("by_import_segment_date", ["importId", "segment", "date"])
 });

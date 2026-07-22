@@ -35,6 +35,16 @@ test("dashboard API fails closed when Convex authentication is not configured", 
   assert.deepEqual(await response.json(), { message: "Dashboard storage authentication is not configured" });
 });
 
+test("management report API fails closed when Convex storage is not configured", async () => {
+  const response = await worker.fetch(
+    new Request("https://finance.example/api/management-report"),
+    { ASSETS: { fetch: async () => new Response("asset") } } as never
+  );
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: "Dashboard storage is not configured" });
+});
+
 test("Merit invoice creation never calls the API while writes are disabled", async () => {
   const originalFetch = globalThis.fetch;
   let meritRequests = 0;

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "tsx watch server/index.ts",
+    "import:management-report": "tsx scripts/import-management-report.ts",
     "build": "tsc -b && vite build",
     "convex:dev": "convex dev --once --env-file .env.local",
     "test": "tsx --test server/*.test.ts shared/*.test.ts worker/*.test.ts",
@@ -42,6 +43,7 @@
     "@types/node": "^24.10.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "read-excel-file": "^9.3.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",

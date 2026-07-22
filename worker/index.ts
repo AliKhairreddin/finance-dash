@@ -390,6 +390,16 @@ function getConvexServiceToken(env: Env): string {
   return token;
 }
 
+async function getManagementReportDashboard(env: Env): Promise<unknown> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  try {
+    return await convex.query(api.managementReport.getDashboard, { serviceToken });
+  } catch (error) {
+    throw new ApiError(503, "Management report storage is temporarily unavailable", { cause: error });
+  }
+}
+
 function parseWiseBalanceIds(value: string | undefined): Set<string> {
   return new Set(parseWiseBalancePairs(value).map((balance) => balance.id));
 }
@@ -3154,6 +3164,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
       return json(await getSnapshot(env));
+    }
+
+    if (url.pathname === "/api/management-report" && request.method === "GET") {
+      return json(await getManagementReportDashboard(env));
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {

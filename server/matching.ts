@@ -1,5 +1,7 @@
 import type { Provider, ProviderType, Team, Transaction, TransactionCategoryRule, WiseCardHolderTeamAssignment } from "../shared/types";
 import {
+  atlanticOceanTeamId,
+  atlanticOceanTeamName,
   canonicalCreatedAt,
   canonicalTeamId,
   canonicalTeamName,
@@ -165,6 +167,11 @@ export const canonicalTeams: Team[] = [
   {
     id: wagnerTeamId,
     name: wagnerTeamName,
+    createdAt: canonicalCreatedAt
+  },
+  {
+    id: atlanticOceanTeamId,
+    name: atlanticOceanTeamName,
     createdAt: canonicalCreatedAt
   }
 ];

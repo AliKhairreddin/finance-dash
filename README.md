@@ -34,6 +34,7 @@ The system follows three rules:
 - Record cash, exchange, and wallet holdings, including fiat and crypto assets.
 - Show a clearly labeled approximate USD total from keyless Coinbase rates while retaining exact native balances.
 - Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
+- Import the legacy Management Report workbook into a dedicated Management workspace with summary, business-unit, platform, offer, ledger, and ownership views.
 - Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
 ## Architecture
@@ -47,6 +48,8 @@ flowchart LR
     API --> T["TUNE partner revenue"]
     API --> M["Merit invoice adapter"]
     CRON["Cloudflare scheduled event"] --> API
+    SHEET["Management Report workbook"] --> IMPORT["Validated manual import"]
+    IMPORT --> C
     C --> U
 ```
 
@@ -134,6 +137,24 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 - server-only OpenRouter configuration.
 
 Missing credentials should produce unavailable/empty integration states rather than seeded financial numbers.
+
+## Management Report Imports
+
+The Management workspace keeps the legacy workbook in this dashboard while preserving a clear boundary between a closed manual report snapshot and live operating data. The importer reads every workbook tab for source lineage, normalizes the eight visible management tabs, records data-quality checks, and exposes only sanitized reporting data through the public API. Hidden supporting rows and sensitive transaction references are never returned by `/api/management-report`.
+
+Prepare a local snapshot:
+
+```bash
+npm run import:management-report -- "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit"
+```
+
+Upload the same content-addressed snapshot to Convex after configuring `CONVEX_URL` and the server-only `MANAGEMENT_REPORT_IMPORT_TOKEN`:
+
+```bash
+npm run import:management-report -- "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit" --convex
+```
+
+A local `.xlsx` path is also accepted. Imports are idempotent by workbook content hash. The May 2026 close stays separate from June source rows, which remain visibly marked as post-close data. Future bank, advertising, revenue, invoice, and FX APIs should write normalized ledger and metric records behind the same reporting model instead of recreating spreadsheet formulas.
 
 ## Wise Statement Imports
 

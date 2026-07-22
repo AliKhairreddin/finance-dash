@@ -9,6 +9,7 @@
  */
 
 import type * as dashboard from "../dashboard.js";
+import type * as managementReport from "../managementReport.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +19,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   dashboard: typeof dashboard;
+  managementReport: typeof managementReport;
 }>;
 
 /**

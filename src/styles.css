@@ -4155,3 +4155,934 @@ textarea:focus-visible {
     @apply font-sans;
   }
 }
+
+/* Management report */
+.management-report-view {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
+.management-report-state {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+  padding: 40px 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+  text-align: center;
+}
+
+.management-report-state-content {
+  display: grid;
+  max-width: 470px;
+  justify-items: center;
+  gap: 10px;
+}
+
+.management-report-state-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-soft);
+  color: var(--app-muted);
+}
+
+.management-report-state.error .management-report-state-icon {
+  border-color: var(--red-border);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.management-report-state h2,
+.management-report-state p {
+  margin: 0;
+}
+
+.management-report-state h2 {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.management-report-state p {
+  color: var(--app-muted);
+  line-height: 1.55;
+}
+
+.management-report-loader {
+  animation: management-report-spin 0.9s linear infinite;
+}
+
+@keyframes management-report-spin {
+  to { transform: rotate(360deg); }
+}
+
+.management-report-status-band {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.management-report-status-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-header-shine), var(--panel-soft);
+}
+
+.management-report-status-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.management-report-status-title-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--green-border);
+  border-radius: 10px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.management-report-status-title-icon.ready-with-warnings {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.management-report-status-title-icon.invalid {
+  border-color: var(--red-border);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.management-report-status-title h2,
+.management-report-status-title p {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-status-title h2 {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.management-report-status-title p {
+  margin-top: 2px;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.management-report-source-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--info-border);
+  border-radius: 999px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.management-report-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.management-report-status-item {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 15px 18px;
+  border-right: 1px solid var(--line-soft);
+}
+
+.management-report-status-item:last-child {
+  border-right: 0;
+}
+
+.management-report-status-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.management-report-status-value {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-status-note {
+  overflow: hidden;
+  color: var(--app-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-quality {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
+  padding: 0 18px 16px;
+}
+
+.management-report-coverage,
+.management-report-checks {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.management-report-quality-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.management-report-quality-heading strong {
+  font-size: 12px;
+}
+
+.management-report-quality-heading span {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+.management-report-sheet-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.management-report-sheet-pill {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid var(--green-border);
+  border-radius: 7px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.management-report-sheet-pill span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-sheet-pill small {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 550;
+  opacity: 0.78;
+}
+
+.management-report-sheet-pill.warning {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.management-report-sheet-pill.error {
+  border-color: var(--red-border);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.management-report-check-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.management-report-check {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.management-report-check.pass svg { color: var(--green); }
+.management-report-check.warning svg { color: var(--amber); }
+.management-report-check.error svg { color: var(--red); }
+
+.management-report-tabs {
+  min-width: 0;
+  gap: 16px;
+}
+
+.management-report-tab-list {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.management-report-tab-trigger {
+  min-width: max-content;
+  height: 32px;
+  flex: 0 0 auto;
+  padding-inline: 12px;
+  border-radius: 7px;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.management-report-tab-trigger[data-active] {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(9, 9, 11, 0.07);
+}
+
+.management-report-tab-panel {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.management-report-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.management-report-kpi-grid.dense {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.management-report-kpi {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.management-report-kpi-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.management-report-kpi strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: clamp(20px, 2vw, 27px);
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-kpi small {
+  min-height: 30px;
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.management-report-tone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.management-report-tone.positive { color: var(--green); }
+.management-report-tone.negative { color: var(--red); }
+.management-report-tone.warning { color: var(--amber); }
+
+.management-report-two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.management-report-ownership-sections {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.management-report-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.management-report-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-header-shine), var(--panel-soft);
+}
+
+.management-report-panel-heading {
+  min-width: 0;
+}
+
+.management-report-panel-heading h3,
+.management-report-panel-heading p {
+  margin: 0;
+}
+
+.management-report-panel-heading h3 {
+  color: var(--ink);
+  font-size: 14px;
+  letter-spacing: -0.015em;
+}
+
+.management-report-panel-heading p {
+  margin-top: 4px;
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.management-report-panel-body {
+  padding: 16px;
+}
+
+.management-report-panel-body.flush {
+  padding: 0;
+}
+
+.management-report-trend-chart {
+  display: grid;
+  gap: 12px;
+}
+
+.management-report-trend-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 10px;
+}
+
+.management-report-trend-label,
+.management-report-trend-value {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.management-report-trend-value {
+  text-align: right;
+}
+
+.management-report-trend-track {
+  position: relative;
+  display: flex;
+  height: 26px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--line-soft);
+}
+
+.management-report-trend-bar {
+  position: absolute;
+  left: 0;
+  min-width: 2px;
+  border-radius: 0 3px 3px 0;
+}
+
+.management-report-trend-bar.revenue {
+  top: 4px;
+  height: 8px;
+  background: var(--ink);
+}
+
+.management-report-trend-bar.spend {
+  bottom: 4px;
+  height: 8px;
+  background: var(--app-muted);
+}
+
+.management-report-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 4px;
+  color: var(--app-muted);
+  font-size: 10px;
+}
+
+.management-report-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.management-report-chart-legend i {
+  display: block;
+  width: 9px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.management-report-chart-legend .spend i {
+  background: var(--app-muted);
+}
+
+.management-report-table-wrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.management-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.management-report-table caption {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.management-report-table th,
+.management-report-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.management-report-table th {
+  color: var(--app-muted);
+  background: var(--panel-soft);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.management-report-table tbody tr:last-child td,
+.management-report-table tfoot tr:last-child td {
+  border-bottom: 0;
+}
+
+.management-report-table tbody tr:hover {
+  background: var(--panel-soft);
+}
+
+.management-report-table td.amount,
+.management-report-table th.amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.management-report-table td.wrap {
+  min-width: 160px;
+  white-space: normal;
+}
+
+.management-report-table td strong,
+.management-report-table td small {
+  display: block;
+}
+
+.management-report-table td small {
+  margin-top: 2px;
+  color: var(--app-muted);
+  font-size: 10px;
+}
+
+.management-report-table .total-row td {
+  border-top: 1px solid var(--line);
+  background: var(--panel-soft);
+  font-weight: 750;
+}
+
+.management-report-positive { color: var(--green); }
+.management-report-negative { color: var(--red); }
+.management-report-muted { color: var(--app-muted); }
+
+.management-report-breakdown {
+  display: grid;
+  gap: 12px;
+}
+
+.management-report-breakdown-row {
+  display: grid;
+  gap: 6px;
+}
+
+.management-report-breakdown-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.management-report-breakdown-copy strong {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.management-report-breakdown-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line-soft);
+}
+
+.management-report-breakdown-bar {
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--ink);
+}
+
+.management-report-breakdown-row:nth-child(2n) .management-report-breakdown-bar {
+  background: var(--app-muted);
+}
+
+.management-report-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.management-report-dimension-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--control-bg);
+}
+
+.management-report-dimension-switch button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.management-report-dimension-switch button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--panel);
+}
+
+.management-report-dimension-switch button:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.management-report-field {
+  display: grid;
+  min-width: 150px;
+  gap: 5px;
+  color: var(--app-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.management-report-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.5fr) repeat(2, minmax(150px, 0.7fr));
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.management-report-search {
+  position: relative;
+}
+
+.management-report-search > svg {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 9px;
+  transform: translateY(-50%);
+  color: var(--app-muted);
+  pointer-events: none;
+}
+
+.management-report-search input {
+  padding-left: 30px;
+}
+
+.management-report-empty-row {
+  padding: 32px 16px !important;
+  color: var(--app-muted);
+  text-align: center !important;
+  white-space: normal !important;
+}
+
+.management-report-summary-note,
+.management-report-ownership-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 13px;
+  border: 1px solid var(--info-border);
+  border-radius: 10px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.management-report-summary-note.warning {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.management-report-summary-note svg,
+.management-report-ownership-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.management-report-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.management-report-balance-block {
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.management-report-balance-block h4 {
+  margin: 0 0 10px;
+  color: var(--app-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.management-report-balance-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.management-report-balance-list div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.management-report-balance-list dt {
+  color: var(--app-muted);
+}
+
+.management-report-balance-list dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.management-report-balance-total {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-weight: 750;
+}
+
+.management-report-entity-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid var(--green-border);
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.management-report-entity-status.inactive {
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--app-muted);
+}
+
+@media (max-width: 1180px) {
+  .management-report-status-grid,
+  .management-report-kpi-grid,
+  .management-report-kpi-grid.dense {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .management-report-status-item:nth-child(2) {
+    border-right: 0;
+  }
+
+  .management-report-status-item:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .management-report-two-column,
+  .management-report-quality {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .management-report-view {
+    gap: 14px;
+  }
+
+  .management-report-status-topline,
+  .management-report-panel-header,
+  .management-report-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .management-report-source-badge {
+    width: fit-content;
+  }
+
+  .management-report-status-grid,
+  .management-report-kpi-grid,
+  .management-report-kpi-grid.dense,
+  .management-report-balance-grid,
+  .management-report-filter-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .management-report-status-item {
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .management-report-status-item:nth-child(3) {
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .management-report-status-item:last-child {
+    border-bottom: 0;
+  }
+
+  .management-report-quality {
+    padding-inline: 12px;
+  }
+
+  .management-report-tab-list {
+    display: flex;
+    width: 100%;
+  }
+
+  .management-report-trend-row {
+    grid-template-columns: 58px minmax(120px, 1fr) 76px;
+  }
+
+  .management-report-panel-body {
+    padding: 13px;
+  }
+
+  .management-report-field {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .management-report-loader {
+    animation-duration: 1.8s;
+  }
+}
