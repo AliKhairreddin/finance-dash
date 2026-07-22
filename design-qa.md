@@ -1,64 +1,69 @@
 # Design QA
 
-- Source visual truth: `/Users/alikheireddine/.codex/generated_images/019f81d6-812c-7c10-a985-9b0f9c6afbb6/exec-b0fa9131-4c2a-4c7c-8916-a3b60fd3ccaa.png`
-- Implementation screenshot: `/tmp/finance-dash-mobile-final-2.png`
-- Live-data implementation screenshot: `/tmp/finance-dash-live-mobile-fixed.png`
-- Normalized side-by-side comparison: `/tmp/finance-dash-option3-comparison-final.png` (source left, implementation right)
-- Viewport: browser `390 × 844`; browser screenshot content capture `375 × 812`
-- State: light theme, Overview selected, mobile navigation closed, empty financial data with live incomplete-source warning
+- Source visual truth: user-provided Dia appshot plus `/tmp/finance-dash-invoice-popup-before.png` (pre-change production popup)
+- Implementation screenshot: `/tmp/finance-dash-invoice-popup-real-data.png`
+- Search interaction screenshot: `/tmp/finance-dash-invoice-company-search.png`
+- Mobile implementation screenshot: `/tmp/finance-dash-invoice-popup-mobile-fixed.png`
+- Normalized side-by-side comparison: `/tmp/finance-dash-invoice-popup-comparison.png` (source left, implementation right)
+- Viewport: source `1265 × 712`; implementation `1280 × 720`; mobile `390 × 844`
+- Density normalization: browser screenshots were captured at CSS-pixel density; the implementation was scaled to `1265 × 712` for the final comparison
+- State: light theme, Invoices selected, Kissterra draft open, company selected, Merit tax unselected, form body at its top position
 
 ## Findings
 
-- No actionable P0, P1, or P2 differences remain.
-- The implementation deliberately retains the existing metric details, liquidity rate note, and live incomplete-source warning. This places the last two finance-summary rows below the first viewport compared with the concept, but preserves the user's requested information and a current operational warning.
-- The concept's chevrons are omitted from non-interactive balance and metric rows so the production UI does not imply unsupported drill-in behavior. Navigation, theme, add-company, and sync controls retain clear interactive affordances.
+- No actionable P0, P1, or P2 issues remain.
+- The searchable company and Merit tax controls keep their menus inside a product-styled popup layer instead of using the browser-native menu shown in the source. Filtering, selection, empty results, and selected-state indicators are visible and keyboard-addressable.
+- The invoice popup now has stable header, scrollable body, and footer regions. The customer fields, four-column Merit summary, financial fields, date pairs, description, and actions share consistent outer edges and spacing.
 
 ## Required Fidelity Surfaces
 
-- Fonts and typography: Geist Variable is preserved. The final mobile heading fits on one line like the source, with matching compact uppercase labels, tabular financial values, and readable secondary copy.
-- Spacing and layout rhythm: the command bar, heading, shallow liquidity block, divider-based balance rows, and grouped finance-summary rows follow the source hierarchy. The layout has no horizontal overflow at the verified viewport.
-- Colors and visual tokens: the implementation uses the existing monochrome light/dark tokens, subtle neutral surface tint, hairline dividers, and semantic amber warning treatment. Shadows are removed from nested summary surfaces.
-- Image quality and asset fidelity: the target contains no raster imagery. Existing Lucide icons are used consistently with the product's established icon system; no placeholder, CSS-drawn, inline-SVG, or generated decorative assets were introduced.
-- Copy and content: all existing financial labels, values, explanatory details, timestamps, and live warnings are preserved. No new financial metrics or data were invented.
+- Fonts and typography: the existing Geist Variable family, label weights, field text sizes, uppercase eyebrow, and heading hierarchy are preserved. Long customer, tax, and email values remain readable without breaking their grid tracks.
+- Spacing and layout rhythm: the popup uses one consistent two-column form grid. Net amount and currency are grouped within the left half while Merit tax occupies the aligned right half. The customer summary uses a compact four-column definition grid and a separate explanatory row. Header and footer remain visible while the body scrolls.
+- Colors and visual tokens: existing panel, border, focus, hover, green customer-summary, and modal shadow tokens are reused in light and dark themes. No new palette or decorative treatment was introduced.
+- Image quality and asset fidelity: the popup contains no raster imagery. Existing Lucide Search, Check, ChevronDown, X, and form-action icons are used consistently; no placeholder or code-drawn assets were added.
+- Copy and content: invoice data and Merit guidance are unchanged. Search placeholders and empty-result messages are the only new copy.
 
 ## Interaction And Responsive Evidence
 
-- Mobile dropdown opens, exposes all eight destinations, selects a destination, updates its label, and closes after selection.
-- Escape closes the open dropdown.
-- Theme toggles successfully in the compact command bar and was restored to light mode.
-- Overview, Revenue, Invoices, and Companies were visually inspected at the mobile viewport; desktop Overview was inspected at the default `1280 × 720` browser viewport.
-- Browser console errors checked: none.
-- The deployed page was rechecked with real multi-currency balances; long values wrap within their value track without squeezing labels or creating horizontal overflow.
-- Automated checks: TypeScript lint, 48 tests, and production build passed.
+- Company dropdown opens with the full client list, filters `kiss` to Kissterra, and filters `Sil` to SilverPush in the local sample dataset.
+- Selecting SilverPush closes the list and updates the invoice customer field.
+- Merit tax dropdown opens with live Merit rates, filters `outside Estonia` to one option, and selection closes the list with the chosen tax displayed.
+- The selected option is marked with both accessible selected state and a visible check icon.
+- At `390 × 844`, the form collapses to one column while amount and currency remain a compact pair; Cancel and Save draft remain fully visible in the fixed footer.
+- The modal suppresses background-page scrolling, leaving one clear scrollbar for its body.
+- Browser console errors checked after company and tax interactions: none.
+- Automated checks: TypeScript lint, 63 passing tests (1 skipped), and production build passed.
 
 ## Comparison History
 
-1. Initial comparison: `/tmp/finance-dash-option3-comparison.png`
-   - [P2] The implementation heading wrapped to two lines while the source kept it on one line.
-   - [P2] The liquidity summary was materially taller than the source because of larger mobile type, padding, and line spacing.
-   - Fixes: reduced the mobile heading scale, tightened liquidity padding/gaps/type, shortened supporting-row height, reduced metric-row height, and removed side margins from the live warning.
-2. Post-fix comparison: `/tmp/finance-dash-option3-comparison-final.png`
-   - The heading, primary summary proportions, row rhythm, control sizing, and overall visual density now match the selected direction without sacrificing production data or truthful affordances.
-3. Live-data responsive check: `/tmp/finance-dash-live-mobile-fixed.png`
-   - [P1] The first deployed pass exposed a multi-currency total that consumed the metric row's intrinsic-width value track and squeezed its label.
-   - Fix: changed the mobile metric row to bounded fractional label/value tracks and allowed the value to wrap inside its assigned track.
-   - Post-fix evidence: the full label, supporting copy, and `€51,891.36 · £0.00 · $18,757.44` value remain readable with no horizontal overflow or console errors.
+1. Source review: `/tmp/finance-dash-invoice-popup-before.png`
+   - [P1] Company and Merit tax used native selects with no text filtering; the long company menu escaped the popup and obscured most of the form.
+   - [P2] The three-column financial row did not share the two-column alignment used by surrounding fields.
+   - [P2] The whole popup scrolled, so actions disappeared and the page and popup exposed competing scrollbars.
+2. First implementation: `/tmp/finance-dash-invoice-popup-local.png`
+   - Searchable comboboxes, a two-column form rhythm, and fixed header/body/footer regions were added.
+   - [P2] At the mobile breakpoint, global full-width button rules squeezed Cancel out of the footer.
+3. Mobile fix: `/tmp/finance-dash-invoice-popup-mobile-fixed.png`
+   - The footer now uses explicit two-column tracks, and background scrolling is suppressed while a modal is open.
+4. Final real-data pass: `/tmp/finance-dash-invoice-popup-comparison.png`
+   - Customer identity, long billing emails, ID, financial fields, date fields, and search affordances fit their intended tracks with no actionable alignment or overflow issues.
 
 ## Focused Region Comparison
 
-A separate crop was not needed: the normalized `752 × 812` comparison keeps the full command bar, heading, liquidity summary, supporting balances, warning state, and readable finance-summary labels and values visible at original-height scale.
+- `/tmp/finance-dash-invoice-company-search.png` verifies the search input, clear and disclosure controls, filtered option row, selected indicator, popup width, and layering at readable scale.
+- `/tmp/finance-dash-invoice-popup-mobile-fixed.png` verifies the narrow-screen field and footer alignment.
 
 ## Implementation Checklist
 
-- [x] Compact mobile dropdown navigation
-- [x] Working command-bar actions and keyboard dismissal
-- [x] Shallow liquidity summary and divider-based supporting rows
-- [x] Grouped, compact finance-summary rows
-- [x] Shared density treatment for summary bands, filters, panels, and cards across major pages
-- [x] Mobile, desktop, dark-mode, interaction, console, test, and build verification
+- [x] Searchable Company dropdown
+- [x] Searchable Merit tax dropdown
+- [x] Filtered, empty, selected, hover, and focus states
+- [x] Consistent popup grid and field alignment
+- [x] Fixed header and action footer with a scrollable form body
+- [x] Real-data, mobile, console, lint, test, and build verification
 
 ## Follow-up Polish
 
-- P3: if metric drill-in routes are added later, the source chevrons can be restored as real links rather than decorative affordances.
+- No P3 follow-up is required for this scoped popup change.
 
 final result: passed

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   BillingCadence,
@@ -696,6 +697,14 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   const clients = dashboard.providers.filter((provider) => provider.type === "client");
   const selectedProvider = providerId ? clients.find((provider) => provider.id === providerId) : undefined;
   const officialCustomerName = selectedProvider?.legalName?.trim() || selectedProvider?.name;
+  const companyOptions = clients.map((provider) => ({
+    value: provider.id,
+    label: `${provider.name}${provider.meritCustomerId ? " · Merit" : ""}`
+  }));
+  const taxOptions = dashboard.meritTaxes.map((tax) => ({
+    value: tax.id,
+    label: `${tax.name} · ${tax.taxPct}%`
+  }));
 
   function chooseProvider(nextId: string) {
     setProviderId(nextId);
@@ -739,12 +748,30 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
     <div className="modal-backdrop" role="presentation">
       <form className="modal wide-modal invoice-editor-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-editor-title" onSubmit={handleSubmit}>
         <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
-        <div className="modal-body-stack">
+        <div className="modal-body-stack invoice-editor-body">
           {error && <div className="inline-error">{error}</div>}
-          <div className="form-grid"><label>Company<NativeSelect value={providerId} onChange={(event) => chooseProvider(event.target.value)}><NativeSelectOption value="">Choose a client</NativeSelectOption>{clients.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}{provider.meritCustomerId ? " · Merit" : ""}</NativeSelectOption>)}</NativeSelect></label><label>Invoice customer<Input value={selectedProvider?.meritCustomerId ? officialCustomerName : customerName} readOnly={Boolean(selectedProvider?.meritCustomerId)} aria-readonly={selectedProvider?.meritCustomerId ? "true" : undefined} onChange={(event) => setCustomerName(event.target.value)} /><small className="field-help">{selectedProvider?.meritCustomerId ? "Locked to the legal name saved in Merit." : "Choose a Merit customer for revenue invoices."}</small></label></div>
+          <div className="invoice-form-grid">
+            <div className="invoice-field">
+              <label htmlFor="invoice-company">Company</label>
+              <SearchableSelect
+                id="invoice-company"
+                value={providerId}
+                options={companyOptions}
+                onValueChange={chooseProvider}
+                placeholder="Search or choose a client"
+                emptyMessage="No clients found"
+                ariaLabel="Company"
+              />
+            </div>
+            <div className="invoice-field">
+              <label htmlFor="invoice-customer">Invoice customer</label>
+              <Input id="invoice-customer" value={selectedProvider?.meritCustomerId ? officialCustomerName : customerName} readOnly={Boolean(selectedProvider?.meritCustomerId)} aria-readonly={selectedProvider?.meritCustomerId ? "true" : undefined} onChange={(event) => setCustomerName(event.target.value)} />
+              <small className="field-help">{selectedProvider?.meritCustomerId ? "Locked to the legal name saved in Merit." : "Choose a Merit customer for revenue invoices."}</small>
+            </div>
+          </div>
           {selectedProvider?.meritCustomerId && (
             <div className="merit-customer-preview">
-              <div><span>Merit customer</span><strong>{officialCustomerName}</strong><small>ID {selectedProvider.meritCustomerId}</small></div>
+              <div className="merit-customer-heading"><div><span>Merit customer</span><strong>{officialCustomerName}</strong></div><small>ID {selectedProvider.meritCustomerId}</small></div>
               <dl>
                 <div><dt>Billing email</dt><dd>{selectedProvider.email || "Not saved"}</dd></div>
                 <div><dt>Billing address</dt><dd>{selectedProvider.address || selectedProvider.country || "Not saved"}</dd></div>
@@ -754,10 +781,33 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
               <p>Merit will render its saved company identity and invoice template; this draft supplies the service period, line description, net amount, tax, issue date, and due date.</p>
             </div>
           )}
-          <div className="form-grid three"><label>Net amount<Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Currency<Input value={currency} maxLength={6} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></label><label>Merit tax<NativeSelect value={taxId} onChange={(event) => setTaxId(event.target.value)}><NativeSelectOption value="">Choose before sending</NativeSelectOption>{dashboard.meritTaxes.map((tax) => <NativeSelectOption key={tax.id} value={tax.id}>{tax.name} · {tax.taxPct}%</NativeSelectOption>)}</NativeSelect></label></div>
-          <div className="form-grid"><label>Issue date<Input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label><label>Due date<Input type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label></div>
-          <div className="form-grid"><label>Service period start<Input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label><label>Service period end<Input type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label></div>
-          <label>Description / Merit item<Textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></label>
+          <div className="invoice-financial-grid">
+            <div className="invoice-money-fields">
+              <div className="invoice-field"><label htmlFor="invoice-amount">Net amount</label><Input id="invoice-amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></div>
+              <div className="invoice-field"><label htmlFor="invoice-currency">Currency</label><Input id="invoice-currency" value={currency} maxLength={6} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></div>
+            </div>
+            <div className="invoice-field">
+              <label htmlFor="invoice-tax">Merit tax</label>
+              <SearchableSelect
+                id="invoice-tax"
+                value={taxId}
+                options={taxOptions}
+                onValueChange={setTaxId}
+                placeholder="Search or choose a tax"
+                emptyMessage="No taxes found"
+                ariaLabel="Merit tax"
+              />
+            </div>
+          </div>
+          <div className="invoice-form-grid">
+            <div className="invoice-field"><label htmlFor="invoice-issue-date">Issue date</label><Input id="invoice-issue-date" type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></div>
+            <div className="invoice-field"><label htmlFor="invoice-due-date">Due date</label><Input id="invoice-due-date" type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></div>
+          </div>
+          <div className="invoice-form-grid">
+            <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start</label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></div>
+            <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
+          </div>
+          <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
           <div className="income-callout"><CircleAlert size={16} /><span>Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action.</span></div>
         </div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !customerName.trim() || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} Save draft</Button></div>
