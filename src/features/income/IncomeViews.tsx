@@ -133,7 +133,8 @@ function revenuePartnerForInvoice(invoice: Invoice, dashboard: DashboardSnapshot
   return undefined;
 }
 
-function invoiceIsSendReady(invoice: Invoice): boolean {
+function invoiceIsSendReady(invoice: Invoice, providersById: Map<string, Provider>): boolean {
+  const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
   return (
     invoice.documentType === "sales_invoice" &&
     invoice.status === "draft" &&
@@ -141,8 +142,22 @@ function invoiceIsSendReady(invoice: Invoice): boolean {
     !invoice.externalId &&
     !invoice.meritCreationReservedAt &&
     !invoice.sendError &&
-    Boolean(invoice.taxId)
+    Boolean(invoice.taxId) &&
+    (invoice.origin !== "revenue" || Boolean(provider?.meritCustomerId))
   );
+}
+
+function invoiceCanBeDelivered(invoice: Invoice): boolean {
+  return (
+    invoice.documentType === "sales_invoice" &&
+    invoice.status === "open" &&
+    Boolean(invoice.externalId) &&
+    (invoice.meritDeliveryStatus === "saved" || invoice.meritDeliveryStatus === "delivery-failed")
+  );
+}
+
+function invoiceCanBeSelected(invoice: Invoice, providersById: Map<string, Provider>): boolean {
+  return invoiceIsSendReady(invoice, providersById) || invoiceCanBeDelivered(invoice);
 }
 
 export function RevenueView({
@@ -152,8 +167,8 @@ export function RevenueView({
   onOpenInvoices
 }: {
   dashboard: DashboardSnapshot;
-  onSyncRevenue: (payload: SyncRevenuePayload) => Promise<void>;
-  onDraftRevenueRun: (runId: string) => Promise<void>;
+  onSyncRevenue: (payload: SyncRevenuePayload) => Promise<RevenueRun[]>;
+  onDraftRevenueRun: (run: RevenueRun) => Promise<void>;
   onOpenInvoices: () => void;
 }) {
   const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
@@ -165,6 +180,7 @@ export function RevenueView({
   const [periodEnd, setPeriodEnd] = useState("");
   const [busy, setBusy] = useState(false);
   const [draftingRunId, setDraftingRunId] = useState<string | null>(null);
+  const [pullResults, setPullResults] = useState<RevenueRun[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const partnersById = useMemo(
@@ -173,10 +189,15 @@ export function RevenueView({
   );
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const currencies = useMemo(
-    () => [...new Set([...dashboard.revenueRuns.map((run) => run.currency), ...dashboard.revenueAccruals.map((row) => row.currency)])].sort(),
-    [dashboard.revenueAccruals, dashboard.revenueRuns]
+    () => [...new Set([...pullResults.map((run) => run.currency), ...dashboard.revenueRuns.map((run) => run.currency), ...dashboard.revenueAccruals.map((row) => row.currency)])].sort(),
+    [dashboard.revenueAccruals, dashboard.revenueRuns, pullResults]
   );
-  const visibleRuns = dashboard.revenueRuns.filter((run) => {
+  const savedRunIds = new Set(dashboard.revenueRuns.map((run) => run.id));
+  const displayedRuns = [
+    ...pullResults.filter((run) => !savedRunIds.has(run.id)),
+    ...dashboard.revenueRuns
+  ];
+  const visibleRuns = displayedRuns.filter((run) => {
     const partner = partnersById.get(run.partnerId);
     return (
       (partnerId === "all" || run.partnerId === partnerId) &&
@@ -213,12 +234,13 @@ export function RevenueView({
     setBusy(true);
     setError(null);
     try {
-      await onSyncRevenue({
+      const runs = await onSyncRevenue({
         partnerId: partnerId === "all" ? undefined : partnerId,
         periodPreset,
         periodStart: periodPreset === "custom" ? periodStart : undefined,
         periodEnd: periodPreset === "custom" ? periodEnd : undefined
       });
+      setPullResults(runs);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Revenue could not be pulled");
     } finally {
@@ -226,11 +248,12 @@ export function RevenueView({
     }
   }
 
-  async function prepareDraft(runId: string) {
-    setDraftingRunId(runId);
+  async function prepareDraft(run: RevenueRun) {
+    setDraftingRunId(run.id);
     setError(null);
     try {
-      await onDraftRevenueRun(runId);
+      await onDraftRevenueRun(run);
+      setPullResults((results) => results.filter((item) => item.id !== run.id));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Revenue draft could not be prepared");
     } finally {
@@ -328,14 +351,14 @@ export function RevenueView({
         {error && <div className="inline-error">{error}</div>}
 
         <div className="income-summary-grid">
-          <IncomeSummary label="Tracked revenue" value={formatTotals(totalRevenue)} detail={`${visibleRuns.length} completed pull rows`} />
+          <IncomeSummary label="Revenue shown" value={formatTotals(totalRevenue)} detail={`${visibleRuns.length} saved or current result rows`} />
           <IncomeSummary label="Drafts prepared" value={formatTotals(draftedRevenue)} detail="Ready for invoice review" tone="draft" />
           <IncomeSummary label="Accruing now" value={formatTotals(accruingRevenue)} detail={`${visibleAccruals.length} current-period invoice previews`} tone="accruing" />
           <IncomeSummary label="Automation" value={lastAutomation?.status ?? "Scheduled"} detail="Monday 09:00 Beirut" tone={lastAutomation?.status === "failed" ? "warning" : ""} />
         </div>
 
         <div className="table-section-heading">
-          <div><h3>Revenue activity</h3><p>Sending and delivery actions live on Invoices.</p></div>
+          <div><h3>Revenue activity</h3><p>Pull results stay temporary until you prepare a draft invoice.</p></div>
           <Button className="icon-text-button" type="button" onClick={onOpenInvoices}><FilePlus2 size={15} /> Invoices</Button>
         </div>
         <div className="table-wrap">
@@ -361,7 +384,7 @@ export function RevenueView({
                     <td>{run.invoiceId
                       ? <Button className="text-link-button" type="button" onClick={onOpenInvoices}>{run.externalInvoiceId ?? "View draft"}</Button>
                       : canPrepareDraft
-                        ? <Button className="icon-text-button" type="button" disabled={draftingRunId !== null} onClick={() => void prepareDraft(run.id)}>{draftingRunId === run.id ? <Loader2 className="spin" size={14} /> : <FilePlus2 size={14} />} Prepare draft</Button>
+                        ? <Button className="icon-text-button" type="button" disabled={draftingRunId !== null} onClick={() => void prepareDraft(run)}>{draftingRunId === run.id ? <Loader2 className="spin" size={14} /> : <FilePlus2 size={14} />} Prepare draft</Button>
                         : <span className="muted-cell">{run.status === "pulled" && run.revenue > 0 ? "Period still open" : "Not drafted"}</span>}</td>
                   </tr>
                 );
@@ -376,7 +399,7 @@ export function RevenueView({
           <div><p className="eyebrow">Open-income preview</p><h2>Invoices building now</h2></div>
           <span className="total-pill">{visibleAccruals.length} accruing</span>
         </div>
-        <div className="accrual-explainer"><Sparkles size={17} /><span>Weekly and monthly rows show revenue earned so far in the current billing period. Monday automation and Pull now refresh the amount; closed periods become invoice drafts.</span></div>
+        <div className="accrual-explainer"><Sparkles size={17} /><span>Weekly and monthly rows are maintained by Monday automation. Manual pulls are temporary lookups and do not alter these saved previews.</span></div>
         <div className="table-wrap">
           <table className="data-table modern-income-table">
             <thead><tr><th>Company</th><th>Billing period</th><th>Accrued through</th><th>Cadence</th><th>Current amount</th><th>Status</th></tr></thead>
@@ -491,15 +514,18 @@ export function InvoicesView({
   for (const [itemCurrency, amount] of Object.entries(draftTotals)) addTotal(expectedTotals, itemCurrency, amount);
   for (const [itemCurrency, amount] of Object.entries(accruingTotals)) addTotal(expectedTotals, itemCurrency, amount);
 
-  const readyVisibleIds = visibleRows
-    .filter((row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> => row.kind === "invoice" && invoiceIsSendReady(row.invoice))
+  const actionableVisibleIds = visibleRows
+    .filter((row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> => row.kind === "invoice" && invoiceCanBeSelected(row.invoice, providersById))
     .map((row) => row.invoice.id);
-  const allReadySelected = readyVisibleIds.length > 0 && readyVisibleIds.every((id) => selectedIds.includes(id));
+  const allActionableSelected = actionableVisibleIds.length > 0 && actionableVisibleIds.every((id) => selectedIds.includes(id));
+  const selectedInvoices = salesInvoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const selectedDraftCount = selectedInvoices.filter((invoice) => invoice.status === "draft").length;
+  const selectedDeliveryCount = selectedInvoices.filter(invoiceCanBeDelivered).length;
 
   useEffect(() => {
-    const validIds = new Set(salesInvoices.filter(invoiceIsSendReady).map((invoice) => invoice.id));
+    const validIds = new Set(salesInvoices.filter((invoice) => invoiceCanBeSelected(invoice, providersById)).map((invoice) => invoice.id));
     setSelectedIds((current) => current.filter((id) => validIds.has(id)));
-  }, [dashboard.invoices]);
+  }, [dashboard.invoices, dashboard.providers, providersById]);
 
   function toggleSelected(id: string, checked: boolean) {
     setSelectedIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
@@ -532,9 +558,14 @@ export function InvoicesView({
           </div>
           {selectedIds.length > 0 && (
             <div className="selection-action-bar">
-              <span>{selectedIds.length} send-ready draft{selectedIds.length === 1 ? "" : "s"}</span>
+              <span>
+                {selectedIds.length} selected
+                {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
+                {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
+              </span>
               <Button className="primary-button" type="button" onClick={() => setSendIds(selectedIds)} disabled={!meritWriteEnabled}>
-                <Send size={15} /> Send selected
+                {selectedDraftCount === 0 ? <Mail size={15} /> : <Send size={15} />}
+                {selectedDraftCount === 0 ? "Deliver selected" : "Review selected"}
               </Button>
               <Button className="icon-button" type="button" aria-label="Clear selection" onClick={() => setSelectedIds([])}><X size={15} /></Button>
             </div>
@@ -553,14 +584,18 @@ export function InvoicesView({
         {!meritWriteEnabled && (
           <div className="income-callout warning"><CircleAlert size={17} /><span>Merit writes are currently disabled by the deployment switch. Draft review and local payment controls remain available.</span></div>
         )}
+        <div className="invoice-selection-help">
+          <Check size={15} />
+          <span>Select drafts to save or save & deliver in bulk. Select open Merit invoices to deliver them in bulk. Record payments one invoice at a time so each bank allocation stays accurate.</span>
+        </div>
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
-            <thead><tr><th className="selection-column"><Checkbox aria-label="Select all send-ready drafts" checked={allReadySelected} onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...readyVisibleIds])] : selectedIds.filter((id) => !readyVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="selection-column"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
             <tbody>
               {visibleRows.length > 0 ? visibleRows.map((row) => {
                 if (row.kind === "accrual") {
-                  return <tr key={row.id} className="accrual-row"><td className="selection-column"><Checkbox disabled aria-label="Accrual cannot be selected" /></td><td className="counterparty-cell"><strong>{row.accrual.partnerName}</strong><small>Future invoice · current through {dateLabel(row.accrual.accruedThrough)}</small></td><td>{periodLabel(row.accrual.periodStart, row.accrual.periodEnd)}</td><td className="amount">{money(row.accrual.amount, row.accrual.currency)}</td><td><span className="cadence-badge">{cadenceLabel(row.accrual.billingCadence)}</span></td><td><span className="status-pill invoice-status-accruing">Accruing</span></td><td><span className="forecast-copy"><Clock3 size={14} /> Starts after invoice is sent</span></td><td><span className="muted-cell">Monday + Pull now</span></td></tr>;
+                  return <tr key={row.id} className="accrual-row"><td className="selection-column"><Checkbox disabled aria-label="Accrual cannot be selected" /></td><td className="counterparty-cell"><strong>{row.accrual.partnerName}</strong><small>Future invoice · current through {dateLabel(row.accrual.accruedThrough)}</small></td><td>{periodLabel(row.accrual.periodStart, row.accrual.periodEnd)}</td><td className="amount">{money(row.accrual.amount, row.accrual.currency)}</td><td><span className="cadence-badge">{cadenceLabel(row.accrual.billingCadence)}</span></td><td><span className="status-pill invoice-status-accruing">Accruing</span></td><td><span className="forecast-copy"><Clock3 size={14} /> Starts after invoice is sent</span></td><td><span className="muted-cell">Monday automation</span></td></tr>;
                 }
                 const invoice = row.invoice;
                 const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
@@ -568,20 +603,20 @@ export function InvoicesView({
                 const prediction = dashboard.invoicePredictions.find((item) => item.invoiceId === invoice.id);
                 const allocations = dashboard.paymentAllocations.filter((allocation) => allocation.invoiceId === invoice.id);
                 const paidAmount = allocations.reduce((total, allocation) => total + allocation.amount, 0);
-                const ready = invoiceIsSendReady(invoice);
+                const ready = invoiceIsSendReady(invoice, providersById);
                 const sendBlockReason = invoice.sendError
                   ?? (invoice.meritCreationReservedAt
                     ? "Merit creation was already attempted. Review Merit, then edit this draft before retrying."
+                    : invoice.origin === "revenue" && !provider?.meritCustomerId
+                      ? "Edit the revenue rule and choose the customer imported from Merit"
                     : !invoice.taxId
                       ? "Edit the draft and choose a Merit tax first"
                       : "This draft is not send-ready");
-                const canDeliverExisting =
-                  invoice.status === "open" &&
-                  Boolean(invoice.externalId) &&
-                  (invoice.meritDeliveryStatus === "saved" || invoice.meritDeliveryStatus === "delivery-failed");
+                const canDeliverExisting = invoiceCanBeDelivered(invoice);
+                const selectable = ready || canDeliverExisting;
                 return (
                   <tr key={invoice.id}>
-                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!ready} title={ready ? "Select draft" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
+                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={ready ? "Select draft to save or deliver" : canDeliverExisting ? "Select existing Merit invoice for delivery" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
                     <td className="counterparty-cell"><strong>{invoice.invoiceNumber || "Draft invoice"}</strong><span>{provider?.name ?? invoice.customerName}</span><small>{invoice.description}</small></td>
                     <td><span>{periodLabel(invoice.periodStart, invoice.periodEnd)}</span><small>Due {dateLabel(invoice.dueDate)}</small></td>
                     <td className="amount"><strong>{money(invoice.amount, invoice.currency)}</strong>{paidAmount > 0 && invoice.status !== "paid" && <small>{money(paidAmount, invoice.currency)} recorded</small>}</td>
@@ -628,7 +663,7 @@ export function InvoicesView({
       </section>
 
       {editorInvoice && <InvoiceEditorDialog dashboard={dashboard} invoice={editorInvoice === "new" ? undefined : editorInvoice} onClose={() => setEditorInvoice(null)} onSubmit={async (payload) => { if (editorInvoice === "new") await onCreateDraft(payload as CreateInvoicePayload); else await onUpdateDraft(editorInvoice.id, payload as UpdateInvoicePayload); setEditorInvoice(null); }} />}
-      {sendIds && <SendInvoicesDialog invoiceIds={sendIds} invoices={salesInvoices.filter((invoice) => sendIds.includes(invoice.id))} onClose={() => setSendIds(null)} onSend={async (mode) => { await onSendInvoices(sendIds, mode); setSendIds(null); setSelectedIds([]); }} />}
+      {sendIds && <SendInvoicesDialog invoiceIds={sendIds} invoices={salesInvoices.filter((invoice) => sendIds.includes(invoice.id))} providersById={providersById} onClose={() => setSendIds(null)} onSend={async (mode) => { await onSendInvoices(sendIds, mode); setSendIds(null); setSelectedIds([]); }} />}
       {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
     </div>
   );
@@ -659,6 +694,8 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clients = dashboard.providers.filter((provider) => provider.type === "client");
+  const selectedProvider = providerId ? clients.find((provider) => provider.id === providerId) : undefined;
+  const officialCustomerName = selectedProvider?.legalName?.trim() || selectedProvider?.name;
 
   function chooseProvider(nextId: string) {
     setProviderId(nextId);
@@ -679,7 +716,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
     try {
       const core: UpdateInvoicePayload = {
         providerId: providerId || undefined,
-        customerName: customerName.trim(),
+        customerName: selectedProvider?.meritCustomerId ? officialCustomerName! : customerName.trim(),
         amount: Number(amount),
         currency: currency.trim().toUpperCase(),
         issueDate,
@@ -704,7 +741,19 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
         <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="modal-body-stack">
           {error && <div className="inline-error">{error}</div>}
-          <div className="form-grid"><label>Company<NativeSelect value={providerId} onChange={(event) => chooseProvider(event.target.value)}><NativeSelectOption value="">Choose a client</NativeSelectOption>{clients.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label><label>Invoice name<Input value={customerName} onChange={(event) => setCustomerName(event.target.value)} /></label></div>
+          <div className="form-grid"><label>Company<NativeSelect value={providerId} onChange={(event) => chooseProvider(event.target.value)}><NativeSelectOption value="">Choose a client</NativeSelectOption>{clients.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}{provider.meritCustomerId ? " · Merit" : ""}</NativeSelectOption>)}</NativeSelect></label><label>Invoice customer<Input value={selectedProvider?.meritCustomerId ? officialCustomerName : customerName} readOnly={Boolean(selectedProvider?.meritCustomerId)} aria-readonly={selectedProvider?.meritCustomerId ? "true" : undefined} onChange={(event) => setCustomerName(event.target.value)} /><small className="field-help">{selectedProvider?.meritCustomerId ? "Locked to the legal name saved in Merit." : "Choose a Merit customer for revenue invoices."}</small></label></div>
+          {selectedProvider?.meritCustomerId && (
+            <div className="merit-customer-preview">
+              <div><span>Merit customer</span><strong>{officialCustomerName}</strong><small>ID {selectedProvider.meritCustomerId}</small></div>
+              <dl>
+                <div><dt>Billing email</dt><dd>{selectedProvider.email || "Not saved"}</dd></div>
+                <div><dt>Billing address</dt><dd>{selectedProvider.address || selectedProvider.country || "Not saved"}</dd></div>
+                <div><dt>Currency</dt><dd>{selectedProvider.defaultCurrency || currency}</dd></div>
+                <div><dt>Terms</dt><dd>{selectedProvider.paymentTermsDays ?? 0} days</dd></div>
+              </dl>
+              <p>Merit will render its saved company identity and invoice template; this draft supplies the service period, line description, net amount, tax, issue date, and due date.</p>
+            </div>
+          )}
           <div className="form-grid three"><label>Net amount<Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Currency<Input value={currency} maxLength={6} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></label><label>Merit tax<NativeSelect value={taxId} onChange={(event) => setTaxId(event.target.value)}><NativeSelectOption value="">Choose before sending</NativeSelectOption>{dashboard.meritTaxes.map((tax) => <NativeSelectOption key={tax.id} value={tax.id}>{tax.name} · {tax.taxPct}%</NativeSelectOption>)}</NativeSelect></label></div>
           <div className="form-grid"><label>Issue date<Input type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label><label>Due date<Input type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label></div>
           <div className="form-grid"><label>Service period start<Input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label><label>Service period end<Input type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label></div>
@@ -717,7 +766,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   );
 }
 
-function SendInvoicesDialog({ invoiceIds, invoices, onClose, onSend }: { invoiceIds: string[]; invoices: Invoice[]; onClose: () => void; onSend: (mode: MeritSendMode) => Promise<void> }) {
+function SendInvoicesDialog({ invoiceIds, invoices, providersById, onClose, onSend }: { invoiceIds: string[]; invoices: Invoice[]; providersById: Map<string, Provider>; onClose: () => void; onSend: (mode: MeritSendMode) => Promise<void> }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [busyMode, setBusyMode] = useState<MeritSendMode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -732,6 +781,10 @@ function SendInvoicesDialog({ invoiceIds, invoices, onClose, onSend }: { invoice
         (invoice.meritDeliveryStatus === "saved" || invoice.meritDeliveryStatus === "delivery-failed")
     );
   const isDeliveryRetry = deliveryOnly && invoices.some((invoice) => invoice.meritDeliveryStatus === "delivery-failed");
+  const draftCount = invoices.filter((invoice) => invoice.status === "draft").length;
+  const existingCount = invoices.length - draftCount;
+  const mixedSelection = draftCount > 0 && existingCount > 0;
+  const unknownDeliveryCount = invoices.filter((invoice) => invoice.origin === "merit" && invoiceCanBeDelivered(invoice)).length;
 
   async function send(mode: MeritSendMode) {
     if (!acknowledged) return;
@@ -748,19 +801,35 @@ function SendInvoicesDialog({ invoiceIds, invoices, onClose, onSend }: { invoice
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal send-choice-modal" role="dialog" aria-modal="true" aria-labelledby="send-choice-title">
-        <div className="modal-header"><div><p className="eyebrow">External Merit action</p><h2 id="send-choice-title">{deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : `Send ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
-        <div className="send-review-summary"><span>Selected total</span><strong>{formatTotals(totals)}</strong><small>{deliveryOnly ? "These invoices already exist in Merit. This action only requests client delivery; it does not create them again." : "All selected drafts use their saved company rule and Merit tax."}</small></div>
+        <div className="modal-header"><div><p className="eyebrow">External Merit action</p><h2 id="send-choice-title">{deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : mixedSelection ? `Review ${invoiceIds.length} selected invoices` : `Send ${invoiceIds.length} draft${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        <div className="send-review-summary"><span>Selected total</span><strong>{formatTotals(totals)}</strong><small>{deliveryOnly ? "These invoices already exist in Merit. This action only requests client delivery; it does not create them again." : mixedSelection ? `${draftCount} draft${draftCount === 1 ? "" : "s"} will be created; ${existingCount} existing Merit invoice${existingCount === 1 ? "" : "s"} can be delivered in the same action.` : "Each draft uses its linked Merit customer, saved tax, and invoice details shown below."}</small></div>
+        <div className="invoice-send-review-list">
+          {invoices.map((invoice) => {
+            const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
+            return (
+              <div key={invoice.id}>
+                <span>{invoice.status === "draft" ? "Draft" : "In Merit"}</span>
+                <strong>{provider?.legalName || provider?.name || invoice.customerName}</strong>
+                <small>{periodLabel(invoice.periodStart, invoice.periodEnd)} · due {dateLabel(invoice.dueDate)} · {money(invoice.amount, invoice.currency)}</small>
+                <small>{invoice.description}</small>
+              </div>
+            );
+          })}
+        </div>
+        {unknownDeliveryCount > 0 && (
+          <div className="income-callout warning"><CircleAlert size={16} /><span>Merit’s invoice list does not report prior email delivery. Delivering {unknownDeliveryCount} imported invoice{unknownDeliveryCount === 1 ? "" : "s"} may resend them to the saved customer contacts.</span></div>
+        )}
         <div className={`send-option-grid${deliveryOnly ? " single" : ""}`}>
           {deliveryOnly ? (
             <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{isDeliveryRetry ? "Retry Merit delivery" : "Deliver through Merit"}</strong><small>Ask Merit to email/deliver the existing invoice to the client without creating another invoice.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>{isDeliveryRetry ? "Retry delivery" : "Deliver existing invoice"} <ChevronRight size={15} /></>}</span></button>
           ) : (
             <>
-              <button type="button" className="send-option-card" disabled={!acknowledged || busyMode !== null} onClick={() => void send("save")}><span className="send-option-icon"><FilePlus2 size={20} /></span><strong>Save in Merit</strong><small>Create the invoice in Merit and leave delivery to your team.</small><span className="send-option-action">{busyMode === "save" ? <Loader2 className="spin" size={16} /> : <>Choose save only <ChevronRight size={15} /></>}</span></button>
-              <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>Save & deliver</strong><small>Create the invoice in Merit and ask Merit to email/deliver it to the client.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>Choose save & deliver <ChevronRight size={15} /></>}</span></button>
+              <button type="button" className="send-option-card" disabled={!acknowledged || busyMode !== null} onClick={() => void send("save")}><span className="send-option-icon"><FilePlus2 size={20} /></span><strong>Save draft{draftCount === 1 ? "" : "s"} in Merit</strong><small>Create the selected drafts in Merit. Existing Merit invoices stay unchanged.</small><span className="send-option-action">{busyMode === "save" ? <Loader2 className="spin" size={16} /> : <>Choose save only <ChevronRight size={15} /></>}</span></button>
+              <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{mixedSelection ? "Create & deliver all" : "Save & deliver"}</strong><small>Create each draft, then ask Merit to deliver every selected invoice to its saved customer.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>Choose save & deliver <ChevronRight size={15} /></>}</span></button>
             </>
           )}
         </div>
-        <label className="merit-confirmation-check"><Checkbox checked={acknowledged} onCheckedChange={(checked) => setAcknowledged(checked === true)} />{deliveryOnly ? "I understand this asks Merit to deliver/email an existing invoice to the client." : "I understand either option writes real invoices to Merit."}</label>
+        <label className="merit-confirmation-check"><Checkbox checked={acknowledged} onCheckedChange={(checked) => setAcknowledged(checked === true)} />{unknownDeliveryCount > 0 ? "I understand this may resend imported Merit invoices to their saved customer contacts." : deliveryOnly ? "I understand this asks Merit to deliver/email an existing invoice to the client." : "I understand either option writes real invoices to Merit."}</label>
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={busyMode !== null}>Cancel</Button></div>
       </div>

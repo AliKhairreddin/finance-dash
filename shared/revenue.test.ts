@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { RevenuePartner, RevenueRun } from "./types";
+import type { Invoice, Provider, RevenuePartner, RevenueRun } from "./types";
 import {
+  bindRevenuePartnerCompany,
   calculateRevenueMetrics,
   mergeRevenuePartnerDirectory,
+  revenueRuleId,
   resolveRevenuePeriod
 } from "./revenue";
 
@@ -77,12 +79,70 @@ test("revenue rules are ordinary persisted child records and are never injected 
   assert.equal(merged.find((item) => item.id === configured.id)?.providerId, "provider-user-kissterra");
 });
 
-test("revenue rules without an affiliate ID stay disabled until configured", () => {
+test("company-level revenue rules can query the full network without an affiliate filter", () => {
   const custom = { ...partner("unconfigured"), affiliateId: "", enabled: true };
   const merged = mergeRevenuePartnerDirectory([custom]);
 
-  assert.equal(merged.find((item) => item.id === custom.id)?.enabled, false);
+  assert.equal(merged.find((item) => item.id === custom.id)?.enabled, true);
   assert.equal(merged.length, 1);
+});
+
+test("revenue rule IDs are stable and restored drafts bind to the Merit customer", () => {
+  const rule = {
+    ...partner("legacy"),
+    id: revenueRuleId("Kissterra"),
+    providerId: "merit-kissterra",
+    name: "Kissterra",
+    affiliateId: "",
+    invoiceDueDays: 30,
+    defaultMeritTaxId: "tax-zero"
+  };
+  const provider: Provider = {
+    id: "merit-kissterra",
+    name: "Kissterra Technologies Ltd",
+    legalName: "Kissterra Technologies Ltd",
+    type: "client",
+    tags: ["Merit"],
+    aliases: ["Kissterra Technologies Ltd"],
+    defaultCurrency: "USD",
+    paymentTermsDays: 7,
+    meritCustomerId: "customer-kissterra",
+    source: "merit",
+    createdAt: "2026-07-22T00:00:00.000Z"
+  };
+  const orphanedRun = {
+    ...run("run-kissterra", 521252, "USD", "drafted", "2026-07-21T00:00:00.000Z"),
+    partnerId: rule.id,
+    partnerName: "Kissterra"
+  };
+  const orphanedDraft: Invoice = {
+    id: "invoice-kissterra",
+    documentType: "sales_invoice",
+    origin: "revenue",
+    customerName: "Kissterra",
+    amount: 521252,
+    currency: "USD",
+    status: "draft",
+    meritDeliveryStatus: "not-sent",
+    invoiceNumber: "FD-KISSTERRA",
+    issueDate: "2026-07-21",
+    dueDate: "2026-08-20",
+    source: "tune",
+    description: "Partner network revenue",
+    billingRuleId: rule.id,
+    revenueRunIds: [orphanedRun.id],
+    createdAt: "2026-07-21T00:00:00.000Z",
+    updatedAt: "2026-07-21T00:00:00.000Z"
+  };
+
+  const rebound = bindRevenuePartnerCompany(rule, provider, [orphanedRun], [orphanedDraft]);
+
+  assert.equal(rule.id, "revenue-kissterra");
+  assert.equal(rebound.runs[0]?.providerId, provider.id);
+  assert.equal(rebound.invoices[0]?.providerId, provider.id);
+  assert.equal(rebound.invoices[0]?.customerName, provider.legalName);
+  assert.equal(rebound.invoices[0]?.dueDate, "2026-07-28");
+  assert.equal(rebound.invoices[0]?.taxId, "tax-zero");
 });
 
 test("this-week revenue pulls are cumulative from Monday through the current local date", () => {

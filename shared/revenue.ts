@@ -1,4 +1,4 @@
-import type { RevenueMetrics, RevenuePartner, RevenuePeriodPreset, RevenueRun } from "./types";
+import type { Invoice, Provider, RevenueMetrics, RevenuePartner, RevenuePeriodPreset, RevenueRun } from "./types";
 import { sumCurrencyTotals } from "./currencyTotals";
 
 const dayMs = 24 * 60 * 60 * 1000;
@@ -21,14 +21,55 @@ export interface RevenuePeriod {
 }
 
 export function mergeRevenuePartnerDirectory(partners: RevenuePartner[]): RevenuePartner[] {
-  const next = partners.map((partner) =>
-    partner.affiliateId.trim() ? partner : { ...partner, enabled: false }
-  );
-
-  return next.sort((left, right) => {
+  return [...partners].sort((left, right) => {
     const teamOrder = (left.teamId ?? "").localeCompare(right.teamId ?? "");
     return teamOrder || left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
   });
+}
+
+function revenueRuleSlug(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+export function revenueRuleId(name: string, teamId?: string): string {
+  const company = revenueRuleSlug(name) || "company";
+  const team = teamId ? `-${revenueRuleSlug(teamId) || "team"}` : "";
+  return `revenue-${company}${team}`;
+}
+
+export function bindRevenuePartnerCompany(
+  partner: RevenuePartner,
+  provider: Provider,
+  runs: RevenueRun[],
+  invoices: Invoice[]
+): { runs: RevenueRun[]; invoices: Invoice[] } {
+  if (provider.type !== "client" || !provider.meritCustomerId) {
+    throw new Error("Revenue rules require a customer imported from Merit");
+  }
+  const customerName = provider.legalName?.trim() || provider.name;
+  const paymentTermsDays = provider.paymentTermsDays ?? partner.invoiceDueDays;
+  return {
+    runs: runs.map((run) => run.partnerId === partner.id
+      ? { ...run, providerId: provider.id, partnerName: partner.name }
+      : run),
+    invoices: invoices.map((invoice) => {
+      if (invoice.billingRuleId !== partner.id || invoice.status !== "draft" || invoice.externalId) return invoice;
+      return {
+        ...invoice,
+        providerId: provider.id,
+        customerName,
+        dueDate: calculateInvoiceDueDate(invoice.issueDate, paymentTermsDays),
+        taxId: partner.defaultMeritTaxId ?? invoice.taxId,
+        updatedAt: new Date().toISOString()
+      };
+    })
+  };
 }
 
 export function resolveRevenuePeriod({

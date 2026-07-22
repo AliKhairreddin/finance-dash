@@ -54,6 +54,19 @@ const run: RevenueRun = {
   createdAt: "2026-07-13T06:00:00.000Z"
 };
 
+const revenueProvider: Provider = {
+  id: "client",
+  name: "Client Co",
+  legalName: "Client Co LLC",
+  type: "client",
+  tags: [],
+  aliases: [],
+  source: "merit",
+  meritCustomerId: "merit-client",
+  paymentTermsDays: 14,
+  createdAt: "2026-01-01T00:00:00.000Z"
+};
+
 function openInvoice(overrides: Partial<Invoice> = {}): Invoice {
   return {
     id: "invoice-1",
@@ -108,10 +121,10 @@ test("billing period helpers close Monday-Sunday and calendar months", () => {
 
 test("closed revenue run creates an idempotent local draft", () => {
   assert.throws(
-    () => buildRevenueDraft(partner, run, new Date("2026-07-12T18:00:00.000Z")),
+    () => buildRevenueDraft(partner, run, revenueProvider, new Date("2026-07-12T18:00:00.000Z")),
     /not a closed billing period/
   );
-  const draft = buildRevenueDraft(partner, run, new Date("2026-07-13T06:00:00.000Z"));
+  const draft = buildRevenueDraft(partner, run, revenueProvider, new Date("2026-07-13T06:00:00.000Z"));
   assert.equal(draft.id, "invoice-revenue-revenue-client-2026-07-06-2026-07-12");
   assert.equal(draft.status, "draft");
   assert.equal(draft.dueDate, "2026-07-27");

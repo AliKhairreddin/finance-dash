@@ -997,8 +997,10 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
   params.append("fields[1]", "Stat.payout");
   params.append("fields[2]", "Stat.conversions");
   params.append("fields[3]", "Stat.clicks");
-  params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
-  params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
+  if (partner.affiliateId.trim()) {
+    params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
+    params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
+  }
   params.append("filters[Stat.date][conditional]", "BETWEEN");
   params.append("filters[Stat.date][values][0]", period.periodStart);
   params.append("filters[Stat.date][values][1]", period.periodEnd);

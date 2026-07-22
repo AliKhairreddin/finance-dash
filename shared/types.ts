@@ -681,6 +681,17 @@ export interface SyncRevenuePayload {
   timezone?: string;
 }
 
+export interface RevenuePullResult {
+  runs: RevenueRun[];
+}
+
+export interface DraftRevenueRunPayload {
+  partnerId: string;
+  periodStart: string;
+  periodEnd: string;
+  timezone: string;
+}
+
 export interface SendRevenueInvoicePayload {
   confirmation: "SEND_TO_MERIT";
   taxId: string;

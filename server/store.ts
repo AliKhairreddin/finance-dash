@@ -13,6 +13,7 @@ import type {
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
   DashboardSnapshot,
+  DraftRevenueRunPayload,
   FxRate,
   Holding,
   ImportWiseStatementPayload,
@@ -28,6 +29,7 @@ import type {
   RecordInvoicePaymentPayload,
   RevenueAccrual,
   RevenuePartner,
+  RevenuePullResult,
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
@@ -60,7 +62,13 @@ import {
   reconcileMeritInvoices,
   reconcileMeritProviders
 } from "../shared/merit";
-import { calculateRevenueMetrics, mergeRevenuePartnerDirectory, resolveRevenuePeriod } from "../shared/revenue";
+import {
+  bindRevenuePartnerCompany,
+  calculateRevenueMetrics,
+  mergeRevenuePartnerDirectory,
+  revenueRuleId,
+  resolveRevenuePeriod
+} from "../shared/revenue";
 import {
   applyPaymentState,
   buildRevenueDraft,
@@ -754,10 +762,12 @@ function revenuePartnerFields(
 ): Omit<RevenuePartner, "id" | "source" | "createdAt"> {
   const name = payload.name?.trim();
   if (!name) throw new Error("Revenue rule name is required");
-  const affiliateId = payload.affiliateId?.trim();
-  if (!affiliateId) throw new Error("Affiliate ID is required");
+  const affiliateId = payload.affiliateId?.trim() ?? "";
+  if (payload.teamId && !affiliateId) throw new Error("Team revenue rules require an affiliate ID");
   const company = providers.find((provider) => provider.id === payload.providerId);
-  if (!company || company.type !== "client") throw new Error("Revenue rule company must be a client");
+  if (!company || company.type !== "client" || !company.meritCustomerId) {
+    throw new Error("Revenue rules require a customer imported from Merit");
+  }
   if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue rule team not found");
   }
@@ -801,13 +811,21 @@ function revenuePartnerFields(
 }
 
 export async function createRevenuePartner(payload: CreateRevenuePartnerPayload): Promise<RevenuePartner> {
+  const fields = revenuePartnerFields(payload);
   const partner: RevenuePartner = {
-    id: `revenue-partner-${crypto.randomUUID()}`,
-    ...revenuePartnerFields(payload),
+    id: revenueRuleId(fields.name, fields.teamId),
+    ...fields,
     source: "tune",
     createdAt: new Date().toISOString()
   };
+  if (revenuePartners.some((item) => item.id === partner.id)) {
+    throw new Error("A revenue rule already exists for this company and team");
+  }
   revenuePartners = [partner, ...revenuePartners];
+  const provider = providers.find((item) => item.id === partner.providerId)!;
+  const rebound = bindRevenuePartnerCompany(partner, provider, revenueRuns, invoices);
+  revenueRuns = rebound.runs;
+  invoices = rebound.invoices;
   await persist();
   return partner;
 }
@@ -822,6 +840,10 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
   });
   if (!updated) throw new Error("Revenue partner not found");
   revenuePartners = mergeRevenuePartnerDirectory(revenuePartners);
+  const provider = providers.find((item) => item.id === updated!.providerId)!;
+  const rebound = bindRevenuePartnerCompany(updated, provider, revenueRuns, invoices);
+  revenueRuns = rebound.runs;
+  invoices = rebound.invoices;
   await persist();
   return updated;
 }
@@ -1258,39 +1280,6 @@ function updateRevenueAccrual(
   return true;
 }
 
-function openAccrualPeriodEnd(
-  partner: RevenuePartner,
-  run: RevenueRun,
-  now = new Date()
-): string | undefined {
-  if (run.status !== "pulled") {
-    return undefined;
-  }
-  if (partner.billingCadence === "weekly") {
-    const currentWeek = currentWeekAccrualPeriod(now, partner.billingTimezone);
-    return run.periodStart === currentWeek.periodStart &&
-      run.periodEnd >= run.periodStart &&
-      run.periodEnd <= currentWeek.accruedThrough
-      ? currentWeek.periodEnd
-      : undefined;
-  }
-  if (!/^\d{4}-\d{2}-01$/.test(run.periodStart)) return undefined;
-  const currentMonth = resolveRevenuePeriod({
-    periodPreset: "this-month",
-    timezone: run.timezone || partner.timezone,
-    now
-  });
-  if (
-    run.periodStart !== currentMonth.periodStart ||
-    run.periodEnd < run.periodStart ||
-    run.periodEnd > currentMonth.periodEnd
-  ) {
-    return undefined;
-  }
-  const [year, month] = run.periodStart.split("-").map(Number);
-  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-}
-
 function removeClosedRevenueAccrual(partner: RevenuePartner, run: RevenueRun): void {
   const id = `revenue-accrual-${partner.id}-${run.periodStart}-${run.periodEnd}`;
   const previousAccrual = revenueAccruals.find((item) => item.id === id);
@@ -1310,7 +1299,9 @@ function draftRevenueRunInternal(run: RevenueRun, partner: RevenuePartner, autom
   }
   if (automatic && !partner.autoDraft) throw new Error(`Automatic drafting is disabled for ${partner.name}`);
 
-  const draft = buildRevenueDraft(automatic ? partner : { ...partner, autoDraft: true }, run, now);
+  const provider = providers.find((item) => item.id === partner.providerId);
+  if (!provider) throw new Error("Revenue rule customer no longer exists");
+  const draft = buildRevenueDraft(automatic ? partner : { ...partner, autoDraft: true }, run, provider, now);
   invoices = [draft, ...invoices];
   const { error: _error, ...withoutError } = run;
   const draftedRun: RevenueRun = { ...withoutError, status: "drafted", invoiceId: draft.id };
@@ -1323,11 +1314,25 @@ function draftRevenueRunInternal(run: RevenueRun, partner: RevenuePartner, autom
   return draft;
 }
 
-export async function draftRevenueRun(runId: string): Promise<Invoice> {
-  const run = revenueRuns.find((item) => item.id === runId);
-  if (!run) throw new Error("Revenue run not found");
-  const partner = revenuePartners.find((item) => item.id === run.partnerId);
+export async function draftRevenueRun(payload: DraftRevenueRunPayload): Promise<Invoice> {
+  const partner = revenuePartners.find((item) => item.id === payload.partnerId);
   if (!partner) throw new Error("Revenue partner not found");
+  if (!partner.enabled) throw new Error("Revenue rule is disabled");
+  if (payload.timezone !== partner.timezone && payload.timezone !== partner.billingTimezone) {
+    throw new Error("Revenue draft timezone does not match the revenue rule");
+  }
+  const period = resolveRevenuePeriod({
+    periodPreset: "custom",
+    periodStart: payload.periodStart,
+    periodEnd: payload.periodEnd,
+    timezone: payload.timezone
+  });
+  const run: RevenueRun = {
+    ...(await fetchTuneRevenue(partner, period)),
+    ...(partner.teamId
+      ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
+      : {})
+  };
   const invoice = draftRevenueRunInternal(run, partner, false);
   await persist();
   return invoice;
@@ -1582,6 +1587,10 @@ export async function sendInvoices(payload: SendInvoicesPayload): Promise<SendIn
       const invoiceProvider = invoice.providerId
         ? providers.find((provider) => provider.id === invoice?.providerId)
         : undefined;
+      if (invoice.origin === "revenue" && !invoiceProvider?.meritCustomerId) {
+        outcomes.push({ invoiceId, status: "failed", message: "Revenue invoices require a customer imported from Merit" });
+        continue;
+      }
       invoice = {
         ...invoice,
         meritCreationReservedAt: new Date().toISOString(),
@@ -1662,7 +1671,7 @@ export async function sendInvoices(payload: SendInvoicesPayload): Promise<SendIn
   return { dashboard: getSnapshot(), outcomes };
 }
 
-export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
+export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<RevenuePullResult> {
   const selectedPartners = revenuePartners.filter(
     (partner) =>
       partner.enabled &&
@@ -1718,31 +1727,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Das
     }
   }
 
-  const protectedRunIds = new Set(
-    revenueRuns
-      .filter((run) => run.status === "drafted" || run.status === "invoicing" || run.status === "invoiced")
-      .map((run) => run.id)
-  );
-  const safeNextRuns = nextRuns.filter((run) => !protectedRunIds.has(run.id));
-  const partnerById = new Map(selectedPartners.map((partner) => [partner.id, partner]));
-  const acceptedNextRuns: RevenueRun[] = [];
-  for (const run of safeNextRuns) {
-    const partner = partnerById.get(run.partnerId);
-    if (!partner) {
-      acceptedNextRuns.push(run);
-      continue;
-    }
-    const accrualPeriodEnd = openAccrualPeriodEnd(partner, run);
-    if (isClosedBillingPeriod(partner, run)) removeClosedRevenueAccrual(partner, run);
-    if (!accrualPeriodEnd || updateRevenueAccrual(partner, run, accrualPeriodEnd, run.periodEnd)) {
-      acceptedNextRuns.push(run);
-    }
-  }
-  const nextRunIds = new Set(acceptedNextRuns.map((run) => run.id));
-  revenueRuns = [...acceptedNextRuns, ...revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
-  lastSync = new Date().toISOString();
-  await persist();
-  return getSnapshot();
+  return { runs: nextRuns };
 }
 
 export async function syncExternalActivity(): Promise<DashboardSnapshot> {

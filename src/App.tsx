@@ -63,6 +63,7 @@ import type {
   CurrencyTotals,
   DataSource,
   DashboardSnapshot,
+  DraftRevenueRunPayload,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   InvoiceDocumentType,
@@ -75,6 +76,8 @@ import type {
   Provider,
   ProviderType,
   RevenuePartner,
+  RevenuePullResult,
+  RevenueRun,
   RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
@@ -805,7 +808,7 @@ function App() {
     }
   }
 
-  async function syncRevenue(payload: SyncRevenuePayload) {
+  async function syncRevenue(payload: SyncRevenuePayload): Promise<RevenueRun[]> {
     setNotice(null);
     setError(null);
     const response = await fetch(`${apiBase}/revenue/sync`, {
@@ -816,15 +819,24 @@ function App() {
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Revenue sync failed"));
     }
-    setDashboard((await response.json()) as DashboardSnapshot);
-    setNotice("Revenue pulled. Nothing was sent to Merit.");
+    const result = (await response.json()) as RevenuePullResult;
+    setNotice("Revenue pulled for review. The result has not been saved.");
+    return result.runs;
   }
 
-  async function draftRevenueRun(runId: string) {
+  async function draftRevenueRun(run: RevenueRun) {
     setNotice(null);
     setError(null);
-    const response = await fetch(`${apiBase}/revenue/runs/${encodeURIComponent(runId)}/draft`, {
-      method: "POST"
+    const payload: DraftRevenueRunPayload = {
+      partnerId: run.partnerId,
+      periodStart: run.periodStart,
+      periodEnd: run.periodEnd,
+      timezone: run.timezone
+    };
+    const response = await fetch(`${apiBase}/revenue/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Revenue draft could not be prepared"));
@@ -5010,7 +5022,8 @@ function RevenuePartnerModal({
         networkIdEnv,
         apiKeyEnv,
         apiBaseUrlEnv: apiBaseUrlEnv.trim() || undefined,
-        meritCustomerName: meritCustomerName.trim() || undefined,
+        meritCustomerName: providers.find((provider) => provider.id === providerId)?.legalName
+          ?? providers.find((provider) => provider.id === providerId)?.name,
         invoiceDueDays: Number(invoiceDueDays),
         billingCadence,
         billingTimezone,
@@ -5045,8 +5058,8 @@ function RevenuePartnerModal({
             <Input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            Affiliate ID
-            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} />
+            Affiliate ID {teamId ? "" : "(optional)"}
+            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} placeholder={teamId ? "Required for a team-specific stream" : "Blank pulls the full company network"} />
           </label>
         </div>
         <div className="form-grid">
@@ -5058,20 +5071,20 @@ function RevenuePartnerModal({
                 const nextProviderId = event.target.value;
                 const nextProvider = providers.find((provider) => provider.id === nextProviderId);
                 setProviderId(nextProviderId);
-                if (!partner && nextProvider) {
-                  setName(nextProvider.name);
+                if (nextProvider) {
                   setMeritCustomerName(nextProvider.legalName ?? nextProvider.name);
                   setCurrency(nextProvider.defaultCurrency ?? "USD");
                   setInvoiceDueDays(String(nextProvider.paymentTermsDays ?? 30));
+                  if (!partner) setName(nextProvider.name);
                 }
               }}
             >
               <option value="">Choose a client</option>
               {providers
-                .filter((provider) => provider.type === "client")
+                .filter((provider) => provider.type === "client" && provider.meritCustomerId)
                 .map((provider) => (
                   <option key={provider.id} value={provider.id}>
-                    {provider.name}
+                    {provider.name} · Merit
                   </option>
                 ))}
             </select>
@@ -5147,7 +5160,7 @@ function RevenuePartnerModal({
         <div className="form-grid">
           <label>
             Merit customer
-            <Input value={meritCustomerName} onChange={(event) => setMeritCustomerName(event.target.value)} />
+            <Input value={meritCustomerName} readOnly aria-readonly="true" />
           </label>
           <label>
             Invoice due days
@@ -5211,7 +5224,7 @@ function RevenuePartnerModal({
               submitting ||
               !providerId ||
               !name.trim() ||
-              !affiliateId.trim() ||
+              (Boolean(teamId) && !affiliateId.trim()) ||
               !revenueCategory.trim() ||
               !currency.trim() ||
               !timezone ||

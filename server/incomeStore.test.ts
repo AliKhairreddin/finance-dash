@@ -166,7 +166,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
       join(temporaryDirectory, ".local", "finance-dashboard-store.json"),
       JSON.stringify({
         providers: [
-          { id: "client-1", name: "Acme", type: "client", tags: [], aliases: [], source: "manual", createdAt },
+          { id: "client-1", name: "Acme", type: "client", meritCustomerId: "merit-client-1", tags: [], aliases: [], source: "merit", createdAt },
           { id: "supplier-1", name: "Supplier", type: "supplier", tags: [], aliases: [], source: "manual", createdAt }
         ],
         invoices: [{
@@ -235,19 +235,19 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
     assert.equal(store.getSnapshot().revenuePartners.filter((rule) => rule.providerId === "client-1").length, 2);
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, providerId: "supplier-1" }),
-      /must be a client/
+      /imported from Merit/
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, providerId: "missing-client" }),
-      /must be a client/
+      /imported from Merit/
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, networkIdEnv: "not-valid" }),
       /uppercase environment variable/
     );
     await assert.rejects(
-      store.createRevenuePartner({ ...rulePayload, affiliateId: "   " }),
-      /Affiliate ID is required/
+      store.createRevenuePartner({ ...rulePayload, teamId: "team-1", affiliateId: "   " }),
+      /Team revenue rules require an affiliate ID/
     );
 
     await store.recordInvoicePayment("invoice-open-1", {
@@ -271,7 +271,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
   }
 });
 
-test("manual current-month pulls refresh a monthly accrual instead of accumulating snapshots", async (context) => {
+test("manual pulls stay transient until preparing a draft persists the run and invoice", async (context) => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "finance-dash-accrual-"));
   const previousDirectory = process.cwd();
   const previousFetch = globalThis.fetch;
@@ -291,6 +291,7 @@ test("manual current-month pulls refresh a monthly accrual instead of accumulati
           id: "client-monthly",
           name: "Monthly Client",
           type: "client",
+          meritCustomerId: "merit-monthly",
           tags: [],
           aliases: [],
           source: "manual",
@@ -366,12 +367,13 @@ test("manual current-month pulls refresh a monthly accrual instead of accumulati
     process.env.MONTHLY_TUNE_NETWORK_ID = "monthly-network";
     process.env.MONTHLY_TUNE_API_KEY = "monthly-key";
     process.env.MONTHLY_TUNE_API_BASE_URL = "https://tune.example.test/Apiv3/json";
-    let expectedPeriodEnd = "2026-07-19";
+    let expectedPeriodStart = "2026-06-01";
+    let expectedPeriodEnd = "2026-06-30";
     let payout = "900";
     globalThis.fetch = async (input) => {
       const url = new URL(String(input));
       assert.equal(url.origin, "https://tune.example.test");
-      assert.equal(url.searchParams.get("data_start"), "2026-07-01");
+      assert.equal(url.searchParams.get("data_start"), expectedPeriodStart);
       assert.equal(url.searchParams.get("data_end"), expectedPeriodEnd);
       assert.equal(url.searchParams.get("filters[Affiliate.id][conditional]"), "EQUAL_TO");
       assert.equal(url.searchParams.get("filters[Affiliate.id][values][0]"), "42");
@@ -385,40 +387,33 @@ test("manual current-month pulls refresh a monthly accrual instead of accumulati
 
     const store = await import("./store");
     await store.initializeStore();
-    const snapshot = await store.syncRevenue({
+    const result = await store.syncRevenue({
       partnerId: "rule-monthly",
       periodPreset: "custom",
-      periodStart: "2026-07-01",
-      periodEnd: "2026-07-19",
+      periodStart: expectedPeriodStart,
+      periodEnd: expectedPeriodEnd,
       timezone: "UTC"
     });
 
-    assert.deepEqual(
-      snapshot.revenueRuns.map((run) => run.id),
-      ["revenue-rule-monthly-2026-07-01-2026-07-19"]
-    );
-    assert.equal(snapshot.revenueRuns[0]?.revenue, 900);
-    assert.equal(snapshot.revenueAccruals.length, 1);
-    assert.equal(snapshot.revenueAccruals[0]?.periodEnd, "2026-07-31");
-    assert.equal(snapshot.revenueAccruals[0]?.accruedThrough, "2026-07-19");
-    assert.equal(snapshot.revenueAccruals[0]?.amount, 900);
-    assert.equal(snapshot.revenueAccruals[0]?.revenueRunId, "revenue-rule-monthly-2026-07-01-2026-07-19");
+    assert.deepEqual(result.runs.map((run) => run.id), ["revenue-rule-monthly-2026-06-01-2026-06-30"]);
+    assert.equal(result.runs[0]?.revenue, 900);
+    let snapshot = store.getSnapshot();
+    assert.deepEqual(snapshot.revenueRuns.map((run) => run.id), ["revenue-rule-monthly-2026-07-01-2026-07-12"]);
+    assert.equal(snapshot.invoices.length, 0);
+    assert.equal(snapshot.revenueAccruals[0]?.amount, 500);
 
-    expectedPeriodEnd = "2026-07-18";
-    payout = "800";
-    const staleSnapshot = await store.syncRevenue({
+    const invoice = await store.draftRevenueRun({
       partnerId: "rule-monthly",
-      periodPreset: "custom",
-      periodStart: "2026-07-01",
-      periodEnd: "2026-07-18",
+      periodStart: expectedPeriodStart,
+      periodEnd: expectedPeriodEnd,
       timezone: "UTC"
     });
-    assert.deepEqual(
-      staleSnapshot.revenueRuns.map((run) => run.id),
-      ["revenue-rule-monthly-2026-07-01-2026-07-19"]
-    );
-    assert.equal(staleSnapshot.revenueAccruals[0]?.amount, 900);
-    assert.equal(staleSnapshot.revenueAccruals[0]?.accruedThrough, "2026-07-19");
+    assert.equal(invoice.status, "draft");
+    assert.equal(invoice.amount, 900);
+    snapshot = store.getSnapshot();
+    assert.equal(snapshot.invoices[0]?.id, invoice.id);
+    assert.equal(snapshot.revenueRuns[0]?.id, "revenue-rule-monthly-2026-06-01-2026-06-30");
+    assert.equal(snapshot.revenueRuns[0]?.status, "drafted");
   } finally {
     context.mock.timers.reset();
     process.chdir(previousDirectory);
@@ -433,7 +428,7 @@ test("manual current-month pulls refresh a monthly accrual instead of accumulati
   }
 });
 
-test("current-week pulls refresh one weekly accrual and cannot draft before the week closes", async (context) => {
+test("current-week manual pulls are transient and cannot draft before the week closes", async (context) => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "finance-dash-weekly-accrual-"));
   const previousDirectory = process.cwd();
   const previousFetch = globalThis.fetch;
@@ -538,27 +533,37 @@ test("current-week pulls refresh one weekly accrual and cannot draft before the 
 
     const store = await import("./store");
     await store.initializeStore();
-    const snapshot = await store.syncRevenue({ partnerId: "rule-weekly", periodPreset: "this-week" });
+    const result = await store.syncRevenue({ partnerId: "rule-weekly", periodPreset: "this-week" });
+    assert.deepEqual(result.runs.map((run) => run.id), ["revenue-rule-weekly-2026-07-20-2026-07-23"]);
+    assert.equal(result.runs[0]?.revenue, 450);
+    let snapshot = store.getSnapshot();
     assert.equal(snapshot.invoices.length, 0);
-    assert.deepEqual(snapshot.revenueRuns.map((run) => run.id), ["revenue-rule-weekly-2026-07-20-2026-07-23"]);
-    assert.equal(snapshot.revenueAccruals.length, 1);
-    assert.equal(snapshot.revenueAccruals[0]?.periodEnd, "2026-07-26");
-    assert.equal(snapshot.revenueAccruals[0]?.accruedThrough, "2026-07-23");
-    assert.equal(snapshot.revenueAccruals[0]?.amount, 450);
-    await assert.rejects(store.draftRevenueRun(snapshot.revenueRuns[0].id), /not a closed billing period/);
+    assert.deepEqual(snapshot.revenueRuns.map((run) => run.id), ["revenue-rule-weekly-2026-07-20-2026-07-22"]);
+    assert.equal(snapshot.revenueAccruals[0]?.amount, 300);
+    await assert.rejects(
+      store.draftRevenueRun({
+        partnerId: "rule-weekly",
+        periodStart: "2026-07-20",
+        periodEnd: "2026-07-23",
+        timezone: "UTC"
+      }),
+      /not a closed billing period/
+    );
 
     expectedPeriodEnd = "2026-07-22";
     payout = "300";
-    const staleSnapshot = await store.syncRevenue({
+    const earlierResult = await store.syncRevenue({
       partnerId: "rule-weekly",
       periodPreset: "custom",
       periodStart: "2026-07-20",
       periodEnd: "2026-07-22",
       timezone: "UTC"
     });
-    assert.deepEqual(staleSnapshot.revenueRuns.map((run) => run.id), ["revenue-rule-weekly-2026-07-20-2026-07-23"]);
-    assert.equal(staleSnapshot.revenueAccruals[0]?.amount, 450);
-    assert.equal(staleSnapshot.revenueAccruals[0]?.accruedThrough, "2026-07-23");
+    assert.equal(earlierResult.runs[0]?.revenue, 300);
+    snapshot = store.getSnapshot();
+    assert.deepEqual(snapshot.revenueRuns.map((run) => run.id), ["revenue-rule-weekly-2026-07-20-2026-07-22"]);
+    assert.equal(snapshot.revenueAccruals[0]?.amount, 300);
+    assert.equal(snapshot.revenueAccruals[0]?.accruedThrough, "2026-07-22");
   } finally {
     context.mock.timers.reset();
     process.chdir(previousDirectory);

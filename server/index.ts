@@ -10,6 +10,7 @@ import type {
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
+  DraftRevenueRunPayload,
   AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
@@ -115,9 +116,9 @@ app.post("/api/revenue/sync", async (request, response, next) => {
   }
 });
 
-app.post("/api/revenue/runs/:runId/draft", async (request, response, next) => {
+app.post("/api/revenue/draft", async (request, response, next) => {
   try {
-    response.status(201).json(await draftRevenueRun(request.params.runId));
+    response.status(201).json(await draftRevenueRun(request.body as DraftRevenueRunPayload));
   } catch (error) {
     next(error);
   }

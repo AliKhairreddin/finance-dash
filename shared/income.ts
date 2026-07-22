@@ -124,26 +124,29 @@ export function revenueInvoiceNumber(partnerId: string, periodStart: string, per
   return `FD-${slug(partnerId).toUpperCase().slice(-12)}-${periodStart.replaceAll("-", "")}-${periodEnd.replaceAll("-", "")}`;
 }
 
-export function buildRevenueDraft(partner: RevenuePartner, run: RevenueRun, now = new Date()): Invoice {
+export function buildRevenueDraft(partner: RevenuePartner, run: RevenueRun, provider: Provider, now = new Date()): Invoice {
   if (!partner.autoDraft) throw new Error(`Automatic drafting is disabled for ${partner.name}`);
   if (!isClosedBillingPeriod(partner, run, now)) throw new Error("Revenue run is not a closed billing period");
   if (run.revenue <= 0) throw new Error("Revenue draft amount must be positive");
+  if (provider.id !== partner.providerId || provider.type !== "client" || !provider.meritCustomerId) {
+    throw new Error("Revenue drafts require the rule's customer to be imported from Merit");
+  }
 
   const createdAt = now.toISOString();
   const issueDate = createdAt.slice(0, 10);
   return {
     id: revenueInvoiceId(partner.id, run.periodStart, run.periodEnd),
-    providerId: run.providerId ?? partner.providerId,
+    providerId: provider.id,
     documentType: "sales_invoice",
     origin: "revenue",
-    customerName: partner.meritCustomerName || partner.name,
+    customerName: provider.legalName?.trim() || provider.name,
     amount: run.revenue,
     currency: run.currency.toUpperCase(),
     status: "draft",
     meritDeliveryStatus: "not-sent",
     invoiceNumber: revenueInvoiceNumber(partner.id, run.periodStart, run.periodEnd),
     issueDate,
-    dueDate: addDays(issueDate, Math.max(0, partner.invoiceDueDays)),
+    dueDate: addDays(issueDate, Math.max(0, provider.paymentTermsDays ?? partner.invoiceDueDays)),
     source: "tune",
     description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd}`,
     billingRuleId: partner.id,

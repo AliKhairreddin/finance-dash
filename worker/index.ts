@@ -18,6 +18,7 @@ import type {
   CreateTeamPayload,
   DashboardSnapshot,
   DataSource,
+  DraftRevenueRunPayload,
   FxRate,
   Holding,
   ImportWiseStatementPayload,
@@ -34,6 +35,7 @@ import type {
   RecordInvoicePaymentPayload,
   RevenueAccrual,
   RevenuePartner,
+  RevenuePullResult,
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
@@ -70,9 +72,11 @@ import {
   reconcileMeritProviders
 } from "../shared/merit";
 import {
+  bindRevenuePartnerCompany,
   calculateRevenueMetrics,
   calculateTuneHourOffset,
   mergeRevenuePartnerDirectory,
+  revenueRuleId,
   resolveRevenuePeriod
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
@@ -158,29 +162,6 @@ function cleanOptional(value?: string): string | undefined {
 
 function cleanOptionalNumber(value?: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function calendarMonthEnd(periodStart: string): string {
-  const [year, month] = periodStart.split("-").map(Number);
-  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-}
-
-function openAccrualPeriodEnd(partner: RevenuePartner, run: RevenueRun, now = new Date()): string | undefined {
-  if (run.status !== "pulled") return undefined;
-  if (partner.billingCadence === "weekly") {
-    const currentWeek = currentWeekAccrualPeriod(now, partner.billingTimezone);
-    return run.periodStart === currentWeek.periodStart &&
-      run.periodEnd >= run.periodStart &&
-      run.periodEnd <= currentWeek.accruedThrough
-      ? currentWeek.periodEnd
-      : undefined;
-  }
-  const currentMonth = resolveRevenuePeriod({ periodPreset: "this-month", timezone: partner.billingTimezone, now });
-  return run.periodStart === currentMonth.periodStart &&
-    run.periodEnd >= run.periodStart &&
-    run.periodEnd <= currentMonth.periodEnd
-    ? calendarMonthEnd(run.periodStart)
-    : undefined;
 }
 
 function isEnvironmentVariableName(value: string | undefined): boolean {
@@ -1262,8 +1243,10 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
   params.append("fields[1]", "Stat.payout");
   params.append("fields[2]", "Stat.conversions");
   params.append("fields[3]", "Stat.clicks");
-  params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
-  params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
+  if (partner.affiliateId.trim()) {
+    params.append("filters[Affiliate.id][conditional]", "EQUAL_TO");
+    params.append("filters[Affiliate.id][values][0]", partner.affiliateId);
+  }
   params.append("filters[Stat.date][conditional]", "BETWEEN");
   params.append("filters[Stat.date][values][0]", period.periodStart);
   params.append("filters[Stat.date][values][1]", period.periodEnd);
@@ -1913,7 +1896,7 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
     !payload.name?.trim() ||
     !payload.providerId?.trim() ||
     !payload.revenueCategory?.trim() ||
-    !payload.affiliateId?.trim() ||
+    (Boolean(payload.teamId) && !payload.affiliateId?.trim()) ||
     !payload.currency?.trim() ||
     !payload.timezone?.trim() ||
     !payload.networkTimezone?.trim() ||
@@ -1931,7 +1914,9 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
   }
   const state = await loadPersisted(env);
   const selectedProvider = state.providers.find((provider) => provider.id === payload.providerId);
-  if (!selectedProvider || selectedProvider.type !== "client") throw new Error("Revenue rules require a client company");
+  if (!selectedProvider || selectedProvider.type !== "client" || !selectedProvider.meritCustomerId) {
+    throw new Error("Revenue rules require a customer imported from Merit");
+  }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue partner team not found");
   }
@@ -1947,7 +1932,7 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
       name: payload.name.trim(),
       providerId: payload.providerId,
       revenueCategory,
-      affiliateId: payload.affiliateId.trim(),
+      affiliateId: payload.affiliateId?.trim() ?? "",
       externalId: payload.externalId?.trim() || undefined,
       currency: payload.currency.trim().toUpperCase(),
       timezone: payload.timezone.trim(),
@@ -1974,6 +1959,9 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
   });
   if (!updated) throw new Error("Revenue partner not found");
   state.revenuePartners = mergeRevenuePartnerDirectory(state.revenuePartners);
+  const rebound = bindRevenuePartnerCompany(updated, selectedProvider, state.revenueRuns, state.invoices);
+  state.revenueRuns = rebound.runs;
+  state.invoices = rebound.invoices;
   await savePersisted(env, state);
   return updated;
 }
@@ -1983,7 +1971,7 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     !payload.name?.trim() ||
     !payload.providerId?.trim() ||
     !payload.revenueCategory?.trim() ||
-    !payload.affiliateId?.trim() ||
+    (Boolean(payload.teamId) && !payload.affiliateId?.trim()) ||
     !payload.currency?.trim() ||
     !payload.timezone?.trim() ||
     !payload.networkTimezone?.trim() ||
@@ -1997,11 +1985,13 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     payload.invoiceDueDays < 0 ||
     (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
   ) {
-    throw new ApiError(400, "name, client, revenue category, affiliate ID, API environment names, cadence, and billing timezone are required");
+    throw new ApiError(400, "name, Merit customer, revenue category, API environment names, cadence, and billing timezone are required; team rules also require an affiliate ID");
   }
   const state = await loadPersisted(env);
   const provider = state.providers.find((item) => item.id === payload.providerId);
-  if (!provider || provider.type !== "client") throw new ApiError(400, "Revenue rules require a client company");
+  if (!provider || provider.type !== "client" || !provider.meritCustomerId) {
+    throw new ApiError(400, "Revenue rules require a customer imported from Merit");
+  }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
     throw new ApiError(400, "Revenue rule team not found");
   }
@@ -2010,13 +2000,13 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     throw new ApiError(400, `Category "${revenueCategory}" is not valid for money in`);
   }
   const partner: RevenuePartner = {
-    id: `revenue-rule-${crypto.randomUUID()}`,
+    id: revenueRuleId(payload.name, cleanOptional(payload.teamId)),
     providerId: provider.id,
     teamId: cleanOptional(payload.teamId),
     name: payload.name.trim(),
     revenueCategory,
     source: "tune",
-    affiliateId: payload.affiliateId.trim(),
+    affiliateId: payload.affiliateId?.trim() ?? "",
     externalId: cleanOptional(payload.externalId),
     currency: payload.currency.trim().toUpperCase() || "USD",
     timezone: payload.timezone.trim(),
@@ -2034,7 +2024,13 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     enabled: payload.enabled,
     createdAt: new Date().toISOString()
   };
+  if (state.revenuePartners.some((item) => item.id === partner.id)) {
+    throw new ApiError(409, "A revenue rule already exists for this company and team");
+  }
   state.revenuePartners = mergeRevenuePartnerDirectory([...state.revenuePartners, partner]);
+  const rebound = bindRevenuePartnerCompany(partner, provider, state.revenueRuns, state.invoices);
+  state.revenueRuns = rebound.runs;
+  state.invoices = rebound.invoices;
   await savePersisted(env, state);
   return partner;
 }
@@ -2417,7 +2413,7 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
   return updated;
 }
 
-async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<DashboardSnapshot> {
+async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<RevenuePullResult> {
   const initialState = await loadPersisted(env);
   const selectedPartners = initialState.revenuePartners.filter(
     (partner) =>
@@ -2478,71 +2474,38 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
     }
   }
 
-  if (nextRuns.length > 0) {
-    const latestState = await loadPersisted(env);
-    const protectedRunIds = new Set(
-      latestState.revenueRuns
-        .filter((run) => run.status === "drafted" || run.status === "invoicing" || run.status === "invoiced")
-        .map((run) => run.id)
-    );
-    const safeNextRuns = nextRuns.filter((run) => !protectedRunIds.has(run.id));
-    const acceptedNextRuns: RevenueRun[] = [];
-    for (const run of safeNextRuns) {
-      const partner = latestState.revenuePartners.find((item) => item.id === run.partnerId);
-      if (!partner || run.status === "failed") {
-        acceptedNextRuns.push(run);
-        continue;
-      }
-      if (isClosedBillingPeriod(partner, run)) {
-        removeClosedRevenueAccrual(latestState, partner, run);
-        acceptedNextRuns.push(run);
-        continue;
-      }
-      const accrualPeriodEnd = openAccrualPeriodEnd(partner, run);
-      if (!accrualPeriodEnd) {
-        acceptedNextRuns.push(run);
-        continue;
-      }
-      if (upsertRevenueAccrual(latestState, {
-        id: `revenue-accrual-${partner.id}-${run.periodStart}-${accrualPeriodEnd}`,
-        partnerId: partner.id,
-        providerId: partner.providerId,
-        partnerName: partner.name,
-        billingCadence: partner.billingCadence,
-        periodStart: run.periodStart,
-        periodEnd: accrualPeriodEnd,
-        accruedThrough: run.periodEnd,
-        amount: run.revenue,
-        currency: run.currency,
-        status: "accruing",
-        revenueRunId: run.id,
-        updatedAt: run.createdAt
-      })) {
-        acceptedNextRuns.push(run);
-      }
-    }
-    const nextRunIds = new Set(acceptedNextRuns.map((run) => run.id));
-    latestState.revenueRuns = [...acceptedNextRuns, ...latestState.revenueRuns.filter((run) => !nextRunIds.has(run.id))].slice(0, 250);
-    await savePersisted(env, latestState);
-  }
-  return getSnapshot(env);
+  return { runs: nextRuns };
 }
 
-async function draftRevenueRun(env: Env, runId: string): Promise<Invoice> {
+async function draftRevenueRun(env: Env, payload: DraftRevenueRunPayload): Promise<Invoice> {
   const state = await loadPersisted(env);
-  const run = state.revenueRuns.find((item) => item.id === runId);
-  if (!run) throw new ApiError(404, "Revenue run not found");
-  if (run.status !== "pulled" || run.revenue <= 0) {
-    throw new ApiError(409, "Only a positive pulled revenue period can be drafted");
-  }
-  const partner = state.revenuePartners.find((item) => item.id === run.partnerId);
+  const partner = state.revenuePartners.find((item) => item.id === payload.partnerId);
   if (!partner) throw new ApiError(409, "Revenue rule no longer exists");
+  if (!partner.enabled) throw new ApiError(409, "Revenue rule is disabled");
+  if (payload.timezone !== partner.timezone && payload.timezone !== partner.billingTimezone) {
+    throw new ApiError(400, "Revenue draft timezone does not match the revenue rule");
+  }
+  const period = resolveRevenuePeriod({
+    periodPreset: "custom",
+    periodStart: payload.periodStart,
+    periodEnd: payload.periodEnd,
+    timezone: payload.timezone
+  });
+  const run: RevenueRun = {
+    ...(await fetchTuneRevenue(env, partner, period)),
+    ...(partner.teamId
+      ? { teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
+      : {})
+  };
+  if (run.revenue <= 0) throw new ApiError(409, "Only a positive pulled revenue period can be drafted");
   if (!isClosedBillingPeriod(partner, run)) throw new ApiError(409, "Revenue period is not closed yet");
   const existing = state.invoices.find(
     (invoice) => invoice.billingRuleId === partner.id && invoice.periodStart === run.periodStart && invoice.periodEnd === run.periodEnd
   );
   if (existing) return existing;
-  const draft = buildRevenueDraft({ ...partner, autoDraft: true }, run);
+  const provider = state.providers.find((item) => item.id === partner.providerId);
+  if (!provider) throw new ApiError(409, "Revenue rule customer no longer exists");
+  const draft = buildRevenueDraft({ ...partner, autoDraft: true }, run, provider);
   state.invoices = [draft, ...state.invoices];
   upsertRevenueRun(state, { ...run, status: "drafted", invoiceId: draft.id });
   if (partner.billingCadence === "monthly") {
@@ -2638,6 +2601,9 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
           ? state.revenuePartners.find((partner) => partner.id === current?.billingRuleId)
           : undefined;
         const provider = current.providerId ? state.providers.find((item) => item.id === current?.providerId) : undefined;
+        if (current.origin === "revenue" && !provider?.meritCustomerId) {
+          throw new ApiError(409, "Revenue invoices require a customer imported from Merit");
+        }
         const created = await createMeritInvoice(
           env,
           {
@@ -3047,7 +3013,9 @@ async function automateClosedRevenuePeriod(
   if (existingInvoice) {
     run = { ...run, status: existingInvoice.externalId ? "invoiced" : "drafted", invoiceId: existingInvoice.id, externalInvoiceId: existingInvoice.externalId };
   } else if (partner.autoDraft && run.revenue > 0) {
-    const draft = buildRevenueDraft(partner, run, scheduledAt);
+    const provider = state.providers.find((item) => item.id === partner.providerId);
+    if (!provider) throw new Error("Revenue rule customer no longer exists");
+    const draft = buildRevenueDraft(partner, run, provider, scheduledAt);
     state.invoices = [draft, ...state.invoices.filter((invoice) => invoice.id !== draft.id)];
     run = { ...run, status: "drafted", invoiceId: draft.id };
   }
@@ -3250,9 +3218,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await syncRevenue(env, (await request.json()) as SyncRevenuePayload));
     }
 
-    const revenueDraftMatch = url.pathname.match(/^\/api\/revenue\/runs\/([^/]+)\/draft$/);
-    if (revenueDraftMatch && request.method === "POST") {
-      return json(await draftRevenueRun(env, decodeURIComponent(revenueDraftMatch[1])), { status: 201 });
+    if (url.pathname === "/api/revenue/draft" && request.method === "POST") {
+      return json(await draftRevenueRun(env, (await request.json()) as DraftRevenueRunPayload), { status: 201 });
     }
 
     if (url.pathname === "/api/providers" && request.method === "POST") {
