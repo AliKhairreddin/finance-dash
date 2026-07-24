@@ -1762,7 +1762,7 @@ function Overview({
           nameLabel="Name"
           rows={dashboard.receivables.map((item) => ({
             id: item.id,
-            name: item.name,
+            name: item.id.startsWith("open-invoices-") ? `Open INV ${item.currency}` : item.name,
             amount: item.balance,
             currency: item.currency,
             source: sourceLabel(item.source)

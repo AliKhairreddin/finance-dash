@@ -1,69 +1,65 @@
 # Design QA
 
-- Source visual truth: user-provided Dia appshot plus `/tmp/finance-dash-invoice-popup-before.png` (pre-change production popup)
-- Implementation screenshot: `/tmp/finance-dash-invoice-popup-real-data.png`
-- Search interaction screenshot: `/tmp/finance-dash-invoice-company-search.png`
-- Mobile implementation screenshot: `/tmp/finance-dash-invoice-popup-mobile-fixed.png`
-- Normalized side-by-side comparison: `/tmp/finance-dash-invoice-popup-comparison.png` (source left, implementation right)
-- Viewport: source `1265 × 712`; implementation `1280 × 720`; mobile `390 × 844`
-- Density normalization: browser screenshots were captured at CSS-pixel density; the implementation was scaled to `1265 × 712` for the final comparison
-- State: light theme, Invoices selected, Kissterra draft open, company selected, Merit tax unselected, form body at its top position
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-2d2eddf1-e294-4f73-b6b3-07d31161faf5.png`
+- Implementation screenshot: `/tmp/finance-dash-receivables-currency-labels.png`
+- Full implementation screenshot: `/tmp/finance-dash-overview-currency-labels.png`
+- Normalized side-by-side comparison: `/tmp/finance-dash-receivables-comparison.png` (source left, implementation right)
+- Viewport: implementation `1312 × 769` CSS pixels; narrow-screen check `390 × 844`
+- Pixel dimensions: source `678 × 476`; implementation viewport capture `1297 × 760`; focused implementation crop `330 × 224`
+- Density normalization: the source was downsampled proportionally to `319 × 224`; the implementation crop remained `330 × 224`; both were compared at the same 224-pixel height
+- State: light theme, Overview selected, live production dashboard data, Receivables card visible
 
 ## Findings
 
 - No actionable P0, P1, or P2 issues remain.
-- The searchable company and Merit tax controls keep their menus inside a product-styled popup layer instead of using the browser-native menu shown in the source. Filtering, selection, empty results, and selected-state indicators are visible and keyboard-addressable.
-- The invoice popup now has stable header, scrollable body, and footer regions. The customer fields, four-column Merit summary, financial fields, date pairs, description, and actions share consistent outer edges and spacing.
+- Both currency groups are identifiable without hover: `Open INV EUR` and `Open INV USD`.
+- The labels fit the narrow desktop name track exactly without ellipsis (`scrollWidth = clientWidth = 93px`) and fit the mobile track without ellipsis (`scrollWidth = clientWidth = 134px`).
+- Each row's hover title now contains the same explicit currency label.
 
 ## Required Fidelity Surfaces
 
-- Fonts and typography: the existing Geist Variable family, label weights, field text sizes, uppercase eyebrow, and heading hierarchy are preserved. Long customer, tax, and email values remain readable without breaking their grid tracks.
-- Spacing and layout rhythm: the popup uses one consistent two-column form grid. Net amount and currency are grouped within the left half while Merit tax occupies the aligned right half. The customer summary uses a compact four-column definition grid and a separate explanatory row. Header and footer remain visible while the body scrolls.
-- Colors and visual tokens: existing panel, border, focus, hover, green customer-summary, and modal shadow tokens are reused in light and dark themes. No new palette or decorative treatment was introduced.
-- Image quality and asset fidelity: the popup contains no raster imagery. Existing Lucide Search, Check, ChevronDown, X, and form-action icons are used consistently; no placeholder or code-drawn assets were added.
-- Copy and content: invoice data and Merit guidance are unchanged. Search placeholders and empty-result messages are the only new copy.
+- Fonts and typography: the existing Geist Variable family, table size, weight, and truncation behavior are unchanged. The shorter labels preserve the card's hierarchy and remain fully readable.
+- Spacing and layout rhythm: the existing three-column row grid, padding, source badge, balances, borders, and card dimensions are unchanged.
+- Colors and visual tokens: no color, border, hover, shadow, or semantic token changed.
+- Image quality and asset fidelity: this table contains no raster imagery or custom assets, and no new icon treatment was introduced.
+- Copy and content: only generated open-invoice bucket labels changed, from repeated `Open invoices` text to explicit `Open INV EUR` and `Open INV USD`; manual receivable names remain unchanged.
 
 ## Interaction And Responsive Evidence
 
-- Company dropdown opens with the full client list, filters `kiss` to Kissterra, and filters `Sil` to SilverPush in the local sample dataset.
-- Selecting SilverPush closes the list and updates the invoice customer field.
-- Merit tax dropdown opens with live Merit rates, filters `outside Estonia` to one option, and selection closes the list with the chosen tax displayed.
-- The selected option is marked with both accessible selected state and a visible check icon.
-- At `390 × 844`, the form collapses to one column while amount and currency remain a compact pair; Cancel and Save draft remain fully visible in the fixed footer.
-- The modal suppresses background-page scrolling, leaving one clear scrollbar for its body.
-- Browser console errors checked after company and tax interactions: none.
-- Automated checks: TypeScript lint, 63 passing tests (1 skipped), and production build passed.
+- The EUR and USD rows render from live dashboard data with their corresponding balances.
+- Hover titles were verified as `Open INV EUR` and `Open INV USD`.
+- At `390 × 844`, both labels remain fully visible with no overflow.
+- Browser console errors and warnings checked at desktop and mobile widths: none.
+- Automated checks: TypeScript lint, 73 passing tests (1 skipped), and production build passed.
 
 ## Comparison History
 
-1. Source review: `/tmp/finance-dash-invoice-popup-before.png`
-   - [P1] Company and Merit tax used native selects with no text filtering; the long company menu escaped the popup and obscured most of the form.
-   - [P2] The three-column financial row did not share the two-column alignment used by surrounding fields.
-   - [P2] The whole popup scrolled, so actions disappeared and the page and popup exposed competing scrollbars.
-2. First implementation: `/tmp/finance-dash-invoice-popup-local.png`
-   - Searchable comboboxes, a two-column form rhythm, and fixed header/body/footer regions were added.
-   - [P2] At the mobile breakpoint, global full-width button rules squeezed Cancel out of the footer.
-3. Mobile fix: `/tmp/finance-dash-invoice-popup-mobile-fixed.png`
-   - The footer now uses explicit two-column tracks, and background scrolling is suppressed while a modal is open.
-4. Final real-data pass: `/tmp/finance-dash-invoice-popup-comparison.png`
-   - Customer identity, long billing emails, ID, financial fields, date fields, and search affordances fit their intended tracks with no actionable alignment or overflow issues.
+1. Source review:
+   - [P2] Both rows displayed the same truncated `Open invoic…` label.
+   - [P2] Hover only revealed `Open invoices`, so it still did not identify EUR versus USD.
+2. First implementation:
+   - Labels changed to `Open INV · EUR` and `Open INV · USD`.
+   - [P2] The separator consumed enough width that the currency still rendered as `E…` and `U…` in the desktop card.
+3. Final implementation:
+   - Labels tightened to `Open INV EUR` and `Open INV USD`.
+   - The desktop and narrow-screen measurements confirm both strings fit without truncation.
+   - The normalized comparison shows the card's layout and visual system are otherwise unchanged.
 
 ## Focused Region Comparison
 
-- `/tmp/finance-dash-invoice-company-search.png` verifies the search input, clear and disclosure controls, filtered option row, selected indicator, popup width, and layering at readable scale.
-- `/tmp/finance-dash-invoice-popup-mobile-fixed.png` verifies the narrow-screen field and footer alignment.
+- `/tmp/finance-dash-receivables-comparison.png` compares the source and implementation at the same normalized height. A focused comparison was required because the change is confined to short labels in a dense table.
 
 ## Implementation Checklist
 
-- [x] Searchable Company dropdown
-- [x] Searchable Merit tax dropdown
-- [x] Filtered, empty, selected, hover, and focus states
-- [x] Consistent popup grid and field alignment
-- [x] Fixed header and action footer with a scrollable form body
-- [x] Real-data, mobile, console, lint, test, and build verification
+- [x] Distinguish EUR and USD without hover
+- [x] Preserve compact `Open INV` wording
+- [x] Preserve manual receivable names
+- [x] Verify hover titles
+- [x] Verify desktop and narrow-screen fit
+- [x] Check console, lint, tests, and production build
 
 ## Follow-up Polish
 
-- No P3 follow-up is required for this scoped popup change.
+- No P3 follow-up is required for this scoped label change.
 
 final result: passed
