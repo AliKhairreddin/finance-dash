@@ -82,6 +82,32 @@ function dateTimeLabel(value: string): string {
   }).format(date);
 }
 
+function createdAtLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "Asia/Beirut"
+  }).format(date);
+}
+
+function createdDateKey(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Beirut"
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function toDateInput(value?: string): string {
   if (!value) return new Date().toISOString().slice(0, 10);
   const date = new Date(value);
@@ -452,6 +478,7 @@ export function InvoicesView({
   const [currency, setCurrency] = useState("all");
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>("all");
   const [cadence, setCadence] = useState<"all" | BillingCadence | "manual">("all");
+  const [createdDate, setCreatedDate] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editorInvoice, setEditorInvoice] = useState<Invoice | "new" | null>(null);
   const [sendIds, setSendIds] = useState<string[] | null>(null);
@@ -486,6 +513,7 @@ export function InvoicesView({
       const rowCurrency = row.kind === "invoice" ? row.invoice.currency : row.accrual.currency;
       if (currency !== "all" && rowCurrency !== currency) return false;
       if (cadence !== "all" && rowCadence(row) !== cadence) return false;
+      if (createdDate && (row.kind !== "invoice" || createdDateKey(row.invoice.createdAt) !== createdDate)) return false;
       const search = query.trim().toLowerCase();
       if (!search) return true;
       const provider = rowProviderId(row) ? providersById.get(rowProviderId(row) ?? "") : undefined;
@@ -579,7 +607,8 @@ export function InvoicesView({
           <label>Currency<NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}><NativeSelectOption value="all">All currencies</NativeSelectOption>{currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}</NativeSelect></label>
           <label>Status<NativeSelect value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as InvoiceStatusFilter)}><NativeSelectOption value="all">All statuses</NativeSelectOption><NativeSelectOption value="draft">Draft</NativeSelectOption><NativeSelectOption value="open">Open</NativeSelectOption><NativeSelectOption value="paid">Paid</NativeSelectOption><NativeSelectOption value="accruing">Accruing</NativeSelectOption></NativeSelect></label>
           <label>Cadence<NativeSelect value={cadence} onChange={(event) => setCadence(event.target.value as "all" | BillingCadence | "manual")}><NativeSelectOption value="all">All cadences</NativeSelectOption><NativeSelectOption value="weekly">Weekly</NativeSelectOption><NativeSelectOption value="monthly">Monthly</NativeSelectOption><NativeSelectOption value="manual">Manual</NativeSelectOption></NativeSelect></label>
-          <Button className="icon-text-button clear-filter-button" type="button" disabled={!query && companyId === "all" && currency === "all" && statusFilter === "all" && cadence === "all"} onClick={() => { setQuery(""); setCompanyId("all"); setCurrency("all"); setStatusFilter("all"); setCadence("all"); }}><Filter size={14} /> Clear</Button>
+          <label>Created date<Input type="date" aria-label="Filter invoices by created date" value={createdDate} onChange={(event) => setCreatedDate(event.target.value)} /></label>
+          <Button className="icon-text-button clear-filter-button" type="button" disabled={!query && companyId === "all" && currency === "all" && statusFilter === "all" && cadence === "all" && !createdDate} onClick={() => { setQuery(""); setCompanyId("all"); setCurrency("all"); setStatusFilter("all"); setCadence("all"); setCreatedDate(""); }}><Filter size={14} /> Clear</Button>
         </div>
 
         {!meritWriteEnabled && (
@@ -592,11 +621,11 @@ export function InvoicesView({
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
-            <thead><tr><th className="selection-column"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="selection-column"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Created at</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
             <tbody>
               {visibleRows.length > 0 ? visibleRows.map((row) => {
                 if (row.kind === "accrual") {
-                  return <tr key={row.id} className="accrual-row"><td className="selection-column"><Checkbox disabled aria-label="Accrual cannot be selected" /></td><td className="counterparty-cell"><strong>{row.accrual.partnerName}</strong><small>Future invoice · current through {dateLabel(row.accrual.accruedThrough)}</small></td><td>{periodLabel(row.accrual.periodStart, row.accrual.periodEnd)}</td><td className="amount">{money(row.accrual.amount, row.accrual.currency)}</td><td><span className="cadence-badge">{cadenceLabel(row.accrual.billingCadence)}</span></td><td><span className="status-pill invoice-status-accruing">Accruing</span></td><td><span className="forecast-copy"><Clock3 size={14} /> Starts after invoice is sent</span></td><td><span className="muted-cell">Monday automation</span></td></tr>;
+                  return <tr key={row.id} className="accrual-row"><td className="selection-column"><Checkbox disabled aria-label="Accrual cannot be selected" /></td><td className="counterparty-cell"><strong>{row.accrual.partnerName}</strong><small>Future invoice · current through {dateLabel(row.accrual.accruedThrough)}</small></td><td className="muted-cell">—</td><td>{periodLabel(row.accrual.periodStart, row.accrual.periodEnd)}</td><td className="amount">{money(row.accrual.amount, row.accrual.currency)}</td><td><span className="cadence-badge">{cadenceLabel(row.accrual.billingCadence)}</span></td><td><span className="status-pill invoice-status-accruing">Accruing</span></td><td><span className="forecast-copy"><Clock3 size={14} /> Starts after invoice is sent</span></td><td><span className="muted-cell">Monday automation</span></td></tr>;
                 }
                 const invoice = row.invoice;
                 const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
@@ -619,6 +648,7 @@ export function InvoicesView({
                   <tr key={invoice.id}>
                     <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={ready ? "Select draft to save or deliver" : canDeliverExisting ? "Select existing Merit invoice for delivery" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
                     <td className="counterparty-cell"><strong>{invoice.invoiceNumber || "Draft invoice"}</strong><span>{provider?.name ?? invoice.customerName}</span><small>{invoice.description}</small></td>
+                    <td className="invoice-created-cell">{createdAtLabel(invoice.createdAt)}</td>
                     <td><span>{periodLabel(invoice.periodStart, invoice.periodEnd)}</span><small>Due {dateLabel(invoice.dueDate)}</small></td>
                     <td className="amount"><strong>{money(invoice.amount, invoice.currency)}</strong>{paidAmount > 0 && invoice.status !== "paid" && <small>{money(paidAmount, invoice.currency)} recorded</small>}</td>
                     <td><span className="cadence-badge">{cadenceLabel(invoiceCadence)}</span></td>
@@ -657,7 +687,7 @@ export function InvoicesView({
                     </div></td>
                   </tr>
                 );
-              }) : <tr><td colSpan={8}>No invoices match this view</td></tr>}
+              }) : <tr><td colSpan={9}>No invoices match this view</td></tr>}
             </tbody>
           </table>
         </div>

@@ -9,6 +9,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateHoldingPayload,
   CreateInvoicePayload,
+  CreateManualReceivablePayload,
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
@@ -20,6 +21,7 @@ import type {
   ImportWiseStatementResult,
   ImportWiseStatementSummary,
   Invoice,
+  LedgerItem,
   MeritTax,
   MatchTransactionPayload,
   PaymentAllocation,
@@ -83,6 +85,7 @@ import {
   isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
   mergeFxRates,
+  openInvoiceReceivables,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -134,6 +137,7 @@ import { loadPersistedState, savePersistedState } from "./persistence";
 
 let providers: Provider[] = [];
 let invoices: Invoice[] = [];
+let manualReceivables: LedgerItem[] = [];
 let paymentAllocations: PaymentAllocation[] = [];
 let holdings: Holding[] = [];
 let fxRates: FxRate[] = [];
@@ -238,6 +242,7 @@ export async function initializeStore(): Promise<void> {
   providers = mergeProviderDirectory(persisted.providers ?? []);
   paymentAllocations = persisted.paymentAllocations ?? [];
   invoices = applyPaymentState(persisted.invoices ?? [], paymentAllocations);
+  manualReceivables = persisted.manualReceivables ?? [];
   holdings = persisted.holdings ?? [];
   fxRates = persisted.fxRates ?? [];
   fxTrackedAssets = persisted.fxTrackedAssets ?? [];
@@ -260,6 +265,7 @@ async function persist(): Promise<void> {
   await savePersistedState({
     providers,
     invoices,
+    manualReceivables,
     paymentAllocations,
     holdings,
     fxRates,
@@ -518,14 +524,15 @@ export async function autoCategorizeTransactions(
 }
 
 export function getSnapshot(): DashboardSnapshot {
-  const metrics = calculateMetrics(accounts, [], [], [], []);
   const matchedTransactions = getMatchedTransactions();
   const paymentAwareInvoices = applyPaymentState(invoices, paymentAllocations);
+  const receivables = [...openInvoiceReceivables(paymentAwareInvoices, paymentAllocations), ...manualReceivables];
+  const metrics = calculateMetrics(accounts, receivables, [], [], []);
   const approximateUsdTotals = calculateApproximateUsdTotals(accounts, holdings, fxRates);
   return {
     asOf: new Date().toISOString(),
     accounts,
-    receivables: [],
+    receivables,
     openBalances: [],
     payables: [],
     investments: [],
@@ -974,6 +981,21 @@ function validateInvoiceCompany(providerId: string | undefined, documentType: In
 function validateInvoiceAmount(amount: number): number {
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("Invoice amount must be positive");
   return Number(amount.toFixed(2));
+}
+
+export async function createManualReceivable(payload: CreateManualReceivablePayload): Promise<LedgerItem> {
+  const name = payload.name.trim();
+  if (!name) throw new Error("Receivable name is required");
+  const receivable: LedgerItem = {
+    id: `manual-receivable-${crypto.randomUUID()}`,
+    name,
+    balance: validateInvoiceAmount(payload.amount),
+    currency: normalizedCurrency(payload.currency),
+    source: "manual"
+  };
+  manualReceivables = [receivable, ...manualReceivables];
+  await persist();
+  return receivable;
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {

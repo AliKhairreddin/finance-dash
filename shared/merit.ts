@@ -13,6 +13,21 @@ export interface MeritInvoicePeriod {
   periodEnd: string;
 }
 
+export function meritInvoiceLineDescription(
+  description: string,
+  periodStart?: string,
+  periodEnd?: string,
+  maxLength = 150
+): string {
+  const cleanDescription = description.trim();
+  if (!periodStart || !periodEnd) return cleanDescription.slice(0, maxLength);
+
+  const period = `(Period: ${periodStart} - ${periodEnd})`;
+  const descriptionLength = Math.max(0, maxLength - period.length - 1);
+  const shortenedDescription = cleanDescription.slice(0, descriptionLength).trimEnd();
+  return shortenedDescription ? `${shortenedDescription} ${period}` : period.slice(0, maxLength);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

@@ -9,6 +9,7 @@ import {
   currentWeekAccrualPeriod,
   isLebanonIncomeAutomationTime,
   mergeFxRates,
+  openInvoiceReceivables,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -265,6 +266,42 @@ test("partial allocations keep an invoice open until fully covered", () => {
     )[0].status,
     "paid"
   );
+});
+
+test("open invoice receivables group outstanding balances by currency", () => {
+  const invoices = [
+    openInvoice({ id: "usd-1", amount: 1000 }),
+    openInvoice({ id: "usd-2", amount: 500 }),
+    openInvoice({ id: "eur-1", amount: 200, currency: "EUR" }),
+    openInvoice({ id: "draft", amount: 900, status: "draft" })
+  ];
+  const allocation: PaymentAllocation = {
+    id: "payment-usd",
+    invoiceId: "usd-1",
+    amount: 250,
+    currency: "USD",
+    source: "wise",
+    mode: "manual",
+    paidAt: "2026-07-10",
+    createdAt: "2026-07-10T12:00:00.000Z"
+  };
+
+  assert.deepEqual(openInvoiceReceivables(invoices, [allocation]), [
+    {
+      id: "open-invoices-eur",
+      name: "Open invoices",
+      balance: 200,
+      currency: "EUR",
+      source: "merit"
+    },
+    {
+      id: "open-invoices-usd",
+      name: "Open invoices",
+      balance: 1250,
+      currency: "USD",
+      source: "merit"
+    }
+  ]);
 });
 
 test("payment prediction waits for five confirmed transaction matches and uses their median", () => {

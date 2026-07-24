@@ -10,7 +10,12 @@ import type {
   RevenueRun,
   Transaction
 } from "../shared/types";
-import { meritInvoicePeriods, meritProviderId, meritProvidersFromResponse } from "../shared/merit";
+import {
+  meritInvoiceLineDescription,
+  meritInvoicePeriods,
+  meritProviderId,
+  meritProvidersFromResponse
+} from "../shared/merit";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
@@ -797,7 +802,7 @@ export async function createMeritInvoice(
       {
         Item: {
           Code: configuredMeritItemCode(options.itemCode, tax),
-          Description: invoice.description.slice(0, 150),
+          Description: meritInvoiceLineDescription(invoice.description, invoice.periodStart, invoice.periodEnd),
           Type: 2
         },
         Quantity: 1,

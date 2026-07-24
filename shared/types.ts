@@ -46,6 +46,12 @@ export interface LedgerItem {
   dueDate?: string;
 }
 
+export interface CreateManualReceivablePayload {
+  name: string;
+  amount: number;
+  currency: string;
+}
+
 export interface Payable {
   id: string;
   supplier: string;

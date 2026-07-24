@@ -893,6 +893,17 @@ textarea:focus-visible {
   padding: 10px 12px;
 }
 
+.receivables-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.receivables-add-button {
+  min-height: 28px;
+  padding: 5px 8px;
+}
+
 .total-pill,
 .source-pill,
 .status-pill,
@@ -2905,6 +2916,21 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+.manual-receivable-modal {
+  width: min(460px, calc(100vw - 30px));
+}
+
+.manual-receivable-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 0.42fr);
+  gap: 10px;
+}
+
+.manual-receivable-modal .modal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3322,7 +3348,7 @@ textarea:focus-visible {
 }
 
 .invoice-filter-bar {
-  grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(120px, 0.8fr)) auto;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(5, minmax(120px, 0.8fr)) auto;
 }
 
 .income-search-field {
@@ -3368,7 +3394,14 @@ textarea:focus-visible {
 }
 
 .invoice-control-table {
-  min-width: 1160px;
+  min-width: 1300px;
+}
+
+.invoice-created-cell {
+  width: 136px;
+  color: var(--label-text);
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 .invoice-control-table .amount strong,

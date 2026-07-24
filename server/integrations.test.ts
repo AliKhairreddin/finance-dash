@@ -23,6 +23,8 @@ const invoice: Invoice = {
   source: "manual",
   description: "Consulting services",
   revenueRunIds: [],
+  periodStart: "2026-07-01",
+  periodEnd: "2026-07-31",
   createdAt: "2026-07-20T00:00:00.000Z",
   updatedAt: "2026-07-20T00:00:00.000Z"
 };
@@ -75,6 +77,10 @@ test("Merit creation and delivery use distinct endpoints and payloads", async ()
     assert.equal(requests[0]?.legacyApiId, null);
     assert.equal(requests[0]?.body.InvoiceNo, invoice.invoiceNumber);
     assert.equal((requests[0]?.body.InvoiceRow as Array<{ Item: { Code: string } }>)[0]?.Item.Code, "REV-USD");
+    assert.equal(
+      (requests[0]?.body.InvoiceRow as Array<{ Item: { Description: string } }>)[0]?.Item.Description,
+      "Consulting services (Period: 2026-07-01 - 2026-07-31)"
+    );
     assert.equal((requests[0]?.body.Customer as { Email?: string }).Email, "billing@example.com");
     assert.equal(requests[1]?.path.endsWith("/v2/sendinvoicebyemail"), true);
     assert.equal(requests[1]?.apiId, "api-id");

@@ -7,6 +7,7 @@ import type {
   AutoCategorizeTransactionsPayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
+  CreateManualReceivablePayload,
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
@@ -29,6 +30,7 @@ import {
   autoCategorizeTransactions,
   createHolding,
   createInvoice,
+  createManualReceivable,
   createProvider,
   createRevenuePartner,
   createTeam,
@@ -311,6 +313,14 @@ app.post("/api/invoices", async (request, response, next) => {
       return;
     }
     response.status(201).json(await createInvoice(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/receivables", async (request, response, next) => {
+  try {
+    response.status(201).json(await createManualReceivable(request.body as CreateManualReceivablePayload));
   } catch (error) {
     next(error);
   }

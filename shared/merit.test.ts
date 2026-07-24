@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   linkMeritInvoiceProviders,
+  meritInvoiceLineDescription,
   meritInvoicePeriods,
   meritProviderId,
   meritProvidersFromResponse,
@@ -33,6 +34,16 @@ function invoice(overrides: Partial<Invoice> = {}): Invoice {
     ...overrides
   };
 }
+
+test("Merit invoice descriptions include the dashboard period without exceeding Merit limits", () => {
+  assert.equal(
+    meritInvoiceLineDescription("Consulting services", "2026-07-01", "2026-07-31"),
+    "Consulting services (Period: 2026-07-01 - 2026-07-31)"
+  );
+  const longDescription = meritInvoiceLineDescription("A".repeat(200), "2026-07-01", "2026-07-31");
+  assert.equal(longDescription.length, 150);
+  assert.equal(longDescription.endsWith("(Period: 2026-07-01 - 2026-07-31)"), true);
+});
 
 test("Merit customer responses retain invoice-relevant identity, contact, billing, and metadata", () => {
   const [provider] = meritProvidersFromResponse(

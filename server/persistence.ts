@@ -5,6 +5,7 @@ import type {
   FxRate,
   Holding,
   Invoice,
+  LedgerItem,
   PaymentAllocation,
   PersistedAiSettings,
   Provider,
@@ -27,6 +28,7 @@ function storePath(): string {
 export interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
+  manualReceivables: LedgerItem[];
   paymentAllocations: PaymentAllocation[];
   holdings: Holding[];
   fxRates: FxRate[];

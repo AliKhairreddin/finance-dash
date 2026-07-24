@@ -57,6 +57,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateHoldingPayload,
   CreateInvoicePayload,
+  CreateManualReceivablePayload,
   CreateRevenuePartnerPayload,
   CreateProviderPayload,
   CreateTeamPayload,
@@ -1068,6 +1069,19 @@ function App() {
     setNotice(payload.documentType === "sales_invoice" ? "Sales invoice draft created." : "Supplier bill draft recorded.");
   }
 
+  async function createManualReceivable(payload: CreateManualReceivablePayload) {
+    const response = await fetch(`${apiBase}/receivables`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Manual receivable could not be added"));
+    }
+    await loadDashboard();
+    setNotice(`${payload.name.trim()} added to receivables.`);
+  }
+
   async function updateInvoiceDraft(invoiceId: string, payload: UpdateInvoicePayload) {
     const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
       method: "PUT",
@@ -1325,7 +1339,13 @@ function App() {
               detail={hasInvestments ? `${formatCurrencyTotals(dashboard.metrics.investments)} investments` : "No live investments"}
             />
           </section>
-          <Overview dashboard={dashboard} providersById={providersById} onOpenInvoice={setInvoiceTransaction} onQuickMatch={matchTransaction} />
+          <Overview
+            dashboard={dashboard}
+            providersById={providersById}
+            onOpenInvoice={setInvoiceTransaction}
+            onQuickMatch={matchTransaction}
+            onCreateManualReceivable={createManualReceivable}
+          />
         </>
       )}
 
@@ -1687,13 +1707,16 @@ function Overview({
   dashboard,
   providersById,
   onOpenInvoice,
-  onQuickMatch
+  onQuickMatch,
+  onCreateManualReceivable
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   onOpenInvoice: (transaction: Transaction) => void;
   onQuickMatch: (transaction: Transaction, providerId?: string) => void;
+  onCreateManualReceivable: (payload: CreateManualReceivablePayload) => Promise<void>;
 }) {
+  const [manualReceivableOpen, setManualReceivableOpen] = useState(false);
   const reviewRows = dashboard.transactions.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86).slice(0, 5);
   const payableMonths = Array.from(new Set(dashboard.payables.flatMap((payable) => Object.keys(payable.monthBuckets))));
   const hasCash = dashboard.accounts.length > 0;
@@ -1728,7 +1751,12 @@ function Overview({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Receivables</h2>
-          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalReceivables)}</span>
+          <div className="receivables-header-actions">
+            <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalReceivables)}</span>
+            <Button className="icon-text-button receivables-add-button" type="button" onClick={() => setManualReceivableOpen(true)}>
+              <Plus size={14} /> Add
+            </Button>
+          </div>
         </div>
         <SimpleMoneyTable
           nameLabel="Name"
@@ -1741,6 +1769,15 @@ function Overview({
           }))}
           emptyLabel="No live receivables"
         />
+        {manualReceivableOpen && (
+          <ManualReceivableDialog
+            onClose={() => setManualReceivableOpen(false)}
+            onSubmit={async (payload) => {
+              await onCreateManualReceivable(payload);
+              setManualReceivableOpen(false);
+            }}
+          />
+        )}
       </section>
 
       <section className="panel tall">
@@ -2865,6 +2902,72 @@ function SimpleMoneyTable({
       ) : (
         <div className="money-empty">{emptyLabel}</div>
       )}
+    </div>
+  );
+}
+
+function ManualReceivableDialog({
+  onClose,
+  onSubmit
+}: {
+  onClose: () => void;
+  onSubmit: (payload: CreateManualReceivablePayload) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        name: name.trim(),
+        amount: Number(amount),
+        currency: currency.trim().toUpperCase()
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Manual receivable could not be added");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal manual-receivable-modal" role="dialog" aria-modal="true" aria-labelledby="manual-receivable-title" onSubmit={handleSubmit}>
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">Receivables</p>
+            <h2 id="manual-receivable-title">Add manual receivable</h2>
+          </div>
+          <Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button>
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        <label>
+          Name
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="VAT, TAX, or another receivable" required />
+        </label>
+        <div className="manual-receivable-fields">
+          <label>
+            Amount
+            <Input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required />
+          </label>
+          <label>
+            Currency
+            <Input value={currency} maxLength={12} onChange={(event) => setCurrency(event.target.value.toUpperCase())} required />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <Button className="secondary-button" type="button" onClick={onClose}>Cancel</Button>
+          <Button className="primary-button" type="submit" disabled={submitting || !name.trim() || !amount || !currency.trim()}>
+            {submitting ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Add receivable
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

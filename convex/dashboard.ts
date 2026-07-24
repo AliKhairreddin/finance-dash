@@ -15,6 +15,16 @@ const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("
 const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
 const billingCadence = v.union(v.literal("weekly"), v.literal("monthly"));
 
+const ledgerItem = v.object({
+  id: v.string(),
+  name: v.string(),
+  balance: v.number(),
+  currency: v.string(),
+  source: dataSource,
+  notes: v.optional(v.string()),
+  dueDate: v.optional(v.string())
+});
+
 const meritCompanyComment = v.object({ date: v.optional(v.string()), text: v.string() });
 const meritCompanyDimension = v.object({
   id: v.optional(v.string()),
@@ -311,6 +321,7 @@ export const getState = query({
     v.object({
       providers: v.array(provider),
       invoices: v.array(invoice),
+      manualReceivables: v.array(ledgerItem),
       teams: v.array(team),
       transactionCategoryRules: v.array(transactionCategoryRule),
       revenuePartners: v.array(revenuePartner),
@@ -337,6 +348,7 @@ export const getState = query({
     return {
       providers: state.providers,
       invoices: state.invoices,
+      manualReceivables: state.manualReceivables,
       teams: state.teams,
       transactionCategoryRules: state.transactionCategoryRules,
       revenuePartners: state.revenuePartners,
@@ -362,6 +374,7 @@ export const saveState = mutation({
   args: {
     providers: v.array(provider),
     invoices: v.array(invoice),
+    manualReceivables: v.array(ledgerItem),
     teams: v.array(team),
     transactionCategoryRules: v.array(transactionCategoryRule),
     revenuePartners: v.array(revenuePartner),
@@ -391,6 +404,7 @@ export const saveState = mutation({
     const dashboardState = {
       providers: args.providers,
       invoices: args.invoices,
+      manualReceivables: args.manualReceivables,
       teams: args.teams,
       transactionCategoryRules: args.transactionCategoryRules,
       revenuePartners: args.revenuePartners,

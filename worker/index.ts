@@ -13,6 +13,7 @@ import type {
   AutoCategorizeTransactionsResult,
   CreateHoldingPayload,
   CreateInvoicePayload,
+  CreateManualReceivablePayload,
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
@@ -26,6 +27,7 @@ import type {
   ImportWiseStatementSummary,
   IntegrationStatus,
   Invoice,
+  LedgerItem,
   MeritTax,
   MatchTransactionPayload,
   PaymentAllocation,
@@ -66,6 +68,7 @@ import { deleteProviderReferences } from "../shared/providerDeletion";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
+  meritInvoiceLineDescription,
   meritInvoicePeriods,
   meritProviderId,
   meritProvidersFromResponse,
@@ -103,6 +106,7 @@ import {
   isLiquidAccountBalance,
   isLebanonIncomeAutomationTime,
   mergeFxRates,
+  openInvoiceReceivables,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
@@ -138,6 +142,7 @@ interface PersistedState {
   revision: string | null;
   providers: Provider[];
   invoices: Invoice[];
+  manualReceivables: LedgerItem[];
   teams: Team[];
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
@@ -1224,7 +1229,7 @@ export async function createMeritInvoice(
         {
           Item: {
             Code: meritItemCode(env, tax, itemCode),
-            Description: payload.description.slice(0, 150),
+            Description: meritInvoiceLineDescription(payload.description, payload.periodStart, payload.periodEnd),
             Type: 2
           },
           Quantity: 1,
@@ -1404,6 +1409,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: stored?.invoices ?? [],
+    manualReceivables: stored?.manualReceivables ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategoryRules: stored?.transactionCategoryRules ?? [],
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
@@ -1847,12 +1853,13 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
   }
   const invoices = reconciliation.invoices;
   const transactions = reconciliation.transactions;
+  const receivables = [...openInvoiceReceivables(invoices, reconciliation.allocations), ...state.manualReceivables];
   const approximateUsdTotals = calculateApproximateUsdTotals(accounts, state.holdings, state.fxRates);
 
   return {
     asOf: new Date().toISOString(),
     accounts,
-    receivables: [],
+    receivables,
     openBalances: [],
     payables: [],
     investments: [],
@@ -1885,7 +1892,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
       approximateUsdTotals.excludedAssets,
       approximateUsdTotals.staleAssets
     ),
-    metrics: calculateMetrics(accounts, [], [], [], []),
+    metrics: calculateMetrics(accounts, receivables, [], [], []),
     profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()
   };
@@ -2443,6 +2450,30 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   state.invoices = [invoice, ...state.invoices];
   await savePersisted(env, state);
   return invoice;
+}
+
+async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
+  const name = payload.name?.trim();
+  const currency = payload.currency?.trim().toUpperCase();
+  if (!name) throw new ApiError(400, "Receivable name is required");
+  if (!Number.isFinite(payload.amount) || payload.amount <= 0) {
+    throw new ApiError(400, "Receivable amount must be positive");
+  }
+  if (!currency || !/^[A-Z0-9]{2,12}$/.test(currency)) {
+    throw new ApiError(400, "Receivable currency is invalid");
+  }
+
+  const state = await loadPersisted(env);
+  const receivable: LedgerItem = {
+    id: `manual-receivable-${crypto.randomUUID()}`,
+    name,
+    balance: Number(payload.amount.toFixed(2)),
+    currency,
+    source: "manual"
+  };
+  state.manualReceivables = [receivable, ...state.manualReceivables];
+  await savePersisted(env, state);
+  return receivable;
 }
 
 async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
@@ -3376,6 +3407,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
+    }
+
+    if (url.pathname === "/api/receivables" && request.method === "POST") {
+      return json(await createManualReceivable(env, (await request.json()) as CreateManualReceivablePayload), { status: 201 });
     }
 
     if (url.pathname === "/api/invoices/send" && request.method === "POST") {

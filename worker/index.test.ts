@@ -110,7 +110,9 @@ test("Merit invoice creation uses the explicitly selected tax", async () => {
         amount: 125.5,
         currency: "USD",
         dueDate: "2026-07-31",
-        description: "Verify selected tax payload"
+        description: "Verify selected tax payload",
+        periodStart: "2026-07-01",
+        periodEnd: "2026-07-31"
       },
       { id: "tax-20", code: "VAT20", name: "VAT 20%", taxPct: 20 },
       "2026/1304"
@@ -118,10 +120,14 @@ test("Merit invoice creation uses the explicitly selected tax", async () => {
 
     assert.equal(invoice.externalId, "invoice-123");
     assert.equal(requestBody?.InvoiceNo, "2026/1304");
-    const rows = requestBody?.InvoiceRow as Array<{ TaxId: string; Item: { Code: string } }>;
+    const rows = requestBody?.InvoiceRow as Array<{ TaxId: string; Item: { Code: string; Description: string } }>;
     const taxes = requestBody?.TaxAmount as Array<{ TaxId: string; Amount: number }>;
     assert.equal(rows[0]?.TaxId, "tax-20");
     assert.equal(rows[0]?.Item.Code, "SERVICES-VAT20");
+    assert.equal(
+      rows[0]?.Item.Description,
+      "Verify selected tax payload (Period: 2026-07-01 - 2026-07-31)"
+    );
     assert.deepEqual(taxes, [{ TaxId: "tax-20", Amount: 25.1 }]);
   } finally {
     globalThis.fetch = originalFetch;

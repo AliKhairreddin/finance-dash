@@ -5,6 +5,7 @@ import type {
   Holding,
   Invoice,
   InvoicePaymentPrediction,
+  LedgerItem,
   PaymentAllocation,
   PaymentSource,
   Provider,
@@ -172,6 +173,29 @@ export function invoiceAllocatedAmount(invoiceId: string, allocations: PaymentAl
 
 export function invoiceOutstanding(invoice: Invoice, allocations: PaymentAllocation[]): number {
   return Math.max(0, Number((invoice.amount - invoiceAllocatedAmount(invoice.id, allocations)).toFixed(2)));
+}
+
+export function openInvoiceReceivables(invoices: Invoice[], allocations: PaymentAllocation[]): LedgerItem[] {
+  const outstandingByCurrency = new Map<string, number>();
+  for (const invoice of invoices) {
+    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") continue;
+    const outstanding = invoiceOutstanding(invoice, allocations);
+    if (outstanding <= 0) continue;
+    outstandingByCurrency.set(
+      invoice.currency,
+      Number(((outstandingByCurrency.get(invoice.currency) ?? 0) + outstanding).toFixed(2))
+    );
+  }
+
+  return [...outstandingByCurrency.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, balance]) => ({
+      id: `open-invoices-${currency.toLowerCase()}`,
+      name: "Open invoices",
+      balance,
+      currency,
+      source: "merit"
+    }));
 }
 
 export function applyPaymentState(invoices: Invoice[], allocations: PaymentAllocation[]): Invoice[] {
