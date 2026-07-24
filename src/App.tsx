@@ -1740,6 +1740,7 @@ function Overview({
           rows={dashboard.accounts.map((item) => ({
             id: item.id,
             name: item.name,
+            title: item.name,
             amount: item.balance,
             currency: item.currency,
             source: sourceLabel(item.source)
@@ -1762,7 +1763,8 @@ function Overview({
           nameLabel="Name"
           rows={dashboard.receivables.map((item) => ({
             id: item.id,
-            name: item.id.startsWith("open-invoices-") ? `Open INV ${item.currency}` : item.name,
+            name: item.id.startsWith("open-invoices-") ? `INV ${item.currency}` : item.name,
+            title: item.id.startsWith("open-invoices-") ? `Open invoices · ${item.currency}` : item.name,
             amount: item.balance,
             currency: item.currency,
             source: sourceLabel(item.source)
@@ -1790,6 +1792,7 @@ function Overview({
           rows={dashboard.openBalances.map((item) => ({
             id: item.id,
             name: item.name,
+            title: item.name,
             amount: item.balance,
             currency: item.currency,
             source: sourceLabel(item.source)
@@ -2875,7 +2878,7 @@ function SimpleMoneyTable({
   emptyLabel = "No live rows",
   nameLabel = "Account"
 }: {
-  rows: Array<{ id: string; name: string; amount: number; currency: string; source: string }>;
+  rows: Array<{ id: string; name: string; title: string; amount: number; currency: string; source: string }>;
   dense?: boolean;
   emptyLabel?: string;
   nameLabel?: string;
@@ -2890,7 +2893,7 @@ function SimpleMoneyTable({
       {rows.length > 0 ? (
         rows.map((row) => (
           <div className="money-row" key={row.id}>
-            <span className="money-name" title={row.name}>
+            <span className="money-name" title={row.title}>
               {row.name}
             </span>
             <span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span>
@@ -4000,6 +4003,7 @@ function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: 
           rows={revolutAccounts.map((account) => ({
             id: account.id,
             name: account.name,
+            title: account.name,
             amount: account.balance,
             currency: account.currency,
             source: sourceLabel(account.source)
@@ -4052,6 +4056,7 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
           rows={slashAccounts.map((account) => ({
             id: account.id,
             name: account.name,
+            title: account.name,
             amount: account.balance,
             currency: account.currency,
             source: sourceLabel(account.source)
@@ -4099,6 +4104,7 @@ function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tra
           rows={amexAccounts.map((account) => ({
             id: account.id,
             name: account.name,
+            title: account.name,
             amount: account.balance,
             currency: account.currency,
             source: sourceLabel(account.source)
