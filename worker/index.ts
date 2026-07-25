@@ -1780,16 +1780,11 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     : [];
   const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
   const trackedAssetsBefore = state.fxTrackedAssets.join("|");
-  state.fxTrackedAssets = [...new Set([
-    ...state.fxTrackedAssets,
-    ...state.fxRates.map((rate) => rate.asset),
-    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
-    ...state.holdings.map((holding) => holding.asset)
-  ].map((asset) => asset.trim().toUpperCase()).filter(Boolean))].sort();
+  state.fxTrackedAssets = trackedFxAssets(state, accounts, liveMeritInvoices);
   const fxAssetInventoryChanged = state.fxTrackedAssets.join("|") !== trackedAssetsBefore;
   let fxRatesRefreshed = false;
   if (options.refreshFxRates) {
-    await updateCurrentFxRates(env, state, accounts);
+    await updateCurrentFxRates(env, state, accounts, liveMeritInvoices);
     fxRatesRefreshed = true;
   }
   const invoicesBeforeReconciliation = assignMeritStyleDraftNumbers(
@@ -2999,16 +2994,12 @@ export async function fetchCoinbaseUsdRates(env: Env, assets: Iterable<string>):
 async function updateCurrentFxRates(
   env: Env,
   state: PersistedState,
-  accounts: AccountBalance[] = []
+  accounts: AccountBalance[] = [],
+  liveInvoices: Invoice[] = []
 ): Promise<void> {
-  const trackedAssets = new Set([
-    ...state.fxTrackedAssets,
-    ...state.fxRates.map((rate) => rate.asset),
-    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
-    ...state.holdings.map((holding) => holding.asset)
-  ]);
+  const trackedAssets = trackedFxAssets(state, accounts, liveInvoices);
   const checkedAt = new Date().toISOString();
-  state.fxTrackedAssets = [...trackedAssets].map((asset) => asset.trim().toUpperCase()).filter(Boolean).sort();
+  state.fxTrackedAssets = trackedAssets;
   let refreshedRates: FxRate[] = [];
   try {
     refreshedRates = await fetchCoinbaseUsdRates(env, trackedAssets);
@@ -3016,6 +3007,26 @@ async function updateCurrentFxRates(
     // Conversion availability is independent from bank/invoice sync; last-known values stay visible as stale.
   }
   state.fxRates = mergeFxRates(state.fxRates, refreshedRates, trackedAssets, checkedAt);
+}
+
+function trackedFxAssets(
+  state: PersistedState,
+  accounts: AccountBalance[] = [],
+  liveInvoices: Invoice[] = []
+): string[] {
+  return [...new Set([
+    ...state.fxTrackedAssets,
+    ...state.fxRates.map((rate) => rate.asset),
+    ...accounts.map((account) => account.currency),
+    ...state.holdings.map((holding) => holding.asset),
+    ...state.invoices.map((invoice) => invoice.currency),
+    ...liveInvoices.map((invoice) => invoice.currency),
+    ...state.manualReceivables.map((receivable) => receivable.currency),
+    ...state.revenuePartners.map((partner) => partner.currency),
+    ...state.revenueRuns.map((run) => run.currency),
+    ...state.revenueAccruals.map((accrual) => accrual.currency),
+    ...state.wiseStatementTransactions.map((transaction) => transaction.currency)
+  ].map((asset) => asset.trim().toUpperCase()).filter(Boolean))].sort();
 }
 
 async function refreshFxRates(env: Env): Promise<DashboardSnapshot> {

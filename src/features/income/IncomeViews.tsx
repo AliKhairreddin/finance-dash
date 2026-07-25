@@ -27,6 +27,7 @@ import type {
   CreateInvoicePayload,
   CurrencyTotals,
   DashboardSnapshot,
+  FxRate,
   Invoice,
   MeritSendMode,
   PaymentSource,
@@ -38,6 +39,7 @@ import type {
   SyncRevenuePayload,
   UpdateInvoicePayload
 } from "../../../shared/types";
+import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { isClosedBillingPeriod } from "../../../shared/income";
 
 type InvoiceTab = "all" | "open" | "paid";
@@ -127,6 +129,17 @@ function addTotal(totals: CurrencyTotals, currency: string, amount: number): voi
 function formatTotals(totals: CurrencyTotals): string {
   const rows = Object.entries(totals).sort(([left], [right]) => left.localeCompare(right));
   return rows.length > 0 ? rows.map(([currency, amount]) => money(amount, currency)).join(" · ") : "—";
+}
+
+function formatUsdTotal(totals: CurrencyTotals, rates: FxRate[]): string {
+  if (Object.keys(totals).length === 0) return "—";
+  const conversion = convertCurrencyTotalsToUsd(totals, rates);
+  return conversion.excludedCurrencies.length > 0 ? "USD rate unavailable" : money(conversion.totalUsd, "USD");
+}
+
+function nativeBreakdown(totals: CurrencyTotals): string | undefined {
+  const breakdown = formatTotals(totals);
+  return breakdown === "—" ? undefined : `Native: ${breakdown}`;
 }
 
 function cadenceLabel(cadence?: BillingCadence): string {
@@ -378,9 +391,9 @@ export function RevenueView({
         {error && <div className="inline-error">{error}</div>}
 
         <div className="income-summary-grid">
-          <IncomeSummary label="Revenue shown" value={formatTotals(totalRevenue)} detail={`${visibleRuns.length} saved or current result rows`} />
-          <IncomeSummary label="Drafts prepared" value={formatTotals(draftedRevenue)} detail="Ready for invoice review" tone="draft" />
-          <IncomeSummary label="Accruing now" value={formatTotals(accruingRevenue)} detail={`${visibleAccruals.length} current-period invoice previews`} tone="accruing" />
+          <IncomeSummary label="Revenue shown" value={formatUsdTotal(totalRevenue, dashboard.fxRates)} breakdown={nativeBreakdown(totalRevenue)} detail={`${visibleRuns.length} saved or current result rows`} />
+          <IncomeSummary label="Drafts prepared" value={formatUsdTotal(draftedRevenue, dashboard.fxRates)} breakdown={nativeBreakdown(draftedRevenue)} detail="Ready for invoice review" tone="draft" />
+          <IncomeSummary label="Accruing now" value={formatUsdTotal(accruingRevenue, dashboard.fxRates)} breakdown={nativeBreakdown(accruingRevenue)} detail={`${visibleAccruals.length} current-period invoice previews`} tone="accruing" />
           <IncomeSummary label="Automation" value={lastAutomation?.status ?? "Scheduled"} detail="Monday 09:00 Beirut" tone={lastAutomation?.status === "failed" ? "warning" : ""} />
         </div>
 
@@ -449,8 +462,8 @@ export function RevenueView({
   );
 }
 
-function IncomeSummary({ label, value, detail, tone = "" }: { label: string; value: string; detail: string; tone?: string }) {
-  return <article className={`income-summary-card ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
+function IncomeSummary({ label, value, detail, breakdown, tone = "" }: { label: string; value: string; detail: string; breakdown?: string; tone?: string }) {
+  return <article className={`income-summary-card ${tone}`}><span>{label}</span><strong>{value}</strong>{breakdown && <small className="currency-breakdown">{breakdown}</small>}<small>{detail}</small></article>;
 }
 
 type DisplayInvoiceRow =
@@ -563,10 +576,10 @@ export function InvoicesView({
   return (
     <div className="income-page-stack">
       <section className="invoice-total-band" aria-label="Invoice totals">
-        <IncomeSummary label="Open" value={formatTotals(openTotals)} detail="Sent, less recorded payments" tone="open" />
-        <IncomeSummary label="Drafts" value={formatTotals(draftTotals)} detail="Prepared, not yet in Merit" tone="draft" />
-        <IncomeSummary label="Accruing" value={formatTotals(accruingTotals)} detail="Current-period invoice previews" tone="accruing" />
-        <IncomeSummary label="Expected income" value={formatTotals(expectedTotals)} detail="Open + drafts + accruing" tone="expected" />
+        <IncomeSummary label="Open" value={formatUsdTotal(openTotals, dashboard.fxRates)} breakdown={nativeBreakdown(openTotals)} detail="Sent, less recorded payments" tone="open" />
+        <IncomeSummary label="Drafts" value={formatUsdTotal(draftTotals, dashboard.fxRates)} breakdown={nativeBreakdown(draftTotals)} detail="Prepared, not yet in Merit" tone="draft" />
+        <IncomeSummary label="Accruing" value={formatUsdTotal(accruingTotals, dashboard.fxRates)} breakdown={nativeBreakdown(accruingTotals)} detail="Current-period invoice previews" tone="accruing" />
+        <IncomeSummary label="Expected income" value={formatUsdTotal(expectedTotals, dashboard.fxRates)} breakdown={nativeBreakdown(expectedTotals)} detail="Open + drafts + accruing" tone="expected" />
       </section>
 
       <section className="panel">
@@ -694,7 +707,7 @@ export function InvoicesView({
       </section>
 
       {editorInvoice && <InvoiceEditorDialog dashboard={dashboard} invoice={editorInvoice === "new" ? undefined : editorInvoice} onClose={() => setEditorInvoice(null)} onSubmit={async (payload) => { if (editorInvoice === "new") await onCreateDraft(payload as CreateInvoicePayload); else await onUpdateDraft(editorInvoice.id, payload as UpdateInvoicePayload); setEditorInvoice(null); }} />}
-      {sendIds && <SendInvoicesDialog invoiceIds={sendIds} invoices={salesInvoices.filter((invoice) => sendIds.includes(invoice.id))} providersById={providersById} onClose={() => setSendIds(null)} onSend={async (mode) => { await onSendInvoices(sendIds, mode); setSendIds(null); setSelectedIds([]); }} />}
+      {sendIds && <SendInvoicesDialog invoiceIds={sendIds} invoices={salesInvoices.filter((invoice) => sendIds.includes(invoice.id))} fxRates={dashboard.fxRates} providersById={providersById} onClose={() => setSendIds(null)} onSend={async (mode) => { await onSendInvoices(sendIds, mode); setSendIds(null); setSelectedIds([]); }} />}
       {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
     </div>
   );
@@ -844,7 +857,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   );
 }
 
-function SendInvoicesDialog({ invoiceIds, invoices, providersById, onClose, onSend }: { invoiceIds: string[]; invoices: Invoice[]; providersById: Map<string, Provider>; onClose: () => void; onSend: (mode: MeritSendMode) => Promise<void> }) {
+function SendInvoicesDialog({ invoiceIds, invoices, fxRates, providersById, onClose, onSend }: { invoiceIds: string[]; invoices: Invoice[]; fxRates: FxRate[]; providersById: Map<string, Provider>; onClose: () => void; onSend: (mode: MeritSendMode) => Promise<void> }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [busyMode, setBusyMode] = useState<MeritSendMode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -880,7 +893,7 @@ function SendInvoicesDialog({ invoiceIds, invoices, providersById, onClose, onSe
     <div className="modal-backdrop" role="presentation">
       <div className="modal send-choice-modal" role="dialog" aria-modal="true" aria-labelledby="send-choice-title">
         <div className="modal-header"><div><p className="eyebrow">External Merit action</p><h2 id="send-choice-title">{deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : mixedSelection ? `Review ${invoiceIds.length} selected invoices` : `Send ${invoiceIds.length} draft${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
-        <div className="send-review-summary"><span>Selected total</span><strong>{formatTotals(totals)}</strong><small>{deliveryOnly ? "These invoices already exist in Merit. This action only requests client delivery; it does not create them again." : mixedSelection ? `${draftCount} draft${draftCount === 1 ? "" : "s"} will be created; ${existingCount} existing Merit invoice${existingCount === 1 ? "" : "s"} can be delivered in the same action.` : "Each draft uses its linked Merit customer, saved tax, and invoice details shown below."}</small></div>
+        <div className="send-review-summary"><span>Selected total · USD</span><strong>{formatUsdTotal(totals, fxRates)}</strong>{nativeBreakdown(totals) && <small className="currency-breakdown">{nativeBreakdown(totals)}</small>}<small>{deliveryOnly ? "These invoices already exist in Merit. This action only requests client delivery; it does not create them again." : mixedSelection ? `${draftCount} draft${draftCount === 1 ? "" : "s"} will be created; ${existingCount} existing Merit invoice${existingCount === 1 ? "" : "s"} can be delivered in the same action.` : "Each draft uses its linked Merit customer, saved tax, and invoice details shown below."}</small></div>
         <div className="invoice-send-review-list">
           {invoices.map((invoice) => {
             const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;

@@ -65,6 +65,7 @@ import type {
   DataSource,
   DashboardSnapshot,
   DraftRevenueRunPayload,
+  FxRate,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   InvoiceDocumentType,
@@ -100,7 +101,7 @@ import {
   transactionCategoryOptions,
   transactionCategoryOptionsForDirection
 } from "../shared/categories";
-import { hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
+import { convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
 import {
   profitDistributionAdjustmentId,
   profitDistributionBucketLabels,
@@ -180,10 +181,6 @@ function money(value: number, currency = "USD"): string {
   }).format(value);
 }
 
-function maybeMoney(hasValue: boolean, value: number, currency = "USD"): string {
-  return hasValue ? money(value, currency) : "—";
-}
-
 function optionalMoney(value: number | null | undefined, currency = "USD"): string {
   return typeof value === "number" ? money(value, currency) : "—";
 }
@@ -191,6 +188,17 @@ function optionalMoney(value: number | null | undefined, currency = "USD"): stri
 function formatCurrencyTotals(totals: CurrencyTotals): string {
   const values = Object.entries(totals).sort(([left], [right]) => left.localeCompare(right));
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
+}
+
+function formatUsdCurrencyTotal(totals: CurrencyTotals, rates: FxRate[]): string {
+  if (!hasCurrencyTotals(totals)) return "—";
+  const conversion = convertCurrencyTotalsToUsd(totals, rates);
+  return conversion.excludedCurrencies.length > 0 ? "USD rate unavailable" : money(conversion.totalUsd, "USD");
+}
+
+function nativeCurrencyBreakdown(totals: CurrencyTotals): string | undefined {
+  const breakdown = formatCurrencyTotals(totals);
+  return breakdown === "—" ? undefined : `Native: ${breakdown}`;
 }
 
 function negateCurrencyTotals(totals: CurrencyTotals): CurrencyTotals {
@@ -1227,6 +1235,23 @@ function App() {
   const liquidAccounts = dashboard.accounts.filter(isLiquidAccountBalance);
   const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
   const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
+  const overviewConversions = [
+    cardLiabilities,
+    dashboard.metrics.totalCash,
+    dashboard.metrics.totalReceivables,
+    dashboard.metrics.totalOpenBalance,
+    dashboard.metrics.totalPayables,
+    dashboard.metrics.profit,
+    dashboard.metrics.totalAssets
+  ].map((totals) => convertCurrencyTotalsToUsd(totals, dashboard.fxRates));
+  const overviewExcludedCurrencies = [...new Set([
+    ...dashboard.approximateUsdTotals.excludedAssets,
+    ...overviewConversions.flatMap((conversion) => conversion.excludedCurrencies)
+  ])].sort();
+  const overviewStaleCurrencies = [...new Set([
+    ...dashboard.approximateUsdTotals.staleAssets,
+    ...overviewConversions.flatMap((conversion) => conversion.staleCurrencies)
+  ])].sort();
   const incompleteLiquiditySources = dashboard.integrationStatus
     .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash") && status.mode === "partial")
     .map((status) => status.label);
@@ -1291,52 +1316,58 @@ function App() {
             <div className="liquidity-breakdown">
               <article><span>Liquid bank accounts</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>{groupedAccountMoney(liquidAccounts)}</small></article>
               <article><span>Cash & crypto</span><strong>{money(dashboard.approximateUsdTotals.holdingsUsd, "USD")}</strong><small>{groupedHoldingMoney(dashboard.holdings)}</small></article>
-              <article className="liability"><span>Card liabilities · excluded</span><strong>{hasCurrencyTotals(cardLiabilities) ? formatCurrencyTotals(cardLiabilities) : "—"}</strong><small>Shown separately and never deducted from liquid assets.</small></article>
+              <article className="liability"><span>Card liabilities · excluded</span><strong>{formatUsdCurrencyTotal(cardLiabilities, dashboard.fxRates)}</strong><small>{nativeCurrencyBreakdown(cardLiabilities) ?? "No card liabilities"} · never deducted from liquid assets.</small></article>
             </div>
           </section>
           {incompleteLiquiditySources.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>The total only includes currently available balances. Incomplete bank sources: <strong>{incompleteLiquiditySources.join(", ")}</strong>.</span></div>}
-          {dashboard.approximateUsdTotals.staleAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Using last-known conversion rates for <strong>{dashboard.approximateUsdTotals.staleAssets.join(", ")}</strong>; the total remains approximate.</span></div>}
-          {dashboard.approximateUsdTotals.excludedAssets.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Not included because Coinbase did not return a USD rate: <strong>{dashboard.approximateUsdTotals.excludedAssets.join(", ")}</strong>.</span></div>}
+          {overviewStaleCurrencies.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Using last-known conversion rates for <strong>{overviewStaleCurrencies.join(", ")}</strong>; affected USD totals remain approximate.</span></div>}
+          {overviewExcludedCurrencies.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Complete USD totals are unavailable where Coinbase did not return a rate for <strong>{overviewExcludedCurrencies.join(", ")}</strong>. Native balances remain visible.</span></div>}
           <section className="metric-grid" aria-label="Finance summary">
-            <div className="metric-grid-heading">Finance summary</div>
+            <div className="metric-grid-heading">Finance summary · USD totals</div>
             <MetricCard
               icon={<Banknote />}
               label="Cash in accounts"
-              value={formatCurrencyTotals(dashboard.metrics.totalCash)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}
               detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}
             />
             <MetricCard
               icon={<BadgeDollarSign />}
               label="Receivables"
-              value={formatCurrencyTotals(dashboard.metrics.totalReceivables)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates)}
               detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalReceivables)}
             />
             <MetricCard
               icon={<WalletCards />}
               label="Open balance"
-              value={formatCurrencyTotals(dashboard.metrics.totalOpenBalance)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates)}
               detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}
             />
             <MetricCard
               icon={<ArrowDownRight />}
               label="Payables"
-              value={formatCurrencyTotals(dashboard.metrics.totalPayables)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates)}
               detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}
               danger
             />
             <MetricCard
               icon={<CircleDollarSign />}
               label="Profit"
-              value={formatCurrencyTotals(dashboard.metrics.profit)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.profit, dashboard.fxRates)}
               detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.profit)}
               good={profitTone === "good"}
               danger={profitTone === "danger"}
             />
             <MetricCard
               icon={<ShieldCheck />}
               label="Total assets"
-              value={formatCurrencyTotals(dashboard.metrics.totalAssets)}
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalAssets, dashboard.fxRates)}
               detail={hasInvestments ? `${formatCurrencyTotals(dashboard.metrics.investments)} investments` : "No live investments"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalAssets)}
             />
           </section>
           <Overview
@@ -1681,6 +1712,7 @@ function MetricCard({
   label,
   value,
   detail,
+  breakdown,
   danger,
   good
 }: {
@@ -1688,6 +1720,7 @@ function MetricCard({
   label: string;
   value: string;
   detail: string;
+  breakdown?: string;
   danger?: boolean;
   good?: boolean;
 }) {
@@ -1698,6 +1731,7 @@ function MetricCard({
         <span>{label}</span>
         <strong>{value}</strong>
         <small>{detail}</small>
+        {breakdown && <small className="currency-breakdown">{breakdown}</small>}
       </div>
     </article>
   );
@@ -1733,7 +1767,7 @@ function Overview({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Cash in accounts</h2>
-          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalCash)}</span>
+          <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
         </div>
         <SimpleMoneyTable
           nameLabel="Account"
@@ -1753,7 +1787,7 @@ function Overview({
         <div className="panel-header compact">
           <h2>Receivables</h2>
           <div className="receivables-header-actions">
-            <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalReceivables)}</span>
+            <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalReceivables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates)}</span>
             <Button className="icon-text-button receivables-add-button" type="button" onClick={() => setManualReceivableOpen(true)}>
               <Plus size={14} /> Add
             </Button>
@@ -1785,7 +1819,7 @@ function Overview({
       <section className="panel tall">
         <div className="panel-header compact">
           <h2>Open balance</h2>
-          <span className="total-pill">{formatCurrencyTotals(dashboard.metrics.totalOpenBalance)}</span>
+          <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}>{formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates)}</span>
         </div>
         <SimpleMoneyTable
           nameLabel="Name"
@@ -1805,7 +1839,7 @@ function Overview({
       <section className="panel wide">
         <div className="panel-header compact">
           <h2>Payables by supplier and month</h2>
-          <span className="total-pill danger">{formatCurrencyTotals(dashboard.metrics.totalPayables)}</span>
+          <span className="total-pill danger" title={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates)}</span>
         </div>
         <div className="table-wrap">
           <table className="data-table payables-table">
@@ -1863,7 +1897,7 @@ function Overview({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Assets bridge</h2>
-          <span className={`total-pill ${assetsTone}`}>{formatCurrencyTotals(dashboard.metrics.totalAssets)}</span>
+          <span className={`total-pill ${assetsTone}`} title={nativeCurrencyBreakdown(dashboard.metrics.totalAssets)}>{formatUsdCurrencyTotal(dashboard.metrics.totalAssets, dashboard.fxRates)}</span>
         </div>
         <div className="bridge">
           <BridgeRow label="Cash" value={dashboard.metrics.totalCash} />
@@ -2067,11 +2101,13 @@ function BanksView({
             const accounts = accountsBySource.get(source.id) ?? [];
             const rows = rowsBySource.get(source.id) ?? [];
             const status = statusBySource.get(source.id);
+            const accountTotals = sumCurrencyTotals(accounts, (account) => account.balance);
             return (
               <SummaryTile
                 key={source.id}
                 label={`${source.label} ${status?.mode ?? "partial"}`}
-                value={accounts.length > 0 ? groupedAccountMoney(accounts) : `${rows.length} rows`}
+                value={accounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
+                detail={accounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
               />
             );
           })}
@@ -2262,7 +2298,11 @@ function WiseBankView({
         </div>
       </div>
       <div className="wise-summary-grid">
-        <SummaryTile label="Visible volume" value={formatCurrencyTotals(summary.volume)} />
+        <SummaryTile
+          label="Visible volume"
+          value={formatUsdCurrencyTotal(summary.volume, dashboard.fxRates)}
+          detail={nativeCurrencyBreakdown(summary.volume)}
+        />
         <SummaryTile label="Transactions" value={String(summary.count)} />
         <SummaryTile label="Matched rows" value={String(summary.matched)} />
         <SummaryTile label="No team" value={String(summary.unassigned)} />
@@ -2522,6 +2562,8 @@ function AnalyticsView({
       return { source, transactions, accounts, invoices, status };
     })
     .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
+  const moneyInTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "in"), (row) => row.amount);
+  const moneyOutTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "out"), (row) => row.amount);
 
   return (
     <div className="categorization-layout">
@@ -2550,19 +2592,20 @@ function AnalyticsView({
           </div>
         </div>
         <div className="wise-summary-grid categorization-summary">
-          <SummaryTile label="Money in" value={groupedTransactionMoney(rows, "in")} />
-          <SummaryTile label="Money out" value={groupedTransactionMoney(rows, "out")} />
+          <SummaryTile label="Money in" value={formatUsdCurrencyTotal(moneyInTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyInTotals)} />
+          <SummaryTile label="Money out" value={formatUsdCurrencyTotal(moneyOutTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyOutTotals)} />
           <SummaryTile label="Teams" value={String(dashboard.teams.length)} />
           <SummaryTile label="Sources" value={String(sourceRows.length)} />
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
       </section>
 
-      <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} emptyLabel="No spend transactions yet" />
+      <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} rates={dashboard.fxRates} emptyLabel="No spend transactions yet" />
       <CategoryPiePanel
         title="Revenue by team and partner"
         tone="good"
         groups={revenuePieGroups}
+        rates={dashboard.fxRates}
         emptyLabel={revenuePieFilterActive ? "No revenue rows match these filters" : "No revenue transactions yet"}
         controls={revenuePieControls}
       />
@@ -2785,22 +2828,24 @@ function CategoryPiePanel({
   title,
   tone,
   groups,
+  rates,
   emptyLabel,
   controls
 }: {
   title: string;
   tone: "good" | "danger";
   groups: CategoryPieGroup[];
+  rates: FxRate[];
   emptyLabel: string;
   controls?: ReactNode;
 }) {
-  const totalLabel = groups.length > 0 ? groups.map((group) => money(group.total, group.currency)).join(" · ") : "—";
+  const nativeTotals = Object.fromEntries(groups.map((group) => [group.currency, group.total]));
 
   return (
     <section className={`panel category-chart-panel ${tone}`}>
       <div className="panel-header compact">
         <h2>{title}</h2>
-        <span className={`total-pill ${tone}`}>{totalLabel}</span>
+        <span className={`total-pill ${tone}`} title={nativeCurrencyBreakdown(nativeTotals)}>{formatUsdCurrencyTotal(nativeTotals, rates)}</span>
       </div>
       {controls}
       <div className="category-chart-body">
@@ -3008,11 +3053,12 @@ function GrowthItem({ label, value, danger }: { label: string; value?: number | 
   );
 }
 
-function SummaryTile({ label, value }: { label: string; value: string }) {
+function SummaryTile({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="summary-tile">
       <span>{label}</span>
       <strong>{value}</strong>
+      {detail && <small className="currency-breakdown">{detail}</small>}
     </div>
   );
 }
@@ -3607,6 +3653,9 @@ function DistributionView({
     distribution.months.find((month) => month.month === selectedMonth && month.currency === selectedCurrency) ??
     distribution.months[0];
   const currencySummary = distribution.currencies.find((currency) => currency.currency === selectedCurrency);
+  const payableTotal = currencySummary ? { [currencySummary.currency]: currencySummary.totalPayable } : {};
+  const paidTotal = currencySummary ? { [currencySummary.currency]: currencySummary.totalPaid } : {};
+  const remainingTotal = currencySummary ? { [currencySummary.currency]: currencySummary.remaining } : {};
   const balanceRows = distribution.partners.filter((partner) => partner.currency === selectedCurrency);
   const partnerOrder = new Map(profitDistributionPartners.map((partner, index) => [partner.id, index]));
   const selectedPartners = selectedLedger
@@ -3655,7 +3704,7 @@ function DistributionView({
             <p className="eyebrow">Distribution</p>
             <h2>Partner payables, paid amounts, and remaining balances</h2>
           </div>
-          <span className="total-pill">{currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} remaining</span>
+          <span className="total-pill" title={nativeCurrencyBreakdown(remainingTotal)}>{formatUsdCurrencyTotal(remainingTotal, dashboard.fxRates)} remaining</span>
         </div>
         <div className="revenue-controls distribution-controls">
           <label>
@@ -3680,9 +3729,9 @@ function DistributionView({
           </label>
         </div>
         <div className="wise-summary-grid distribution-summary">
-          <SummaryTile label="Payable" value={currencySummary ? money(currencySummary.totalPayable, currencySummary.currency) : "—"} />
-          <SummaryTile label="Paid" value={currencySummary ? money(currencySummary.totalPaid, currencySummary.currency) : "—"} />
-          <SummaryTile label="Remaining" value={currencySummary ? money(currencySummary.remaining, currencySummary.currency) : "—"} />
+          <SummaryTile label="Payable" value={formatUsdCurrencyTotal(payableTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(payableTotal)} />
+          <SummaryTile label="Paid" value={formatUsdCurrencyTotal(paidTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(paidTotal)} />
+          <SummaryTile label="Remaining" value={formatUsdCurrencyTotal(remainingTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(remainingTotal)} />
           <SummaryTile label="Adjustments" value={String(distribution.adjustments.length)} />
         </div>
       </section>
@@ -4050,7 +4099,7 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash balances</h2>
-          <span className="total-pill">{formatCurrencyTotals(balance)}</span>
+          <span className="total-pill" title={nativeCurrencyBreakdown(balance)}>{formatUsdCurrencyTotal(balance, dashboard.fxRates)}</span>
         </div>
         <SimpleMoneyTable
           rows={slashAccounts.map((account) => ({
@@ -4067,7 +4116,7 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
       <section className="panel">
         <div className="panel-header compact">
           <h2>Slash cashback</h2>
-          <span className="total-pill good">{formatCurrencyTotals(cashback)}</span>
+          <span className="total-pill good" title={nativeCurrencyBreakdown(cashback)}>{formatUsdCurrencyTotal(cashback, dashboard.fxRates)}</span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
@@ -4091,14 +4140,15 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
 function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
   const amexAccounts = dashboard.accounts.filter((account) => account.source === "amex");
   const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
-  const balance = amexAccounts.reduce((total, account) => total + account.balance, 0);
+  const balance = sumCurrencyTotals(amexAccounts, (account) => account.balance);
+  const balanceTone = Object.values(balance).some((amount) => amount < 0) ? "warning" : "";
 
   return (
     <div className="split-view">
       <section className="panel">
         <div className="panel-header compact">
           <h2>Amex cards</h2>
-          <span className={`total-pill ${balance < 0 ? "warning" : ""}`}>{maybeMoney(amexAccounts.length > 0, balance)}</span>
+          <span className={`total-pill ${balanceTone}`} title={nativeCurrencyBreakdown(balance)}>{formatUsdCurrencyTotal(balance, dashboard.fxRates)}</span>
         </div>
         <SimpleMoneyTable
           rows={amexAccounts.map((account) => ({

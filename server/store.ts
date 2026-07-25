@@ -1247,8 +1247,15 @@ async function updateCurrentFxRates(): Promise<void> {
   const trackedAssets = new Set([
     ...fxTrackedAssets,
     ...fxRates.map((rate) => rate.asset),
-    ...accounts.filter(isLiquidAccountBalance).map((account) => account.currency),
-    ...holdings.map((holding) => holding.asset)
+    ...accounts.map((account) => account.currency),
+    ...holdings.map((holding) => holding.asset),
+    ...invoices.map((invoice) => invoice.currency),
+    ...manualReceivables.map((receivable) => receivable.currency),
+    ...revenuePartners.map((partner) => partner.currency),
+    ...revenueRuns.map((run) => run.currency),
+    ...revenueAccruals.map((accrual) => accrual.currency),
+    ...transactions.map((transaction) => transaction.currency),
+    ...wiseStatementTransactions.map((transaction) => transaction.currency)
   ]);
   const checkedAt = new Date().toISOString();
   fxTrackedAssets = [...trackedAssets].map((asset) => asset.trim().toUpperCase()).filter(Boolean).sort();

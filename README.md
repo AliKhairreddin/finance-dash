@@ -63,7 +63,7 @@ flowchart LR
 
 ### Exact and Approximate Currency Views
 
-Derived cash, revenue, payable, distribution, and profit metrics stay grouped by native currency. A secondary approximate USD view uses timestamped Coinbase rates, retains last-known rates during a feed interruption, and discloses stale or unsupported assets.
+Derived cash, revenue, payable, distribution, and profit metrics stay grouped by native currency. Headline cards and panel totals convert those buckets into one USD amount using timestamped, keyless Coinbase rates; the exact native-currency split remains visible underneath or in the underlying rows. Rates refresh hourly and with Sync, retain last-known values during a feed interruption, and disclose stale or unsupported currencies instead of presenting an incomplete amount as a total.
 
 ### Learned Matching Without Silent Mutation
 

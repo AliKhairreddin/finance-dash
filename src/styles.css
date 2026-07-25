@@ -724,6 +724,16 @@ textarea:focus-visible {
   font-size: 0.78rem;
 }
 
+.metric-card .currency-breakdown,
+.income-summary-card > .currency-breakdown,
+.summary-tile > .currency-breakdown,
+.send-review-summary > .currency-breakdown {
+  color: var(--label-text);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .metric-card strong {
   display: block;
   margin: 4px 0 2px;
@@ -1975,6 +1985,10 @@ textarea:focus-visible {
   line-height: 1.2;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.summary-tile small {
+  color: var(--app-muted);
 }
 
 .filters label,
@@ -4369,7 +4383,7 @@ textarea:focus-visible {
 
   .metric-card,
   .metric-card:nth-of-type(3n) {
-    min-height: 60px;
+    min-height: 72px;
     padding: 8px 10px;
     border-right: 0;
   }
@@ -4392,6 +4406,11 @@ textarea:focus-visible {
 
   .metric-card small {
     grid-column: 1;
+  }
+
+  .metric-card .currency-breakdown {
+    grid-column: 1 / -1;
+    margin-top: 2px;
   }
 
   .income-schedule-strip,
