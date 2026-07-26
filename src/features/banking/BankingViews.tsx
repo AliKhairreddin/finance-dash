@@ -1,6 +1,7 @@
 import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Edit3, Loader2, Plus, RefreshCw, Search, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
@@ -124,9 +125,21 @@ export function HoldingsView({
   return (
     <div className="holdings-stack">
       <section className="holding-summary-band">
-        <article className="holding-total-card"><span>Liquid bank accounts · approx.</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>Converted to USD; card liabilities excluded</small></article>
-        <article className="holding-total-card"><span>Cash & wallets · approx.</span><strong>{money(dashboard.approximateUsdTotals.holdingsUsd, "USD")}</strong><small>{dashboard.holdings.length} manually tracked holdings</small></article>
-        <article className="holding-total-card total"><span>Total available · approx.</span><strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong><small>{dashboard.approximateUsdTotals.asOf ? `Quotes ${dateLabel(dashboard.approximateUsdTotals.asOf)}` : dashboard.approximateUsdTotals.excludedAssets.length > 0 ? "Refresh quotes to include every asset" : "No non-USD quote required"}</small></article>
+        <article className="holding-total-card">
+          <InfoPopover label="liquid bank accounts">Converted to USD; card liabilities excluded.</InfoPopover>
+          <strong><AnimatedNumber animationKey="holdings-liquid-bank-accounts" value={money(dashboard.approximateUsdTotals.accountsUsd, "USD")} /></strong>
+          <span>Liquid bank accounts · approx.</span>
+        </article>
+        <article className="holding-total-card">
+          <InfoPopover label="cash and wallets">{dashboard.holdings.length} manually tracked holdings.</InfoPopover>
+          <strong><AnimatedNumber animationKey="holdings-cash-wallets" value={money(dashboard.approximateUsdTotals.holdingsUsd, "USD")} /></strong>
+          <span>Cash & wallets · approx.</span>
+        </article>
+        <article className="holding-total-card total">
+          <InfoPopover label="total available">{dashboard.approximateUsdTotals.asOf ? `Quotes ${dateLabel(dashboard.approximateUsdTotals.asOf)}.` : dashboard.approximateUsdTotals.excludedAssets.length > 0 ? "Refresh quotes to include every asset." : "No non-USD quote required."}</InfoPopover>
+          <strong><AnimatedNumber animationKey="holdings-total-available" value={money(dashboard.approximateUsdTotals.totalUsd, "USD")} /></strong>
+          <span>Total available · approx.</span>
+        </article>
       </section>
 
       <section className="panel">

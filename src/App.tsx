@@ -47,6 +47,7 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
@@ -1304,19 +1305,35 @@ function App() {
           </div>
         )}
 
+        <div className="route-stage" key={activeTab}>
       {activeTab === "overview" && (
         <>
           <section className="liquidity-hero" aria-label="Approximate total liquidity in US dollars">
             <div className="liquidity-hero-main">
+              <InfoPopover label="approximate liquid assets">
+                <span>One USD view across connected bank balances, manual cash, exchanges, and crypto wallets.</span>
+                <span>{dashboard.approximateUsdTotals.asOf ? `Oldest included rate ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync.</span>
+              </InfoPopover>
+              <strong><AnimatedNumber animationKey="overview-liquid-assets" value={money(dashboard.approximateUsdTotals.totalUsd, "USD")} /></strong>
               <div className="liquidity-hero-title"><CircleDollarSign size={20} /><span>Approximate liquid assets</span></div>
-              <strong>{money(dashboard.approximateUsdTotals.totalUsd, "USD")}</strong>
-              <p>One USD view across connected bank balances, manual cash, exchanges, and crypto wallets.</p>
-              <small>{dashboard.approximateUsdTotals.asOf ? `Oldest included rate ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync</small>
             </div>
             <div className="liquidity-breakdown">
-              <article><span>Liquid bank accounts</span><strong>{money(dashboard.approximateUsdTotals.accountsUsd, "USD")}</strong><small>{groupedAccountMoney(liquidAccounts)}</small></article>
-              <article><span>Cash & crypto</span><strong>{money(dashboard.approximateUsdTotals.holdingsUsd, "USD")}</strong><small>{groupedHoldingMoney(dashboard.holdings)}</small></article>
-              <article className="liability"><span>Card liabilities · excluded</span><strong>{formatUsdCurrencyTotal(cardLiabilities, dashboard.fxRates)}</strong><small>{nativeCurrencyBreakdown(cardLiabilities) ?? "No card liabilities"} · never deducted from liquid assets.</small></article>
+              <article>
+                <strong><AnimatedNumber animationKey="overview-liquid-bank-accounts" value={money(dashboard.approximateUsdTotals.accountsUsd, "USD")} /></strong>
+                <span>Liquid bank accounts</span>
+                <small>{groupedAccountMoney(liquidAccounts)}</small>
+              </article>
+              <article>
+                <strong><AnimatedNumber animationKey="overview-cash-crypto" value={money(dashboard.approximateUsdTotals.holdingsUsd, "USD")} /></strong>
+                <span>Cash & crypto</span>
+                <small>{groupedHoldingMoney(dashboard.holdings)}</small>
+              </article>
+              <article className="liability">
+                <InfoPopover label="card liabilities"><span>Card liabilities are excluded and never deducted from liquid assets.</span></InfoPopover>
+                <strong><AnimatedNumber animationKey="overview-card-liabilities" value={formatUsdCurrencyTotal(cardLiabilities, dashboard.fxRates)} /></strong>
+                <span>Card liabilities · excluded</span>
+                <small>{nativeCurrencyBreakdown(cardLiabilities) ?? "No card liabilities"}</small>
+              </article>
             </div>
           </section>
           {incompleteLiquiditySources.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>The total only includes currently available balances. Incomplete bank sources: <strong>{incompleteLiquiditySources.join(", ")}</strong>.</span></div>}
@@ -1351,7 +1368,7 @@ function App() {
               value={formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates)}
               detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
               breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}
-              danger
+              danger={hasPayables}
             />
             <MetricCard
               icon={<CircleDollarSign />}
@@ -1487,6 +1504,7 @@ function App() {
           onRunAiPrompt={runAiPrompt}
         />
       )}
+        </div>
 
       {invoiceTransaction && (
         <InvoiceModal
@@ -1727,10 +1745,10 @@ function MetricCard({
   return (
     <article className={`metric-card ${danger ? "danger" : ""} ${good ? "good" : ""}`}>
       <div className="metric-icon">{icon}</div>
-      <div>
+      <div className="metric-card-content">
+        <InfoPopover label={label}>{detail}</InfoPopover>
+        <strong><AnimatedNumber animationKey={`overview-metric-${label}`} value={value} /></strong>
         <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{detail}</small>
         {breakdown && <small className="currency-breakdown">{breakdown}</small>}
       </div>
     </article>
@@ -3056,8 +3074,8 @@ function GrowthItem({ label, value, danger }: { label: string; value?: number | 
 function SummaryTile({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="summary-tile">
+      <strong><AnimatedNumber animationKey={`summary-${label}`} value={value} /></strong>
       <span>{label}</span>
-      <strong>{value}</strong>
       {detail && <small className="currency-breakdown">{detail}</small>}
     </div>
   );

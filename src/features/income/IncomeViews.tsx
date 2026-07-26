@@ -18,6 +18,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -306,9 +307,9 @@ export function RevenueView({
       <section className="income-schedule-strip" aria-label="Revenue automation schedule">
         <div className="schedule-icon"><CalendarClock size={20} /></div>
         <div className="schedule-primary">
+          <InfoPopover label="weekly automation">Pulls the prior Monday–Sunday and refreshes current-period previews for weekly and monthly rules.</InfoPopover>
           <span className="eyebrow">Weekly automation</span>
           <strong>Every Monday at 09:00 · Asia/Beirut</strong>
-          <small>Pulls the prior Monday–Sunday and refreshes current-period previews for weekly and monthly rules.</small>
         </div>
         <div className="schedule-meta">
           <span>Last activity</span>
@@ -463,7 +464,14 @@ export function RevenueView({
 }
 
 function IncomeSummary({ label, value, detail, breakdown, tone = "" }: { label: string; value: string; detail: string; breakdown?: string; tone?: string }) {
-  return <article className={`income-summary-card ${tone}`}><span>{label}</span><strong>{value}</strong>{breakdown && <small className="currency-breakdown">{breakdown}</small>}<small>{detail}</small></article>;
+  return (
+    <article className={`income-summary-card ${tone}`}>
+      <InfoPopover label={label}>{detail}</InfoPopover>
+      <strong><AnimatedNumber animationKey={`income-summary-${label}`} value={value} /></strong>
+      <span>{label}</span>
+      {breakdown && <small className="currency-breakdown">{breakdown}</small>}
+    </article>
+  );
 }
 
 type DisplayInvoiceRow =
