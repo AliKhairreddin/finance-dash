@@ -3408,14 +3408,60 @@ textarea:focus-visible {
 }
 
 .invoice-control-table {
-  min-width: 1300px;
+  min-width: 1040px;
+  table-layout: fixed;
+}
+
+.invoice-control-table .invoice-col-selection {
+  width: 42px;
+}
+
+.invoice-control-table .invoice-col-counterparty {
+  width: 205px;
+}
+
+.invoice-control-table .invoice-col-created {
+  width: 120px;
+}
+
+.invoice-control-table .invoice-col-period {
+  width: 130px;
+}
+
+.invoice-control-table .invoice-col-amount {
+  width: 108px;
+}
+
+.invoice-control-table .invoice-col-cadence {
+  width: 80px;
+}
+
+.invoice-control-table .invoice-col-status {
+  width: 90px;
+}
+
+.invoice-control-table .invoice-col-forecast {
+  width: 142px;
+}
+
+.invoice-control-table .invoice-col-actions {
+  width: 123px;
+}
+
+.invoice-control-table .counterparty-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.invoice-control-table .counterparty-cell > strong,
+.invoice-control-table .counterparty-cell > span {
+  display: block;
 }
 
 .invoice-created-cell {
-  width: 136px;
   color: var(--label-text);
   font-size: 0.8rem;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .invoice-control-table .amount strong,
@@ -3426,7 +3472,16 @@ textarea:focus-visible {
 }
 
 .invoice-row-actions {
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+}
+
+.invoice-row-actions > .icon-text-button {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
 }
 
 .forecast-copy {
@@ -3438,6 +3493,10 @@ textarea:focus-visible {
   color: var(--info-text);
   font-size: 0.75rem;
   line-height: 1.25;
+}
+
+.invoice-control-table .forecast-copy {
+  min-width: 0;
 }
 
 .forecast-copy svg {

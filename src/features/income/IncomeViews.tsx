@@ -642,6 +642,17 @@ export function InvoicesView({
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
+            <colgroup>
+              <col className="invoice-col-selection" />
+              <col className="invoice-col-counterparty" />
+              <col className="invoice-col-created" />
+              <col className="invoice-col-period" />
+              <col className="invoice-col-amount" />
+              <col className="invoice-col-cadence" />
+              <col className="invoice-col-status" />
+              <col className="invoice-col-forecast" />
+              <col className="invoice-col-actions" />
+            </colgroup>
             <thead><tr><th className="selection-column"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Created at</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
             <tbody>
               {visibleRows.length > 0 ? visibleRows.map((row) => {
