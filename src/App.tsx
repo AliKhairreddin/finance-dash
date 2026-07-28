@@ -110,7 +110,11 @@ import {
   profitDistributionBucketLabels,
   profitDistributionPartners
 } from "../shared/distribution";
-import { isLiquidAccountBalance } from "../shared/income";
+import {
+  isLiquidAccountBalance,
+  latestIncomeAutomationTimestamp,
+  unreadIncomeAutomationCount
+} from "../shared/income";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
@@ -152,6 +156,7 @@ type DirectoryDeleteTarget =
   | { kind: "provider"; provider: Provider }
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
+const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
 
 async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -641,6 +646,9 @@ function App() {
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
+    return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
+  });
   const [bankTab, setBankTab] = useState<BankTab>("all");
   const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
@@ -696,6 +704,21 @@ function App() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load dashboard"))
       .finally(() => setIsLoading(false));
   }, []);
+
+  const latestIncomeAutomation = useMemo(
+    () => latestIncomeAutomationTimestamp(dashboard?.automationRuns ?? []),
+    [dashboard?.automationRuns]
+  );
+  const incomeAutomationUnreadCount = useMemo(
+    () => unreadIncomeAutomationCount(dashboard?.automationRuns ?? [], incomeAutomationReadAt),
+    [dashboard?.automationRuns, incomeAutomationReadAt]
+  );
+
+  useEffect(() => {
+    if (activeTab !== "revenue" || !latestIncomeAutomation || latestIncomeAutomation === incomeAutomationReadAt) return;
+    window.localStorage.setItem(incomeAutomationReadStorageKey, latestIncomeAutomation);
+    setIncomeAutomationReadAt(latestIncomeAutomation);
+  }, [activeTab, incomeAutomationReadAt, latestIncomeAutomation]);
 
   const providersById = useMemo(() => {
     const map = new Map<string, Provider>();
@@ -1308,6 +1331,7 @@ function App() {
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        incomeAutomationUnreadCount={incomeAutomationUnreadCount}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
         onSync={syncNow}
@@ -1650,6 +1674,7 @@ function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: 
 function Sidebar({
   activeTab,
   setActiveTab,
+  incomeAutomationUnreadCount,
   themeMode,
   onToggleTheme,
   onSync,
@@ -1657,6 +1682,7 @@ function Sidebar({
 }: {
   activeTab: ActiveTab;
   setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
+  incomeAutomationUnreadCount: number;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
   onSync: () => void;
@@ -1706,10 +1732,12 @@ function Sidebar({
   }
 
   function navigationButton(item: { id: ActiveTab; label: string; icon: React.ReactNode }, nested = false, mobile = false) {
+    const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : 0;
     return (
       <Button
         key={item.id}
-        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""}`}
+        aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} unread automation ${unreadCount === 1 ? "update" : "updates"}` : item.label}
+        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-notifications" : ""}`}
         onClick={() => selectTab(item.id)}
         aria-current={activeTab === item.id ? "page" : undefined}
         role={mobile ? "menuitem" : undefined}
@@ -1718,6 +1746,11 @@ function Sidebar({
       >
         {item.icon}
         <span>{item.label}</span>
+        {unreadCount > 0 && (
+          <span aria-hidden="true" className="sidebar-notification-badge">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
       </Button>
     );
   }

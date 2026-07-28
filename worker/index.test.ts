@@ -459,3 +459,29 @@ test("scheduled handler ignores the non-09:00 Lebanon cron occurrence", async ()
     { ASSETS: { fetch: async () => new Response("asset") } } as never
   );
 });
+
+test("hourly scheduled handler retries missed income automation after the Monday release time", async () => {
+  const originalConsoleError = console.error;
+  const events: string[] = [];
+  console.error = (message?: unknown) => {
+    events.push(String(message));
+  };
+
+  try {
+    await assert.rejects(
+      worker.scheduled(
+        {
+          cron: "17 * * * *",
+          scheduledTime: new Date("2026-07-28T00:17:00.000Z").getTime(),
+          noRetry() {}
+        },
+        {} as never
+      ),
+      /Dashboard storage is not configured/
+    );
+    assert.equal(events.some((event) => event.includes("\"event\":\"fx_rate_refresh_failed\"")), true);
+    assert.equal(events.some((event) => event.includes("\"event\":\"income_automation_failed\"")), true);
+  } finally {
+    console.error = originalConsoleError;
+  }
+});

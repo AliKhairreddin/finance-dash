@@ -1,6 +1,7 @@
 import type {
   AccountBalance,
   ApproximateUsdTotals,
+  AutomationRun,
   CurrencyTotals,
   FxRate,
   Holding,
@@ -48,6 +49,34 @@ export function isLebanonIncomeAutomationTime(scheduledTime: number | Date): boo
   const date = scheduledTime instanceof Date ? scheduledTime : new Date(scheduledTime);
   const parts = zonedParts(date, incomeAutomationTimezone);
   return parts.weekday === 1 && parts.hour === 9 && parts.minute === 0;
+}
+
+export function canCatchUpLebanonIncomeAutomation(scheduledTime: number | Date): boolean {
+  const date = scheduledTime instanceof Date ? scheduledTime : new Date(scheduledTime);
+  const parts = zonedParts(date, incomeAutomationTimezone);
+  return parts.weekday !== 1 || parts.hour >= 9;
+}
+
+function terminalAutomationTimestamp(run: AutomationRun): number | undefined {
+  if (run.status === "running") return undefined;
+  const timestamp = Date.parse(run.completedAt ?? run.startedAt);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+export function latestIncomeAutomationTimestamp(runs: AutomationRun[]): string | undefined {
+  const latestTimestamp = Math.max(
+    ...runs.map(terminalAutomationTimestamp).filter((timestamp): timestamp is number => timestamp !== undefined)
+  );
+  return Number.isFinite(latestTimestamp) ? new Date(latestTimestamp).toISOString() : undefined;
+}
+
+export function unreadIncomeAutomationCount(runs: AutomationRun[], readAt?: string): number {
+  const readTimestamp = readAt ? Date.parse(readAt) : Number.NEGATIVE_INFINITY;
+  const threshold = Number.isFinite(readTimestamp) ? readTimestamp : Number.NEGATIVE_INFINITY;
+  return runs.filter((run) => {
+    const timestamp = terminalAutomationTimestamp(run);
+    return timestamp !== undefined && timestamp > threshold;
+  }).length;
 }
 
 export function previousCompletedWeek(now = new Date(), timezone: string = incomeAutomationTimezone): DatePeriod {

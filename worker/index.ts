@@ -98,6 +98,7 @@ import {
 import {
   applyPaymentState,
   buildRevenueDraft,
+  canCatchUpLebanonIncomeAutomation,
   calculateApproximateUsdTotals,
   calculateInvoicePredictions,
   currentMonthAccrualPeriod,
@@ -3531,6 +3532,7 @@ export default {
     return env.ASSETS.fetch(request);
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    const failures: unknown[] = [];
     if (controller.cron === "17 * * * *") {
       try {
         await refreshStoredFxRates(env);
@@ -3540,20 +3542,26 @@ export default {
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
-        throw error;
+        failures.push(error);
       }
-      return;
     }
-    if (!isLebanonIncomeAutomationTime(controller.scheduledTime)) return;
-    try {
-      await runIncomeAutomation(env, new Date(controller.scheduledTime));
-    } catch (error) {
-      console.error(JSON.stringify({
-        event: "income_automation_failed",
-        scheduledTime: controller.scheduledTime,
-        error: error instanceof Error ? error.message : String(error)
-      }));
-      throw error;
+
+    const shouldRunIncomeAutomation =
+      isLebanonIncomeAutomationTime(controller.scheduledTime) ||
+      (controller.cron === "17 * * * *" && canCatchUpLebanonIncomeAutomation(controller.scheduledTime));
+    if (shouldRunIncomeAutomation) {
+      try {
+        await runIncomeAutomation(env, new Date(controller.scheduledTime));
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "income_automation_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
     }
+
+    if (failures.length > 0) throw failures[0];
   }
 } satisfies WorkerExportedHandler;

@@ -6,17 +6,20 @@ import {
   calculateApproximateUsdTotals,
   calculateInvoiceSummaryTotals,
   calculateInvoicePredictions,
+  canCatchUpLebanonIncomeAutomation,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   isLebanonIncomeAutomationTime,
+  latestIncomeAutomationTimestamp,
   mergeFxRates,
   openInvoiceReceivables,
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
-  reconcileExactInvoicePayments
+  reconcileExactInvoicePayments,
+  unreadIncomeAutomationCount
 } from "./income";
-import type { Invoice, PaymentAllocation, Provider, RevenuePartner, RevenueRun, Transaction } from "./types";
+import type { AutomationRun, Invoice, PaymentAllocation, Provider, RevenuePartner, RevenueRun, Transaction } from "./types";
 
 const partner: RevenuePartner = {
   id: "revenue-client",
@@ -98,6 +101,54 @@ test("Lebanon automation gate follows local summer and winter 09:00", () => {
   assert.equal(isLebanonIncomeAutomationTime(new Date("2026-12-07T07:00:00.000Z")), true);
   assert.equal(isLebanonIncomeAutomationTime(new Date("2026-07-20T07:00:00.000Z")), false);
   assert.equal(isLebanonIncomeAutomationTime(new Date("2026-07-21T06:00:00.000Z")), false);
+});
+
+test("income automation catch-up opens after Monday 09:00 Beirut and remains open for missed runs", () => {
+  assert.equal(canCatchUpLebanonIncomeAutomation(new Date("2026-07-27T05:17:00.000Z")), false);
+  assert.equal(canCatchUpLebanonIncomeAutomation(new Date("2026-07-27T06:17:00.000Z")), true);
+  assert.equal(canCatchUpLebanonIncomeAutomation(new Date("2026-12-07T06:17:00.000Z")), false);
+  assert.equal(canCatchUpLebanonIncomeAutomation(new Date("2026-12-07T07:17:00.000Z")), true);
+  assert.equal(canCatchUpLebanonIncomeAutomation(new Date("2026-07-28T00:17:00.000Z")), true);
+});
+
+test("income automation notifications count terminal runs newer than the last visit", () => {
+  const runs: AutomationRun[] = [
+    {
+      id: "weekly-income-2026-07-20-2026-07-26",
+      type: "weekly-income",
+      periodStart: "2026-07-20",
+      periodEnd: "2026-07-26",
+      timezone: "Asia/Beirut",
+      status: "completed",
+      startedAt: "2026-07-27T06:00:00.000Z",
+      completedAt: "2026-07-27T06:02:00.000Z"
+    },
+    {
+      id: "weekly-income-2026-07-13-2026-07-19",
+      type: "weekly-income",
+      periodStart: "2026-07-13",
+      periodEnd: "2026-07-19",
+      timezone: "Asia/Beirut",
+      status: "failed",
+      startedAt: "2026-07-20T06:00:00.000Z",
+      completedAt: "2026-07-20T06:01:00.000Z",
+      error: "Revenue provider unavailable"
+    },
+    {
+      id: "weekly-income-running",
+      type: "weekly-income",
+      periodStart: "2026-07-27",
+      periodEnd: "2026-08-02",
+      timezone: "Asia/Beirut",
+      status: "running",
+      startedAt: "2026-08-03T06:00:00.000Z"
+    }
+  ];
+
+  assert.equal(latestIncomeAutomationTimestamp(runs), "2026-07-27T06:02:00.000Z");
+  assert.equal(unreadIncomeAutomationCount(runs), 2);
+  assert.equal(unreadIncomeAutomationCount(runs, "2026-07-20T06:01:00.000Z"), 1);
+  assert.equal(unreadIncomeAutomationCount(runs, "2026-07-27T06:02:00.000Z"), 0);
 });
 
 test("billing period helpers close Monday-Sunday and calendar months", () => {

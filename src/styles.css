@@ -367,6 +367,30 @@ button:disabled {
   box-shadow: inset 2px 0 0 var(--blue);
 }
 
+.sidebar-nav button.has-notifications {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.sidebar-nav .sidebar-notification-badge,
+.mobile-nav-menu .sidebar-notification-badge {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  justify-self: end;
+  padding: 0 5px;
+  overflow: visible;
+  border: 2px solid var(--sidebar-bg-strong);
+  border-radius: 999px;
+  color: #fff;
+  background: #dc2626;
+  box-shadow: 0 2px 7px rgba(220, 38, 38, 0.34);
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: clip;
+}
+
 .mobile-command-bar {
   display: none;
 }
@@ -4395,6 +4419,10 @@ th.amount .sortable-table-heading {
     letter-spacing: -0.01em;
     line-height: 1.25;
     text-align: left;
+  }
+
+  .mobile-nav-menu button.has-notifications {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
   }
 
   .mobile-nav-menu button svg {

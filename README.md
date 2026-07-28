@@ -26,7 +26,7 @@ The system follows three rules:
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
 - Preview partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations without persisting manual searches.
-- Run income automation every Monday at 09:00 in `Asia/Beirut`, with DST-aware scheduling and idempotent local drafts.
+- Run income automation every Monday at 09:00 in `Asia/Beirut`, with DST-aware scheduling, idempotent local drafts, and hourly catch-up retries after the weekly release time.
 - Track weekly and monthly current-period revenue as accruing future invoices without double-counting after drafts are created.
 - Create a Merit invoice only through a separately confirmed action, with distinct “Save in Merit” and “Save & deliver” choices.
 - Match exact incoming bank payments to open invoices and predict collection dates from the latest five confirmed matches.

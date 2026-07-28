@@ -190,15 +190,6 @@ function periodLabel(start?: string, end?: string): string {
   return dateLabel(start ?? end ?? "");
 }
 
-function latestRevenueActivity(dashboard: DashboardSnapshot): string | undefined {
-  const candidates = [
-    ...dashboard.automationRuns.map((run) => run.completedAt ?? run.startedAt),
-    ...dashboard.revenueRuns.map((run) => run.createdAt),
-    ...dashboard.revenueAccruals.map((accrual) => accrual.updatedAt)
-  ].filter(Boolean);
-  return candidates.sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
-}
-
 function revenuePartnerForInvoice(invoice: Invoice, dashboard: DashboardSnapshot) {
   if (invoice.billingRuleId) {
     const direct = dashboard.revenuePartners.find((partner) => partner.id === invoice.billingRuleId);
@@ -361,7 +352,6 @@ export function RevenueView({
   }
   for (const row of visibleAccruals) addTotal(accruingRevenue, row.currency, row.amount);
 
-  const latestActivity = latestRevenueActivity(dashboard);
   const lastAutomation = dashboard.automationRuns
     .slice()
     .sort((left, right) => new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime())[0];
@@ -403,13 +393,17 @@ export function RevenueView({
       <section className="income-schedule-strip" aria-label="Revenue automation schedule">
         <div className="schedule-icon"><CalendarClock size={20} /></div>
         <div className="schedule-primary">
-          <InfoPopover label="weekly automation">Pulls the prior Monday–Sunday and refreshes current-period previews for weekly and monthly rules.</InfoPopover>
+          <InfoPopover label="weekly automation">Pulls the prior Monday–Sunday and refreshes current-period previews for weekly and monthly rules. If the exact weekly run is missed, the hourly scheduler retries it until it completes.</InfoPopover>
           <span className="eyebrow">Weekly automation</span>
           <strong>Every Monday at 09:00 · Asia/Beirut</strong>
         </div>
         <div className="schedule-meta">
-          <span>Last activity</span>
-          <strong>{latestActivity ? dateTimeLabel(latestActivity) : "No activity yet"}</strong>
+          <span>Latest automation</span>
+          <strong>
+            {lastAutomation
+              ? `${periodLabel(lastAutomation.periodStart, lastAutomation.periodEnd)} · ${dateTimeLabel(lastAutomation.completedAt ?? lastAutomation.startedAt)}`
+              : "No run recorded"}
+          </strong>
           {lastAutomation && <small className={`automation-state ${lastAutomation.status}`}>{lastAutomation.status}</small>}
         </div>
         <Button className="secondary-button" type="button" onClick={onOpenInvoices}>
