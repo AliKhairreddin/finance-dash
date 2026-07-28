@@ -11,6 +11,7 @@ import type {
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
+  DeleteInvoicesPayload,
   DraftRevenueRunPayload,
   AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
@@ -34,7 +35,7 @@ import {
   createProvider,
   createRevenuePartner,
   createTeam,
-  deleteInvoiceDraft,
+  deleteInvoiceDrafts,
   deleteProvider,
   deleteRevenuePartner,
   deleteHolding,
@@ -320,6 +321,15 @@ app.post("/api/invoices", async (request, response, next) => {
   }
 });
 
+app.delete("/api/invoices", async (request, response, next) => {
+  try {
+    const payload = (request.body ?? {}) as Partial<DeleteInvoicesPayload>;
+    response.json(await deleteInvoiceDrafts(Array.isArray(payload.invoiceIds) ? payload.invoiceIds : []));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/invoices/:invoiceId/duplicate-preview", async (request, response, next) => {
   try {
     response.json(await previewInvoiceDuplicate(request.params.invoiceId));
@@ -339,14 +349,6 @@ app.post("/api/receivables", async (request, response, next) => {
 app.put("/api/invoices/:invoiceId", async (request, response, next) => {
   try {
     response.json(await updateInvoice(request.params.invoiceId, request.body as UpdateInvoicePayload));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/invoices/:invoiceId", async (request, response, next) => {
-  try {
-    response.json(await deleteInvoiceDraft(request.params.invoiceId));
   } catch (error) {
     next(error);
   }

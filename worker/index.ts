@@ -19,6 +19,7 @@ import type {
   CreateTeamPayload,
   DashboardSnapshot,
   DataSource,
+  DeleteInvoicesPayload,
   DraftRevenueRunPayload,
   FxRate,
   Holding,
@@ -64,7 +65,7 @@ import {
   isTransactionCategoryForDirection,
   transactionBusinessCategory
 } from "../shared/categories";
-import { dashboardInvoiceDeletionBlockReason } from "../shared/invoiceDeletion";
+import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
@@ -2435,15 +2436,20 @@ async function previewInvoiceDuplicate(env: Env, invoiceId: string): Promise<Cre
   return invoiceCopyPayload(copySource);
 }
 
-async function deleteInvoiceDraft(env: Env, invoiceId: string): Promise<Invoice> {
+async function deleteInvoiceDrafts(env: Env, invoiceIds: string[]): Promise<Invoice[]> {
   const state = await loadPersisted(env);
-  const invoice = state.invoices.find((item) => item.id === invoiceId);
-  if (!invoice) throw new ApiError(404, "Invoice not found");
-  const blockReason = dashboardInvoiceDeletionBlockReason(invoice, state.paymentAllocations);
+  const requestedIds = [...new Set(invoiceIds.filter((invoiceId) => typeof invoiceId === "string" && invoiceId.trim()).map((invoiceId) => invoiceId.trim()))];
+  const selectedInvoices = requestedIds.map((invoiceId) => {
+    const invoice = state.invoices.find((item) => item.id === invoiceId);
+    if (!invoice) throw new ApiError(404, `Invoice not found: ${invoiceId}`);
+    return invoice;
+  });
+  const blockReason = dashboardInvoiceDeletionBatchBlockReason(selectedInvoices, state.paymentAllocations);
   if (blockReason) throw new ApiError(409, blockReason);
-  state.invoices = state.invoices.filter((item) => item.id !== invoiceId);
+  const selectedIds = new Set(requestedIds);
+  state.invoices = state.invoices.filter((item) => !selectedIds.has(item.id));
   await savePersisted(env, state);
-  return invoice;
+  return selectedInvoices;
 }
 
 async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
@@ -3419,6 +3425,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
     }
 
+    if (url.pathname === "/api/invoices" && request.method === "DELETE") {
+      const payload = (await request.json()) as Partial<DeleteInvoicesPayload> | null;
+      return json(await deleteInvoiceDrafts(env, Array.isArray(payload?.invoiceIds) ? payload.invoiceIds : []));
+    }
+
     const invoiceDuplicatePreviewMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/duplicate-preview$/);
     if (invoiceDuplicatePreviewMatch && request.method === "GET") {
       return json(await previewInvoiceDuplicate(env, decodeURIComponent(invoiceDuplicatePreviewMatch[1])));
@@ -3447,10 +3458,6 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (invoiceMatch && request.method === "PUT") {
       return json(await updateInvoice(env, decodeURIComponent(invoiceMatch[1]), (await request.json()) as UpdateInvoicePayload));
     }
-    if (invoiceMatch && request.method === "DELETE") {
-      return json(await deleteInvoiceDraft(env, decodeURIComponent(invoiceMatch[1])));
-    }
-
     if (url.pathname === "/api/holdings" && request.method === "POST") {
       return json(await createHolding(env, (await request.json()) as CreateHoldingPayload), { status: 201 });
     }

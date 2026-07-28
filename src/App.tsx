@@ -66,6 +66,7 @@ import type {
   CurrencyTotals,
   DataSource,
   DashboardSnapshot,
+  DeleteInvoicesPayload,
   DraftRevenueRunPayload,
   FxRate,
   ImportWiseStatementPayload,
@@ -1175,16 +1176,21 @@ function App() {
     return (await response.json()) as CreateInvoicePayload;
   }
 
-  async function deleteInvoiceDraft(invoiceId: string): Promise<void> {
-    const invoice = dashboard?.invoices.find((item) => item.id === invoiceId);
-    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
-      method: "DELETE"
+  async function deleteInvoiceDrafts(invoiceIds: string[]): Promise<void> {
+    const payload: DeleteInvoicesPayload = { invoiceIds };
+    const response = await fetch(`${apiBase}/invoices`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      throw new Error(await apiErrorMessage(response, "Invoice draft could not be deleted"));
+      throw new Error(await apiErrorMessage(response, "Invoice drafts could not be deleted"));
     }
+    const deletedInvoices = (await response.json()) as Invoice[];
     await loadDashboard();
-    setNotice(`${invoice?.invoiceNumber ?? "Invoice draft"} deleted from the dashboard. Merit was not changed.`);
+    setNotice(
+      `${deletedInvoices.length} dashboard draft${deletedInvoices.length === 1 ? "" : "s"} deleted. Merit was not changed.`
+    );
   }
 
   async function sendInvoices(invoiceIds: string[], mode: MeritSendMode) {
@@ -1549,7 +1555,7 @@ function App() {
           providersById={providersById}
           onCreateDraft={submitInvoice}
           onPrepareDuplicate={prepareInvoiceDuplicate}
-          onDeleteDraft={deleteInvoiceDraft}
+          onDeleteDrafts={deleteInvoiceDrafts}
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
           onRecordPayment={recordInvoicePayment}

@@ -58,7 +58,7 @@ import {
   isTransactionCategoryForDirection,
   transactionBusinessCategory
 } from "../shared/categories";
-import { dashboardInvoiceDeletionBlockReason } from "../shared/invoiceDeletion";
+import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
@@ -1077,14 +1077,19 @@ export async function previewInvoiceDuplicate(invoiceId: string): Promise<Create
   return invoiceCopyPayload(copySource);
 }
 
-export async function deleteInvoiceDraft(invoiceId: string): Promise<Invoice> {
-  const invoice = invoices.find((item) => item.id === invoiceId);
-  if (!invoice) throw new Error("Invoice not found");
-  const blockReason = dashboardInvoiceDeletionBlockReason(invoice, paymentAllocations);
+export async function deleteInvoiceDrafts(invoiceIds: string[]): Promise<Invoice[]> {
+  const requestedIds = [...new Set(invoiceIds.filter((invoiceId) => typeof invoiceId === "string" && invoiceId.trim()).map((invoiceId) => invoiceId.trim()))];
+  const selectedInvoices = requestedIds.map((invoiceId) => {
+    const invoice = invoices.find((item) => item.id === invoiceId);
+    if (!invoice) throw new Error(`Invoice not found: ${invoiceId}`);
+    return invoice;
+  });
+  const blockReason = dashboardInvoiceDeletionBatchBlockReason(selectedInvoices, paymentAllocations);
   if (blockReason) throw new Error(blockReason);
-  invoices = invoices.filter((item) => item.id !== invoiceId);
+  const selectedIds = new Set(requestedIds);
+  invoices = invoices.filter((item) => !selectedIds.has(item.id));
   await persist();
-  return invoice;
+  return selectedInvoices;
 }
 
 export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {

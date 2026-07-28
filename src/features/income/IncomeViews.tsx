@@ -595,7 +595,7 @@ export function InvoicesView({
   providersById,
   onCreateDraft,
   onPrepareDuplicate,
-  onDeleteDraft,
+  onDeleteDrafts,
   onUpdateDraft,
   onSendInvoices,
   onRecordPayment
@@ -604,7 +604,7 @@ export function InvoicesView({
   providersById: Map<string, Provider>;
   onCreateDraft: (payload: CreateInvoicePayload) => Promise<Invoice>;
   onPrepareDuplicate: (invoiceId: string) => Promise<CreateInvoicePayload>;
-  onDeleteDraft: (invoiceId: string) => Promise<void>;
+  onDeleteDrafts: (invoiceIds: string[]) => Promise<void>;
   onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
@@ -624,7 +624,7 @@ export function InvoicesView({
   const [editorRequest, setEditorRequest] = useState<InvoiceEditorRequest | null>(null);
   const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
-  const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
+  const [deleteInvoices, setDeleteInvoices] = useState<Invoice[] | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
@@ -760,17 +760,38 @@ export function InvoicesView({
   );
 
   const actionableVisibleIds = visibleRows
-    .filter((row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> => row.kind === "invoice" && invoiceCanBeSelected(row.invoice, providersById))
+    .filter(
+      (row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> =>
+        row.kind === "invoice"
+        && (
+          invoiceCanBeSelected(row.invoice, providersById)
+          || !dashboardInvoiceDeletionBlockReason(row.invoice, dashboard.paymentAllocations)
+        )
+    )
     .map((row) => row.invoice.id);
   const allActionableSelected = actionableVisibleIds.length > 0 && actionableVisibleIds.every((id) => selectedIds.includes(id));
   const selectedInvoices = salesInvoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const allSelectedSendable = selectedInvoices.length > 0
+    && selectedInvoices.length === selectedIds.length
+    && selectedInvoices.every((invoice) => invoiceCanBeSelected(invoice, providersById));
+  const allSelectedDeletable = selectedInvoices.length > 0
+    && selectedInvoices.length === selectedIds.length
+    && selectedInvoices.every((invoice) => !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations));
   const selectedDraftCount = selectedInvoices.filter((invoice) => invoice.status === "draft").length;
   const selectedDeliveryCount = selectedInvoices.filter(invoiceCanBeDelivered).length;
 
   useEffect(() => {
-    const validIds = new Set(salesInvoices.filter((invoice) => invoiceCanBeSelected(invoice, providersById)).map((invoice) => invoice.id));
+    const validIds = new Set(
+      salesInvoices
+        .filter(
+          (invoice) =>
+            invoiceCanBeSelected(invoice, providersById)
+            || !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations)
+        )
+        .map((invoice) => invoice.id)
+    );
     setSelectedIds((current) => current.filter((id) => validIds.has(id)));
-  }, [dashboard.invoices, dashboard.providers, providersById]);
+  }, [dashboard.invoices, dashboard.paymentAllocations, dashboard.providers, providersById]);
 
   function toggleSelected(id: string, checked: boolean) {
     setSelectedIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
@@ -876,7 +897,22 @@ export function InvoicesView({
                 {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
                 {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
               </span>
-              <Button className="primary-button" type="button" onClick={() => setSendRequest({ invoiceIds: selectedIds })} disabled={!meritWriteEnabled}>
+              <Button
+                className="icon-text-button destructive-icon-button"
+                type="button"
+                title={allSelectedDeletable ? "Delete every selected dashboard draft" : "Delete is available only when every selected invoice is an unsent dashboard draft"}
+                onClick={() => setDeleteInvoices(selectedInvoices)}
+                disabled={!allSelectedDeletable}
+              >
+                <Trash2 size={15} /> Delete selected
+              </Button>
+              <Button
+                className="primary-button"
+                type="button"
+                title={allSelectedSendable ? undefined : "Review is available only when every selected invoice can be saved or delivered through Merit"}
+                onClick={() => setSendRequest({ invoiceIds: selectedIds })}
+                disabled={!meritWriteEnabled || !allSelectedSendable}
+              >
                 {selectedDraftCount === 0 ? <Mail size={15} /> : <Send size={15} />}
                 {selectedDraftCount === 0 ? "Deliver selected" : "Review selected"}
               </Button>
@@ -913,7 +949,7 @@ export function InvoicesView({
         )}
         <div className="invoice-selection-help">
           <Check size={15} />
-          <span>Select drafts to save or save & deliver in bulk. Select open Merit invoices to deliver them in bulk. Record payments one invoice at a time so each bank allocation stays accurate.</span>
+          <span>Select unsent dashboard drafts to delete them together, or select send-ready drafts and open Merit invoices for bulk delivery. Record payments one invoice at a time so each bank allocation stays accurate.</span>
         </div>
         {duplicateError && <div className="inline-error">{duplicateError}</div>}
 
@@ -931,7 +967,7 @@ export function InvoicesView({
               <col className="invoice-col-actions" />
             </colgroup>
             <thead><tr>
-              <th className="selection-column" scope="col"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th>
+              <th className="selection-column" scope="col"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select invoices that can be deleted, saved, or delivered" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="company">Invoice / company</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="created">Created at</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="period">Period</SortableTableHead>
@@ -962,10 +998,12 @@ export function InvoicesView({
                       ? "Edit the draft and choose a Merit tax first"
                       : "This draft is not send-ready");
                 const canDeliverExisting = invoiceCanBeDelivered(invoice);
-                const selectable = ready || canDeliverExisting;
+                const deleteBlockReason = dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations);
+                const canDelete = !deleteBlockReason;
+                const selectable = ready || canDeliverExisting || canDelete;
                 return (
                   <tr key={invoice.id}>
-                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={ready ? "Select draft to save or deliver" : canDeliverExisting ? "Select existing Merit invoice for delivery" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
+                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={ready ? "Select draft to save, deliver, or delete" : canDeliverExisting ? "Select existing Merit invoice for delivery" : canDelete ? "Select dashboard draft to delete" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
                     <td className="counterparty-cell"><strong>{invoice.invoiceNumber || "Draft invoice"}</strong><span>{provider?.name ?? invoice.customerName}</span><small>{invoice.description}</small></td>
                     <td className="invoice-created-cell">{createdAtLabel(invoice.createdAt)}</td>
                     <td><span>{periodLabel(invoice.periodStart, invoice.periodEnd)}</span><small>Due {dateLabel(invoice.dueDate)}</small></td>
@@ -1011,12 +1049,12 @@ export function InvoicesView({
                         {duplicatingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Copy size={14} />}
                         Duplicate
                       </Button>
-                      {!dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations) && (
+                      {canDelete && (
                         <Button
                           className="icon-text-button destructive-icon-button"
                           type="button"
                           title="Delete this unsent dashboard draft"
-                          onClick={() => setDeleteInvoice(invoice)}
+                          onClick={() => setDeleteInvoices([invoice])}
                         >
                           <Trash2 size={14} /> Delete
                         </Button>
@@ -1076,7 +1114,16 @@ export function InvoicesView({
         }}
       />}
       {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
-      {deleteInvoice && <DeleteInvoiceDialog invoice={deleteInvoice} onClose={() => setDeleteInvoice(null)} onDelete={async () => { await onDeleteDraft(deleteInvoice.id); setDeleteInvoice(null); }} />}
+      {deleteInvoices && <DeleteInvoiceDialog
+        invoices={deleteInvoices}
+        onClose={() => setDeleteInvoices(null)}
+        onDelete={async () => {
+          const deletedIds = new Set(deleteInvoices.map((invoice) => invoice.id));
+          await onDeleteDrafts([...deletedIds]);
+          setDeleteInvoices(null);
+          setSelectedIds((current) => current.filter((invoiceId) => !deletedIds.has(invoiceId)));
+        }}
+      />}
     </div>
   );
 }
@@ -1344,16 +1391,18 @@ function SendInvoicesDialog({
 }
 
 function DeleteInvoiceDialog({
-  invoice,
+  invoices,
   onClose,
   onDelete
 }: {
-  invoice: Invoice;
+  invoices: Invoice[];
   onClose: () => void;
   onDelete: () => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const invoiceCount = invoices.length;
+  const singleInvoice = invoiceCount === 1 ? invoices[0] : undefined;
 
   async function remove() {
     setSubmitting(true);
@@ -1361,7 +1410,7 @@ function DeleteInvoiceDialog({
     try {
       await onDelete();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Invoice draft could not be deleted");
+      setError(caught instanceof Error ? caught.message : "Invoice drafts could not be deleted");
       setSubmitting(false);
     }
   }
@@ -1370,12 +1419,15 @@ function DeleteInvoiceDialog({
     <div className="modal-backdrop" role="presentation">
       <div className="modal confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="delete-invoice-title">
         <div className="confirmation-icon"><Trash2 size={20} /></div>
-        <div><p className="eyebrow">Delete dashboard draft</p><h2 id="delete-invoice-title">Remove {invoice.invoiceNumber}?</h2></div>
-        <p className="confirmation-copy">This permanently removes the unsent draft from the dashboard. It does not delete or change anything in Merit because this draft has never been saved there.</p>
+        <div>
+          <p className="eyebrow">Delete dashboard draft{invoiceCount === 1 ? "" : "s"}</p>
+          <h2 id="delete-invoice-title">{singleInvoice ? `Remove ${singleInvoice.invoiceNumber}?` : `Remove ${invoiceCount} dashboard drafts?`}</h2>
+        </div>
+        <p className="confirmation-copy">This permanently removes {invoiceCount === 1 ? "the selected unsent draft" : `all ${invoiceCount} selected unsent drafts`} from the dashboard. Nothing will be deleted or changed in Merit because {invoiceCount === 1 ? "this draft has" : "these drafts have"} never been saved there.</p>
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions">
           <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button type="button" className="destructive-button" onClick={() => void remove()} disabled={submitting}>{submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Delete dashboard draft</Button>
+          <Button type="button" className="destructive-button" onClick={() => void remove()} disabled={submitting}>{submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Delete {invoiceCount === 1 ? "dashboard draft" : `${invoiceCount} drafts`}</Button>
         </div>
       </div>
     </div>,

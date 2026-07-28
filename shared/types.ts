@@ -561,6 +561,10 @@ export interface UpdateInvoicePayload {
   periodEnd?: string;
 }
 
+export interface DeleteInvoicesPayload {
+  invoiceIds: string[];
+}
+
 export interface SendInvoicesPayload {
   invoiceIds: string[];
   mode: MeritSendMode;

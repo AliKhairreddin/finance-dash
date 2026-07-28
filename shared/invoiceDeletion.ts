@@ -24,3 +24,17 @@ export function dashboardInvoiceDeletionBlockReason(
   }
   return undefined;
 }
+
+export function dashboardInvoiceDeletionBatchBlockReason(
+  invoices: Invoice[],
+  paymentAllocations: PaymentAllocation[]
+): string | undefined {
+  if (invoices.length === 0) {
+    return "Select at least one dashboard draft to delete";
+  }
+  for (const invoice of invoices) {
+    const reason = dashboardInvoiceDeletionBlockReason(invoice, paymentAllocations);
+    if (reason) return `${invoice.invoiceNumber}: ${reason}`;
+  }
+  return undefined;
+}
