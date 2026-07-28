@@ -100,7 +100,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     id: "slash-account-debit",
     name: "Operating",
     source: "slash",
-    balance: 1200,
+    balance: 1250,
     currency: "USD",
     updatedAt: "2026-07-28T12:00:00.000Z",
     status: "live"
@@ -148,6 +148,64 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   );
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-debit/balance"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
+});
+
+test("Slash charge-card accounts use the available credit balance", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({
+        items: [{
+          id: "account-platinum",
+          name: "Business Platinum",
+          status: "open",
+          type: "charge_card",
+          balances: ["cash", "credit"]
+        }],
+        metadata: {}
+      });
+    }
+    if (url.pathname === "/account/account-platinum/balance") {
+      return Response.json({
+        balances: [
+          {
+            accountId: "account-platinum",
+            type: "credit",
+            available: { amountCents: 6_655_198 },
+            posted: { amountCents: 7_066_898 },
+            timestamp: "2026-07-28T22:31:42.052Z"
+          },
+          {
+            accountId: "account-platinum",
+            type: "cash",
+            available: { amountCents: 0 },
+            posted: { amountCents: 0 },
+            timestamp: "2026-07-28T22:31:42.058Z"
+          }
+        ]
+      });
+    }
+
+    assert.equal(url.pathname, "/transaction");
+    return Response.json({ items: [], metadata: {} });
+  };
+
+  const result = await fetchSlashActivityForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher
+  });
+
+  assert.deepEqual(result.accounts, [{
+    id: "slash-account-platinum",
+    name: "Business Platinum",
+    source: "slash",
+    balance: 66_551.98,
+    currency: "USD",
+    updatedAt: "2026-07-28T22:31:42.052Z",
+    status: "live"
+  }]);
 });
 
 test("Slash activity rejects repeated pagination cursors", async () => {

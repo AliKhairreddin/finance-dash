@@ -241,7 +241,7 @@ async function fetchAllSlashPages<T>(
 }
 
 function accountBalance(account: SlashAccount, balances: SlashBalance[]): SlashBalance {
-  const expectedType: SlashBalanceType = account.type === "debit" ? "debit" : "cash";
+  const expectedType: SlashBalanceType = account.type === "debit" ? "debit" : "credit";
   const balance = balances.find((item) => item.type === expectedType);
   if (!balance) {
     throw new Error(`Slash account ${account.id} is missing its ${expectedType} balance`);
@@ -285,7 +285,7 @@ export async function fetchSlashActivityForLegalEntity({
         id: `slash-${account.id}`,
         name: account.name,
         source: "slash",
-        balance: balance.posted.amountCents / 100,
+        balance: balance.available.amountCents / 100,
         currency: "USD",
         updatedAt: balance.timestamp,
         status: "live"
