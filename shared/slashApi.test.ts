@@ -16,13 +16,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
           name: "Operating",
           status: "open",
           type: "debit",
-          balances: [{
-            accountId: "account-debit",
-            type: "debit",
-            available: { amountCents: 125_000 },
-            posted: { amountCents: 120_000 },
-            timestamp: "2026-07-28T12:00:00.000Z"
-          }]
+          balances: ["debit"]
         }],
         metadata: { nextCursor: "accounts-next", count: 1 }
       });
@@ -35,15 +29,20 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
           name: "Old account",
           status: "closed",
           type: "debit",
-          balances: [{
-            accountId: "account-closed",
-            type: "debit",
-            available: { amountCents: 500 },
-            posted: { amountCents: 500 },
-            timestamp: "2026-07-01T12:00:00.000Z"
-          }]
+          balances: ["debit"]
         }],
         metadata: { count: 1 }
+      });
+    }
+    if (url.pathname === "/account/account-debit/balance") {
+      return Response.json({
+        balances: [{
+          accountId: "account-debit",
+          type: "debit",
+          available: { amountCents: 125_000 },
+          posted: { amountCents: 120_000 },
+          timestamp: "2026-07-28T12:00:00.000Z"
+        }]
       });
     }
     if (url.pathname === "/transaction" && !cursor) {
@@ -147,6 +146,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     requests.every((request) => request.headers.get("User-Agent") === "finance-dash/1.0 (+https://finance.thatcanadian.dev)"),
     true
   );
+  assert.equal(requests.some((request) => request.url.pathname === "/account/account-debit/balance"), true);
+  assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
 });
 
 test("Slash activity rejects repeated pagination cursors", async () => {

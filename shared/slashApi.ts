@@ -23,7 +23,7 @@ interface SlashAccount {
   name: string;
   status: "open" | "closed";
   type: SlashAccountType;
-  balances: SlashBalance[];
+  balances: SlashBalanceType[];
 }
 
 interface SlashTransaction {
@@ -126,7 +126,13 @@ function parseSlashAccount(value: unknown): SlashAccount {
     name: requiredString(payload.name, "account.name"),
     status,
     type,
-    balances: payload.balances.map(parseSlashBalance)
+    balances: payload.balances.map((balance, index) => {
+      const balanceType = requiredString(balance, `account.balances[${index}]`);
+      if (balanceType !== "cash" && balanceType !== "credit" && balanceType !== "debit") {
+        throw new Error(`Slash API response has unsupported account.balances[${index}]`);
+      }
+      return balanceType;
+    })
   };
 }
 
@@ -186,6 +192,26 @@ async function fetchSlashPage<T>(
   return parseSlashPage(JSON.parse(text) as unknown, parseItem);
 }
 
+async function fetchSlashBalances(
+  fetcher: typeof fetch,
+  url: URL,
+  headers: HeadersInit
+): Promise<SlashBalance[]> {
+  const response = await fetcher(url, { headers });
+  const text = await response.text();
+  if (!response.ok) {
+    const requestId = response.headers.get("x-request-id");
+    const requestSuffix = requestId ? ` [Slash request ${requestId}]` : "";
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}${requestSuffix}`);
+  }
+  if (!text) throw new Error("Slash API returned an empty response");
+  const payload = requiredRecord(JSON.parse(text) as unknown, "balance response");
+  if (!Array.isArray(payload.balances)) {
+    throw new Error("Slash API response is missing balances");
+  }
+  return payload.balances.map(parseSlashBalance);
+}
+
 async function fetchAllSlashPages<T>(
   fetcher: typeof fetch,
   initialUrl: URL,
@@ -211,9 +237,9 @@ async function fetchAllSlashPages<T>(
   return items;
 }
 
-function accountBalance(account: SlashAccount): SlashBalance {
+function accountBalance(account: SlashAccount, balances: SlashBalance[]): SlashBalance {
   const expectedType: SlashBalanceType = account.type === "debit" ? "debit" : "cash";
-  const balance = account.balances.find((item) => item.type === expectedType);
+  const balance = balances.find((item) => item.type === expectedType);
   if (!balance) {
     throw new Error(`Slash account ${account.id} is missing its ${expectedType} balance`);
   }
@@ -241,12 +267,17 @@ export async function fetchSlashActivityForLegalEntity({
     fetchAllSlashPages(fetcher, accountsUrl, headers, parseSlashAccount),
     fetchAllSlashPages(fetcher, transactionsUrl, headers, parseSlashTransaction)
   ]);
+  const balancesByAccountId = new Map<string, SlashBalance[]>();
+  for (const account of slashAccounts.filter((item) => item.status === "open")) {
+    const balanceUrl = new URL(`/account/${encodeURIComponent(account.id)}/balance`, baseUrl);
+    balancesByAccountId.set(account.id, await fetchSlashBalances(fetcher, balanceUrl, headers));
+  }
   const accountNameById = new Map(slashAccounts.map((account) => [account.id, account.name]));
 
   const accounts: AccountBalance[] = slashAccounts
     .filter((account) => account.status === "open")
     .map((account) => {
-      const balance = accountBalance(account);
+      const balance = accountBalance(account, balancesByAccountId.get(account.id) ?? []);
       return {
         id: `slash-${account.id}`,
         name: account.name,
