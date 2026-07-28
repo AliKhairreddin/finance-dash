@@ -1610,6 +1610,22 @@ th.amount .sortable-table-heading {
   box-shadow: 0 0 0 3px var(--focus-ring-strong);
 }
 
+.simple-select-control {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 11px;
+  font: inherit;
+  text-align: left;
+}
+
+.simple-select-value {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .searchable-select-leading-icon {
   color: var(--app-muted);
 }
@@ -1737,7 +1753,7 @@ th.amount .sortable-table-heading {
   place-items: center;
 }
 
-.searchable-select-option > span:last-child {
+.searchable-select-option-label {
   grid-column: 2;
   min-width: 0;
 }
@@ -3230,6 +3246,13 @@ th.amount .sortable-table-heading {
   font-weight: 690;
 }
 
+.income-filter-bar > label,
+.income-filter-bar > .created-date-filter {
+  grid-template-rows: 14px 36px;
+  align-self: end;
+  line-height: 14px;
+}
+
 .revenue-pull-bar {
   grid-template-columns: repeat(5, minmax(128px, 1fr)) auto;
 }
@@ -3477,17 +3500,18 @@ th.amount .sortable-table-heading {
   border: 0;
 }
 
-.created-date-filter legend {
-  padding: 0;
+.created-date-filter-label {
   color: var(--label-text);
   font-size: 0.74rem;
   font-weight: 690;
+  line-height: 14px;
 }
 
 .created-date-range {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+  height: 36px;
 }
 
 .created-date-range label {
@@ -3508,24 +3532,34 @@ th.amount .sortable-table-heading {
 }
 
 .created-date-range input {
+  min-height: 36px;
   padding-left: 42px;
 }
 
 .income-search-field {
-  position: relative;
-  display: flex !important;
-  align-items: center;
+  display: grid !important;
 }
 
-.income-search-field > svg {
+.income-search-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 36px;
+}
+
+.income-search-control > svg {
   position: absolute;
   z-index: 1;
   left: 11px;
-  bottom: 11px;
+  top: 50%;
   color: var(--app-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 
 .income-search-field input {
+  min-height: 36px;
   padding-left: 34px;
 }
 

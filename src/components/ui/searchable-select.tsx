@@ -1,4 +1,5 @@
 import { Combobox } from "@base-ui/react/combobox";
+import { Select } from "@base-ui/react/select";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ type SearchableSelectProps = {
   className?: string;
   clearable?: boolean;
   disabled?: boolean;
+  searchable?: boolean;
   size?: "sm" | "default";
 };
 
@@ -33,10 +35,57 @@ export function SearchableSelect({
   className,
   clearable = true,
   disabled = false,
+  searchable = true,
   size = "default"
 }: SearchableSelectProps) {
   const selectedOption = options.find((option) => option.value === value) ?? null;
   const normalizedLabel = ariaLabel?.toLowerCase() ?? "options";
+
+  if (!searchable) {
+    return (
+      <div className={cn("searchable-select", className)} data-size={size} data-disabled={disabled ? "" : undefined}>
+        <Select.Root
+          items={options}
+          value={value}
+          onValueChange={(option) => onValueChange(option ?? "")}
+          disabled={disabled}
+        >
+          <Select.Trigger
+            id={id}
+            className="searchable-select-control simple-select-control"
+            aria-label={ariaLabel}
+          >
+            <Select.Value className="searchable-select-input simple-select-value" placeholder={placeholder} />
+            <Select.Icon className="searchable-select-action">
+              <ChevronDown size={15} aria-hidden="true" />
+            </Select.Icon>
+          </Select.Trigger>
+
+          <Select.Portal>
+            <Select.Positioner className="searchable-select-positioner" sideOffset={5} align="start">
+              <Select.Popup className="searchable-select-popup">
+                <Select.List className="searchable-select-list">
+                  {options.map((option) => (
+                    <Select.Item
+                      key={option.value}
+                      value={option.value}
+                      className="searchable-select-option"
+                      disabled={option.disabled}
+                    >
+                      <Select.ItemIndicator className="searchable-select-option-indicator">
+                        <Check size={14} aria-hidden="true" />
+                      </Select.ItemIndicator>
+                      <Select.ItemText className="searchable-select-option-label">{option.label}</Select.ItemText>
+                    </Select.Item>
+                  ))}
+                </Select.List>
+              </Select.Popup>
+            </Select.Positioner>
+          </Select.Portal>
+        </Select.Root>
+      </div>
+    );
+  }
 
   return (
     <div className={cn("searchable-select", className)} data-size={size} data-disabled={disabled ? "" : undefined}>
@@ -85,7 +134,7 @@ export function SearchableSelect({
                     <Combobox.ItemIndicator className="searchable-select-option-indicator">
                       <Check size={14} aria-hidden="true" />
                     </Combobox.ItemIndicator>
-                    <span>{option.label}</span>
+                    <span className="searchable-select-option-label">{option.label}</span>
                   </Combobox.Item>
                 )}
               </Combobox.List>

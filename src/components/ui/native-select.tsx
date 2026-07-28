@@ -60,6 +60,7 @@ function NativeSelect({
       ariaLabel={ariaLabel}
       clearable={false}
       disabled={disabled}
+      searchable={options.length > 8}
     />
   );
 }

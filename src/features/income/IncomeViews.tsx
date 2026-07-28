@@ -676,13 +676,62 @@ export function InvoicesView({
       if (currency !== "all" && rowCurrency !== currency) return false;
       if (cadence !== "all" && rowCadence(row) !== cadence) return false;
       if ((createdDateFrom || createdDateTo) && (row.kind !== "invoice" || !matchesCreatedDateRange(row.invoice.createdAt, createdDateFrom, createdDateTo))) return false;
-      const search = query.trim().toLowerCase();
-      if (!search) return true;
+      const searchTerms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (searchTerms.length === 0) return true;
       const provider = rowProviderId(row) ? providersById.get(rowProviderId(row) ?? "") : undefined;
-      const text = row.kind === "invoice"
-        ? `${row.invoice.customerName} ${row.invoice.description} ${row.invoice.invoiceNumber} ${provider?.name ?? ""}`
-        : `${row.accrual.partnerName} ${provider?.name ?? ""}`;
-      return text.toLowerCase().includes(search);
+      const rowAmount = row.kind === "invoice" ? row.invoice.amount : row.accrual.amount;
+      const groupedAmount = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(rowAmount);
+      const amountTerms = [
+        String(rowAmount),
+        rowAmount.toFixed(2),
+        groupedAmount,
+        money(rowAmount, rowCurrency),
+        `${rowCurrency} ${rowAmount}`,
+        `${rowCurrency} ${rowAmount.toFixed(2)}`,
+        `${rowCurrency} ${groupedAmount}`
+      ];
+      const searchableValues = row.kind === "invoice"
+        ? [
+            row.invoice.customerName,
+            row.invoice.description,
+            row.invoice.invoiceNumber,
+            provider?.name,
+            ...amountTerms,
+            row.invoice.currency,
+            row.invoice.status,
+            invoiceDeliveryLabel(row.invoice.meritDeliveryStatus),
+            rowCadence(row) === "manual" ? "Manual" : cadenceLabel(rowCadence(row)),
+            row.invoice.source,
+            row.invoice.origin,
+            row.invoice.issueDate,
+            dateLabel(row.invoice.issueDate),
+            row.invoice.dueDate,
+            dateLabel(row.invoice.dueDate),
+            row.invoice.periodStart,
+            row.invoice.periodStart ? dateLabel(row.invoice.periodStart) : undefined,
+            row.invoice.periodEnd,
+            row.invoice.periodEnd ? dateLabel(row.invoice.periodEnd) : undefined,
+            row.invoice.createdAt,
+            dateTimeLabel(row.invoice.createdAt)
+          ]
+        : [
+            row.accrual.partnerName,
+            provider?.name,
+            ...amountTerms,
+            row.accrual.currency,
+            "Accruing",
+            "Future invoice",
+            cadenceLabel(row.accrual.billingCadence),
+            row.accrual.periodStart,
+            dateLabel(row.accrual.periodStart),
+            row.accrual.periodEnd,
+            dateLabel(row.accrual.periodEnd),
+            row.accrual.accruedThrough,
+            dateLabel(row.accrual.accruedThrough),
+            "Monday automation"
+          ];
+      const searchableText = searchableValues.filter(Boolean).join(" ").toLowerCase();
+      return searchTerms.every((term) => searchableText.includes(term));
     });
   const visibleRows = filteredRows
     .filter((row) => {
@@ -837,19 +886,25 @@ export function InvoicesView({
         </div>
 
         <div className="income-filter-bar invoice-filter-bar">
-          <label className="income-search-field"><Search size={15} /><Input aria-label="Search invoices" placeholder="Search company, invoice, description" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          <label className="income-search-field">
+            <span>Search</span>
+            <span className="income-search-control">
+              <Search size={15} />
+              <Input aria-label="Search invoice details and amounts" placeholder="Search invoices, companies, amounts" value={query} onChange={(event) => setQuery(event.target.value)} />
+            </span>
+          </label>
           <label>Company<NativeSelect value={companyId} onValueChange={setCompanyId}><NativeSelectOption value="all">All companies</NativeSelectOption>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
           <label>Currency<NativeSelect value={currency} onValueChange={setCurrency}><NativeSelectOption value="all">All currencies</NativeSelectOption>{currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}</NativeSelect></label>
           <label>Status<NativeSelect value={statusFilter} onValueChange={(value) => setStatusFilter(value as InvoiceStatusFilter)}><NativeSelectOption value="all">All statuses</NativeSelectOption><NativeSelectOption value="draft">Draft</NativeSelectOption><NativeSelectOption value="open">Open</NativeSelectOption><NativeSelectOption value="paid">Paid</NativeSelectOption><NativeSelectOption value="accruing">Accruing</NativeSelectOption></NativeSelect></label>
           <label>Delivery<NativeSelect value={deliveryFilter} onValueChange={(value) => setDeliveryFilter(value as InvoiceDeliveryFilter)}><NativeSelectOption value="all">All delivery states</NativeSelectOption><NativeSelectOption value="not-sent">Not sent</NativeSelectOption><NativeSelectOption value="saved">Saved, not delivered</NativeSelectOption><NativeSelectOption value="delivered">Delivered</NativeSelectOption><NativeSelectOption value="delivery-failed">Delivery failed</NativeSelectOption></NativeSelect></label>
           <label>Cadence<NativeSelect value={cadence} onValueChange={(value) => setCadence(value as "all" | BillingCadence | "manual")}><NativeSelectOption value="all">All cadences</NativeSelectOption><NativeSelectOption value="weekly">Weekly</NativeSelectOption><NativeSelectOption value="monthly">Monthly</NativeSelectOption><NativeSelectOption value="manual">Manual</NativeSelectOption></NativeSelect></label>
-          <fieldset className="created-date-filter">
-            <legend>Created date</legend>
+          <div className="created-date-filter" role="group" aria-labelledby="created-date-filter-label">
+            <span id="created-date-filter-label" className="created-date-filter-label">Created date</span>
             <div className="created-date-range">
               <label><span>From</span><Input type="date" aria-label="Filter invoices created from date" value={createdDateFrom} onChange={(event) => setCreatedDateFrom(event.target.value)} /></label>
               <label><span>To</span><Input type="date" aria-label="Filter invoices created to date" value={createdDateTo} onChange={(event) => setCreatedDateTo(event.target.value)} /></label>
             </div>
-          </fieldset>
+          </div>
           <Button className="icon-text-button clear-filter-button" type="button" disabled={!query && companyId === "all" && currency === "all" && statusFilter === "all" && deliveryFilter === "all" && cadence === "all" && !createdDateFrom && !createdDateTo} onClick={() => { setQuery(""); setCompanyId("all"); setCurrency("all"); setStatusFilter("all"); setDeliveryFilter("all"); setCadence("all"); setCreatedDateFrom(""); setCreatedDateTo(""); }}><Filter size={14} /> Clear</Button>
         </div>
 
