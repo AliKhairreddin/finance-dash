@@ -229,6 +229,7 @@ export async function fetchSlashActivityForLegalEntity({
 }: SlashActivityOptions): Promise<SlashActivityResult> {
   const headers = {
     Accept: "application/json",
+    "User-Agent": "finance-dash/1.0 (+https://finance.thatcanadian.dev)",
     "X-API-Key": apiKey,
     "x-legal-entity": legalEntityId
   };

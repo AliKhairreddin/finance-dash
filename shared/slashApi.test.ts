@@ -143,6 +143,10 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   assert.equal(requests.every((request) => request.headers.get("X-API-Key") === "slash-key"), true);
   assert.equal(requests.every((request) => request.headers.get("x-legal-entity") === "legal-entity-1"), true);
   assert.equal(requests.every((request) => request.headers.get("Accept") === "application/json"), true);
+  assert.equal(
+    requests.every((request) => request.headers.get("User-Agent") === "finance-dash/1.0 (+https://finance.thatcanadian.dev)"),
+    true
+  );
 });
 
 test("Slash activity rejects repeated pagination cursors", async () => {
