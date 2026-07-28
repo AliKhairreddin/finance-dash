@@ -30,7 +30,7 @@
     // Merit writes only occur after an explicit dashboard save/deliver action; scheduled revenue work creates local drafts.
     "MERIT_WRITES_ENABLED": "true",
     "REVENUE_TIMEZONE": "Asia/Beirut",
-    "COINBASE_EXCHANGE_RATES_URL": "https://api.coinbase.com/v2/exchange-rates",
+    "COINBASE_SPOT_PRICES_URL": "https://api.coinbase.com/v2/prices",
     "PUBLIC_APP_URL": "https://finance.thatcanadian.dev"
   },
   "triggers": {

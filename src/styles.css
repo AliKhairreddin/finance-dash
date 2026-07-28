@@ -6298,7 +6298,7 @@ body {
 }
 
 .metric-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 10px;
   overflow: visible;
@@ -6468,7 +6468,29 @@ body {
 }
 
 .overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+}
+
+.overview-balances-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.overview-balance-stack {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.overview-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 0.78fr) minmax(0, 1.22fr);
+  gap: 10px;
+  align-items: start;
 }
 
 .income-summary-grid,
@@ -6856,6 +6878,13 @@ body {
     border-right: 0;
     border-bottom: 1px solid var(--info-border);
     border-radius: 15px 15px 0 0;
+  }
+}
+
+@media (max-width: 980px) {
+  .overview-balances-grid,
+  .overview-bottom-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -468,20 +468,42 @@ test("successful Slash sync drops transactions outside the current live window",
   );
 });
 
-test("Coinbase quote refresh converts EUR, GBP, and BTC from one USD-base response", async () => {
+test("Coinbase quote refresh loads direct USD spot prices for every tracked asset", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));
-    assert.equal(url.searchParams.get("currency"), "USD");
-    return Response.json({ data: { currency: "USD", rates: { EUR: "0.8", GBP: "0.5", BTC: "0.00001" } } });
+    const asset = url.pathname.split("/").at(-2)?.replace("-USD", "");
+    assert.equal(url.pathname, `/v2/prices/${asset}-USD/spot`);
+    const prices: Record<string, string> = { EUR: "1.25", GBP: "2", BTC: "100000" };
+    return Response.json({ data: { amount: prices[asset ?? ""], base: asset, currency: "USD" } });
   };
 
   try {
     const rates = await fetchCoinbaseUsdRates(
-      { COINBASE_EXCHANGE_RATES_URL: "https://api.coinbase.com/v2/exchange-rates" } as never,
+      { COINBASE_SPOT_PRICES_URL: "https://api.coinbase.com/v2/prices" } as never,
       ["EUR", "GBP", "BTC"]
     );
     assert.deepEqual(rates.map((rate) => [rate.asset, rate.rateUsd]), [["EUR", 1.25], ["GBP", 2], ["BTC", 100000]]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Coinbase quote refresh keeps successful spot prices when one asset is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    return url.pathname.includes("/BTC-USD/")
+      ? new Response("unavailable", { status: 503, statusText: "Unavailable" })
+      : Response.json({ data: { amount: "1.25", base: "EUR", currency: "USD" } });
+  };
+
+  try {
+    const rates = await fetchCoinbaseUsdRates(
+      { COINBASE_SPOT_PRICES_URL: "https://api.coinbase.com/v2/prices" } as never,
+      ["EUR", "BTC"]
+    );
+    assert.deepEqual(rates.map((rate) => [rate.asset, rate.rateUsd]), [["EUR", 1.25]]);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -13,10 +13,9 @@ export function calculateMetrics(
   const totalOpenBalance = sumCurrencyTotals(openBalances, (item) => item.balance);
   const totalPayables = sumCurrencyTotals(payables, (payable) => payable.balance);
   const totalFloat = combineCurrencyTotals(totalCash, totalReceivables, totalOpenBalance);
-  const hasOperatingRows = receivables.length > 0 || openBalances.length > 0 || payables.length > 0;
-  const profit = hasOperatingRows && hasCurrencyTotals(totalFloat) ? subtractCurrencyTotals(totalFloat, totalPayables) : {};
+  const netOperatingAssets = hasCurrencyTotals(totalFloat) ? subtractCurrencyTotals(totalFloat, totalPayables) : {};
   const investmentsTotal = sumCurrencyTotals(investments, (investment) => investment.balance);
-  const totalAssets = combineCurrencyTotals(profit, investmentsTotal);
+  const totalAssets = combineCurrencyTotals(netOperatingAssets, investmentsTotal);
   const monthTotals = payables.reduce<Metrics["monthTotals"]>((months, payable) => {
     for (const [month, amount] of Object.entries(payable.monthBuckets)) {
       months[month] = combineCurrencyTotals(
@@ -33,7 +32,7 @@ export function calculateMetrics(
     totalOpenBalance,
     totalPayables,
     totalFloat,
-    profit,
+    netOperatingAssets,
     investments: investmentsTotal,
     totalAssets,
     monthTotals

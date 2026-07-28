@@ -173,7 +173,7 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
 }
 
 const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
-  overview: { eyebrow: "Finance operations", title: "Cash flow and open balance control" },
+  overview: { eyebrow: "Finance overview", title: "Cash position and working capital" },
   management: { eyebrow: "Management report", title: "Closed performance, platforms, and ownership" },
   banks: { eyebrow: "Banking", title: "Reconcile account activity" },
   analytics: { eyebrow: "Analytics", title: "Review spend, revenue, teams, and categories" },
@@ -218,10 +218,11 @@ function formatCurrencyTotals(totals: CurrencyTotals): string {
   return values.length > 0 ? values.map(([currency, total]) => money(total, currency)).join(" · ") : "—";
 }
 
-function formatUsdCurrencyTotal(totals: CurrencyTotals, rates: FxRate[]): string {
-  if (!hasCurrencyTotals(totals)) return "—";
+function formatUsdCurrencyTotal(totals: CurrencyTotals, rates: FxRate[], emptyValue = "—"): string {
+  if (!hasCurrencyTotals(totals)) return emptyValue;
   const conversion = convertCurrencyTotalsToUsd(totals, rates);
-  return conversion.excludedCurrencies.length > 0 ? "USD rate unavailable" : money(conversion.totalUsd, "USD");
+  const amount = money(conversion.totalUsd, "USD");
+  return conversion.excludedCurrencies.length > 0 ? `Partial ${amount}` : amount;
 }
 
 function nativeCurrencyBreakdown(totals: CurrencyTotals): string | undefined {
@@ -1315,13 +1316,11 @@ function App() {
     );
   }
 
-  const hasCash = dashboard.accounts.length > 0;
   const hasReceivables = dashboard.receivables.length > 0;
   const hasOpenBalances = dashboard.openBalances.length > 0;
   const hasPayables = dashboard.payables.length > 0;
-  const hasInvestments = dashboard.investments.length > 0;
-  const hasProfit = hasCurrencyTotals(dashboard.metrics.profit);
-  const profitTone = currencyTotalsTone(dashboard.metrics.profit);
+  const hasNetOperatingAssets = hasCurrencyTotals(dashboard.metrics.netOperatingAssets);
+  const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
   const liquidAccounts = dashboard.accounts.filter(isLiquidAccountBalance);
   const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
   const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
@@ -1331,7 +1330,7 @@ function App() {
     dashboard.metrics.totalReceivables,
     dashboard.metrics.totalOpenBalance,
     dashboard.metrics.totalPayables,
-    dashboard.metrics.profit,
+    dashboard.metrics.netOperatingAssets,
     dashboard.metrics.totalAssets
   ].map((totals) => convertCurrencyTotalsToUsd(totals, dashboard.fxRates));
   const overviewExcludedCurrencies = [...new Set([
@@ -1398,83 +1397,77 @@ function App() {
         <div className="route-stage" key={activeTab}>
       {activeTab === "overview" && (
         <>
-          <section className="liquidity-hero" aria-label="Approximate total liquidity in US dollars">
+          <section className="liquidity-hero" aria-label="Available liquidity in US dollars">
             <div className="liquidity-hero-main">
-              <InfoPopover label="approximate liquid assets">
-                <span>One USD view across connected bank balances, manual cash, exchanges, and crypto wallets.</span>
-                <span>{dashboard.approximateUsdTotals.asOf ? `Oldest included rate ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync.</span>
+              <InfoPopover label="available liquidity">
+                <span>Connected bank balances, manual cash, exchanges, and crypto wallets converted to USD. Card debt is shown separately and is not deducted.</span>
+                <span>{dashboard.approximateUsdTotals.asOf ? `Oldest included quote ${maybeDate(dashboard.approximateUsdTotals.asOf)}` : "All included balances are already in USD"} · refreshes hourly and with Sync.</span>
               </InfoPopover>
               <strong><AnimatedNumber animationKey="overview-liquid-assets" value={money(dashboard.approximateUsdTotals.totalUsd, "USD")} /></strong>
-              <div className="liquidity-hero-title"><CircleDollarSign size={20} /><span>Approximate liquid assets</span></div>
+              <div className="liquidity-hero-title"><CircleDollarSign size={20} /><span>Available liquidity{dashboard.approximateUsdTotals.excludedAssets.length > 0 ? " · partial" : ""}</span></div>
             </div>
             <div className="liquidity-breakdown">
               <article>
                 <strong><AnimatedNumber animationKey="overview-liquid-bank-accounts" value={money(dashboard.approximateUsdTotals.accountsUsd, "USD")} /></strong>
-                <span>Liquid bank accounts</span>
+                <span>Connected accounts</span>
                 <small>{groupedAccountMoney(liquidAccounts)}</small>
               </article>
               <article>
                 <strong><AnimatedNumber animationKey="overview-cash-crypto" value={money(dashboard.approximateUsdTotals.holdingsUsd, "USD")} /></strong>
-                <span>Cash & crypto</span>
+                <span>Cash & wallets</span>
                 <small>{groupedHoldingMoney(dashboard.holdings)}</small>
               </article>
               <article className="liability">
-                <InfoPopover label="card liabilities"><span>Card liabilities are excluded and never deducted from liquid assets.</span></InfoPopover>
-                <strong><AnimatedNumber animationKey="overview-card-liabilities" value={formatUsdCurrencyTotal(cardLiabilities, dashboard.fxRates)} /></strong>
-                <span>Card liabilities · excluded</span>
-                <small>{nativeCurrencyBreakdown(cardLiabilities) ?? "No card liabilities"}</small>
+                <InfoPopover label="card debt"><span>Card debt is shown for visibility but is not deducted from available liquidity.</span></InfoPopover>
+                <strong><AnimatedNumber animationKey="overview-card-liabilities" value={formatUsdCurrencyTotal(cardLiabilities, dashboard.fxRates, money(0))} /></strong>
+                <span>Card debt · not deducted</span>
+                <small>{nativeCurrencyBreakdown(cardLiabilities) ?? "No card debt"}</small>
               </article>
             </div>
           </section>
-          {incompleteLiquiditySources.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>The total only includes currently available balances. Incomplete bank sources: <strong>{incompleteLiquiditySources.join(", ")}</strong>.</span></div>}
-          {overviewStaleCurrencies.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Using last-known conversion rates for <strong>{overviewStaleCurrencies.join(", ")}</strong>; affected USD totals remain approximate.</span></div>}
-          {overviewExcludedCurrencies.length > 0 && <div className="income-callout warning liquidity-warning"><CircleAlert size={17} /><span>Complete USD totals are unavailable where Coinbase did not return a rate for <strong>{overviewExcludedCurrencies.join(", ")}</strong>. Native balances remain visible.</span></div>}
-          <section className="metric-grid" aria-label="Finance summary">
-            <div className="metric-grid-heading">Finance summary · USD totals</div>
-            <MetricCard
-              icon={<Banknote />}
-              label="Cash in accounts"
-              value={formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}
-              detail={hasCash ? "Connected bank and card accounts" : "No live account data"}
-              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}
-            />
+          {(incompleteLiquiditySources.length > 0 || overviewStaleCurrencies.length > 0 || overviewExcludedCurrencies.length > 0) && (
+            <div className="income-callout warning liquidity-warning" role="status">
+              <CircleAlert size={17} />
+              <span>
+                <strong>Partial data coverage.</strong>
+                {incompleteLiquiditySources.length > 0 && <> {incompleteLiquiditySources.join(", ")} did not fully sync, so totals use available balances only.</>}
+                {overviewStaleCurrencies.length > 0 && <> Last-known quotes are being used for {overviewStaleCurrencies.join(", ")}.</>}
+                {overviewExcludedCurrencies.length > 0 && <> {overviewExcludedCurrencies.join(", ")} {overviewExcludedCurrencies.length === 1 ? "is" : "are"} excluded from converted totals because no current USD quote was returned.</>}
+              </span>
+            </div>
+          )}
+          <section className="metric-grid" aria-label="Working capital summary">
+            <div className="metric-grid-heading">Working capital · converted to USD</div>
             <MetricCard
               icon={<BadgeDollarSign />}
-              label="Receivables"
-              value={formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates)}
-              detail={hasReceivables ? "Live invoice and tax rows" : "No live receivables"}
+              label="Outstanding receivables"
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates, money(0))}
+              detail={hasReceivables ? "Customer invoices and manual receivable balances still due" : "Nothing is currently due from customers"}
               breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalReceivables)}
             />
             <MetricCard
               icon={<WalletCards />}
-              label="Open balance"
-              value={formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates)}
-              detail={hasOpenBalances ? "Customer and provider balances" : "No live open balances"}
+              label="Other open balances"
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates, money(0))}
+              detail={hasOpenBalances ? "Other customer and provider balances outside receivables" : "No other open customer or provider balances"}
               breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}
             />
             <MetricCard
               icon={<ArrowDownRight />}
-              label="Payables"
-              value={formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates)}
-              detail={hasPayables ? "Unpaid platform/provider spend" : "No live payables"}
+              label="Supplier payables"
+              value={formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates, money(0))}
+              detail={hasPayables ? "Unpaid supplier and platform balances" : "Nothing is currently due to suppliers"}
               breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}
               danger={hasPayables}
             />
             <MetricCard
-              icon={<CircleDollarSign />}
-              label="Profit"
-              value={formatUsdCurrencyTotal(dashboard.metrics.profit, dashboard.fxRates)}
-              detail={hasProfit ? "Calculated from live operating rows" : "Waiting for operating rows"}
-              breakdown={nativeCurrencyBreakdown(dashboard.metrics.profit)}
-              good={profitTone === "good"}
-              danger={profitTone === "danger"}
-            />
-            <MetricCard
               icon={<ShieldCheck />}
-              label="Total assets"
-              value={formatUsdCurrencyTotal(dashboard.metrics.totalAssets, dashboard.fxRates)}
-              detail={hasInvestments ? `${formatCurrencyTotals(dashboard.metrics.investments)} investments` : "No live investments"}
-              breakdown={nativeCurrencyBreakdown(dashboard.metrics.totalAssets)}
+              label="Net operating assets"
+              value={formatUsdCurrencyTotal(dashboard.metrics.netOperatingAssets, dashboard.fxRates)}
+              detail={hasNetOperatingAssets ? "Cash plus receivables and other balances, less supplier payables" : "Waiting for operating balances"}
+              breakdown={nativeCurrencyBreakdown(dashboard.metrics.netOperatingAssets)}
+              good={netOperatingAssetsTone === "good"}
+              danger={netOperatingAssetsTone === "danger"}
             />
           </section>
           <Overview
@@ -1872,100 +1865,90 @@ function Overview({
   const [manualReceivableOpen, setManualReceivableOpen] = useState(false);
   const reviewRows = dashboard.transactions.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86).slice(0, 5);
   const payableMonths = Array.from(new Set(dashboard.payables.flatMap((payable) => Object.keys(payable.monthBuckets))));
-  const hasCash = dashboard.accounts.length > 0;
-  const hasReceivables = dashboard.receivables.length > 0;
-  const hasOpenBalances = dashboard.openBalances.length > 0;
   const hasPayables = dashboard.payables.length > 0;
-  const hasInvestments = dashboard.investments.length > 0;
-  const hasCompleteFloat = hasCash && hasReceivables && hasOpenBalances;
-  const profitTone = currencyTotalsTone(dashboard.metrics.profit);
+  const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
   const assetsTone = currencyTotalsTone(dashboard.metrics.totalAssets);
 
   return (
     <div className="overview-grid">
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Cash in accounts</h2>
-          <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
-        </div>
-        <SimpleMoneyTable
-          nameLabel="Account"
-          rows={dashboard.accounts.map((item) => ({
-            id: item.id,
-            name: item.name,
-            title: item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-          emptyLabel="No live account data"
-        />
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Receivables</h2>
-          <div className="receivables-header-actions">
-            <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalReceivables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates)}</span>
-            <Button className="icon-text-button receivables-add-button" type="button" onClick={() => setManualReceivableOpen(true)}>
-              <Plus size={14} /> Add
-            </Button>
+      <div className="overview-balances-grid">
+        <section className="panel">
+          <div className="panel-header compact">
+            <h2>Account balances</h2>
+            <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
           </div>
-        </div>
-        <SimpleMoneyTable
-          nameLabel="Name"
-          rows={dashboard.receivables.map((item) => ({
-            id: item.id,
-            name: item.id.startsWith("open-invoices-") ? `INV ${item.currency}` : item.name,
-            title: item.id.startsWith("open-invoices-") ? `Open invoices · ${item.currency}` : item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-          emptyLabel="No live receivables"
-        />
-        {manualReceivableOpen && (
-          <ManualReceivableDialog
-            onClose={() => setManualReceivableOpen(false)}
-            onSubmit={async (payload) => {
-              await onCreateManualReceivable(payload);
-              setManualReceivableOpen(false);
-            }}
+          <SimpleMoneyTable
+            nameLabel="Account"
+            rows={dashboard.accounts.map((item) => ({
+              id: item.id,
+              name: item.name,
+              title: item.name,
+              amount: item.balance,
+              currency: item.currency,
+              source: sourceLabel(item.source)
+            }))}
+            emptyLabel="No connected account balances"
           />
-        )}
-      </section>
+        </section>
 
-      <section className="panel tall">
-        <div className="panel-header compact">
-          <h2>Open balance</h2>
-          <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}>{formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates)}</span>
+        <div className="overview-balance-stack">
+          <section className="panel">
+            <div className="panel-header compact">
+              <h2>Outstanding receivables</h2>
+              <div className="receivables-header-actions">
+                <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalReceivables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalReceivables, dashboard.fxRates, money(0))}</span>
+                <Button className="icon-text-button receivables-add-button" type="button" onClick={() => setManualReceivableOpen(true)}>
+                  <Plus size={14} /> Add
+                </Button>
+              </div>
+            </div>
+            <SimpleMoneyTable
+              nameLabel="Receivable"
+              rows={dashboard.receivables.map((item) => ({
+                id: item.id,
+                name: item.id.startsWith("open-invoices-") ? `Invoices · ${item.currency}` : item.name,
+                title: item.id.startsWith("open-invoices-") ? `Open invoices · ${item.currency}` : item.name,
+                amount: item.balance,
+                currency: item.currency,
+                source: sourceLabel(item.source)
+              }))}
+              emptyLabel="No outstanding receivables"
+            />
+          </section>
+
+          <section className="panel">
+            <div className="panel-header compact">
+              <h2>Other open balances</h2>
+              <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}>{formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates, money(0))}</span>
+            </div>
+            <SimpleMoneyTable
+              nameLabel="Balance item"
+              rows={dashboard.openBalances.map((item) => ({
+                id: item.id,
+                name: item.name,
+                title: item.name,
+                amount: item.balance,
+                currency: item.currency,
+                source: sourceLabel(item.source)
+              }))}
+              emptyLabel="No other open balances"
+              dense
+            />
+          </section>
         </div>
-        <SimpleMoneyTable
-          nameLabel="Name"
-          rows={dashboard.openBalances.map((item) => ({
-            id: item.id,
-            name: item.name,
-            title: item.name,
-            amount: item.balance,
-            currency: item.currency,
-            source: sourceLabel(item.source)
-          }))}
-          emptyLabel="No live open balances"
-          dense
-        />
-      </section>
+      </div>
 
-      <section className="panel wide">
+      <section className="panel">
         <div className="panel-header compact">
-          <h2>Payables by supplier and month</h2>
-          <span className="total-pill danger" title={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates)}</span>
+          <h2>Supplier payables</h2>
+          <span className={`total-pill ${hasPayables ? "danger" : ""}`} title={nativeCurrencyBreakdown(dashboard.metrics.totalPayables)}>{formatUsdCurrencyTotal(dashboard.metrics.totalPayables, dashboard.fxRates, money(0))}</span>
         </div>
         <div className="table-wrap">
           <table className="data-table payables-table">
             <thead>
               <tr>
-                <th>Supplier / platform</th>
-                <th>Balance</th>
+                <th>Supplier or platform</th>
+                <th>Amount due</th>
                 {payableMonths.map((month) => (
                   <th key={month}>{month}</th>
                 ))}
@@ -1992,7 +1975,7 @@ function Overview({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={2 + payableMonths.length}>No live payables</td>
+                  <td colSpan={2 + payableMonths.length}>Nothing is currently due to suppliers</td>
                 </tr>
               )}
             </tbody>
@@ -2013,77 +1996,79 @@ function Overview({
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Assets bridge</h2>
-          <span className={`total-pill ${assetsTone}`} title={nativeCurrencyBreakdown(dashboard.metrics.totalAssets)}>{formatUsdCurrencyTotal(dashboard.metrics.totalAssets, dashboard.fxRates)}</span>
-        </div>
-        <div className="bridge">
-          <BridgeRow label="Cash" value={dashboard.metrics.totalCash} />
-          <BridgeRow label="Receivables" value={dashboard.metrics.totalReceivables} />
-          <BridgeRow label="Open balance" value={dashboard.metrics.totalOpenBalance} />
-          <BridgeRow label="Cash + receivables + open balance" value={hasCompleteFloat ? dashboard.metrics.totalFloat : {}} />
-          <BridgeRow label="Spend without payment" value={hasPayables ? negateCurrencyTotals(dashboard.metrics.totalPayables) : {}} danger />
-          <BridgeRow
-            label="Profit"
-            value={dashboard.metrics.profit}
-            good={profitTone === "good"}
-            danger={profitTone === "danger"}
-          />
-          <BridgeRow label="Investments" value={dashboard.metrics.investments} />
-        </div>
-      </section>
+      <div className="overview-bottom-grid">
+        <section className="panel">
+          <div className="panel-header compact">
+            <h2>Net assets calculation</h2>
+            <span className={`total-pill ${assetsTone}`} title={nativeCurrencyBreakdown(dashboard.metrics.totalAssets)}>{formatUsdCurrencyTotal(dashboard.metrics.totalAssets, dashboard.fxRates)}</span>
+          </div>
+          <div className="bridge">
+            <BridgeRow label="Account balances" value={dashboard.metrics.totalCash} emptyValue={money(0)} />
+            <BridgeRow label="Outstanding receivables" value={dashboard.metrics.totalReceivables} emptyValue={money(0)} />
+            <BridgeRow label="Other open balances" value={dashboard.metrics.totalOpenBalance} emptyValue={money(0)} />
+            <BridgeRow label="Gross operating assets" value={dashboard.metrics.totalFloat} emptyValue={money(0)} />
+            <BridgeRow label="Less: supplier payables" value={hasPayables ? negateCurrencyTotals(dashboard.metrics.totalPayables) : {}} emptyValue={money(0)} danger={hasPayables} />
+            <BridgeRow
+              label="Net operating assets"
+              value={dashboard.metrics.netOperatingAssets}
+              emptyValue={money(0)}
+              good={netOperatingAssetsTone === "good"}
+              danger={netOperatingAssetsTone === "danger"}
+            />
+            <BridgeRow label="Investments" value={dashboard.metrics.investments} emptyValue={money(0)} />
+            <BridgeRow label="Total assets" value={dashboard.metrics.totalAssets} emptyValue={money(0)} good={assetsTone === "good"} danger={assetsTone === "danger"} />
+          </div>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Growth checks</h2>
-          <span className="total-pill">—</span>
-        </div>
-        <div className="growth-list">
-          <GrowthItem label="Cash growth vs last week" />
-          <GrowthItem label="Spend growth vs last week" danger />
-          <GrowthItem label="Profit growth vs last week" />
-        </div>
-      </section>
+        <section className="panel">
+          <div className="panel-header compact">
+            <h2>Transactions to review</h2>
+            <span className={`total-pill ${reviewRows.length > 0 ? "warning" : ""}`}>{reviewRows.length} {reviewRows.length === 1 ? "item" : "items"}</span>
+          </div>
+          <div className="review-list overview-review-list">
+            {reviewRows.length > 0 ? (
+              reviewRows.map((transaction) => {
+                const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+                return (
+                  <article className="review-row" key={transaction.id}>
+                    <div className={`direction-badge ${transaction.direction}`}>
+                      {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+                    </div>
+                    <div className="review-copy">
+                      <strong>{transaction.counterparty}</strong>
+                      <span>{transaction.description}</span>
+                    </div>
+                    <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
+                    <div className="review-actions">
+                      <div className="match-chip">{providerLabel(provider)}</div>
+                      <Button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
+                        <ShieldCheck size={15} />
+                        Match
+                      </Button>
+                      <Button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
+                        <FilePlus2 size={15} />
+                        Document
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <div className="empty-state">All transactions are matched and categorized</div>
+            )}
+          </div>
+        </section>
+      </div>
 
-      <section className="panel wide">
-        <div className="panel-header compact">
-          <h2>Needs review</h2>
-          <span className="total-pill">{reviewRows.length} rows</span>
-        </div>
-        <div className="review-list overview-review-list">
-          {reviewRows.length > 0 ? (
-            reviewRows.map((transaction) => {
-              const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-              return (
-                <article className="review-row" key={transaction.id}>
-                  <div className={`direction-badge ${transaction.direction}`}>
-                    {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
-                  </div>
-                  <div className="review-copy">
-                    <strong>{transaction.counterparty}</strong>
-                    <span>{transaction.description}</span>
-                  </div>
-                  <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
-                  <div className="review-actions">
-                    <div className="match-chip">{providerLabel(provider)}</div>
-                    <Button className="icon-text-button" onClick={() => provider && onQuickMatch(transaction, provider.id)} disabled={!provider}>
-                      <ShieldCheck size={15} />
-                      Match
-                    </Button>
-                    <Button className="icon-text-button" onClick={() => onOpenInvoice(transaction)}>
-                      <FilePlus2 size={15} />
-                      Document
-                    </Button>
-                  </div>
-                </article>
-              );
-            })
-          ) : (
-            <div className="empty-state">No live transactions needing review</div>
-          )}
-        </div>
-      </section>
+      {manualReceivableOpen && (
+        <ManualReceivableDialog
+          onClose={() => setManualReceivableOpen(false)}
+          onSubmit={async (payload) => {
+            await onCreateManualReceivable(payload);
+            setManualReceivableOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -3160,30 +3145,25 @@ function BridgeRow({
   value,
   danger,
   good,
-  currency = "USD"
+  currency = "USD",
+  emptyValue = "—"
 }: {
   label: string;
   value: CurrencyTotals | number | null | undefined;
   danger?: boolean;
   good?: boolean;
   currency?: string;
+  emptyValue?: string;
 }) {
-  const formattedValue = typeof value === "number" || value == null ? optionalMoney(value, currency) : formatCurrencyTotals(value);
+  const formattedValue = typeof value === "number" || value == null
+    ? optionalMoney(value, currency)
+    : hasCurrencyTotals(value)
+      ? formatCurrencyTotals(value)
+      : emptyValue;
   return (
     <div className="bridge-row">
       <span>{label}</span>
       <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{formattedValue}</strong>
-    </div>
-  );
-}
-
-function GrowthItem({ label, value, danger }: { label: string; value?: number | null; danger?: boolean }) {
-  return (
-    <div className="growth-item">
-      <span>{label}</span>
-      <strong className={typeof value === "number" ? (danger ? "danger-text" : "good-text") : ""}>
-        {typeof value === "number" ? `${value.toFixed(2)}%` : "—"}
-      </strong>
     </div>
   );
 }

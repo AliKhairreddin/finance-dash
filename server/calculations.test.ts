@@ -38,7 +38,7 @@ test("calculateMetrics keeps every currency separate through derived totals", ()
     totalOpenBalance: { USD: 10, EUR: 7 },
     totalPayables: { USD: 30, CAD: 2, GBP: 4 },
     totalFloat: { USD: 155, CAD: 55, EUR: 7 },
-    profit: { USD: 125, CAD: 53, EUR: 7, GBP: -4 },
+    netOperatingAssets: { USD: 125, CAD: 53, EUR: 7, GBP: -4 },
     investments: { EUR: 3 },
     totalAssets: { USD: 125, CAD: 53, EUR: 10, GBP: -4 },
     monthTotals: { "2026-07": { USD: 30, CAD: 2 }, "2026-08": { GBP: 4 } }
@@ -52,9 +52,13 @@ test("calculateMetrics never invents an aggregate when there are no rows", () =>
     totalOpenBalance: {},
     totalPayables: {},
     totalFloat: {},
-    profit: {},
+    netOperatingAssets: {},
     investments: {},
     totalAssets: {},
     monthTotals: {}
   });
+});
+
+test("calculateMetrics treats cash-only operations as net operating assets", () => {
+  assert.deepEqual(calculateMetrics([account("cash", 125, "USD")], [], [], [], []).netOperatingAssets, { USD: 125 });
 });

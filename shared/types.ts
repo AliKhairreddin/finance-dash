@@ -403,7 +403,7 @@ export interface Metrics {
   totalOpenBalance: CurrencyTotals;
   totalPayables: CurrencyTotals;
   totalFloat: CurrencyTotals;
-  profit: CurrencyTotals;
+  netOperatingAssets: CurrencyTotals;
   investments: CurrencyTotals;
   totalAssets: CurrencyTotals;
   monthTotals: Record<string, CurrencyTotals>;

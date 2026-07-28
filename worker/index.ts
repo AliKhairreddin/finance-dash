@@ -271,7 +271,7 @@ const wiseBaseUrlByEnvironment = {
   sandbox: "https://api.wise-sandbox.com"
 };
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
-const defaultCoinbaseExchangeRatesUrl = "https://api.coinbase.com/v2/exchange-rates";
+const defaultCoinbaseSpotPricesUrl = "https://api.coinbase.com/v2/prices";
 const defaultMeritDeliverInvoicePath = "/v2/sendinvoicebyemail";
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -2850,30 +2850,33 @@ export async function fetchCoinbaseUsdRates(env: Env, assets: Iterable<string>):
   )];
   if (uniqueAssets.length === 0) return [];
 
-  const url = new URL(env.COINBASE_EXCHANGE_RATES_URL || defaultCoinbaseExchangeRatesUrl);
-  url.searchParams.set("currency", "USD");
   const fetchedAt = new Date().toISOString();
-  const payload = await fetchJson<{ data?: { currency?: string; rates?: Record<string, string> } }>(url.toString(), {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(8_000)
-  });
-  if (payload.data?.currency !== "USD" || !payload.data.rates) {
-    throw new ApiError(502, "Coinbase did not return USD-based exchange rates");
-  }
-
-  const rates = uniqueAssets.flatMap((asset): FxRate[] => {
-    const unitsPerUsd = Number(payload.data?.rates?.[asset]);
-    if (!Number.isFinite(unitsPerUsd) || unitsPerUsd <= 0) return [];
-    return [{
+  const baseUrl = (env.COINBASE_SPOT_PRICES_URL || defaultCoinbaseSpotPricesUrl).replace(/\/+$/, "");
+  const results = await Promise.allSettled(uniqueAssets.map(async (asset): Promise<FxRate> => {
+    const url = new URL(`${baseUrl}/${encodeURIComponent(asset)}-USD/spot`);
+    const payload = await fetchJson<{ data?: { amount?: string; base?: string; currency?: string } }>(url.toString(), {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8_000)
+    });
+    const rateUsd = Number(payload.data?.amount);
+    if (payload.data?.currency !== "USD" || !Number.isFinite(rateUsd) || rateUsd <= 0) {
+      throw new ApiError(502, `Coinbase did not return a USD spot price for ${asset}`);
+    }
+    return {
       asset,
-      rateUsd: Number((1 / unitsPerUsd).toPrecision(15)),
+      rateUsd,
       provider: "coinbase",
       asOf: fetchedAt,
       checkedAt: fetchedAt,
       stale: false
-    }];
-  });
-  if (rates.length === 0) throw new ApiError(502, "Coinbase did not return any requested USD rates");
+    };
+  }));
+  const rates = results.flatMap((result): FxRate[] => result.status === "fulfilled" ? [result.value] : []);
+  if (rates.length === 0) {
+    const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (firstFailure?.reason instanceof Error) throw firstFailure.reason;
+    throw new ApiError(502, "Coinbase did not return any requested USD rates");
+  }
   return rates;
 }
 

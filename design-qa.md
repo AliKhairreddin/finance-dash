@@ -1,59 +1,56 @@
-# Popup and dialog overflow design QA
+# Finance overview design QA
 
 ## Evidence
 
-- Source visual truth:
-  - `/tmp/finance-dash-qa/source-production-modal.png`
-  - `/tmp/finance-dash-qa/source-production-company-menu-open.png`
-- Browser-rendered implementation:
-  - `/tmp/finance-dash-qa/implementation-desktop-modal.png`
-  - `/tmp/finance-dash-qa/implementation-company-menu-adaptive.png`
-  - `/tmp/finance-dash-qa/implementation-company-menu-mobile-bounded.png`
-  - `/tmp/finance-dash-qa/implementation-holding-modal.png`
-- Combined comparison inputs:
-  - `/tmp/finance-dash-qa/comparison-manual-modal.png`
-  - `/tmp/finance-dash-qa/comparison-company-menu.png`
-- Desktop viewport: 1908 × 955 CSS px at device scale factor 1.
-- Mobile viewport: 375 × 667 CSS px at device scale factor 1.
-- Source pixels: manual dialog 1908 × 955; company menu 1893 × 947.
-- Implementation pixels: desktop captures 1908 × 955; mobile capture 375 × 667.
-- Density normalization: none. The company-menu source was padded to 1908 × 955 only for the side-by-side comparison; content was not scaled.
-- State: light theme, manual-receivable dialog open; invoice company selector open; holding editor open.
+- Source visual truth: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/design-audit/01-overview-before.png`
+- Browser-rendered implementation: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/design-audit/02-overview-after.png`
+- Combined comparison input: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/design-audit/03-overview-before-after.png`
+- Responsive implementation: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/design-audit/04-overview-mobile.png`
+- Desktop browser viewport: 1280 × 720 CSS px at device scale factor 2.
+- Desktop source and implementation captures: 1265 × 712 normalized screenshot pixels each.
+- Mobile browser viewport: 390 × 844 CSS px at device scale factor 2.
+- Mobile capture: 375 × 812 normalized screenshot pixels.
+- Density normalization: the browser backend normalized both desktop captures identically; no additional scaling was applied before the side-by-side comparison.
+- State: light theme, Finance Overview, live production balances read through the local implementation.
 
 ## Findings
 
 - No actionable P0, P1, or P2 findings remain.
-- Fonts and typography: the existing Geist typography, weights, hierarchy, and control copy are preserved. Long option labels now wrap within the menu instead of widening its scroll area.
-- Spacing and layout rhythm: the manual-receivable and holding dialogs are centered against the viewport. The searchable company menu grows to 320 px when space permits and remains bounded by the available viewport.
-- Colors and visual tokens: existing panel, backdrop, border, focus, and semantic color tokens are unchanged.
-- Image quality and asset fidelity: no raster or decorative assets are involved in these popup surfaces; the existing icon library remains unchanged.
-- Copy and content: labels, placeholders, button names, option names, and financial content are unchanged.
-- Full-view evidence: the source manual dialog was clipped to its Receivables panel; the implementation uses the full viewport backdrop and is fully visible. The source company menu showed both horizontal and vertical scrollbar tracks; the implementation has no visible tracks and no horizontal overflow.
-- Focused-region evidence: manual dialog geometry changed from a 427.5 × 246.4 panel-bound backdrop to a 1908 × 955 viewport backdrop. The company list changed from `scrollWidth 157 / clientWidth 124` to `scrollWidth 318 / clientWidth 318`, with `overflow-x: hidden` and `scrollbar-width: none`.
+- Fonts and typography: the existing Geist family, weight scale, and compact finance-table typography are preserved. The new page title and section names create a clearer hierarchy without introducing wrapping or truncation problems at desktop or mobile widths.
+- Spacing and layout rhythm: the overview now uses a four-card working-capital row, a balanced account/receivable detail grid, and a separate lower calculation/review grid. The long account list no longer forces large empty columns beside it.
+- Colors and visual tokens: the existing monochrome panel system, green positive state, amber coverage warning, borders, radii, and shadows are reused consistently.
+- Image quality and asset fidelity: this screen contains no raster or decorative imagery. Existing library icons remain sharp, consistent, and aligned.
+- Copy and content: “Available liquidity,” “Outstanding receivables,” “Supplier payables,” “Other open balances,” and “Net operating assets” now describe the underlying figures directly. The former “Profit” label and empty “Growth checks” placeholder were removed because the live calculation did not represent profit and no comparison data existed.
+- States and interactions: genuine zero balances render as `$0.00`; unavailable quotes render a converted subtotal as `Partial $…` and the coverage banner names the excluded asset. The Add Receivable dialog opens and closes correctly.
+- Accessibility: headings and regions remain semantic, the coverage notice uses status semantics, buttons retain accessible names, and no horizontal page overflow was observed at the tested desktop or mobile widths.
+- Full-view comparison evidence: the source has duplicated warnings, six partly redundant summary cards, and a detail grid that leaves large blank regions. The implementation consolidates coverage messaging, reduces the summary to four decision-relevant figures, and uses the page width continuously.
+- Focused-region evidence: a separate crop was not required because the desktop capture keeps the headline, warning, all four summary cards, and table headers legible at original resolution. The mobile capture was inspected separately for wrapping and responsive stacking.
 
 ## Comparison history
 
-1. Initial P1: the manual-receivable dialog inherited transformed panel geometry, was clipped by the panel, and exposed nested horizontal/vertical scrolling.
-   - Fix: render the dialog through `document.body`; remove its internal overflow; stack fields and actions at narrow widths.
-   - Post-fix evidence: 460 × 304 dialog centered in the 1908 × 955 viewport with equal scroll/client dimensions and visible overflow, plus a 335 × 435 mobile dialog fully inside 375 × 667.
-2. Initial P2: the company selector had horizontal overflow and visible horizontal/vertical scrollbar tracks; long names forced `scrollWidth 157` inside a 124 px client width.
-   - Fix: use an adaptive 320 px searchable popup, wrap long labels, suppress horizontal overflow, hide scrollbar chrome while preserving wheel and keyboard navigation, and subtract popup chrome from available-height sizing.
-   - Post-fix evidence: desktop list `scrollWidth 318 / clientWidth 318`; mobile popup bottom 661.95 within a 667 px viewport.
-3. Audit follow-up: transaction detail and category popovers plus holding and distribution dialogs could inherit transformed route containers.
-   - Fix: portal those floating surfaces to `document.body`; apply the same bounded overflow rules to popup lists, modal bodies, send-review lists, and mobile navigation.
-   - Post-fix evidence: holding editor backdrop is 1908 × 955, its grandparent is `BODY`, and its scroll/client dimensions match.
+1. Initial P1: a missing BTC quote replaced every affected converted total with “USD rate unavailable,” even though a valid USD subtotal existed.
+   - Fix: request a direct Coinbase USD spot price for each tracked asset and preserve successful per-asset quotes. Converted totals now remain visible as explicitly partial when any quote is absent.
+   - Post-fix evidence: the implementation capture shows BTC included in available liquidity and all USD totals rendered.
+2. Initial P1: “Profit” was calculated as cash plus receivables and other balances less payables, which is a balance-sheet position rather than profit.
+   - Fix: rename the metric and contract to `netOperatingAssets`, calculate it whenever operating assets exist, and explain the formula in the overview.
+   - Post-fix evidence: the fourth working-capital card and the lower calculation both use “Net operating assets.”
+3. Initial P2: the three-column detail grid inherited the height of the long account table, creating large blank areas and delaying useful lower sections.
+   - Fix: group account balances beside a stacked receivables/open-balances column, then place supplier payables and the lower calculation/review grid in full-width rows.
+   - Post-fix evidence: the implementation capture uses the full above-the-fold width with no empty columns.
+4. Initial P2: multiple dashes represented both true zeroes and missing information, while an empty Growth Checks panel added no decision value.
+   - Fix: render confirmed empty financial balances as `$0.00`, use descriptive empty-state copy, and remove the unavailable growth section.
+   - Post-fix evidence: other balances, supplier payables, card debt, cash and wallets all show explicit zero states.
 
 ## Interaction and runtime checks
 
-- Opened and closed the manual-receivable dialog.
-- Opened and dismissed the searchable company selector at desktop and mobile widths.
-- Opened the holding editor from Banks → Cash & wallets.
-- Verified keyboard dismissal with Escape.
-- Verified popup bounds and scroll metrics from rendered DOM geometry.
-- Browser console warnings/errors: none.
+- Opened and closed the Add Receivable dialog.
+- Verified desktop and 390 px mobile responsive states in the in-app browser.
+- Verified the rendered page has no horizontal document overflow at desktop.
+- Ran a fresh browser session after the final changes; console warnings/errors: none.
+- Automated checks: TypeScript compile, 97 passing tests with 1 intentionally skipped, and production build.
 
 ## Follow-up polish
 
-- None required for this scope.
+- No P3 follow-up is required for this scope.
 
 final result: passed

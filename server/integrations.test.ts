@@ -130,16 +130,19 @@ test("Merit paid state is exposed read-only and never marks a local invoice paid
   }
 });
 
-test("Coinbase USD adapter inverts one USD-base response for EUR, GBP, and crypto", async () => {
+test("Coinbase USD adapter loads direct spot prices for fiat and crypto", async () => {
   const previousFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
       assert.equal(url.origin, "https://api.coinbase.com");
-      assert.equal(url.pathname, "/v2/exchange-rates");
-      assert.equal(url.searchParams.get("currency"), "USD");
+      const asset = url.pathname.split("/").at(-2)?.replace("-USD", "");
+      assert.equal(url.pathname, `/v2/prices/${asset}-USD/spot`);
       assert.equal(new Headers(init?.headers).get("Accept"), "application/json");
-      return Response.json({ data: { currency: "USD", rates: { EUR: "0.8", GBP: "0.5", BTC: "0.00001" } } });
+      const prices: Record<string, string> = { EUR: "1.25", GBP: "2", BTC: "100000" };
+      return asset === "ETH"
+        ? new Response("unsupported", { status: 404, statusText: "Not Found" })
+        : Response.json({ data: { amount: prices[asset ?? ""], base: asset, currency: "USD" } });
     };
     const rates = await fetchCoinbaseUsdRates(["eur", "GBP", "BTC", "ETH", "USD"]);
     assert.deepEqual(
