@@ -9,6 +9,7 @@ import {
   canCatchUpLebanonIncomeAutomation,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
+  hasNonZeroAccountBalance,
   isLebanonIncomeAutomationTime,
   latestIncomeAutomationTimestamp,
   mergeFxRates,
@@ -500,6 +501,23 @@ test("approximate USD totals retain missing-quote disclosure", () => {
   assert.equal(totals.totalUsd, 1375);
   assert.deepEqual(totals.excludedAssets, ["ETH"]);
   assert.deepEqual(totals.staleAssets, []);
+});
+
+test("non-zero account balance visibility keeps positive and negative amounts only", () => {
+  const account = (balance: number) => ({
+    id: `account-${balance}`,
+    name: "Account",
+    source: "wise" as const,
+    balance,
+    currency: "USD",
+    updatedAt: "2026-07-20",
+    status: "live" as const
+  });
+
+  assert.equal(hasNonZeroAccountBalance(account(100)), true);
+  assert.equal(hasNonZeroAccountBalance(account(-100)), true);
+  assert.equal(hasNonZeroAccountBalance(account(0)), false);
+  assert.equal(hasNonZeroAccountBalance(account(-0)), false);
 });
 
 test("approximate USD total converts EUR, GBP, USD, and crypto into one number", () => {

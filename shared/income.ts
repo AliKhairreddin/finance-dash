@@ -499,6 +499,10 @@ export function isLiquidAccountBalance(account: AccountBalance): boolean {
   return account.source !== "amex";
 }
 
+export function hasNonZeroAccountBalance(account: AccountBalance): boolean {
+  return account.balance !== 0;
+}
+
 function isPaymentSource(source: Transaction["source"]): source is Extract<PaymentSource, Transaction["source"]> {
   return source === "wise" || source === "revolut" || source === "slash" || source === "amex";
 }

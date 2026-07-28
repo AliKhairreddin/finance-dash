@@ -113,6 +113,7 @@ import {
   profitDistributionPartners
 } from "../shared/distribution";
 import {
+  hasNonZeroAccountBalance,
   isLiquidAccountBalance,
   latestIncomeAutomationTimestamp,
   unreadIncomeAutomationCount
@@ -1321,7 +1322,9 @@ function App() {
   const hasPayables = dashboard.payables.length > 0;
   const hasNetOperatingAssets = hasCurrencyTotals(dashboard.metrics.netOperatingAssets);
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
-  const liquidAccounts = dashboard.accounts.filter(isLiquidAccountBalance);
+  const liquidAccounts = dashboard.accounts.filter((account) =>
+    isLiquidAccountBalance(account) && hasNonZeroAccountBalance(account)
+  );
   const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
   const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
   const overviewConversions = [
@@ -1879,7 +1882,7 @@ function Overview({
           </div>
           <SimpleMoneyTable
             nameLabel="Account"
-            rows={dashboard.accounts.map((item) => ({
+            rows={dashboard.accounts.filter(hasNonZeroAccountBalance).map((item) => ({
               id: item.id,
               name: item.name,
               title: item.name,
@@ -2158,7 +2161,9 @@ function BanksView({
     );
     accountsBySource.set(
       source.id,
-      dashboard.accounts.filter((account) => account.source === source.id)
+      dashboard.accounts.filter((account) =>
+        account.source === source.id && hasNonZeroAccountBalance(account)
+      )
     );
   }
 
@@ -2675,7 +2680,9 @@ function AnalyticsView({
   const sourceRows = [...sourceIds]
     .map((source) => {
       const transactions = rows.filter((transaction) => transaction.source === source);
-      const accounts = dashboard.accounts.filter((account) => account.source === source);
+      const accounts = dashboard.accounts.filter((account) =>
+        account.source === source && hasNonZeroAccountBalance(account)
+      );
       const invoices = dashboard.invoices.filter((invoice) => invoice.source === source);
       const status = dashboard.integrationStatus.find((integration) => integration.id === source);
       return { source, transactions, accounts, invoices, status };
@@ -4165,7 +4172,9 @@ function DistributionAdjustmentModal({
 }
 
 function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
-  const revolutAccounts = dashboard.accounts.filter((account) => account.source === "revolut");
+  const revolutAccounts = dashboard.accounts.filter((account) =>
+    account.source === "revolut" && hasNonZeroAccountBalance(account)
+  );
 
   return (
     <div className="split-view">
@@ -4215,7 +4224,9 @@ function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: 
 }
 
 function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
-  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
+  const slashAccounts = dashboard.accounts.filter((account) =>
+    account.source === "slash" && hasNonZeroAccountBalance(account)
+  );
   const cashbackRows = rows.filter((row) => row.category.toLowerCase().includes("cashback"));
   const cashback = sumCurrencyTotals(cashbackRows, (row) => row.amount);
   const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
@@ -4264,7 +4275,9 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
 }
 
 function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
-  const amexAccounts = dashboard.accounts.filter((account) => account.source === "amex");
+  const amexAccounts = dashboard.accounts.filter((account) =>
+    account.source === "amex" && hasNonZeroAccountBalance(account)
+  );
   const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
   const balance = sumCurrencyTotals(amexAccounts, (account) => account.balance);
   const balanceTone = Object.values(balance).some((amount) => amount < 0) ? "warning" : "";
