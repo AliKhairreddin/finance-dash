@@ -1,71 +1,59 @@
-# Design QA
+# Popup and dialog overflow design QA
 
-- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-78e8d633-e036-4a87-98aa-c340662c72f5.png`
-- Implementation screenshot: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/playwright/invoice-filter-bar-aligned.png`
-- Full implementation screenshot: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/playwright/invoice-filters-full-viewport.png`
-- Mobile implementation screenshot: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/playwright/invoice-filters-mobile.png`
-- Combined comparison: `/Users/alikheireddine/Desktop/GitHub/finance-dash/output/playwright/invoice-filter-comparison.png` (source above, implementation below)
-- Viewport: desktop `1436 × 900` CSS pixels; mobile `390 × 844`
-- Pixel dimensions: source `1435 × 84`; desktop viewport capture `1436 × 900`; focused implementation crop `1188 × 77`; combined comparison `1435 × 168`
-- Density normalization: both captures are 1×. The focused implementation crop is shown at native size and padded with white to the source width in the combined comparison; it is not scaled.
-- State: light theme, Invoices selected, local dashboard data loaded, default filters, empty invoice result set
+## Evidence
+
+- Source visual truth:
+  - `/tmp/finance-dash-qa/source-production-modal.png`
+  - `/tmp/finance-dash-qa/source-production-company-menu-open.png`
+- Browser-rendered implementation:
+  - `/tmp/finance-dash-qa/implementation-desktop-modal.png`
+  - `/tmp/finance-dash-qa/implementation-company-menu-adaptive.png`
+  - `/tmp/finance-dash-qa/implementation-company-menu-mobile-bounded.png`
+  - `/tmp/finance-dash-qa/implementation-holding-modal.png`
+- Combined comparison inputs:
+  - `/tmp/finance-dash-qa/comparison-manual-modal.png`
+  - `/tmp/finance-dash-qa/comparison-company-menu.png`
+- Desktop viewport: 1908 × 955 CSS px at device scale factor 1.
+- Mobile viewport: 375 × 667 CSS px at device scale factor 1.
+- Source pixels: manual dialog 1908 × 955; company menu 1893 × 947.
+- Implementation pixels: desktop captures 1908 × 955; mobile capture 375 × 667.
+- Density normalization: none. The company-menu source was padded to 1908 × 955 only for the side-by-side comparison; content was not scaled.
+- State: light theme, manual-receivable dialog open; invoice company selector open; holding editor open.
 
 ## Findings
 
-- No actionable P0, P1, or P2 issues remain.
-- Search, Company, Currency, Status, Delivery, Cadence, and Created date now share the same 14-pixel title row and 36-pixel control row.
-- At the desktop QA viewport, every titled filter begins at `y = 380.46`; every control begins at `y = 400.46`, ends at `y = 436.46`, and is 36 pixels tall.
-- Short menus open as styled option lists without a visible search field. The five-option Status menu was opened, `Paid` was selected, and Clear restored `All statuses`.
-- The search field has a visible `Search` title and an accessible name describing invoice details and amounts.
+- No actionable P0, P1, or P2 findings remain.
+- Fonts and typography: the existing Geist typography, weights, hierarchy, and control copy are preserved. Long option labels now wrap within the menu instead of widening its scroll area.
+- Spacing and layout rhythm: the manual-receivable and holding dialogs are centered against the viewport. The searchable company menu grows to 320 px when space permits and remains bounded by the available viewport.
+- Colors and visual tokens: existing panel, backdrop, border, focus, and semantic color tokens are unchanged.
+- Image quality and asset fidelity: no raster or decorative assets are involved in these popup surfaces; the existing icon library remains unchanged.
+- Copy and content: labels, placeholders, button names, option names, and financial content are unchanged.
+- Full-view evidence: the source manual dialog was clipped to its Receivables panel; the implementation uses the full viewport backdrop and is fully visible. The source company menu showed both horizontal and vertical scrollbar tracks; the implementation has no visible tracks and no horizontal overflow.
+- Focused-region evidence: manual dialog geometry changed from a 427.5 × 246.4 panel-bound backdrop to a 1908 × 955 viewport backdrop. The company list changed from `scrollWidth 157 / clientWidth 124` to `scrollWidth 318 / clientWidth 318`, with `overflow-x: hidden` and `scrollbar-width: none`.
 
-## Required Fidelity Surfaces
+## Comparison history
 
-- Fonts and typography: the existing Geist Variable family, weights, sizes, and control text treatment are preserved. The new Search title uses the same filter-label typography as its peers.
-- Spacing and layout rhythm: the filter row preserves its existing grid and eight-pixel column gap. Direct filter children now use an explicit `14px 36px` row structure with a six-pixel gap, removing the former legend and input-height drift.
-- Colors and visual tokens: existing control backgrounds, borders, focus rings, muted icons, hover states, and shadows are unchanged.
-- Image quality and asset fidelity: the source and implementation contain no raster assets or custom illustration requirements. Existing Lucide search, chevron, calendar, and filter icons are preserved.
-- Copy and content: `Search` is now visible above the global search field. The placeholder now advertises invoices, companies, and amounts; search indexing also covers currency, status, delivery, cadence, source, origin, and visible dates.
+1. Initial P1: the manual-receivable dialog inherited transformed panel geometry, was clipped by the panel, and exposed nested horizontal/vertical scrolling.
+   - Fix: render the dialog through `document.body`; remove its internal overflow; stack fields and actions at narrow widths.
+   - Post-fix evidence: 460 × 304 dialog centered in the 1908 × 955 viewport with equal scroll/client dimensions and visible overflow, plus a 335 × 435 mobile dialog fully inside 375 × 667.
+2. Initial P2: the company selector had horizontal overflow and visible horizontal/vertical scrollbar tracks; long names forced `scrollWidth 157` inside a 124 px client width.
+   - Fix: use an adaptive 320 px searchable popup, wrap long labels, suppress horizontal overflow, hide scrollbar chrome while preserving wheel and keyboard navigation, and subtract popup chrome from available-height sizing.
+   - Post-fix evidence: desktop list `scrollWidth 318 / clientWidth 318`; mobile popup bottom 661.95 within a 667 px viewport.
+3. Audit follow-up: transaction detail and category popovers plus holding and distribution dialogs could inherit transformed route containers.
+   - Fix: portal those floating surfaces to `document.body`; apply the same bounded overflow rules to popup lists, modal bodies, send-review lists, and mobile navigation.
+   - Post-fix evidence: holding editor backdrop is 1908 × 955, its grandparent is `BODY`, and its scroll/client dimensions match.
 
-## Interaction And Responsive Evidence
+## Interaction and runtime checks
 
-- The compact Status dropdown opened with five options and no visible search input.
-- Selecting `Paid` updated the trigger label; Clear reset it to `All statuses`.
-- Search matching now checks every whitespace-delimited term against a combined row index, including raw, fixed-decimal, grouped, localized-currency, and currency-prefixed amount formats.
-- At `390 × 844`, the document has no horizontal overflow (`scrollWidth = clientWidth = 375` after browser chrome), Search and Created date span the filter width, and the remaining filters form two columns.
-- Browser console errors and warnings checked after desktop and mobile interaction: none.
-- Full verification passed: TypeScript lint, 87 passing tests (1 skipped), and the production build.
+- Opened and closed the manual-receivable dialog.
+- Opened and dismissed the searchable company selector at desktop and mobile widths.
+- Opened the holding editor from Banks → Cash & wallets.
+- Verified keyboard dismissal with Escape.
+- Verified popup bounds and scroll metrics from rendered DOM geometry.
+- Browser console warnings/errors: none.
 
-## Comparison History
+## Follow-up polish
 
-1. Source review:
-   - [P2] `Created date` sat visibly lower than Company, Currency, Status, Delivery, and Cadence.
-   - [P2] The global search control lacked a visible title.
-   - [P2] Every dropdown showed a search affordance even when it had only a few fixed options.
-2. First implementation:
-   - Added the Search title, replaced the fieldset legend with a normal group label, and introduced non-searchable short dropdowns.
-   - [P2] Browser measurements still showed mixed title positions and control heights: Search started at `y = 384.46`, Company at `y = 380.46`, Created date at `y = 386.73`, and controls ranged from 32 to 36 pixels.
-3. Final implementation:
-   - Added explicit label and control grid rows and normalized search/date controls to 36 pixels.
-   - Post-fix measurements show identical title, control, and bottom alignment across all seven titled filters.
-   - The combined comparison confirms the requested title alignment while preserving the established compact filter styling.
-
-## Focused Region Comparison
-
-- The combined comparison stacks the supplied source crop above the rendered filter crop. A focused comparison was required because the requested change is confined to a dense, 77-pixel filter row and would be too small to judge reliably in the full dashboard screenshot.
-
-## Implementation Checklist
-
-- [x] Align Created date with every other filter title
-- [x] Add a visible Search title
-- [x] Keep short dropdowns non-searchable while preserving styling
-- [x] Keep longer option lists searchable automatically
-- [x] Search amounts in raw, decimal, grouped, currency, and localized display forms
-- [x] Search other visible invoice details and support multi-term matching
-- [x] Verify dropdown selection and reset behavior
-- [x] Verify desktop measurements, mobile overflow, and browser console
-
-## Follow-up Polish
-
-- No P3 follow-up is required for this scoped filter-bar update.
+- None required for this scope.
 
 final result: passed

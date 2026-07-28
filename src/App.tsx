@@ -45,6 +45,7 @@ import {
   useRef,
   useState
 } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
@@ -3117,7 +3118,7 @@ function ManualReceivableDialog({
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
       <form className="modal manual-receivable-modal" role="dialog" aria-modal="true" aria-labelledby="manual-receivable-title" onSubmit={handleSubmit}>
         <div className="modal-header">
@@ -3149,7 +3150,8 @@ function ManualReceivableDialog({
           </Button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3260,6 +3262,7 @@ function CategorySearchSelect({
 
     function closeOnPointerDown(event: PointerEvent) {
       if (!(event.target instanceof Node) || rootRef.current?.contains(event.target)) return;
+      if (event.target instanceof Element && event.target.closest(".category-combobox-menu")) return;
       closeMenu();
     }
 
@@ -3269,6 +3272,7 @@ function CategorySearchSelect({
 
     function closeOnOutsideScroll(event: Event) {
       if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      if (event.target instanceof Element && event.target.closest(".category-combobox-menu")) return;
       closeMenu();
     }
 
@@ -3342,7 +3346,7 @@ function CategorySearchSelect({
         <span title={value}>{value}</span>
         <Search size={14} />
       </button>
-      {isOpen && menuPosition && (
+      {isOpen && menuPosition && createPortal(
         <div
           className={`category-combobox-menu ${menuPosition.placement}`}
           style={{ left: menuPosition.left, top: menuPosition.top, width: menuPosition.width }}
@@ -3393,7 +3397,8 @@ function CategorySearchSelect({
               <div className="category-combobox-empty">No categories found</div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -3495,7 +3500,7 @@ function TransactionTable({
 
   return (
     <div className="table-wrap">
-      {detailPopover && (
+      {detailPopover && createPortal(
         <div
           id="transaction-detail-popover"
           className={`transaction-detail-popover ${detailPopover.placement}`}
@@ -3505,7 +3510,8 @@ function TransactionTable({
         >
           <strong>{detailPopover.title}</strong>
           <span>{detailPopover.description}</span>
-        </div>
+        </div>,
+        document.body
       )}
       <table className="data-table activity-table transaction-table">
         <colgroup>
@@ -4116,7 +4122,7 @@ function DistributionAdjustmentModal({
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
       <form className="modal" onSubmit={saveAdjustment}>
         <div className="modal-header">
@@ -4173,7 +4179,8 @@ function DistributionAdjustmentModal({
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }
 

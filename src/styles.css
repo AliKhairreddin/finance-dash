@@ -1380,7 +1380,13 @@ th.amount .sortable-table-heading {
   border-radius: 8px;
   box-shadow: 0 18px 46px rgba(16, 27, 43, 0.2);
   line-height: 1.35;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.transaction-detail-popover::-webkit-scrollbar {
+  display: none;
 }
 
 .transaction-detail-popover.above {
@@ -1518,9 +1524,13 @@ th.amount .sortable-table-heading {
   display: grid;
   gap: 2px;
   max-height: 214px;
+  overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--muted) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.category-combobox-options::-webkit-scrollbar {
+  display: none;
 }
 
 .category-combobox-option {
@@ -1692,6 +1702,11 @@ th.amount .sortable-table-heading {
   outline: none;
 }
 
+.searchable-select-positioner-adaptive {
+  width: min(320px, var(--available-width));
+  min-width: min(var(--anchor-width), var(--available-width));
+}
+
 .searchable-select-popup {
   width: 100%;
   overflow: hidden;
@@ -1711,13 +1726,19 @@ th.amount .sortable-table-heading {
 }
 
 .searchable-select-list {
-  max-height: min(300px, var(--available-height));
+  width: 100%;
+  min-width: 0;
+  max-height: min(300px, calc(var(--available-height) - 26px));
   padding: 5px;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   outline: 0;
-  scrollbar-color: var(--app-muted) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.searchable-select-list::-webkit-scrollbar {
+  display: none;
 }
 
 .searchable-select-option {
@@ -1725,6 +1746,8 @@ th.amount .sortable-table-heading {
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 7px;
   align-items: center;
+  width: 100%;
+  min-width: 0;
   min-height: 34px;
   padding: 6px 8px;
   color: var(--ink);
@@ -1756,6 +1779,8 @@ th.amount .sortable-table-heading {
 .searchable-select-option-label {
   grid-column: 2;
   min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .searchable-select-empty {
@@ -2885,21 +2910,33 @@ th.amount .sortable-table-heading {
   display: grid;
   place-items: center;
   padding: 20px;
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: none;
   overscroll-behavior: contain;
   background: var(--modal-backdrop);
   backdrop-filter: blur(6px);
 }
 
+.modal-backdrop::-webkit-scrollbar {
+  display: none;
+}
+
 .modal {
   width: min(560px, calc(100vw - 30px));
   max-height: calc(100dvh - 40px);
+  overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: none;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--modal-shadow);
   padding: 16px;
+}
+
+.modal::-webkit-scrollbar {
+  display: none;
 }
 
 .provider-modal {
@@ -2920,9 +2957,13 @@ th.amount .sortable-table-heading {
 .provider-modal-body {
   min-height: 0;
   padding: 0 18px 18px;
+  overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--app-muted) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.provider-modal-body::-webkit-scrollbar {
+  display: none;
 }
 
 .form-section {
@@ -3044,7 +3085,9 @@ th.amount .sortable-table-heading {
 }
 
 .manual-receivable-modal {
-  width: min(460px, calc(100vw - 30px));
+  width: min(460px, 100%);
+  max-height: none;
+  overflow: visible;
 }
 
 .manual-receivable-fields {
@@ -3056,6 +3099,22 @@ th.amount .sortable-table-heading {
 .manual-receivable-modal .modal-actions {
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+@media (max-width: 420px) {
+  .manual-receivable-fields {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .manual-receivable-modal .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .manual-receivable-modal .modal-actions button {
+    width: 100%;
+  }
 }
 
 .form-grid {
@@ -3749,9 +3808,13 @@ th.amount .sortable-table-heading {
   min-height: 0;
   gap: 16px;
   padding: 18px 20px;
+  overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--app-muted) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.invoice-editor-body::-webkit-scrollbar {
+  display: none;
 }
 
 .invoice-editor-modal .modal-actions {
@@ -3881,9 +3944,15 @@ th.amount .sortable-table-heading {
   display: grid;
   max-height: 235px;
   margin-top: 10px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.invoice-send-review-list::-webkit-scrollbar {
+  display: none;
 }
 
 .invoice-send-review-list > div {
@@ -4430,11 +4499,17 @@ th.amount .sortable-table-heading {
     max-height: min(520px, calc(100vh - 78px));
     gap: 2px;
     padding: 6px;
+    overflow-x: hidden;
     overflow-y: auto;
+    scrollbar-width: none;
     border: 1px solid var(--line);
     border-radius: 9px;
     background: var(--panel);
     box-shadow: var(--modal-shadow);
+  }
+
+  .mobile-nav-menu::-webkit-scrollbar {
+    display: none;
   }
 
   .mobile-nav-menu button {
@@ -4670,6 +4745,14 @@ th.amount .sortable-table-heading {
   .send-option-grid,
   .form-grid.three {
     grid-template-columns: 1fr;
+  }
+
+  .invoice-send-review-list > div {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-send-review-list small:last-child {
+    grid-column: auto;
   }
 
   .revenue-pull-bar,

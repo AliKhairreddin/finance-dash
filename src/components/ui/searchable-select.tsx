@@ -120,7 +120,7 @@ export function SearchableSelect({
         </Combobox.InputGroup>
 
         <Combobox.Portal>
-          <Combobox.Positioner className="searchable-select-positioner" sideOffset={5} align="start">
+          <Combobox.Positioner className="searchable-select-positioner searchable-select-positioner-adaptive" sideOffset={5} align="start">
             <Combobox.Popup className="searchable-select-popup">
               <Combobox.Empty className="searchable-select-empty">{emptyMessage}</Combobox.Empty>
               <Combobox.List className="searchable-select-list">
