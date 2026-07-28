@@ -87,6 +87,7 @@ import {
   resolveRevenuePeriod
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import { fetchSlashActivityForLegalEntity } from "../shared/slashApi";
 import {
   emptyWiseActivity,
   fetchWiseActivityForAccessibleBusinesses,
@@ -272,7 +273,6 @@ const revolutBaseUrlByEnvironment = {
 };
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const defaultMeritApiBaseUrl = "https://aktiva.merit.ee/api";
-const defaultSlashBaseUrl = "https://api.slash.com";
 const defaultCoinbaseExchangeRatesUrl = "https://api.coinbase.com/v2/exchange-rates";
 const defaultMeritDeliverInvoicePath = "/v2/sendinvoicebyemail";
 const jsonHeaders = {
@@ -583,63 +583,15 @@ async function fetchRevolutActivity(env: Env): Promise<{ accounts: AccountBalanc
 }
 
 async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
-  if (!env.SLASH_API_KEY) return { accounts: [], transactions: [] };
-
-  const headers: Record<string, string> = { "X-API-Key": env.SLASH_API_KEY };
-  if (env.SLASH_LEGAL_ENTITY_ID) {
-    headers["x-legal-entity"] = env.SLASH_LEGAL_ENTITY_ID;
-  }
-
-  const slashBaseUrl = env.SLASH_BASE_URL || defaultSlashBaseUrl;
-  const [accountsResponse, transactionsResponse] = await Promise.all([
-    fetchJson<{ items?: Array<{ id: string; name?: string; balance?: { amountCents?: number } }> }>(
-      `${slashBaseUrl}/account`,
-      { headers }
-    ),
-    fetchJson<{
-      items?: Array<{
-        id: string;
-        createdAt?: string;
-        description?: string;
-        merchant?: { name?: string };
-        amountCents?: number;
-        currency?: string;
-        status?: string;
-        category?: string;
-      }>;
-    }>(`${slashBaseUrl}/transaction?filter:from_date=${Date.now() - 1000 * 60 * 60 * 24 * 45}`, { headers })
-  ]);
-
-  const accounts: AccountBalance[] = (accountsResponse.items ?? []).map((account) => ({
-    id: `slash-${account.id}`,
-    name: account.name ?? `Slash ${account.id}`,
-    source: "slash",
-    balance: (account.balance?.amountCents ?? 0) / 100,
-    currency: "USD",
-    updatedAt: new Date().toISOString(),
-    status: "live"
-  }));
-
-  const transactions: Transaction[] = (transactionsResponse.items ?? []).map((item) => {
-    const signedAmount = (item.amountCents ?? 0) / 100;
-    const counterparty = item.merchant?.name || item.description || "Slash transaction";
-    return {
-      id: `slash-${item.id}`,
-      source: "slash",
-      accountName: "Slash",
-      date: parseStatementDate(item.createdAt),
-      description: item.description ?? counterparty,
-      rawName: counterparty,
-      counterparty,
-      amount: Math.abs(signedAmount),
-      currency: item.currency ?? "USD",
-      direction: signedAmount >= 0 ? "in" : "out",
-      status: item.status === "pending" ? "pending" : "posted",
-      category: item.category ?? "Slash"
-    };
+  const apiKey = env.SLASH_API_KEY?.trim();
+  const legalEntityId = env.SLASH_LEGAL_ENTITY_ID?.trim();
+  const baseUrl = env.SLASH_BASE_URL?.trim();
+  if (!apiKey || !legalEntityId || !baseUrl) return { accounts: [], transactions: [] };
+  return fetchSlashActivityForLegalEntity({
+    baseUrl,
+    apiKey,
+    legalEntityId
   });
-
-  return { accounts, transactions };
 }
 
 type AmexAccountConfig = {
@@ -1548,7 +1500,7 @@ function integrationStatus(
   const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
 
   const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !env[name as keyof Env]);
-  const slashNeeds = ["SLASH_API_KEY"].filter((name) => !env[name as keyof Env]);
+  const slashNeeds = ["SLASH_API_KEY", "SLASH_LEGAL_ENTITY_ID", "SLASH_BASE_URL"].filter((name) => !env[name as keyof Env]);
   const amexNeeds = [
     "AMEX_TOKEN_URL",
     "AMEX_API_BASE_URL",
@@ -1599,8 +1551,8 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Slash API key is present."
-          : "Slash rows stay empty until API access is configured."),
+          ? "Slash user-scoped API key and legal entity ID are present."
+          : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
     },
