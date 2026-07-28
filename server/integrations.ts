@@ -19,6 +19,7 @@ import {
 } from "../shared/merit";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
+import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
 import { fetchSlashActivityForLegalEntity } from "../shared/slashApi";
 import {
   fetchWiseActivityForAccessibleBusinesses,
@@ -42,11 +43,6 @@ const wiseBaseUrl =
   process.env.WISE_ENVIRONMENT === "sandbox"
     ? "https://api.wise-sandbox.com"
     : "https://api.wise.com";
-const revolutBaseUrl =
-  process.env.REVOLUT_ENVIRONMENT === "sandbox"
-    ? "https://sandbox-b2b.revolut.com/api/1.0"
-    : "https://b2b.revolut.com/api/1.0";
-const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
 function meritWritesEnabled(): boolean {
   return process.env.MERIT_WRITES_ENABLED === "true";
@@ -104,7 +100,12 @@ export function getIntegrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !process.env[name]);
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
 
-  const revolutNeeds = ["REVOLUT_REFRESH_TOKEN", "REVOLUT_CLIENT_ASSERTION_JWT"].filter((name) => !process.env[name]);
+  const revolutNeeds = [
+    "REVOLUT_CLIENT_ID",
+    "REVOLUT_ISSUER",
+    "REVOLUT_PRIVATE_KEY_PEM",
+    "REVOLUT_REFRESH_TOKEN"
+  ].filter((name) => !process.env[name]);
   const slashNeeds = ["SLASH_API_KEY", "SLASH_LEGAL_ENTITY_ID", "SLASH_BASE_URL"].filter((name) => !process.env[name]);
   const amexNeeds = [
     "AMEX_TOKEN_URL",
@@ -144,7 +145,7 @@ export function getIntegrationStatus(
       message:
         bankIssues.revolut ?? (revolutNeeds.length === 0
           ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
-          : "Revolut rows stay empty until the refresh token and client assertion JWT are configured."),
+          : "Revolut rows stay empty until the client ID, issuer, certificate private key, and refresh token are configured."),
       needs: revolutNeeds,
       issue: bankIssues.revolut
     },
@@ -226,142 +227,14 @@ export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   return fetchWiseActivityForAccessibleBusinesses({ baseUrl: wiseBaseUrl, token, profileIds });
 }
 
-async function fetchRevolutAccessToken(): Promise<string | undefined> {
-  const refreshToken = process.env.REVOLUT_REFRESH_TOKEN;
-  const clientAssertion = process.env.REVOLUT_CLIENT_ASSERTION_JWT;
-  if (!refreshToken || !clientAssertion) return undefined;
-
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    client_assertion_type: revolutClientAssertionType,
-    client_assertion: clientAssertion
-  });
-
-  const response = await fetchJson<{ access_token?: string }>(`${revolutBaseUrl}/auth/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body
-  });
-
-  if (!response.access_token) {
-    throw new Error("Revolut token response did not include access_token");
-  }
-  return response.access_token;
-}
-
-function revolutStatus(state: string | undefined): Transaction["status"] {
-  return state === "created" || state === "pending" ? "pending" : "posted";
-}
-
-function revolutCounterparty(
-  activity: {
-    type?: string;
-    request_id?: string;
-    reference?: string;
-    merchant?: { name?: string };
-    card?: { first_name?: string; last_name?: string };
-  },
-  leg: { counterparty?: { description?: string } }
-): string {
-  const cardholder = [activity.card?.first_name, activity.card?.last_name].filter(Boolean).join(" ").trim();
-  return (
-    activity.merchant?.name ||
-    leg.counterparty?.description ||
-    activity.reference ||
-    cardholder ||
-    activity.request_id ||
-    activity.type ||
-    "Revolut transaction"
-  );
-}
-
 export async function fetchRevolutActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
-  const accessToken = await fetchRevolutAccessToken();
-  if (!accessToken) return { accounts: [], transactions: [] };
-
-  const headers = {
-    Authorization: `Bearer ${accessToken}`,
-    Accept: "application/json"
-  };
-  const intervalEnd = new Date().toISOString();
-  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString();
-  const params = new URLSearchParams({
-    from: intervalStart,
-    to: intervalEnd,
-    count: "1000"
+  return fetchRevolutApiActivity({
+    environment: process.env.REVOLUT_ENVIRONMENT,
+    clientId: process.env.REVOLUT_CLIENT_ID,
+    issuer: process.env.REVOLUT_ISSUER,
+    privateKeyPem: process.env.REVOLUT_PRIVATE_KEY_PEM,
+    refreshToken: process.env.REVOLUT_REFRESH_TOKEN
   });
-
-  const [revolutAccounts, revolutTransactions] = await Promise.all([
-    fetchJson<
-      Array<{
-        id: string;
-        name?: string;
-        balance: number;
-        currency: string;
-        state: string;
-        updated_at: string;
-        created_at: string;
-      }>
-    >(`${revolutBaseUrl}/accounts`, { headers }),
-    fetchJson<
-      Array<{
-        id: string;
-        type: string;
-        request_id?: string;
-        state: string;
-        created_at: string;
-        completed_at?: string;
-        reference?: string;
-        merchant?: { name?: string; category_code?: string };
-        card?: { first_name?: string; last_name?: string; card_number?: string };
-        legs: Array<{
-          leg_id?: string;
-          amount: number;
-          currency: string;
-          account_id: string;
-          counterparty?: { description?: string; account_type?: string };
-        }>;
-      }>
-    >(`${revolutBaseUrl}/transactions?${params.toString()}`, { headers })
-  ]);
-
-  const accountById = new Map(revolutAccounts.map((account) => [account.id, account]));
-  const accounts: AccountBalance[] = revolutAccounts.map((account) => ({
-    id: `revolut-${account.id}`,
-    name: account.name || `Revolut ${account.currency}`,
-    source: "revolut",
-    balance: account.balance,
-    currency: account.currency,
-    updatedAt: account.updated_at || account.created_at,
-    status: "live"
-  }));
-
-  const transactions: Transaction[] = [];
-  for (const activity of revolutTransactions) {
-    for (const [index, leg] of activity.legs.entries()) {
-      const account = accountById.get(leg.account_id);
-      const counterparty = revolutCounterparty(activity, leg);
-      transactions.push({
-        id: `revolut-${activity.id}-${leg.leg_id ?? index}`,
-        source: "revolut",
-        accountName: account?.name || `Revolut ${leg.currency}`,
-        date: (activity.completed_at || activity.created_at || new Date().toISOString()).slice(0, 10),
-        description: activity.reference || activity.type || counterparty,
-        rawName: counterparty,
-        counterparty,
-        amount: Math.abs(leg.amount),
-        currency: leg.currency,
-        direction: leg.amount >= 0 ? "in" : "out",
-        status: revolutStatus(activity.state),
-        category: activity.merchant?.category_code || activity.type || "Revolut"
-      });
-    }
-  }
-
-  return { accounts, transactions };
 }
 
 export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {

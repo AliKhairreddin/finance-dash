@@ -132,7 +132,7 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 
 - Convex URL/deployment and `CONVEX_SERVICE_TOKEN`;
 - Wise API token and selected business profile IDs (their visible balances are discovered automatically);
-- Revolut Business credentials;
+- Revolut Business client ID, refresh token, and certificate private key (see [`docs/revolut-setup.md`](docs/revolut-setup.md));
 - Slash API credentials;
 - Amex OAuth, account IDs, and approved API paths;
 - Merit invoice creation and email-delivery settings;
@@ -174,7 +174,7 @@ Wise balances are discovered automatically across the configured business profil
 | Integration | Current role |
 | --- | --- |
 | Wise | Selected multi-business balance discovery; live statements when permitted, with CSV statement import for restricted profiles |
-| Revolut | Business API adapter prepared; requires account credentials |
+| Revolut | Read-only Business API adapter with runtime RS256 client assertions; requires certificate authorization |
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
 | TUNE-compatible networks | Partner-level and team-attributed revenue pulls |

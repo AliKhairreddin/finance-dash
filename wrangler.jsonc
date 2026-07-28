@@ -21,6 +21,7 @@
     "WISE_ENVIRONMENT": "production",
     "WISE_PROFILE_IDS": "31035977,65909506",
     "REVOLUT_ENVIRONMENT": "production",
+    "REVOLUT_ISSUER": "finance.thatcanadian.dev",
     "SLASH_BASE_URL": "https://api.slash.com",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",

@@ -6,3 +6,6 @@ dist/
 *.log
 *.tsbuildinfo
 .DS_Store
+privatecert.pem
+publiccert.cer
+revolut-refresh-token.txt

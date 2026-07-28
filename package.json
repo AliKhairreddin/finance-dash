@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "tsx watch server/index.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
+    "revolut:setup": "tsx scripts/setup-revolut.ts",
     "build": "tsc -b && vite build",
     "convex:dev": "convex dev --once --env-file .env.local",
     "test": "tsx --test server/*.test.ts shared/*.test.ts worker/*.test.ts",
