@@ -987,18 +987,21 @@ textarea:focus-visible {
 }
 
 .source-pill.wise {
-  color: var(--green);
-  background: var(--green-soft);
+  color: var(--source-wise-foreground);
+  background: var(--source-wise-background);
+  border-color: var(--source-wise-border);
 }
 
 .source-pill.revolut {
-  color: var(--teal);
-  background: var(--teal-soft);
+  color: var(--source-revolut-foreground);
+  background: var(--source-revolut-background);
+  border-color: var(--source-revolut-border);
 }
 
 .source-pill.slash {
-  color: var(--violet);
-  background: var(--violet-soft);
+  color: var(--source-slash-foreground);
+  background: var(--source-slash-background);
+  border-color: var(--source-slash-border);
 }
 
 .source-pill.amex {
@@ -5979,6 +5982,15 @@ th.amount .sortable-table-heading {
   --teal-soft: #f4f4f5;
   --violet: #3f3f46;
   --violet-soft: #f4f4f5;
+  --source-wise-foreground: #163300;
+  --source-wise-background: rgba(22, 51, 0, 0.08);
+  --source-wise-border: rgba(22, 51, 0, 0.16);
+  --source-revolut-foreground: #1326fd;
+  --source-revolut-background: rgba(19, 38, 253, 0.07);
+  --source-revolut-border: #c6d9fd;
+  --source-slash-foreground: #2e2a26;
+  --source-slash-background: rgba(204, 180, 147, 0.2);
+  --source-slash-border: #ccb493;
   --shadow: 0 18px 48px rgba(9, 9, 11, 0.06);
   --shadow-soft: 0 8px 24px rgba(9, 9, 11, 0.05);
   --sidebar-bg: rgba(255, 255, 255, 0.96);
@@ -6048,6 +6060,15 @@ th.amount .sortable-table-heading {
   --teal-soft: #18181b;
   --violet: #a1a1aa;
   --violet-soft: #18181b;
+  --source-wise-foreground: #9fe870;
+  --source-wise-background: rgba(159, 232, 112, 0.14);
+  --source-wise-border: rgba(159, 232, 112, 0.34);
+  --source-revolut-foreground: #6fa0ff;
+  --source-revolut-background: rgba(19, 38, 253, 0.2);
+  --source-revolut-border: rgba(111, 160, 255, 0.42);
+  --source-slash-foreground: #ccb493;
+  --source-slash-background: rgba(204, 180, 147, 0.16);
+  --source-slash-border: rgba(204, 180, 147, 0.42);
   --shadow: 0 22px 58px rgba(0, 0, 0, 0.56);
   --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.42);
   --sidebar-bg: rgba(5, 5, 5, 0.94);
