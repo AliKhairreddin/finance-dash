@@ -121,7 +121,8 @@ import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } 
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-type ActiveTab = "overview" | "management" | "banks" | "analytics" | "distribution" | "revenue" | "invoices" | "providers" | "settings";
+const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "revenue", "invoices", "providers", "settings"] as const;
+type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
@@ -156,7 +157,13 @@ type DirectoryDeleteTarget =
   | { kind: "provider"; provider: Provider }
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
+const activeTabStorageKey = "finance-dash-active-tab";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
+
+function storedActiveTab(): ActiveTab {
+  const storedTab = window.sessionStorage.getItem(activeTabStorageKey);
+  return activeTabs.find((tab) => tab === storedTab) ?? "overview";
+}
 
 async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -645,7 +652,7 @@ function App() {
     return window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light";
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const [activeTab, setActiveTab] = useState<ActiveTab>(storedActiveTab);
   const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
   });
@@ -673,6 +680,10 @@ function App() {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(activeTabStorageKey, activeTab);
+  }, [activeTab]);
 
   function toggleThemeMode() {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));
