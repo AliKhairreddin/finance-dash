@@ -24,7 +24,6 @@ import { fetchSlashActivityForLegalEntity } from "../shared/slashApi";
 import {
   fetchWiseActivityForAccessibleBusinesses,
   parseWiseProfileIds,
-  summarizeWiseStatementIssues,
   type WiseActivityResult
 } from "../shared/wiseApi";
 
@@ -89,7 +88,7 @@ function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
 }
 
 export function getIntegrationStatus(
-  wiseIssue?: string,
+  wiseBalanceIssue?: string,
   revenuePartners: RevenuePartner[] = [],
   meritIssue?: string,
   bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {},
@@ -98,7 +97,7 @@ export function getIntegrationStatus(
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !process.env[name]);
-  const activeWiseIssue = wiseNeeds.length === 0 ? wiseIssue : undefined;
+  const activeWiseIssue = wiseNeeds.length === 0 ? wiseBalanceIssue : undefined;
 
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
@@ -132,7 +131,7 @@ export function getIntegrationStatus(
       message:
         activeWiseIssue ??
         (wiseNeeds.length === 0
-          ? "Ready to discover balances and available statements for the selected Wise business profiles."
+          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: activeWiseIssue

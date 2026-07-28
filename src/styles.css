@@ -4081,15 +4081,25 @@ th.amount .sortable-table-heading {
 }
 
 .bank-source-badge.source-wise {
-  color: var(--green);
-  border-color: var(--green-border);
-  background: var(--green-soft);
+  color: var(--source-wise-foreground);
+  border-color: var(--source-wise-border);
+  background: var(--source-wise-background);
 }
 
-.bank-source-badge.source-revolut,
-.bank-source-badge.source-slash,
+.bank-source-badge.source-revolut {
+  color: var(--source-revolut-foreground);
+  border-color: var(--source-revolut-border);
+  background: var(--source-revolut-background);
+}
+
+.bank-source-badge.source-slash {
+  color: var(--source-slash-foreground);
+  border-color: var(--source-slash-border);
+  background: var(--source-slash-background);
+}
+
 .bank-source-badge.source-amex {
-  color: var(--info-text);
+  color: var(--blue);
   border-color: var(--info-border);
   background: var(--info-bg);
 }
@@ -5983,8 +5993,8 @@ th.amount .sortable-table-heading {
   --violet: #3f3f46;
   --violet-soft: #f4f4f5;
   --source-wise-foreground: #163300;
-  --source-wise-background: rgba(22, 51, 0, 0.08);
-  --source-wise-border: rgba(22, 51, 0, 0.16);
+  --source-wise-background: rgba(159, 232, 112, 0.22);
+  --source-wise-border: rgba(22, 51, 0, 0.2);
   --source-revolut-foreground: #1326fd;
   --source-revolut-background: rgba(19, 38, 253, 0.07);
   --source-revolut-border: #c6d9fd;
@@ -6061,8 +6071,8 @@ th.amount .sortable-table-heading {
   --violet: #a1a1aa;
   --violet-soft: #18181b;
   --source-wise-foreground: #9fe870;
-  --source-wise-background: rgba(159, 232, 112, 0.14);
-  --source-wise-border: rgba(159, 232, 112, 0.34);
+  --source-wise-background: rgba(159, 232, 112, 0.18);
+  --source-wise-border: rgba(159, 232, 112, 0.4);
   --source-revolut-foreground: #6fa0ff;
   --source-revolut-background: rgba(19, 38, 253, 0.2);
   --source-revolut-border: rgba(111, 160, 255, 0.42);

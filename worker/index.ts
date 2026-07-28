@@ -95,7 +95,6 @@ import {
   emptyWiseActivity,
   fetchWiseActivityForAccessibleBusinesses,
   parseWiseProfileIds,
-  summarizeWiseStatementIssues,
   wiseSyncIssue,
   type WiseActivityResult
 } from "../shared/wiseApi";
@@ -673,7 +672,7 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
   }
 
   const [wise, revolut, slash, amex] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseSyncIssue(error)])),
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
@@ -1370,7 +1369,7 @@ function integrationStatus(
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !env[name as keyof Env]);
-  const wiseIssue = wiseNeeds.length === 0 ? summarizeWiseStatementIssues(wiseActivity?.statementIssues ?? []) : undefined;
+  const wiseBalanceIssue = wiseNeeds.length === 0 ? wiseActivity?.balanceIssue : undefined;
 
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
@@ -1401,14 +1400,14 @@ function integrationStatus(
       id: "wise" as DataSource,
       label: "Wise",
       configured: wiseNeeds.length === 0,
-      mode: wiseNeeds.length === 0 && !wiseIssue ? "live" : "partial",
+      mode: wiseNeeds.length === 0 && !wiseBalanceIssue ? "live" : "partial",
       message:
-        wiseIssue ??
+        wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Ready to discover balances and available statements for the selected Wise business profiles."
+          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
-      issue: wiseIssue
+      issue: wiseBalanceIssue
     },
     {
       id: "revolut" as DataSource,
@@ -1588,7 +1587,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     return `${label} balance sync failed: ${message.slice(0, 240)}`;
   };
   const [wise, revolut, slash, amex, meritResults] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity([wiseSyncIssue(error)])),
+    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
     fetchRevolutActivity(env).catch((error: unknown) => {
       bankIssues.revolut = bankIssue("Revolut", error);
       return { accounts: [], transactions: [] };

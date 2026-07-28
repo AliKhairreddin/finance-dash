@@ -5,7 +5,8 @@ import {
   createMeritInvoice,
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
-  fetchMeritInvoices
+  fetchMeritInvoices,
+  getIntegrationStatus
 } from "./integrations";
 
 const invoice: Invoice = {
@@ -28,6 +29,51 @@ const invoice: Invoice = {
   createdAt: "2026-07-20T00:00:00.000Z",
   updatedAt: "2026-07-20T00:00:00.000Z"
 };
+
+test("configured Wise reports live balances while documenting manual activity imports", () => {
+  const previousToken = process.env.WISE_API_TOKEN;
+  const previousProfileIds = process.env.WISE_PROFILE_IDS;
+  try {
+    process.env.WISE_API_TOKEN = "wise-token";
+    process.env.WISE_PROFILE_IDS = "11,22";
+
+    const wise = getIntegrationStatus().find((integration) => integration.id === "wise");
+
+    assert.equal(wise?.configured, true);
+    assert.equal(wise?.mode, "live");
+    assert.equal(wise?.issue, undefined);
+    assert.equal(
+      wise?.message,
+      "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
+    );
+  } finally {
+    if (previousToken === undefined) delete process.env.WISE_API_TOKEN;
+    else process.env.WISE_API_TOKEN = previousToken;
+    if (previousProfileIds === undefined) delete process.env.WISE_PROFILE_IDS;
+    else process.env.WISE_PROFILE_IDS = previousProfileIds;
+  }
+});
+
+test("Wise remains partial when the balance sync itself fails", () => {
+  const previousToken = process.env.WISE_API_TOKEN;
+  const previousProfileIds = process.env.WISE_PROFILE_IDS;
+  try {
+    process.env.WISE_API_TOKEN = "wise-token";
+    process.env.WISE_PROFILE_IDS = "11,22";
+    const balanceIssue = "Wise balance sync failed: upstream unavailable";
+
+    const wise = getIntegrationStatus(balanceIssue).find((integration) => integration.id === "wise");
+
+    assert.equal(wise?.mode, "partial");
+    assert.equal(wise?.issue, balanceIssue);
+    assert.equal(wise?.message, balanceIssue);
+  } finally {
+    if (previousToken === undefined) delete process.env.WISE_API_TOKEN;
+    else process.env.WISE_API_TOKEN = previousToken;
+    if (previousProfileIds === undefined) delete process.env.WISE_PROFILE_IDS;
+    else process.env.WISE_PROFILE_IDS = previousProfileIds;
+  }
+});
 
 test("Merit creation and delivery use distinct endpoints and payloads", async () => {
   const previousFetch = globalThis.fetch;

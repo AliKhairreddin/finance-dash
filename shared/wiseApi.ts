@@ -4,6 +4,7 @@ export interface WiseActivityResult {
   accounts: AccountBalance[];
   transactions: Transaction[];
   statementIssues: string[];
+  balanceIssue?: string;
 }
 
 interface WiseBusinessProfile {
@@ -71,8 +72,8 @@ function accountName(profileName: string, currency: string): string {
   return `${profileName} · Wise ${currency}`;
 }
 
-export function emptyWiseActivity(statementIssues: string[] = []): WiseActivityResult {
-  return { accounts: [], transactions: [], statementIssues };
+export function emptyWiseActivity(balanceIssue?: string): WiseActivityResult {
+  return { accounts: [], transactions: [], statementIssues: [], balanceIssue };
 }
 
 export function parseWiseProfileIds(value: string | undefined): Set<number> {

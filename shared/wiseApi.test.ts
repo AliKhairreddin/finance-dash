@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchWiseActivityForAccessibleBusinesses } from "./wiseApi";
+import { emptyWiseActivity, fetchWiseActivityForAccessibleBusinesses } from "./wiseApi";
+
+test("empty Wise activity records a balance failure separately from statement limitations", () => {
+  assert.deepEqual(emptyWiseActivity("Wise balance sync failed"), {
+    accounts: [],
+    transactions: [],
+    statementIssues: [],
+    balanceIssue: "Wise balance sync failed"
+  });
+});
 
 test("discovers and labels balances across selected accessible Wise business profiles", async () => {
   const requestedUrls: string[] = [];
@@ -68,6 +77,7 @@ test("discovers and labels balances across selected accessible Wise business pro
   assert.equal(result.transactions[0].accountName, "Digital Nudge · Wise USD");
   assert.equal(result.statementIssues.length, 1);
   assert.match(result.statementIssues[0], /denied live statement API access/);
+  assert.equal(result.balanceIssue, undefined);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/33/balances")), false);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/44/balances")), false);
 });

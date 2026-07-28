@@ -117,7 +117,6 @@ import {
   fetchCoinbaseUsdRates,
   getIntegrationStatus,
   meritConnectionIssue,
-  summarizeWiseStatementIssues,
   wiseSyncIssue as describeWiseSyncIssue
 } from "./integrations";
 import {
@@ -161,7 +160,7 @@ let wiseStatementImports: WiseStatementImport[] = [];
 let profitDistributionAdjustments: ProfitDistributionAdjustment[] = [];
 let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
-let wiseSyncIssue: string | undefined;
+let wiseBalanceSyncIssue: string | undefined;
 let meritSyncIssue: string | undefined;
 let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
 
@@ -559,7 +558,7 @@ export function getSnapshot(): DashboardSnapshot {
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
     integrationStatus: getIntegrationStatus(
-      wiseSyncIssue,
+      wiseBalanceSyncIssue,
       revenuePartners,
       meritSyncIssue,
       bankSyncIssues,
@@ -1824,13 +1823,13 @@ export async function syncExternalActivity(): Promise<DashboardSnapshot> {
   };
 
   if (wise.status === "fulfilled") {
-    wiseSyncIssue = summarizeWiseStatementIssues(wise.value.statementIssues);
+    wiseBalanceSyncIssue = undefined;
     if (wise.value.accounts.length > 0) {
       accounts = [...accounts.filter((account) => account.source !== "wise"), ...wise.value.accounts];
     }
     liveTransactions.push(...wise.value.transactions);
   } else {
-    wiseSyncIssue = describeWiseSyncIssue(wise.reason);
+    wiseBalanceSyncIssue = describeWiseSyncIssue(wise.reason);
   }
   if (revolut.status === "fulfilled") {
     if (revolut.value.accounts.length > 0) {
