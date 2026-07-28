@@ -64,8 +64,9 @@ import {
   isTransactionCategoryForDirection,
   transactionBusinessCategory
 } from "../shared/categories";
+import { dashboardInvoiceDeletionBlockReason } from "../shared/invoiceDeletion";
 import { deleteProviderReferences } from "../shared/providerDeletion";
-import { copyInvoiceToDraft } from "../shared/invoiceCopies";
+import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
@@ -2424,29 +2425,25 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   return invoice;
 }
 
-async function duplicateInvoice(env: Env, invoiceId: string): Promise<Invoice> {
+async function previewInvoiceDuplicate(env: Env, invoiceId: string): Promise<CreateInvoicePayload> {
   const state = await loadPersisted(env);
   const source = state.invoices.find((invoice) => invoice.id === invoiceId);
   if (!source) throw new ApiError(404, "Invoice not found");
   const copySource = source.origin === "merit"
     ? { ...source, ...(await fetchMeritInvoiceCopyDetails(env, source)) }
     : source;
-  const createdAt = new Date().toISOString();
-  const invoiceNumber = copySource.documentType === "sales_invoice"
-    ? nextMeritInvoiceNumber(
-        [...state.invoices, ...(await fetchMeritInvoices(env, state.invoices))],
-        copySource.issueDate
-      )
-    : `BILL-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  const duplicate = copyInvoiceToDraft(
-    copySource,
-    invoiceNumber,
-    `local-${copySource.documentType}-${crypto.randomUUID()}`,
-    createdAt
-  );
-  state.invoices = [duplicate, ...state.invoices];
+  return invoiceCopyPayload(copySource);
+}
+
+async function deleteInvoiceDraft(env: Env, invoiceId: string): Promise<Invoice> {
+  const state = await loadPersisted(env);
+  const invoice = state.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) throw new ApiError(404, "Invoice not found");
+  const blockReason = dashboardInvoiceDeletionBlockReason(invoice, state.paymentAllocations);
+  if (blockReason) throw new ApiError(409, blockReason);
+  state.invoices = state.invoices.filter((item) => item.id !== invoiceId);
   await savePersisted(env, state);
-  return duplicate;
+  return invoice;
 }
 
 async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
@@ -3422,9 +3419,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
     }
 
-    const invoiceDuplicateMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/duplicate$/);
-    if (invoiceDuplicateMatch && request.method === "POST") {
-      return json(await duplicateInvoice(env, decodeURIComponent(invoiceDuplicateMatch[1])), { status: 201 });
+    const invoiceDuplicatePreviewMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/duplicate-preview$/);
+    if (invoiceDuplicatePreviewMatch && request.method === "GET") {
+      return json(await previewInvoiceDuplicate(env, decodeURIComponent(invoiceDuplicatePreviewMatch[1])));
     }
 
     if (url.pathname === "/api/receivables" && request.method === "POST") {
@@ -3449,6 +3446,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     const invoiceMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)$/);
     if (invoiceMatch && request.method === "PUT") {
       return json(await updateInvoice(env, decodeURIComponent(invoiceMatch[1]), (await request.json()) as UpdateInvoicePayload));
+    }
+    if (invoiceMatch && request.method === "DELETE") {
+      return json(await deleteInvoiceDraft(env, decodeURIComponent(invoiceMatch[1])));
     }
 
     if (url.pathname === "/api/holdings" && request.method === "POST") {

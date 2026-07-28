@@ -1156,20 +1156,24 @@ function App() {
     return invoice;
   }
 
-  async function duplicateInvoiceDraft(invoiceId: string): Promise<Invoice> {
-    const source = dashboard?.invoices.find((invoice) => invoice.id === invoiceId);
-    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}/duplicate`, {
-      method: "POST"
-    });
+  async function prepareInvoiceDuplicate(invoiceId: string): Promise<CreateInvoicePayload> {
+    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}/duplicate-preview`);
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Invoice could not be duplicated"));
     }
-    const invoice = (await response.json()) as Invoice;
+    return (await response.json()) as CreateInvoicePayload;
+  }
+
+  async function deleteInvoiceDraft(invoiceId: string): Promise<void> {
+    const invoice = dashboard?.invoices.find((item) => item.id === invoiceId);
+    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
+      method: "DELETE"
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Invoice draft could not be deleted"));
+    }
     await loadDashboard();
-    setNotice(
-      `${source?.invoiceNumber ?? "Invoice"} duplicated as ${invoice.invoiceNumber}. Review the new dashboard draft before sending it to Merit.`
-    );
-    return invoice;
+    setNotice(`${invoice?.invoiceNumber ?? "Invoice draft"} deleted from the dashboard. Merit was not changed.`);
   }
 
   async function sendInvoices(invoiceIds: string[], mode: MeritSendMode) {
@@ -1533,7 +1537,8 @@ function App() {
           dashboard={dashboard}
           providersById={providersById}
           onCreateDraft={submitInvoice}
-          onDuplicateInvoice={duplicateInvoiceDraft}
+          onPrepareDuplicate={prepareInvoiceDuplicate}
+          onDeleteDraft={deleteInvoiceDraft}
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
           onRecordPayment={recordInvoicePayment}

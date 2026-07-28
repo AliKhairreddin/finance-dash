@@ -34,15 +34,16 @@ import {
   createProvider,
   createRevenuePartner,
   createTeam,
+  deleteInvoiceDraft,
   deleteProvider,
   deleteRevenuePartner,
   deleteHolding,
-  duplicateInvoice,
   draftRevenueRun,
   getSnapshot,
   initializeStore,
   importWiseStatement,
   matchTransaction,
+  previewInvoiceDuplicate,
   recordInvoicePayment,
   refreshFxRates,
   runIncomeAutomation,
@@ -319,9 +320,9 @@ app.post("/api/invoices", async (request, response, next) => {
   }
 });
 
-app.post("/api/invoices/:invoiceId/duplicate", async (request, response, next) => {
+app.get("/api/invoices/:invoiceId/duplicate-preview", async (request, response, next) => {
   try {
-    response.status(201).json(await duplicateInvoice(request.params.invoiceId));
+    response.json(await previewInvoiceDuplicate(request.params.invoiceId));
   } catch (error) {
     next(error);
   }
@@ -338,6 +339,14 @@ app.post("/api/receivables", async (request, response, next) => {
 app.put("/api/invoices/:invoiceId", async (request, response, next) => {
   try {
     response.json(await updateInvoice(request.params.invoiceId, request.body as UpdateInvoicePayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/invoices/:invoiceId", async (request, response, next) => {
+  try {
+    response.json(await deleteInvoiceDraft(request.params.invoiceId));
   } catch (error) {
     next(error);
   }

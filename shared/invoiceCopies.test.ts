@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { copyInvoiceToDraft } from "./invoiceCopies";
+import { invoiceCopyPayload } from "./invoiceCopies";
 import type { Invoice } from "./types";
 
-test("copying an invoice creates a clean local draft and keeps editable invoice details", () => {
+test("copying an invoice creates an unsaved payload with only editable invoice details", () => {
   const source: Invoice = {
     id: "merit-existing",
     providerId: "provider-1",
@@ -37,28 +37,19 @@ test("copying an invoice creates a clean local draft and keeps editable invoice 
   };
 
   assert.deepEqual(
-    copyInvoiceToDraft(source, "2026/1305", "local-sales_invoice-copy", "2026-07-28T12:00:00.000Z"),
+    invoiceCopyPayload(source),
     {
-      id: "local-sales_invoice-copy",
       providerId: "provider-1",
       documentType: "sales_invoice",
-      origin: "manual",
       customerName: "Example Client",
       amount: 1250,
       currency: "USD",
-      status: "draft",
-      meritDeliveryStatus: "not-sent",
-      invoiceNumber: "2026/1305",
       issueDate: "2026-07-01",
       dueDate: "2026-07-31",
-      source: "manual",
       description: "Consulting services",
-      revenueRunIds: [],
       periodStart: "2026-06-01",
       periodEnd: "2026-06-30",
-      taxId: "tax-zero",
-      createdAt: "2026-07-28T12:00:00.000Z",
-      updatedAt: "2026-07-28T12:00:00.000Z"
+      taxId: "tax-zero"
     }
   );
 });

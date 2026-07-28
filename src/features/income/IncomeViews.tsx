@@ -15,6 +15,7 @@ import {
   Search,
   Send,
   Sparkles,
+  Trash2,
   X
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
@@ -47,6 +48,7 @@ import type {
 } from "../../../shared/types";
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../shared/income";
+import { dashboardInvoiceDeletionBlockReason } from "../../../shared/invoiceDeletion";
 
 type InvoiceTab = "all" | "open" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open" | "paid" | "accruing";
@@ -59,6 +61,10 @@ type InvoiceSendRequest = {
   invoices?: Invoice[];
   afterDraftSave?: boolean;
 };
+type InvoiceEditorRequest =
+  | { mode: "new" }
+  | { mode: "edit"; invoice: Invoice }
+  | { mode: "duplicate"; sourceInvoiceNumber: string; payload: CreateInvoicePayload };
 
 const paymentSourceOptions: Array<{ value: PaymentSource; label: string }> = [
   { value: "wise", label: "Wise" },
@@ -588,7 +594,8 @@ export function InvoicesView({
   dashboard,
   providersById,
   onCreateDraft,
-  onDuplicateInvoice,
+  onPrepareDuplicate,
+  onDeleteDraft,
   onUpdateDraft,
   onSendInvoices,
   onRecordPayment
@@ -596,7 +603,8 @@ export function InvoicesView({
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   onCreateDraft: (payload: CreateInvoicePayload) => Promise<Invoice>;
-  onDuplicateInvoice: (invoiceId: string) => Promise<Invoice>;
+  onPrepareDuplicate: (invoiceId: string) => Promise<CreateInvoicePayload>;
+  onDeleteDraft: (invoiceId: string) => Promise<void>;
   onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
@@ -613,9 +621,10 @@ export function InvoicesView({
   const [sortKey, setSortKey] = useState<InvoiceSortKey>("period");
   const [sortDirection, setSortDirection] = useState<TableSortDirection>("asc");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [editorInvoice, setEditorInvoice] = useState<Invoice | "new" | null>(null);
+  const [editorRequest, setEditorRequest] = useState<InvoiceEditorRequest | null>(null);
   const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
@@ -797,7 +806,7 @@ export function InvoicesView({
           <div><p className="eyebrow">Invoices</p><h2>Prepare, send, match, and record payment</h2></div>
           <div className="income-panel-actions">
             <Button className="icon-text-button" type="button" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /> Export CSV</Button>
-            <Button className="primary-button" type="button" onClick={() => setEditorInvoice("new")}><FilePlus2 size={16} /> Create manual invoice</Button>
+            <Button className="primary-button" type="button" onClick={() => setEditorRequest({ mode: "new" })}><FilePlus2 size={16} /> Create manual invoice</Button>
           </div>
         </div>
 
@@ -922,17 +931,21 @@ export function InvoicesView({
                     </td>
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
-                      {invoice.status === "draft" && <Button className="icon-text-button" type="button" onClick={() => setEditorInvoice(invoice)}><Edit3 size={14} /> Edit</Button>}
+                      {invoice.status === "draft" && <Button className="icon-text-button" type="button" onClick={() => setEditorRequest({ mode: "edit", invoice })}><Edit3 size={14} /> Edit</Button>}
                       <Button
                         className="icon-text-button"
                         type="button"
                         disabled={duplicatingId !== null}
-                        title="Create a new dashboard draft with a new invoice number and the same invoice details"
+                        title="Review an unsaved copy of this invoice"
                         onClick={async () => {
                           setDuplicatingId(invoice.id);
                           setDuplicateError(null);
                           try {
-                            setEditorInvoice(await onDuplicateInvoice(invoice.id));
+                            setEditorRequest({
+                              mode: "duplicate",
+                              sourceInvoiceNumber: invoice.invoiceNumber,
+                              payload: await onPrepareDuplicate(invoice.id)
+                            });
                           } catch (error) {
                             setDuplicateError(error instanceof Error ? error.message : "Invoice could not be duplicated");
                           } finally {
@@ -943,6 +956,16 @@ export function InvoicesView({
                         {duplicatingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Copy size={14} />}
                         Duplicate
                       </Button>
+                      {!dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations) && (
+                        <Button
+                          className="icon-text-button destructive-icon-button"
+                          type="button"
+                          title="Delete this unsent dashboard draft"
+                          onClick={() => setDeleteInvoice(invoice)}
+                        >
+                          <Trash2 size={14} /> Delete
+                        </Button>
+                      )}
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Send size={14} /> Send</Button>}
                       {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
                       {invoice.status === "open" && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
@@ -968,14 +991,21 @@ export function InvoicesView({
         </div>
       </section>
 
-      {editorInvoice && <InvoiceEditorDialog dashboard={dashboard} invoice={editorInvoice === "new" ? undefined : editorInvoice} onClose={() => setEditorInvoice(null)} onSubmit={async (payload) => {
-        const savedInvoice = editorInvoice === "new"
-          ? await onCreateDraft(payload as CreateInvoicePayload)
-          : await onUpdateDraft(editorInvoice.id, payload as UpdateInvoicePayload);
-        setEditorInvoice(null);
-        setSendRequest({ invoiceIds: [savedInvoice.id], invoices: [savedInvoice], afterDraftSave: true });
-        return savedInvoice;
-      }} />}
+      {editorRequest && <InvoiceEditorDialog
+        dashboard={dashboard}
+        invoice={editorRequest.mode === "edit" ? editorRequest.invoice : undefined}
+        initialDraft={editorRequest.mode === "duplicate" ? editorRequest.payload : undefined}
+        duplicateSourceInvoiceNumber={editorRequest.mode === "duplicate" ? editorRequest.sourceInvoiceNumber : undefined}
+        onClose={() => setEditorRequest(null)}
+        onSubmit={async (payload) => {
+          const savedInvoice = editorRequest.mode === "edit"
+            ? await onUpdateDraft(editorRequest.invoice.id, payload as UpdateInvoicePayload)
+            : await onCreateDraft(payload as CreateInvoicePayload);
+          setEditorRequest(null);
+          setSendRequest({ invoiceIds: [savedInvoice.id], invoices: [savedInvoice], afterDraftSave: true });
+          return savedInvoice;
+        }}
+      />}
       {sendRequest && <SendInvoicesDialog
         invoiceIds={sendRequest.invoiceIds}
         invoices={sendRequest.invoices ?? salesInvoices.filter((invoice) => sendRequest.invoiceIds.includes(invoice.id))}
@@ -991,6 +1021,7 @@ export function InvoicesView({
         }}
       />}
       {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
+      {deleteInvoice && <DeleteInvoiceDialog invoice={deleteInvoice} onClose={() => setDeleteInvoice(null)} onDelete={async () => { await onDeleteDraft(deleteInvoice.id); setDeleteInvoice(null); }} />}
     </div>
   );
 }
@@ -1004,19 +1035,34 @@ function PaymentForecast({ invoice, prediction }: { invoice: Invoice; prediction
   return <span className="forecast-copy"><CalendarClock size={14} /><strong>{dateLabel(prediction.predictedDate)}</strong><small>Median {prediction.medianDays} days · last 5 matched</small></span>;
 }
 
-function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: DashboardSnapshot; invoice?: Invoice; onClose: () => void; onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<Invoice> }) {
+function InvoiceEditorDialog({
+  dashboard,
+  invoice,
+  initialDraft,
+  duplicateSourceInvoiceNumber,
+  onClose,
+  onSubmit
+}: {
+  dashboard: DashboardSnapshot;
+  invoice?: Invoice;
+  initialDraft?: CreateInvoicePayload;
+  duplicateSourceInvoiceNumber?: string;
+  onClose: () => void;
+  onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<Invoice>;
+}) {
   const today = new Date().toISOString().slice(0, 10);
-  const [providerId, setProviderId] = useState(invoice?.providerId ?? "");
-  const initialProvider = invoice?.providerId ? dashboard.providers.find((provider) => provider.id === invoice.providerId) : undefined;
-  const [amount, setAmount] = useState(invoice ? String(invoice.amount) : "");
-  const [currency, setCurrency] = useState(invoice?.currency ?? initialProvider?.defaultCurrency ?? "USD");
-  const [issueDate, setIssueDate] = useState(toDateInput(invoice?.issueDate ?? today));
-  const [dueDate, setDueDate] = useState(toDateInput(invoice?.dueDate ?? addDays(today, initialProvider?.paymentTermsDays ?? 30)));
-  const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? "");
-  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? "");
+  const initialProviderId = invoice?.providerId ?? initialDraft?.providerId ?? "";
+  const [providerId, setProviderId] = useState(initialProviderId);
+  const initialProvider = initialProviderId ? dashboard.providers.find((provider) => provider.id === initialProviderId) : undefined;
+  const [amount, setAmount] = useState(invoice ? String(invoice.amount) : initialDraft ? String(initialDraft.amount) : "");
+  const [currency, setCurrency] = useState(invoice?.currency ?? initialDraft?.currency ?? initialProvider?.defaultCurrency ?? "USD");
+  const [issueDate, setIssueDate] = useState(toDateInput(invoice?.issueDate ?? initialDraft?.issueDate ?? today));
+  const [dueDate, setDueDate] = useState(toDateInput(invoice?.dueDate ?? initialDraft?.dueDate ?? addDays(today, initialProvider?.paymentTermsDays ?? 30)));
+  const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? initialDraft?.periodStart ?? "");
+  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? initialDraft?.periodEnd ?? "");
   const initialRule = initialProvider ? dashboard.revenuePartners.find((item) => item.providerId === initialProvider.id) : undefined;
-  const [taxId, setTaxId] = useState(invoice?.taxId ?? initialRule?.defaultMeritTaxId ?? initialProvider?.defaultMeritTaxId ?? "");
-  const [description, setDescription] = useState(invoice?.description ?? "");
+  const [taxId, setTaxId] = useState(invoice?.taxId ?? initialDraft?.taxId ?? initialRule?.defaultMeritTaxId ?? initialProvider?.defaultMeritTaxId ?? "");
+  const [description, setDescription] = useState(invoice?.description ?? initialDraft?.description ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const clients = dashboard.providers.filter((provider) => provider.type === "client");
@@ -1064,7 +1110,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
         periodEnd: periodEnd || undefined
       };
       if (invoice) await onSubmit(core);
-      else await onSubmit({ ...core, documentType: "sales_invoice" });
+      else await onSubmit({ ...core, documentType: initialDraft?.documentType ?? "sales_invoice" });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Invoice draft could not be saved");
     } finally {
@@ -1075,7 +1121,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   return createPortal(
     <div className="modal-backdrop" role="presentation">
       <form className="modal wide-modal invoice-editor-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-editor-title" onSubmit={handleSubmit}>
-        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : duplicateSourceInvoiceNumber ? `Duplicate ${duplicateSourceInvoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="modal-body-stack invoice-editor-body">
           {error && <div className="inline-error">{error}</div>}
           <div className="invoice-form-grid">
@@ -1131,9 +1177,9 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
           </div>
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
-          <div className="income-callout"><CircleAlert size={16} /><span>Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action.</span></div>
+          <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>
         </div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} Save draft</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} {duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
       </form>
     </div>,
     document.body
@@ -1236,6 +1282,46 @@ function SendInvoicesDialog({
         <label className="merit-confirmation-check"><Checkbox checked={acknowledged} disabled={Boolean(sendUnavailableReason)} onCheckedChange={(checked) => setAcknowledged(checked === true)} />{unknownDeliveryCount > 0 ? "I understand this may resend imported Merit invoices to their saved customer contacts." : deliveryOnly ? "I understand this asks Merit to deliver/email an existing invoice to the client." : "I understand either option writes real invoices to Merit."}</label>
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={busyMode !== null}>{afterDraftSave ? "Keep as dashboard draft" : "Cancel"}</Button></div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function DeleteInvoiceDialog({
+  invoice,
+  onClose,
+  onDelete
+}: {
+  invoice: Invoice;
+  onClose: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onDelete();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Invoice draft could not be deleted");
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="delete-invoice-title">
+        <div className="confirmation-icon"><Trash2 size={20} /></div>
+        <div><p className="eyebrow">Delete dashboard draft</p><h2 id="delete-invoice-title">Remove {invoice.invoiceNumber}?</h2></div>
+        <p className="confirmation-copy">This permanently removes the unsent draft from the dashboard. It does not delete or change anything in Merit because this draft has never been saved there.</p>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="modal-actions">
+          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button type="button" className="destructive-button" onClick={() => void remove()} disabled={submitting}>{submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Delete dashboard draft</Button>
+        </div>
       </div>
     </div>,
     document.body

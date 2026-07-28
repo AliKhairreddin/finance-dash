@@ -58,8 +58,9 @@ import {
   isTransactionCategoryForDirection,
   transactionBusinessCategory
 } from "../shared/categories";
+import { dashboardInvoiceDeletionBlockReason } from "../shared/invoiceDeletion";
 import { deleteProviderReferences } from "../shared/providerDeletion";
-import { copyInvoiceToDraft } from "../shared/invoiceCopies";
+import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
@@ -1067,28 +1068,23 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
   return invoice;
 }
 
-export async function duplicateInvoice(invoiceId: string): Promise<Invoice> {
+export async function previewInvoiceDuplicate(invoiceId: string): Promise<CreateInvoicePayload> {
   const source = invoices.find((invoice) => invoice.id === invoiceId);
   if (!source) throw new Error("Invoice not found");
   const copySource = source.origin === "merit"
     ? { ...source, ...(await fetchMeritInvoiceCopyDetails(source)) }
     : source;
-  const createdAt = new Date().toISOString();
-  const invoiceNumber = copySource.documentType === "sales_invoice"
-    ? nextMeritInvoiceNumber(
-        [...invoices, ...(await fetchMeritInvoices(invoices))],
-        copySource.issueDate
-      )
-    : `BILL-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  const duplicate = copyInvoiceToDraft(
-    copySource,
-    invoiceNumber,
-    `local-${copySource.documentType}-${crypto.randomUUID()}`,
-    createdAt
-  );
-  invoices = [duplicate, ...invoices];
+  return invoiceCopyPayload(copySource);
+}
+
+export async function deleteInvoiceDraft(invoiceId: string): Promise<Invoice> {
+  const invoice = invoices.find((item) => item.id === invoiceId);
+  if (!invoice) throw new Error("Invoice not found");
+  const blockReason = dashboardInvoiceDeletionBlockReason(invoice, paymentAllocations);
+  if (blockReason) throw new Error(blockReason);
+  invoices = invoices.filter((item) => item.id !== invoiceId);
   await persist();
-  return duplicate;
+  return invoice;
 }
 
 export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {

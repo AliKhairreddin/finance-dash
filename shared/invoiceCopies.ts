@@ -1,31 +1,17 @@
-import type { Invoice } from "./types";
+import type { CreateInvoicePayload, Invoice } from "./types";
 
-export function copyInvoiceToDraft(
-  source: Invoice,
-  invoiceNumber: string,
-  id: string,
-  createdAt: string
-): Invoice {
+export function invoiceCopyPayload(source: Invoice): CreateInvoicePayload {
   return {
-    id,
     providerId: source.providerId,
     documentType: source.documentType,
-    origin: "manual",
     customerName: source.customerName,
     amount: source.amount,
     currency: source.currency,
-    status: "draft",
-    meritDeliveryStatus: "not-sent",
-    invoiceNumber,
     issueDate: source.issueDate,
     dueDate: source.dueDate,
-    source: "manual",
     description: source.description,
-    revenueRunIds: [],
     periodStart: source.periodStart,
     periodEnd: source.periodEnd,
-    taxId: source.taxId,
-    createdAt,
-    updatedAt: createdAt
+    taxId: source.taxId
   };
 }
