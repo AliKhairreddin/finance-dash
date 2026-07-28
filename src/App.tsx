@@ -1133,6 +1133,22 @@ function App() {
     return invoice;
   }
 
+  async function duplicateInvoiceDraft(invoiceId: string): Promise<Invoice> {
+    const source = dashboard?.invoices.find((invoice) => invoice.id === invoiceId);
+    const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}/duplicate`, {
+      method: "POST"
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Invoice could not be duplicated"));
+    }
+    const invoice = (await response.json()) as Invoice;
+    await loadDashboard();
+    setNotice(
+      `${source?.invoiceNumber ?? "Invoice"} duplicated as ${invoice.invoiceNumber}. Review the new dashboard draft before sending it to Merit.`
+    );
+    return invoice;
+  }
+
   async function sendInvoices(invoiceIds: string[], mode: MeritSendMode) {
     const payload: SendInvoicesPayload = { invoiceIds, mode, confirmation: "SEND_TO_MERIT" };
     const response = await fetch(`${apiBase}/invoices/send`, {
@@ -1493,6 +1509,7 @@ function App() {
           dashboard={dashboard}
           providersById={providersById}
           onCreateDraft={submitInvoice}
+          onDuplicateInvoice={duplicateInvoiceDraft}
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
           onRecordPayment={recordInvoicePayment}

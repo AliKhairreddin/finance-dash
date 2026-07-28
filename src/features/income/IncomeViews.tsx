@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Copy,
   Download,
   Edit3,
   FilePlus2,
@@ -592,6 +593,7 @@ export function InvoicesView({
   dashboard,
   providersById,
   onCreateDraft,
+  onDuplicateInvoice,
   onUpdateDraft,
   onSendInvoices,
   onRecordPayment
@@ -599,6 +601,7 @@ export function InvoicesView({
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   onCreateDraft: (payload: CreateInvoicePayload) => Promise<Invoice>;
+  onDuplicateInvoice: (invoiceId: string) => Promise<Invoice>;
   onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
@@ -618,6 +621,8 @@ export function InvoicesView({
   const [editorInvoice, setEditorInvoice] = useState<Invoice | "new" | null>(null);
   const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   const salesInvoices = dashboard.invoices.filter((invoice) => invoice.documentType === "sales_invoice");
   const activeAccruals = dashboard.revenueAccruals.filter((row) => row.status === "accruing");
@@ -851,6 +856,7 @@ export function InvoicesView({
           <Check size={15} />
           <span>Select drafts to save or save & deliver in bulk. Select open Merit invoices to deliver them in bulk. Record payments one invoice at a time so each bank allocation stays accurate.</span>
         </div>
+        {duplicateError && <div className="inline-error">{duplicateError}</div>}
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
@@ -922,6 +928,26 @@ export function InvoicesView({
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" onClick={() => setEditorInvoice(invoice)}><Edit3 size={14} /> Edit</Button>}
+                      <Button
+                        className="icon-text-button"
+                        type="button"
+                        disabled={duplicatingId !== null}
+                        title="Create a new dashboard draft with a new invoice number and the same invoice details"
+                        onClick={async () => {
+                          setDuplicatingId(invoice.id);
+                          setDuplicateError(null);
+                          try {
+                            setEditorInvoice(await onDuplicateInvoice(invoice.id));
+                          } catch (error) {
+                            setDuplicateError(error instanceof Error ? error.message : "Invoice could not be duplicated");
+                          } finally {
+                            setDuplicatingId(null);
+                          }
+                        }}
+                      >
+                        {duplicatingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Copy size={14} />}
+                        Duplicate
+                      </Button>
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Send size={14} /> Send</Button>}
                       {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
                       {invoice.status === "open" && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}

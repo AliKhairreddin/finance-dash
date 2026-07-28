@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   linkMeritInvoiceProviders,
+  meritInvoiceCopyDetails,
   meritInvoiceLineDescription,
   meritInvoicePeriods,
   meritProviderId,
@@ -43,6 +44,29 @@ test("Merit invoice descriptions include the dashboard period without exceeding 
   const longDescription = meritInvoiceLineDescription("A".repeat(200), "2026-07-01", "2026-07-31");
   assert.equal(longDescription.length, 150);
   assert.equal(longDescription.endsWith("(Period: 2026-07-01 - 2026-07-31)"), true);
+});
+
+test("Merit invoice copy details recover the single line, period, net amount, and tax", () => {
+  assert.deepEqual(
+    meritInvoiceCopyDetails({
+      Lines: [{
+        Description: "Consulting services (Period: 2026-07-01 - 2026-07-31)",
+        AmountExclVat: 125.5,
+        TaxId: "tax-zero"
+      }]
+    }),
+    {
+      amount: 125.5,
+      description: "Consulting services",
+      taxId: "tax-zero",
+      periodStart: "2026-07-01",
+      periodEnd: "2026-07-31"
+    }
+  );
+  assert.throws(
+    () => meritInvoiceCopyDetails({ Lines: [{ Description: "One" }, { Description: "Two" }] }),
+    /single-line/
+  );
 });
 
 test("Merit customer responses retain invoice-relevant identity, contact, billing, and metadata", () => {

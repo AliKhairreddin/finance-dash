@@ -65,9 +65,11 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
+import { copyInvoiceToDraft } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
+  meritInvoiceCopyDetails,
   meritInvoiceLineDescription,
   meritInvoicePeriods,
   meritProviderId,
@@ -1036,6 +1038,8 @@ async function fetchMeritTaxes(env: Env): Promise<MeritTax[]> {
 
 interface MeritInvoiceDetails {
   Lines?: Array<{
+    AmountExclVat?: number;
+    Description?: string;
     TaxId?: string;
   }>;
 }
@@ -1064,6 +1068,26 @@ export async function fetchMeritInvoiceTaxSample(env: Env, invoice: Invoice): Pr
     issueDate: invoice.issueDate,
     taxIds: (detail.Lines ?? []).map((line) => line.TaxId?.trim()).filter((taxId): taxId is string => Boolean(taxId))
   };
+}
+
+export async function fetchMeritInvoiceCopyDetails(
+  env: Env,
+  invoice: Invoice
+): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId">> {
+  if (!invoice.externalId) throw new ApiError(409, "Merit invoice ID is required to duplicate this invoice");
+  const detail = await fetchMeritJson<MeritInvoiceDetails>(env, "/v2/getinvoice", {
+    Id: invoice.externalId,
+    AddAttachment: false
+  });
+  try {
+    return meritInvoiceCopyDetails(detail);
+  } catch (error) {
+    throw new ApiError(
+      409,
+      error instanceof Error ? error.message : "Merit invoice details cannot be duplicated exactly",
+      { cause: error }
+    );
+  }
 }
 
 async function syncMeritTaxDefaults(env: Env): Promise<{
@@ -2447,6 +2471,31 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
   return invoice;
 }
 
+async function duplicateInvoice(env: Env, invoiceId: string): Promise<Invoice> {
+  const state = await loadPersisted(env);
+  const source = state.invoices.find((invoice) => invoice.id === invoiceId);
+  if (!source) throw new ApiError(404, "Invoice not found");
+  const copySource = source.origin === "merit"
+    ? { ...source, ...(await fetchMeritInvoiceCopyDetails(env, source)) }
+    : source;
+  const createdAt = new Date().toISOString();
+  const invoiceNumber = copySource.documentType === "sales_invoice"
+    ? nextMeritInvoiceNumber(
+        [...state.invoices, ...(await fetchMeritInvoices(env, state.invoices))],
+        copySource.issueDate
+      )
+    : `BILL-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  const duplicate = copyInvoiceToDraft(
+    copySource,
+    invoiceNumber,
+    `local-${copySource.documentType}-${crypto.randomUUID()}`,
+    createdAt
+  );
+  state.invoices = [duplicate, ...state.invoices];
+  await savePersisted(env, state);
+  return duplicate;
+}
+
 async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
   const name = payload.name?.trim();
   const currency = payload.currency?.trim().toUpperCase();
@@ -3418,6 +3467,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
+    }
+
+    const invoiceDuplicateMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/duplicate$/);
+    if (invoiceDuplicateMatch && request.method === "POST") {
+      return json(await duplicateInvoice(env, decodeURIComponent(invoiceDuplicateMatch[1])), { status: 201 });
     }
 
     if (url.pathname === "/api/receivables" && request.method === "POST") {

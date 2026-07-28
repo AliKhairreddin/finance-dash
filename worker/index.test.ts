@@ -6,6 +6,7 @@ import worker, {
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
   fetchMeritCustomers,
+  fetchMeritInvoiceCopyDetails,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
   mergeInvoices
@@ -280,6 +281,67 @@ test("Merit tax learning reads line tax IDs from invoice details", async () => {
       body: { Id: "sih-123", AddAttachment: false }
     });
     assert.deepEqual(sample.taxIds, ["tax-zero", "tax-zero"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Merit invoice duplication reads the exact single-line template without creating anything", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ path: string; body: unknown }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({
+      path: new URL(String(input)).pathname,
+      body: JSON.parse(String(init?.body)) as unknown
+    });
+    return Response.json({
+      Lines: [{
+        Description: "Monthly services (Period: 2026-06-01 - 2026-06-30)",
+        AmountExclVat: 900,
+        TaxId: "tax-zero"
+      }]
+    });
+  };
+
+  try {
+    const details = await fetchMeritInvoiceCopyDetails(
+      {
+        MERIT_API_ID: "api-id",
+        MERIT_API_KEY: "api-key",
+        MERIT_API_BASE_URL: "https://merit.example/api"
+      } as never,
+      {
+        id: "merit-sih-duplicate",
+        documentType: "sales_invoice",
+        origin: "merit",
+        customerName: "Client",
+        amount: 1000,
+        currency: "USD",
+        status: "open",
+        meritDeliveryStatus: "saved",
+        invoiceNumber: "2026/1304",
+        issueDate: "2026-07-01",
+        dueDate: "2026-07-31",
+        source: "merit",
+        externalId: "sih-duplicate",
+        description: "Merit invoice 2026/1304",
+        revenueRunIds: [],
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z"
+      }
+    );
+
+    assert.deepEqual(details, {
+      amount: 900,
+      description: "Monthly services",
+      taxId: "tax-zero",
+      periodStart: "2026-06-01",
+      periodEnd: "2026-06-30"
+    });
+    assert.deepEqual(requests, [{
+      path: "/api/v2/getinvoice",
+      body: { Id: "sih-duplicate", AddAttachment: false }
+    }]);
   } finally {
     globalThis.fetch = originalFetch;
   }

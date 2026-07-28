@@ -11,6 +11,7 @@ import type {
   Transaction
 } from "../shared/types";
 import {
+  meritInvoiceCopyDetails,
   meritInvoiceLineDescription,
   meritInvoicePeriods,
   meritProviderId,
@@ -670,6 +671,14 @@ interface MeritInvoiceRecord {
   Paid?: boolean;
 }
 
+interface MeritInvoiceDetails {
+  Lines?: Array<{
+    AmountExclVat?: number;
+    Description?: string;
+    TaxId?: string;
+  }>;
+}
+
 export async function fetchMeritInvoices(persistedInvoices: Invoice[] = []): Promise<Invoice[]> {
   if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) return [];
 
@@ -715,6 +724,18 @@ export async function fetchMeritInvoices(persistedInvoices: Invoice[] = []): Pro
     });
   }
   return [...byExternalId.values()];
+}
+
+export async function fetchMeritInvoiceCopyDetails(
+  invoice: Invoice
+): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId">> {
+  if (!invoice.externalId) throw new Error("Merit invoice ID is required to duplicate this invoice");
+  return meritInvoiceCopyDetails(
+    await fetchMeritJson<MeritInvoiceDetails>("/v2/getinvoice", {
+      Id: invoice.externalId,
+      AddAttachment: false
+    })
+  );
 }
 
 export async function fetchMeritCustomers(): Promise<Provider[]> {

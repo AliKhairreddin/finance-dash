@@ -37,6 +37,7 @@ import {
   deleteProvider,
   deleteRevenuePartner,
   deleteHolding,
+  duplicateInvoice,
   draftRevenueRun,
   getSnapshot,
   initializeStore,
@@ -313,6 +314,14 @@ app.post("/api/invoices", async (request, response, next) => {
       return;
     }
     response.status(201).json(await createInvoice(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/invoices/:invoiceId/duplicate", async (request, response, next) => {
+  try {
+    response.status(201).json(await duplicateInvoice(request.params.invoiceId));
   } catch (error) {
     next(error);
   }

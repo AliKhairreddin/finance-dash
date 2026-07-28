@@ -59,6 +59,7 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { deleteProviderReferences } from "../shared/providerDeletion";
+import { copyInvoiceToDraft } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
@@ -103,6 +104,7 @@ import {
   createMeritInvoice,
   deliverMeritInvoice,
   fetchAmexActivity,
+  fetchMeritInvoiceCopyDetails,
   fetchMeritInvoices,
   fetchMeritCustomers,
   fetchMeritTaxes,
@@ -1063,6 +1065,30 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
   invoices = [invoice, ...invoices];
   await persist();
   return invoice;
+}
+
+export async function duplicateInvoice(invoiceId: string): Promise<Invoice> {
+  const source = invoices.find((invoice) => invoice.id === invoiceId);
+  if (!source) throw new Error("Invoice not found");
+  const copySource = source.origin === "merit"
+    ? { ...source, ...(await fetchMeritInvoiceCopyDetails(source)) }
+    : source;
+  const createdAt = new Date().toISOString();
+  const invoiceNumber = copySource.documentType === "sales_invoice"
+    ? nextMeritInvoiceNumber(
+        [...invoices, ...(await fetchMeritInvoices(invoices))],
+        copySource.issueDate
+      )
+    : `BILL-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  const duplicate = copyInvoiceToDraft(
+    copySource,
+    invoiceNumber,
+    `local-${copySource.documentType}-${crypto.randomUUID()}`,
+    createdAt
+  );
+  invoices = [duplicate, ...invoices];
+  await persist();
+  return duplicate;
 }
 
 export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {

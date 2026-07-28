@@ -13,6 +13,14 @@ export interface MeritInvoicePeriod {
   periodEnd: string;
 }
 
+export interface MeritInvoiceCopyDetails {
+  amount: number;
+  description: string;
+  taxId: string;
+  periodStart?: string;
+  periodEnd?: string;
+}
+
 export function meritInvoiceLineDescription(
   description: string,
   periodStart?: string,
@@ -26,6 +34,27 @@ export function meritInvoiceLineDescription(
   const descriptionLength = Math.max(0, maxLength - period.length - 1);
   const shortenedDescription = cleanDescription.slice(0, descriptionLength).trimEnd();
   return shortenedDescription ? `${shortenedDescription} ${period}` : period.slice(0, maxLength);
+}
+
+export function meritInvoiceCopyDetails(value: unknown): MeritInvoiceCopyDetails {
+  if (!isRecord(value) || !Array.isArray(value.Lines) || value.Lines.length !== 1) {
+    throw new Error("Only single-line Merit invoices can be duplicated exactly");
+  }
+  const line = value.Lines[0];
+  if (!isRecord(line)) throw new Error("Merit invoice line details are unavailable");
+  const rawDescription = text(line.Description);
+  const taxId = text(line.TaxId);
+  const amount = numberValue(line.AmountExclVat);
+  if (!rawDescription || !taxId || amount === undefined || amount <= 0) {
+    throw new Error("Merit invoice line description, net amount, and tax are required to duplicate it");
+  }
+  const periodMatch = /^(.*?)\s*\(Period:\s*(\d{4}-\d{2}-\d{2})\s+-\s+(\d{4}-\d{2}-\d{2})\)\s*$/.exec(rawDescription);
+  return {
+    amount,
+    description: periodMatch?.[1]?.trim() || rawDescription,
+    taxId,
+    ...(periodMatch ? { periodStart: periodMatch[2], periodEnd: periodMatch[3] } : {})
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
