@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Invoice } from "../shared/types";
+import type { Invoice, Transaction } from "../shared/types";
 import worker, {
   createMeritInvoice,
   deliverMeritInvoice,
@@ -9,7 +9,8 @@ import worker, {
   fetchMeritInvoiceCopyDetails,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
-  mergeInvoices
+  mergeInvoices,
+  retainCurrentSlashTransactions
 } from "./index";
 
 test("dashboard API fails closed when Convex storage is not configured", async () => {
@@ -432,6 +433,39 @@ test("live Merit refresh only updates the read-only Merit status for a persisted
   };
 
   assert.deepEqual(mergeInvoices([live], [persisted]), [{ ...persisted, meritStatus: "paid" }]);
+});
+
+test("successful Slash sync drops transactions outside the current live window", () => {
+  const transaction = (id: string, source: Transaction["source"]): Transaction => ({
+    id,
+    source,
+    accountName: "Operating",
+    date: "2026-07-28",
+    description: "CARD PURCHASE",
+    rawName: "Example Merchant",
+    counterparty: "Example Merchant",
+    amount: 10,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Card"
+  });
+  const wise = transaction("wise-current", "wise");
+  const slashCurrent = transaction("slash-current", "slash");
+  const slashStale = transaction("slash-stale", "slash");
+
+  assert.deepEqual(
+    retainCurrentSlashTransactions(
+      [wise, slashCurrent, slashStale],
+      [transaction("slash-current", "slash")],
+      true
+    ),
+    [wise, slashCurrent]
+  );
+  assert.deepEqual(
+    retainCurrentSlashTransactions([wise, slashCurrent, slashStale], [], false),
+    [wise, slashCurrent, slashStale]
+  );
 });
 
 test("Coinbase quote refresh converts EUR, GBP, and BTC from one USD-base response", async () => {

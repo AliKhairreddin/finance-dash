@@ -1,6 +1,7 @@
 import type { AccountBalance, Transaction } from "./types";
 
 const slashActivityWindowMs = 1000 * 60 * 60 * 24 * 45;
+const slashTransactionLimit = 500;
 
 type SlashAccountType = "debit" | "charge_card";
 type SlashBalanceType = "cash" | "credit" | "debit";
@@ -216,7 +217,8 @@ async function fetchAllSlashPages<T>(
   fetcher: typeof fetch,
   initialUrl: URL,
   headers: HeadersInit,
-  parseItem: (item: unknown) => T
+  parseItem: (item: unknown) => T,
+  maxItems = Number.POSITIVE_INFINITY
 ): Promise<T[]> {
   const items: T[] = [];
   const seenCursors = new Set<string>();
@@ -226,7 +228,8 @@ async function fetchAllSlashPages<T>(
     const url = new URL(initialUrl);
     if (cursor) url.searchParams.set("cursor", cursor);
     const page = await fetchSlashPage(fetcher, url, headers, parseItem);
-    items.push(...page.items);
+    items.push(...page.items.slice(0, Math.max(0, maxItems - items.length)));
+    if (items.length >= maxItems) break;
     cursor = page.metadata.nextCursor;
     if (cursor) {
       if (seenCursors.has(cursor)) throw new Error("Slash API returned a repeated pagination cursor");
@@ -265,7 +268,7 @@ export async function fetchSlashActivityForLegalEntity({
 
   const [slashAccounts, slashTransactions] = await Promise.all([
     fetchAllSlashPages(fetcher, accountsUrl, headers, parseSlashAccount),
-    fetchAllSlashPages(fetcher, transactionsUrl, headers, parseSlashTransaction)
+    fetchAllSlashPages(fetcher, transactionsUrl, headers, parseSlashTransaction, slashTransactionLimit)
   ]);
   const balancesByAccountId = new Map<string, SlashBalance[]>();
   for (const account of slashAccounts.filter((item) => item.status === "open")) {

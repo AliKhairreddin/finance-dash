@@ -349,6 +349,16 @@ function mergeBankTransaction(existing: Transaction, fresh: Transaction): Transa
   };
 }
 
+export function retainCurrentSlashTransactions(
+  persisted: Transaction[],
+  live: Transaction[],
+  authoritative: boolean
+): Transaction[] {
+  if (!authoritative) return persisted;
+  const liveIds = new Set(live.map((transaction) => transaction.id));
+  return persisted.filter((transaction) => transaction.source !== "slash" || liveIds.has(transaction.id));
+}
+
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
   const existingKeys = new Set(existing.map((transaction) => wiseStatementTransactionKey(transaction)));
   const incomingKeys = new Set<string>();
@@ -1553,7 +1563,7 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Slash user-scoped API key and legal entity ID are present."
+          ? "Slash balances and the latest 500 transactions are synced for the configured legal entity."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -1779,7 +1789,12 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
   state.paymentAllocations = state.paymentAllocations.filter((allocation) => liveInvoiceIds.has(allocation.invoiceId));
   const paymentAllocationsChanged = state.paymentAllocations.length !== paymentAllocationsBeforeSync.length;
   const persistedTransactionsBeforeSync = state.wiseStatementTransactions;
-  const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
+  const persistedTransactionsInLiveWindows = retainCurrentSlashTransactions(
+    state.wiseStatementTransactions,
+    slash.transactions,
+    !bankIssues.slash
+  );
+  const rawTransactions = mergeWiseStatementTransactions(persistedTransactionsInLiveWindows, [
     ...wise.transactions,
     ...revolut.transactions,
     ...slash.transactions,

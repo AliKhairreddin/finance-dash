@@ -169,3 +169,59 @@ test("Slash activity rejects repeated pagination cursors", async () => {
     /repeated pagination cursor/
   );
 });
+
+test("Slash activity stops after the latest 500 transactions", async () => {
+  let transactionRequests = 0;
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({
+        items: [{
+          id: "account-debit",
+          name: "Operating",
+          status: "open",
+          type: "debit",
+          balances: ["debit"]
+        }],
+        metadata: {}
+      });
+    }
+    if (url.pathname === "/account/account-debit/balance") {
+      return Response.json({
+        balances: [{
+          accountId: "account-debit",
+          type: "debit",
+          available: { amountCents: 125_000 },
+          posted: { amountCents: 120_000 },
+          timestamp: "2026-07-28T12:00:00.000Z"
+        }]
+      });
+    }
+
+    assert.equal(url.pathname, "/transaction");
+    transactionRequests += 1;
+    const page = Number(url.searchParams.get("cursor") ?? "1");
+    return Response.json({
+      items: Array.from({ length: 100 }, (_, index) => ({
+        id: `transaction-${page}-${index}`,
+        date: "2026-07-28T09:30:00.000Z",
+        description: "CARD PURCHASE",
+        amountCents: -100,
+        accountId: "account-debit",
+        status: "posted"
+      })),
+      metadata: { nextCursor: String(page + 1) }
+    });
+  };
+
+  const result = await fetchSlashActivityForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher
+  });
+
+  assert.equal(result.transactions.length, 500);
+  assert.equal(transactionRequests, 5);
+  assert.equal(result.transactions.at(-1)?.id, "slash-transaction-5-99");
+});
