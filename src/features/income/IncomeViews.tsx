@@ -18,6 +18,7 @@ import {
   X
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
@@ -1071,7 +1072,7 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
       <form className="modal wide-modal invoice-editor-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-editor-title" onSubmit={handleSubmit}>
         <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
@@ -1134,7 +1135,8 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
         </div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} Save draft</Button></div>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1194,7 +1196,7 @@ function SendInvoicesDialog({
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
       <div className="modal send-choice-modal" role="dialog" aria-modal="true" aria-labelledby="send-choice-title">
         <div className="modal-header"><div><p className="eyebrow">{afterDraftSave ? "Dashboard draft saved" : "External Merit action"}</p><h2 id="send-choice-title">{afterDraftSave ? "Send this invoice to Merit?" : deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : mixedSelection ? `Review ${invoiceIds.length} selected invoices` : `Send ${invoiceIds.length} draft${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
@@ -1235,7 +1237,8 @@ function SendInvoicesDialog({
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={busyMode !== null}>{afterDraftSave ? "Keep as dashboard draft" : "Cancel"}</Button></div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1293,7 +1296,7 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
       <form className="modal payment-modal" role="dialog" aria-modal="true" aria-labelledby="mark-paid-title" onSubmit={handleSubmit}>
         <div className="modal-header"><div><p className="eyebrow">Dashboard payment</p><h2 id="mark-paid-title">Record payment for {invoice.invoiceNumber}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
@@ -1332,6 +1335,7 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
         <div className="payment-balance-line"><span>Invoice {money(invoice.amount, invoice.currency)}</span><span>Already recorded {money(allocated, invoice.currency)}</span>{selectedTransaction && <span>Transaction available {money(selectedTransaction.available, invoice.currency)}</span>}<strong>Remaining {money(remaining, invoice.currency)}</strong></div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || Number(amount) <= 0 || Number(amount) > maximumPayment || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record in dashboard</Button></div>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }
