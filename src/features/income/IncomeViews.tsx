@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Download,
   Edit3,
   FilePlus2,
   Filter,
@@ -22,6 +23,7 @@ import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   BillingCadence,
@@ -30,6 +32,7 @@ import type {
   DashboardSnapshot,
   FxRate,
   Invoice,
+  MeritDeliveryStatus,
   MeritSendMode,
   PaymentSource,
   Provider,
@@ -41,10 +44,19 @@ import type {
   UpdateInvoicePayload
 } from "../../../shared/types";
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
-import { isClosedBillingPeriod } from "../../../shared/income";
+import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../shared/income";
 
 type InvoiceTab = "all" | "open" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open" | "paid" | "accruing";
+type InvoiceDeliveryFilter = "all" | MeritDeliveryStatus;
+type RevenueRunSortKey = "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
+type RevenueAccrualSortKey = "accruedThrough" | "amount" | "cadence" | "company" | "period" | "status";
+type InvoiceSortKey = "amount" | "cadence" | "company" | "created" | "forecast" | "period" | "status";
+type InvoiceSendRequest = {
+  invoiceIds: string[];
+  invoices?: Invoice[];
+  afterDraftSave?: boolean;
+};
 
 const paymentSourceOptions: Array<{ value: PaymentSource; label: string }> = [
   { value: "wise", label: "Wise" },
@@ -85,6 +97,19 @@ function dateTimeLabel(value: string): string {
   }).format(date);
 }
 
+function invoiceDeliveryLabel(status: MeritDeliveryStatus): string {
+  if (status === "not-sent") return "Not sent";
+  if (status === "saved") return "Saved in Merit";
+  if (status === "delivered") return "Delivered";
+  return "Delivery failed";
+}
+
+function csvCell(value: boolean | number | string | undefined): string {
+  const text = value === undefined ? "" : String(value);
+  const formulaSafeText = /^[=+\-@]/.test(text.trimStart()) ? `'${text}` : text;
+  return `"${formulaSafeText.replaceAll('"', '""')}"`;
+}
+
 function createdAtLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -109,6 +134,16 @@ function createdDateKey(value: string): string {
   }).formatToParts(date);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
   return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function matchesCreatedDateRange(value: string, from: string, to: string): boolean {
+  if (!from && !to) return true;
+  const createdDate = createdDateKey(value);
+  if (!createdDate) return false;
+  if (!from || !to) return createdDate === (from || to);
+  const rangeStart = from < to ? from : to;
+  const rangeEnd = from < to ? to : from;
+  return createdDate >= rangeStart && createdDate <= rangeEnd;
 }
 
 function toDateInput(value?: string): string {
@@ -143,8 +178,8 @@ function nativeBreakdown(totals: CurrencyTotals): string | undefined {
   return breakdown === "—" ? undefined : `Native: ${breakdown}`;
 }
 
-function cadenceLabel(cadence?: BillingCadence): string {
-  if (!cadence) return "Manual";
+function cadenceLabel(cadence?: BillingCadence | "manual"): string {
+  if (!cadence || cadence === "manual") return "Manual";
   return cadence === "weekly" ? "Weekly" : "Monthly";
 }
 
@@ -223,6 +258,10 @@ export function RevenueView({
   const [draftingRunId, setDraftingRunId] = useState<string | null>(null);
   const [pullResults, setPullResults] = useState<RevenueRun[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [runSortKey, setRunSortKey] = useState<RevenueRunSortKey>("period");
+  const [runSortDirection, setRunSortDirection] = useState<TableSortDirection>("desc");
+  const [accrualSortKey, setAccrualSortKey] = useState<RevenueAccrualSortKey>("period");
+  const [accrualSortDirection, setAccrualSortDirection] = useState<TableSortDirection>("asc");
 
   const partnersById = useMemo(
     () => new Map(dashboard.revenuePartners.map((partner) => [partner.id, partner])),
@@ -238,24 +277,80 @@ export function RevenueView({
     ...pullResults.filter((run) => !savedRunIds.has(run.id)),
     ...dashboard.revenueRuns
   ];
-  const visibleRuns = displayedRuns.filter((run) => {
+  function revenueRunSortValue(run: RevenueRun): boolean | number | string | undefined {
     const partner = partnersById.get(run.partnerId);
-    return (
-      (partnerId === "all" || run.partnerId === partnerId) &&
-      (currency === "all" || run.currency === currency) &&
-      (cadence === "all" || partner?.billingCadence === cadence) &&
-      (status === "all" || run.status === status)
+    if (runSortKey === "activity") return run.conversions ?? 0;
+    if (runSortKey === "amount") return run.status === "failed" ? undefined : run.revenue;
+    if (runSortKey === "cadence") return partner?.billingCadence;
+    if (runSortKey === "company") return run.partnerName;
+    if (runSortKey === "invoice") return run.externalInvoiceId ?? run.invoiceId;
+    if (runSortKey === "period") return run.periodStart;
+    return run.status;
+  }
+
+  const visibleRuns = displayedRuns
+    .filter((run) => {
+      const partner = partnersById.get(run.partnerId);
+      return (
+        (partnerId === "all" || run.partnerId === partnerId) &&
+        (currency === "all" || run.currency === currency) &&
+        (cadence === "all" || partner?.billingCadence === cadence) &&
+        (status === "all" || run.status === status)
+      );
+    })
+    .sort((left, right) =>
+      compareTableValues(revenueRunSortValue(left), revenueRunSortValue(right), runSortDirection)
+      || compareTableValues(left.createdAt, right.createdAt, "desc")
+      || left.id.localeCompare(right.id)
     );
-  });
-  const visibleAccruals = dashboard.revenueAccruals.filter((accrual) => {
-    return (
-      accrual.status === "accruing" &&
-      (partnerId === "all" || accrual.partnerId === partnerId) &&
-      (currency === "all" || accrual.currency === currency) &&
-      (cadence === "all" || accrual.billingCadence === cadence) &&
-      (status === "all" || status === "accruing")
+
+  function revenueAccrualSortValue(accrual: RevenueAccrual): number | string {
+    if (accrualSortKey === "accruedThrough") return accrual.accruedThrough;
+    if (accrualSortKey === "amount") return accrual.amount;
+    if (accrualSortKey === "cadence") return accrual.billingCadence;
+    if (accrualSortKey === "company") return accrual.partnerName;
+    if (accrualSortKey === "period") return accrual.periodStart;
+    return accrual.status;
+  }
+
+  const visibleAccruals = dashboard.revenueAccruals
+    .filter((accrual) => {
+      return (
+        accrual.status === "accruing" &&
+        (partnerId === "all" || accrual.partnerId === partnerId) &&
+        (currency === "all" || accrual.currency === currency) &&
+        (cadence === "all" || accrual.billingCadence === cadence) &&
+        (status === "all" || status === "accruing")
+      );
+    })
+    .sort((left, right) =>
+      compareTableValues(revenueAccrualSortValue(left), revenueAccrualSortValue(right), accrualSortDirection)
+      || left.id.localeCompare(right.id)
     );
-  });
+
+  function requestRunSort(nextSortKey: RevenueRunSortKey) {
+    if (nextSortKey === runSortKey) {
+      setRunSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setRunSortKey(nextSortKey);
+    setRunSortDirection("asc");
+  }
+
+  function requestAccrualSort(nextSortKey: RevenueAccrualSortKey) {
+    if (nextSortKey === accrualSortKey) {
+      setAccrualSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setAccrualSortKey(nextSortKey);
+    setAccrualSortDirection("asc");
+  }
+  const visibleActiveRules = dashboard.revenuePartners.filter((partner) =>
+    partner.enabled &&
+    (partnerId === "all" || partner.id === partnerId) &&
+    (currency === "all" || partner.currency === currency) &&
+    (cadence === "all" || partner.billingCadence === cadence)
+  );
   const totalRevenue: CurrencyTotals = {};
   const draftedRevenue: CurrencyTotals = {};
   const accruingRevenue: CurrencyTotals = {};
@@ -327,13 +422,13 @@ export function RevenueView({
             <p className="eyebrow">Revenue tracking</p>
             <h2>Earned income, draft readiness, and current-period accruals</h2>
           </div>
-          <span className="total-pill">{dashboard.revenuePartners.filter((partner) => partner.enabled).length} active rules</span>
+          <span className="total-pill">{visibleActiveRules.length} active rules</span>
         </div>
 
         <form className="income-filter-bar revenue-pull-bar" onSubmit={handlePull}>
           <label>
             Company / rule
-            <NativeSelect value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
+            <NativeSelect value={partnerId} onValueChange={setPartnerId}>
               <NativeSelectOption value="all">All revenue rules</NativeSelectOption>
               {dashboard.revenuePartners.map((partner) => (
                 <NativeSelectOption key={partner.id} value={partner.id}>
@@ -344,14 +439,14 @@ export function RevenueView({
           </label>
           <label>
             Currency
-            <NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}>
+            <NativeSelect value={currency} onValueChange={setCurrency}>
               <NativeSelectOption value="all">All currencies</NativeSelectOption>
               {currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
             </NativeSelect>
           </label>
           <label>
             Cadence
-            <NativeSelect value={cadence} onChange={(event) => setCadence(event.target.value as "all" | BillingCadence)}>
+            <NativeSelect value={cadence} onValueChange={(value) => setCadence(value as "all" | BillingCadence)}>
               <NativeSelectOption value="all">All cadences</NativeSelectOption>
               <NativeSelectOption value="weekly">Weekly</NativeSelectOption>
               <NativeSelectOption value="monthly">Monthly</NativeSelectOption>
@@ -359,7 +454,7 @@ export function RevenueView({
           </label>
           <label>
             Status
-            <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
+            <NativeSelect value={status} onValueChange={setStatus}>
               <NativeSelectOption value="all">All statuses</NativeSelectOption>
               <NativeSelectOption value="pulled">Pulled</NativeSelectOption>
               <NativeSelectOption value="drafted">Drafted</NativeSelectOption>
@@ -370,7 +465,7 @@ export function RevenueView({
           </label>
           <label>
             Pull period
-            <NativeSelect value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value as RevenuePeriodPreset)}>
+            <NativeSelect value={periodPreset} onValueChange={(value) => setPeriodPreset(value as RevenuePeriodPreset)}>
               <NativeSelectOption value="last-week">Last week</NativeSelectOption>
               <NativeSelectOption value="last-7-days">Last 7 days</NativeSelectOption>
               <NativeSelectOption value="this-week">This week to date</NativeSelectOption>
@@ -404,7 +499,15 @@ export function RevenueView({
         </div>
         <div className="table-wrap">
           <table className="data-table revenue-table modern-income-table">
-            <thead><tr><th>Company</th><th>Period</th><th>Cadence</th><th>Activity</th><th>Amount</th><th>Status</th><th>Invoice</th></tr></thead>
+            <thead><tr>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="company">Company</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="period">Period</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="cadence">Cadence</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="activity">Activity</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="amount">Amount</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="invoice">Invoice</SortableTableHead>
+            </tr></thead>
             <tbody>
               {visibleRuns.length > 0 ? visibleRuns.map((run) => {
                 const partner = partnersById.get(run.partnerId);
@@ -443,7 +546,14 @@ export function RevenueView({
         <div className="accrual-explainer"><Sparkles size={17} /><span>Weekly and monthly rows are maintained by Monday automation. Manual pulls are temporary lookups and do not alter these saved previews.</span></div>
         <div className="table-wrap">
           <table className="data-table modern-income-table">
-            <thead><tr><th>Company</th><th>Billing period</th><th>Accrued through</th><th>Cadence</th><th>Current amount</th><th>Status</th></tr></thead>
+            <thead><tr>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="company">Company</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="period">Billing period</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="accruedThrough">Accrued through</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="cadence">Cadence</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} className="amount" direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="amount">Current amount</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="status">Status</SortableTableHead>
+            </tr></thead>
             <tbody>
               {visibleAccruals.length > 0 ? visibleAccruals.map((row) => (
                 <tr key={row.id}>
@@ -488,8 +598,8 @@ export function InvoicesView({
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
-  onCreateDraft: (payload: CreateInvoicePayload) => Promise<void>;
-  onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<void>;
+  onCreateDraft: (payload: CreateInvoicePayload) => Promise<Invoice>;
+  onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
 }) {
@@ -498,11 +608,15 @@ export function InvoicesView({
   const [companyId, setCompanyId] = useState("all");
   const [currency, setCurrency] = useState("all");
   const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>("all");
+  const [deliveryFilter, setDeliveryFilter] = useState<InvoiceDeliveryFilter>("all");
   const [cadence, setCadence] = useState<"all" | BillingCadence | "manual">("all");
-  const [createdDate, setCreatedDate] = useState("");
+  const [createdDateFrom, setCreatedDateFrom] = useState("");
+  const [createdDateTo, setCreatedDateTo] = useState("");
+  const [sortKey, setSortKey] = useState<InvoiceSortKey>("period");
+  const [sortDirection, setSortDirection] = useState<TableSortDirection>("asc");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editorInvoice, setEditorInvoice] = useState<Invoice | "new" | null>(null);
-  const [sendIds, setSendIds] = useState<string[] | null>(null);
+  const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
 
   const salesInvoices = dashboard.invoices.filter((invoice) => invoice.documentType === "sales_invoice");
@@ -525,16 +639,34 @@ export function InvoicesView({
     return revenuePartnerForInvoice(row.invoice, dashboard)?.billingCadence ?? "manual";
   }
 
-  const visibleRows = allRows
+  function invoiceSortValue(row: DisplayInvoiceRow): number | string | undefined {
+    if (sortKey === "amount") return row.kind === "invoice" ? row.invoice.amount : row.accrual.amount;
+    if (sortKey === "cadence") return rowCadence(row);
+    if (sortKey === "company") {
+      if (row.kind === "accrual") return row.accrual.partnerName;
+      return (row.invoice.providerId ? providersById.get(row.invoice.providerId)?.name : undefined)
+        ?? row.invoice.customerName
+        ?? row.invoice.invoiceNumber;
+    }
+    if (sortKey === "created") return row.kind === "invoice" ? row.invoice.createdAt : undefined;
+    if (sortKey === "forecast") {
+      return row.kind === "invoice"
+        ? dashboard.invoicePredictions.find((prediction) => prediction.invoiceId === row.invoice.id)?.predictedDate
+        : undefined;
+    }
+    if (sortKey === "period") return row.kind === "invoice" ? row.invoice.periodStart : row.accrual.periodStart;
+    return row.status;
+  }
+
+  const filteredRows = allRows
     .filter((row) => {
-      if (tab === "open" && !["draft", "open", "accruing"].includes(row.status)) return false;
-      if (tab === "paid" && row.status !== "paid") return false;
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (deliveryFilter !== "all" && (row.kind !== "invoice" || row.invoice.meritDeliveryStatus !== deliveryFilter)) return false;
       if (companyId !== "all" && rowProviderId(row) !== companyId) return false;
       const rowCurrency = row.kind === "invoice" ? row.invoice.currency : row.accrual.currency;
       if (currency !== "all" && rowCurrency !== currency) return false;
       if (cadence !== "all" && rowCadence(row) !== cadence) return false;
-      if (createdDate && (row.kind !== "invoice" || createdDateKey(row.invoice.createdAt) !== createdDate)) return false;
+      if ((createdDateFrom || createdDateTo) && (row.kind !== "invoice" || !matchesCreatedDateRange(row.invoice.createdAt, createdDateFrom, createdDateTo))) return false;
       const search = query.trim().toLowerCase();
       if (!search) return true;
       const provider = rowProviderId(row) ? providersById.get(rowProviderId(row) ?? "") : undefined;
@@ -542,27 +674,32 @@ export function InvoicesView({
         ? `${row.invoice.customerName} ${row.invoice.description} ${row.invoice.invoiceNumber} ${provider?.name ?? ""}`
         : `${row.accrual.partnerName} ${provider?.name ?? ""}`;
       return text.toLowerCase().includes(search);
-    })
-    .sort((left, right) => {
-      const leftDate = left.kind === "invoice" ? left.invoice.dueDate : left.accrual.periodEnd;
-      const rightDate = right.kind === "invoice" ? right.invoice.dueDate : right.accrual.periodEnd;
-      return leftDate.localeCompare(rightDate);
     });
+  const visibleRows = filteredRows
+    .filter((row) => {
+      if (tab === "open") return ["draft", "open", "accruing"].includes(row.status);
+      if (tab === "paid") return row.status === "paid";
+      return true;
+    })
+    .sort((left, right) =>
+      compareTableValues(invoiceSortValue(left), invoiceSortValue(right), sortDirection)
+      || left.id.localeCompare(right.id)
+    );
 
-  const draftTotals: CurrencyTotals = {};
-  const openTotals: CurrencyTotals = {};
-  const accruingTotals: CurrencyTotals = {};
-  for (const invoice of salesInvoices) {
-    if (invoice.status === "draft") addTotal(draftTotals, invoice.currency, invoice.amount);
-    if (invoice.status === "open") {
-      const allocated = dashboard.paymentAllocations.filter((allocation) => allocation.invoiceId === invoice.id).reduce((total, item) => total + item.amount, 0);
-      addTotal(openTotals, invoice.currency, Math.max(0, invoice.amount - allocated));
+  function requestSort(nextSortKey: InvoiceSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
     }
+    setSortKey(nextSortKey);
+    setSortDirection("asc");
   }
-  for (const accrual of activeAccruals) addTotal(accruingTotals, accrual.currency, accrual.amount);
-  const expectedTotals: CurrencyTotals = { ...openTotals };
-  for (const [itemCurrency, amount] of Object.entries(draftTotals)) addTotal(expectedTotals, itemCurrency, amount);
-  for (const [itemCurrency, amount] of Object.entries(accruingTotals)) addTotal(expectedTotals, itemCurrency, amount);
+
+  const summaryTotals = calculateInvoiceSummaryTotals(
+    visibleRows.flatMap((row) => row.kind === "invoice" ? [row.invoice] : []),
+    visibleRows.flatMap((row) => row.kind === "accrual" ? [row.accrual] : []),
+    dashboard.paymentAllocations
+  );
 
   const actionableVisibleIds = visibleRows
     .filter((row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> => row.kind === "invoice" && invoiceCanBeSelected(row.invoice, providersById))
@@ -581,27 +718,95 @@ export function InvoicesView({
     setSelectedIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
   }
 
+  function exportVisibleRows() {
+    const headers = [
+      "Invoice number",
+      "Company",
+      "Description",
+      "Created at",
+      "Period start",
+      "Period end",
+      "Issue date",
+      "Due date",
+      "Currency",
+      "Amount",
+      "Invoice status",
+      "Delivery status",
+      "Cadence",
+      "Source"
+    ];
+    const rows = visibleRows.map((row) => {
+      if (row.kind === "accrual") {
+        return [
+          "",
+          (row.accrual.providerId ? providersById.get(row.accrual.providerId)?.name : undefined) ?? row.accrual.partnerName,
+          `Future invoice · current through ${row.accrual.accruedThrough}`,
+          "",
+          row.accrual.periodStart,
+          row.accrual.periodEnd,
+          "",
+          "",
+          row.accrual.currency,
+          row.accrual.amount,
+          "Accruing",
+          "",
+          cadenceLabel(row.accrual.billingCadence),
+          "tune"
+        ];
+      }
+      const provider = row.invoice.providerId ? providersById.get(row.invoice.providerId) : undefined;
+      return [
+        row.invoice.invoiceNumber,
+        provider?.name ?? row.invoice.customerName,
+        row.invoice.description,
+        row.invoice.createdAt,
+        row.invoice.periodStart,
+        row.invoice.periodEnd,
+        row.invoice.issueDate,
+        row.invoice.dueDate,
+        row.invoice.currency,
+        row.invoice.amount,
+        row.invoice.status,
+        invoiceDeliveryLabel(row.invoice.meritDeliveryStatus),
+        rowCadence(row) === "manual" ? "Manual" : cadenceLabel(rowCadence(row)),
+        row.invoice.source
+      ];
+    });
+    const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
+
   return (
     <div className="income-page-stack">
       <section className="invoice-total-band" aria-label="Invoice totals">
-        <IncomeSummary label="Open" value={formatUsdTotal(openTotals, dashboard.fxRates)} breakdown={nativeBreakdown(openTotals)} detail="Sent, less recorded payments" tone="open" />
-        <IncomeSummary label="Drafts" value={formatUsdTotal(draftTotals, dashboard.fxRates)} breakdown={nativeBreakdown(draftTotals)} detail="Prepared, not yet in Merit" tone="draft" />
-        <IncomeSummary label="Accruing" value={formatUsdTotal(accruingTotals, dashboard.fxRates)} breakdown={nativeBreakdown(accruingTotals)} detail="Current-period invoice previews" tone="accruing" />
-        <IncomeSummary label="Expected income" value={formatUsdTotal(expectedTotals, dashboard.fxRates)} breakdown={nativeBreakdown(expectedTotals)} detail="Open + drafts + accruing" tone="expected" />
+        <IncomeSummary label="Open" value={formatUsdTotal(summaryTotals.open, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.open)} detail="Visible sent invoices, less recorded payments" tone="open" />
+        <IncomeSummary label="Drafts" value={formatUsdTotal(summaryTotals.drafts, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.drafts)} detail="Visible drafts not yet in Merit" tone="draft" />
+        <IncomeSummary label="Accruing" value={formatUsdTotal(summaryTotals.accruing, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.accruing)} detail="Visible current-period invoice previews" tone="accruing" />
+        <IncomeSummary label="Expected income" value={formatUsdTotal(summaryTotals.expected, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.expected)} detail="Visible open + drafts + accruing" tone="expected" />
       </section>
 
       <section className="panel">
         <div className="panel-header income-panel-header">
           <div><p className="eyebrow">Invoices</p><h2>Prepare, send, match, and record payment</h2></div>
-          <Button className="primary-button" type="button" onClick={() => setEditorInvoice("new")}><FilePlus2 size={16} /> Create manual invoice</Button>
+          <div className="income-panel-actions">
+            <Button className="icon-text-button" type="button" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /> Export CSV</Button>
+            <Button className="primary-button" type="button" onClick={() => setEditorInvoice("new")}><FilePlus2 size={16} /> Create manual invoice</Button>
+          </div>
         </div>
 
         <div className="invoice-tabs-row">
           <div className="segmented-control invoice-tabs" aria-label="Invoice view">
             {([
-              ["all", `All ${allRows.length}`],
-              ["open", `Open ${allRows.filter((row) => ["draft", "open", "accruing"].includes(row.status)).length}`],
-              ["paid", `Paid ${salesInvoices.filter((invoice) => invoice.status === "paid").length}`]
+              ["all", `All ${filteredRows.length}`],
+              ["open", `Open ${filteredRows.filter((row) => ["draft", "open", "accruing"].includes(row.status)).length}`],
+              ["paid", `Paid ${filteredRows.filter((row) => row.status === "paid").length}`]
             ] as Array<[InvoiceTab, string]>).map(([id, label]) => (
               <Button key={id} className={tab === id ? "active" : ""} type="button" onClick={() => setTab(id)}>{label}</Button>
             ))}
@@ -613,7 +818,7 @@ export function InvoicesView({
                 {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
                 {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
               </span>
-              <Button className="primary-button" type="button" onClick={() => setSendIds(selectedIds)} disabled={!meritWriteEnabled}>
+              <Button className="primary-button" type="button" onClick={() => setSendRequest({ invoiceIds: selectedIds })} disabled={!meritWriteEnabled}>
                 {selectedDraftCount === 0 ? <Mail size={15} /> : <Send size={15} />}
                 {selectedDraftCount === 0 ? "Deliver selected" : "Review selected"}
               </Button>
@@ -624,12 +829,19 @@ export function InvoicesView({
 
         <div className="income-filter-bar invoice-filter-bar">
           <label className="income-search-field"><Search size={15} /><Input aria-label="Search invoices" placeholder="Search company, invoice, description" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          <label>Company<NativeSelect value={companyId} onChange={(event) => setCompanyId(event.target.value)}><NativeSelectOption value="all">All companies</NativeSelectOption>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
-          <label>Currency<NativeSelect value={currency} onChange={(event) => setCurrency(event.target.value)}><NativeSelectOption value="all">All currencies</NativeSelectOption>{currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}</NativeSelect></label>
-          <label>Status<NativeSelect value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as InvoiceStatusFilter)}><NativeSelectOption value="all">All statuses</NativeSelectOption><NativeSelectOption value="draft">Draft</NativeSelectOption><NativeSelectOption value="open">Open</NativeSelectOption><NativeSelectOption value="paid">Paid</NativeSelectOption><NativeSelectOption value="accruing">Accruing</NativeSelectOption></NativeSelect></label>
-          <label>Cadence<NativeSelect value={cadence} onChange={(event) => setCadence(event.target.value as "all" | BillingCadence | "manual")}><NativeSelectOption value="all">All cadences</NativeSelectOption><NativeSelectOption value="weekly">Weekly</NativeSelectOption><NativeSelectOption value="monthly">Monthly</NativeSelectOption><NativeSelectOption value="manual">Manual</NativeSelectOption></NativeSelect></label>
-          <label>Created date<Input type="date" aria-label="Filter invoices by created date" value={createdDate} onChange={(event) => setCreatedDate(event.target.value)} /></label>
-          <Button className="icon-text-button clear-filter-button" type="button" disabled={!query && companyId === "all" && currency === "all" && statusFilter === "all" && cadence === "all" && !createdDate} onClick={() => { setQuery(""); setCompanyId("all"); setCurrency("all"); setStatusFilter("all"); setCadence("all"); setCreatedDate(""); }}><Filter size={14} /> Clear</Button>
+          <label>Company<NativeSelect value={companyId} onValueChange={setCompanyId}><NativeSelectOption value="all">All companies</NativeSelectOption>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
+          <label>Currency<NativeSelect value={currency} onValueChange={setCurrency}><NativeSelectOption value="all">All currencies</NativeSelectOption>{currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}</NativeSelect></label>
+          <label>Status<NativeSelect value={statusFilter} onValueChange={(value) => setStatusFilter(value as InvoiceStatusFilter)}><NativeSelectOption value="all">All statuses</NativeSelectOption><NativeSelectOption value="draft">Draft</NativeSelectOption><NativeSelectOption value="open">Open</NativeSelectOption><NativeSelectOption value="paid">Paid</NativeSelectOption><NativeSelectOption value="accruing">Accruing</NativeSelectOption></NativeSelect></label>
+          <label>Delivery<NativeSelect value={deliveryFilter} onValueChange={(value) => setDeliveryFilter(value as InvoiceDeliveryFilter)}><NativeSelectOption value="all">All delivery states</NativeSelectOption><NativeSelectOption value="not-sent">Not sent</NativeSelectOption><NativeSelectOption value="saved">Saved, not delivered</NativeSelectOption><NativeSelectOption value="delivered">Delivered</NativeSelectOption><NativeSelectOption value="delivery-failed">Delivery failed</NativeSelectOption></NativeSelect></label>
+          <label>Cadence<NativeSelect value={cadence} onValueChange={(value) => setCadence(value as "all" | BillingCadence | "manual")}><NativeSelectOption value="all">All cadences</NativeSelectOption><NativeSelectOption value="weekly">Weekly</NativeSelectOption><NativeSelectOption value="monthly">Monthly</NativeSelectOption><NativeSelectOption value="manual">Manual</NativeSelectOption></NativeSelect></label>
+          <fieldset className="created-date-filter">
+            <legend>Created date</legend>
+            <div className="created-date-range">
+              <label><span>From</span><Input type="date" aria-label="Filter invoices created from date" value={createdDateFrom} onChange={(event) => setCreatedDateFrom(event.target.value)} /></label>
+              <label><span>To</span><Input type="date" aria-label="Filter invoices created to date" value={createdDateTo} onChange={(event) => setCreatedDateTo(event.target.value)} /></label>
+            </div>
+          </fieldset>
+          <Button className="icon-text-button clear-filter-button" type="button" disabled={!query && companyId === "all" && currency === "all" && statusFilter === "all" && deliveryFilter === "all" && cadence === "all" && !createdDateFrom && !createdDateTo} onClick={() => { setQuery(""); setCompanyId("all"); setCurrency("all"); setStatusFilter("all"); setDeliveryFilter("all"); setCadence("all"); setCreatedDateFrom(""); setCreatedDateTo(""); }}><Filter size={14} /> Clear</Button>
         </div>
 
         {!meritWriteEnabled && (
@@ -653,7 +865,17 @@ export function InvoicesView({
               <col className="invoice-col-forecast" />
               <col className="invoice-col-actions" />
             </colgroup>
-            <thead><tr><th className="selection-column"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th><th>Invoice / company</th><th>Created at</th><th>Period</th><th>Amount</th><th>Cadence</th><th>Status</th><th>Payment forecast</th><th>Actions</th></tr></thead>
+            <thead><tr>
+              <th className="selection-column" scope="col"><Checkbox aria-label="Select all actionable invoices in this view" checked={allActionableSelected} disabled={actionableVisibleIds.length === 0} title="Select drafts to save or deliver, and existing Merit invoices to deliver" onCheckedChange={(checked) => setSelectedIds(checked === true ? [...new Set([...selectedIds, ...actionableVisibleIds])] : selectedIds.filter((id) => !actionableVisibleIds.includes(id)))} /></th>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="company">Invoice / company</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="created">Created at</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="period">Period</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="cadence">Cadence</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="forecast">Payment forecast</SortableTableHead>
+              <th scope="col">Actions</th>
+            </tr></thead>
             <tbody>
               {visibleRows.length > 0 ? visibleRows.map((row) => {
                 if (row.kind === "accrual") {
@@ -700,8 +922,8 @@ export function InvoicesView({
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" onClick={() => setEditorInvoice(invoice)}><Edit3 size={14} /> Edit</Button>}
-                      {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendIds([invoice.id])}><Send size={14} /> Send</Button>}
-                      {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendIds([invoice.id])}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
+                      {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Send size={14} /> Send</Button>}
+                      {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
                       {invoice.status === "open" && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
                       {invoice.status === "paid" && (
                         <div className="paid-allocation-list">
@@ -725,8 +947,28 @@ export function InvoicesView({
         </div>
       </section>
 
-      {editorInvoice && <InvoiceEditorDialog dashboard={dashboard} invoice={editorInvoice === "new" ? undefined : editorInvoice} onClose={() => setEditorInvoice(null)} onSubmit={async (payload) => { if (editorInvoice === "new") await onCreateDraft(payload as CreateInvoicePayload); else await onUpdateDraft(editorInvoice.id, payload as UpdateInvoicePayload); setEditorInvoice(null); }} />}
-      {sendIds && <SendInvoicesDialog invoiceIds={sendIds} invoices={salesInvoices.filter((invoice) => sendIds.includes(invoice.id))} fxRates={dashboard.fxRates} providersById={providersById} onClose={() => setSendIds(null)} onSend={async (mode) => { await onSendInvoices(sendIds, mode); setSendIds(null); setSelectedIds([]); }} />}
+      {editorInvoice && <InvoiceEditorDialog dashboard={dashboard} invoice={editorInvoice === "new" ? undefined : editorInvoice} onClose={() => setEditorInvoice(null)} onSubmit={async (payload) => {
+        const savedInvoice = editorInvoice === "new"
+          ? await onCreateDraft(payload as CreateInvoicePayload)
+          : await onUpdateDraft(editorInvoice.id, payload as UpdateInvoicePayload);
+        setEditorInvoice(null);
+        setSendRequest({ invoiceIds: [savedInvoice.id], invoices: [savedInvoice], afterDraftSave: true });
+        return savedInvoice;
+      }} />}
+      {sendRequest && <SendInvoicesDialog
+        invoiceIds={sendRequest.invoiceIds}
+        invoices={sendRequest.invoices ?? salesInvoices.filter((invoice) => sendRequest.invoiceIds.includes(invoice.id))}
+        fxRates={dashboard.fxRates}
+        providersById={providersById}
+        meritWriteEnabled={meritWriteEnabled}
+        afterDraftSave={sendRequest.afterDraftSave}
+        onClose={() => setSendRequest(null)}
+        onSend={async (mode) => {
+          await onSendInvoices(sendRequest.invoiceIds, mode);
+          setSendRequest(null);
+          setSelectedIds([]);
+        }}
+      />}
       {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
     </div>
   );
@@ -741,7 +983,7 @@ function PaymentForecast({ invoice, prediction }: { invoice: Invoice; prediction
   return <span className="forecast-copy"><CalendarClock size={14} /><strong>{dateLabel(prediction.predictedDate)}</strong><small>Median {prediction.medianDays} days · last 5 matched</small></span>;
 }
 
-function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: DashboardSnapshot; invoice?: Invoice; onClose: () => void; onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<void> }) {
+function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: DashboardSnapshot; invoice?: Invoice; onClose: () => void; onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<Invoice> }) {
   const today = new Date().toISOString().slice(0, 10);
   const [providerId, setProviderId] = useState(invoice?.providerId ?? "");
   const initialProvider = invoice?.providerId ? dashboard.providers.find((provider) => provider.id === invoice.providerId) : undefined;
@@ -876,7 +1118,25 @@ function InvoiceEditorDialog({ dashboard, invoice, onClose, onSubmit }: { dashbo
   );
 }
 
-function SendInvoicesDialog({ invoiceIds, invoices, fxRates, providersById, onClose, onSend }: { invoiceIds: string[]; invoices: Invoice[]; fxRates: FxRate[]; providersById: Map<string, Provider>; onClose: () => void; onSend: (mode: MeritSendMode) => Promise<void> }) {
+function SendInvoicesDialog({
+  invoiceIds,
+  invoices,
+  fxRates,
+  providersById,
+  meritWriteEnabled,
+  afterDraftSave = false,
+  onClose,
+  onSend
+}: {
+  invoiceIds: string[];
+  invoices: Invoice[];
+  fxRates: FxRate[];
+  providersById: Map<string, Provider>;
+  meritWriteEnabled: boolean;
+  afterDraftSave?: boolean;
+  onClose: () => void;
+  onSend: (mode: MeritSendMode) => Promise<void>;
+}) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [busyMode, setBusyMode] = useState<MeritSendMode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -895,9 +1155,15 @@ function SendInvoicesDialog({ invoiceIds, invoices, fxRates, providersById, onCl
   const existingCount = invoices.length - draftCount;
   const mixedSelection = draftCount > 0 && existingCount > 0;
   const unknownDeliveryCount = invoices.filter((invoice) => invoice.origin === "merit" && invoiceCanBeDelivered(invoice)).length;
+  const sendReady = invoices.length > 0 && invoices.every((invoice) => invoiceCanBeSelected(invoice, providersById));
+  const sendUnavailableReason = !meritWriteEnabled
+    ? "Merit writes are currently disabled by the deployment switch. This invoice remains saved as a dashboard draft."
+    : !sendReady
+      ? "This invoice needs a current Merit tax and a valid Merit customer before it can be sent. Keep the draft, edit the missing details, then send it from the invoice table."
+      : null;
 
   async function send(mode: MeritSendMode) {
-    if (!acknowledged) return;
+    if (!acknowledged || sendUnavailableReason) return;
     setBusyMode(mode);
     setError(null);
     try {
@@ -911,7 +1177,10 @@ function SendInvoicesDialog({ invoiceIds, invoices, fxRates, providersById, onCl
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal send-choice-modal" role="dialog" aria-modal="true" aria-labelledby="send-choice-title">
-        <div className="modal-header"><div><p className="eyebrow">External Merit action</p><h2 id="send-choice-title">{deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : mixedSelection ? `Review ${invoiceIds.length} selected invoices` : `Send ${invoiceIds.length} draft${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        <div className="modal-header"><div><p className="eyebrow">{afterDraftSave ? "Dashboard draft saved" : "External Merit action"}</p><h2 id="send-choice-title">{afterDraftSave ? "Send this invoice to Merit?" : deliveryOnly ? `${isDeliveryRetry ? "Retry delivery for" : "Deliver"} ${invoiceIds.length} invoice${invoiceIds.length === 1 ? "" : "s"}` : mixedSelection ? `Review ${invoiceIds.length} selected invoices` : `Send ${invoiceIds.length} draft${invoiceIds.length === 1 ? "" : "s"}`}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        {afterDraftSave && (
+          <div className="income-callout"><Check size={16} /><span>Your changes are safely saved in the dashboard. Choose a Merit action now, or keep the invoice as a draft and send it later.</span></div>
+        )}
         <div className="send-review-summary"><span>Selected total · USD</span><strong>{formatUsdTotal(totals, fxRates)}</strong>{nativeBreakdown(totals) && <small className="currency-breakdown">{nativeBreakdown(totals)}</small>}<small>{deliveryOnly ? "These invoices already exist in Merit. This action only requests client delivery; it does not create them again." : mixedSelection ? `${draftCount} draft${draftCount === 1 ? "" : "s"} will be created; ${existingCount} existing Merit invoice${existingCount === 1 ? "" : "s"} can be delivered in the same action.` : "Each draft uses its linked Merit customer, saved tax, and invoice details shown below."}</small></div>
         <div className="invoice-send-review-list">
           {invoices.map((invoice) => {
@@ -929,19 +1198,22 @@ function SendInvoicesDialog({ invoiceIds, invoices, fxRates, providersById, onCl
         {unknownDeliveryCount > 0 && (
           <div className="income-callout warning"><CircleAlert size={16} /><span>Merit’s invoice list does not report prior email delivery. Delivering {unknownDeliveryCount} imported invoice{unknownDeliveryCount === 1 ? "" : "s"} may resend them to the saved customer contacts.</span></div>
         )}
+        {sendUnavailableReason && (
+          <div className="income-callout warning"><CircleAlert size={16} /><span>{sendUnavailableReason}</span></div>
+        )}
         <div className={`send-option-grid${deliveryOnly ? " single" : ""}`}>
           {deliveryOnly ? (
-            <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{isDeliveryRetry ? "Retry Merit delivery" : "Deliver through Merit"}</strong><small>Ask Merit to email/deliver the existing invoice to the client without creating another invoice.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>{isDeliveryRetry ? "Retry delivery" : "Deliver existing invoice"} <ChevronRight size={15} /></>}</span></button>
+            <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null || Boolean(sendUnavailableReason)} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{isDeliveryRetry ? "Retry Merit delivery" : "Deliver through Merit"}</strong><small>Ask Merit to email/deliver the existing invoice to the client without creating another invoice.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>{isDeliveryRetry ? "Retry delivery" : "Deliver existing invoice"} <ChevronRight size={15} /></>}</span></button>
           ) : (
             <>
-              <button type="button" className="send-option-card" disabled={!acknowledged || busyMode !== null} onClick={() => void send("save")}><span className="send-option-icon"><FilePlus2 size={20} /></span><strong>Save draft{draftCount === 1 ? "" : "s"} in Merit</strong><small>Create the selected drafts in Merit. Existing Merit invoices stay unchanged.</small><span className="send-option-action">{busyMode === "save" ? <Loader2 className="spin" size={16} /> : <>Choose save only <ChevronRight size={15} /></>}</span></button>
-              <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{mixedSelection ? "Create & deliver all" : "Save & deliver"}</strong><small>Create each draft, then ask Merit to deliver every selected invoice to its saved customer.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>Choose save & deliver <ChevronRight size={15} /></>}</span></button>
+              <button type="button" className="send-option-card" disabled={!acknowledged || busyMode !== null || Boolean(sendUnavailableReason)} onClick={() => void send("save")}><span className="send-option-icon"><FilePlus2 size={20} /></span><strong>Save draft{draftCount === 1 ? "" : "s"} in Merit</strong><small>Create the selected drafts in Merit. Existing Merit invoices stay unchanged.</small><span className="send-option-action">{busyMode === "save" ? <Loader2 className="spin" size={16} /> : <>Choose save only <ChevronRight size={15} /></>}</span></button>
+              <button type="button" className="send-option-card primary" disabled={!acknowledged || busyMode !== null || Boolean(sendUnavailableReason)} onClick={() => void send("deliver")}><span className="send-option-icon"><Mail size={20} /></span><strong>{mixedSelection ? "Create & deliver all" : "Save & deliver"}</strong><small>Create each draft, then ask Merit to deliver every selected invoice to its saved customer.</small><span className="send-option-action">{busyMode === "deliver" ? <Loader2 className="spin" size={16} /> : <>Choose save & deliver <ChevronRight size={15} /></>}</span></button>
             </>
           )}
         </div>
-        <label className="merit-confirmation-check"><Checkbox checked={acknowledged} onCheckedChange={(checked) => setAcknowledged(checked === true)} />{unknownDeliveryCount > 0 ? "I understand this may resend imported Merit invoices to their saved customer contacts." : deliveryOnly ? "I understand this asks Merit to deliver/email an existing invoice to the client." : "I understand either option writes real invoices to Merit."}</label>
+        <label className="merit-confirmation-check"><Checkbox checked={acknowledged} disabled={Boolean(sendUnavailableReason)} onCheckedChange={(checked) => setAcknowledged(checked === true)} />{unknownDeliveryCount > 0 ? "I understand this may resend imported Merit invoices to their saved customer contacts." : deliveryOnly ? "I understand this asks Merit to deliver/email an existing invoice to the client." : "I understand either option writes real invoices to Merit."}</label>
         {error && <div className="inline-error">{error}</div>}
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={busyMode !== null}>Cancel</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={busyMode !== null}>{afterDraftSave ? "Keep as dashboard draft" : "Cancel"}</Button></div>
       </div>
     </div>
   );
@@ -1011,8 +1283,8 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
           Matched bank transaction (optional)
           <NativeSelect
             value={transactionId}
-            onChange={(event) => {
-              const nextId = event.target.value;
+            onValueChange={(value) => {
+              const nextId = value;
               setTransactionId(nextId);
               const row = eligibleTransactions.find((item) => item.transaction.id === nextId);
               if (!row) return;
@@ -1034,7 +1306,7 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
           <small className="field-help">Confirming a real match makes this payment eligible for the five-payment forecast history.</small>
         </label>
         <div className="form-grid"><label>Amount<Input type="number" min="0.01" max={maximumPayment || undefined} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label></div>
-        <div className="form-grid"><label>Paid in / source<NativeSelect value={source} onChange={(event) => setSource(event.target.value as PaymentSource)}>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label><label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="e.g. Wise USD balance" /></label></div>
+        <div className="form-grid"><label>Paid in / source<NativeSelect value={source} onValueChange={(value) => setSource(value as PaymentSource)}>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label><label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="e.g. Wise USD balance" /></label></div>
         <label>Transaction reference<Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Bank or internal reference" /></label>
         <label>Payment note<Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context for this payment" /></label>
         <div className="payment-balance-line"><span>Invoice {money(invoice.amount, invoice.currency)}</span><span>Already recorded {money(allocated, invoice.currency)}</span>{selectedTransaction && <span>Transaction available {money(selectedTransaction.available, invoice.currency)}</span>}<strong>Remaining {money(remaining, invoice.currency)}</strong></div>

@@ -50,6 +50,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { compareTableValues, SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   AiPromptPayload,
@@ -69,6 +70,7 @@ import type {
   FxRate,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
+  Invoice,
   InvoiceDocumentType,
   MeritSendMode,
   MeritTax,
@@ -119,7 +121,18 @@ type ActiveTab = "overview" | "management" | "banks" | "analytics" | "distributi
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
-type TransactionSortKey = "match" | "date" | "period" | "amount" | "category" | "counterparty";
+type TransactionSortKey =
+  | "amount"
+  | "cardHolder"
+  | "category"
+  | "company"
+  | "counterparty"
+  | "date"
+  | "direction"
+  | "document"
+  | "match"
+  | "period"
+  | "team";
 type RevenuePieBreakdown = "team-partner" | "team" | "partner" | "category";
 type TransactionDetailPopover = {
   id: string;
@@ -553,34 +566,41 @@ function transactionPeriod(transaction: Transaction): string {
   return transaction.date.slice(0, 7);
 }
 
-function compareTransactions(left: Transaction, right: Transaction, sortKey: TransactionSortKey): number {
-  if (sortKey === "match") {
-    return (left.confidence ?? 0) - (right.confidence ?? 0) || left.date.localeCompare(right.date);
+function transactionSortValue(
+  transaction: Transaction,
+  sortKey: TransactionSortKey,
+  teamsById: Map<string, Team>,
+  providersById: Map<string, Provider>
+): boolean | number | string | undefined {
+  if (sortKey === "amount") return transaction.amount;
+  if (sortKey === "cardHolder") return transaction.cardHolderName;
+  if (sortKey === "category") return effectiveCategory(transaction);
+  if (sortKey === "company") {
+    return transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name : undefined;
   }
-
-  if (sortKey === "date") {
-    return left.date.localeCompare(right.date) || left.counterparty.localeCompare(right.counterparty);
-  }
-
-  if (sortKey === "period") {
-    return transactionPeriod(left).localeCompare(transactionPeriod(right)) || left.date.localeCompare(right.date);
-  }
-
-  if (sortKey === "amount") {
-    return left.amount - right.amount || left.date.localeCompare(right.date);
-  }
-
-  if (sortKey === "category") {
-    return effectiveCategory(left).localeCompare(effectiveCategory(right)) || left.date.localeCompare(right.date);
-  }
-
-  return left.counterparty.localeCompare(right.counterparty) || left.date.localeCompare(right.date);
+  if (sortKey === "counterparty") return transaction.counterparty;
+  if (sortKey === "date") return transaction.date;
+  if (sortKey === "direction") return transaction.direction;
+  if (sortKey === "document") return Boolean(transaction.matchedInvoiceId);
+  if (sortKey === "match") return transaction.confidence ?? 0;
+  if (sortKey === "period") return transactionPeriod(transaction);
+  return transaction.teamId ? teamsById.get(transaction.teamId)?.name : undefined;
 }
 
-function sortTransactions(rows: Transaction[], sortKey: TransactionSortKey, direction: SortDirection): Transaction[] {
+function sortTransactions(
+  rows: Transaction[],
+  sortKey: TransactionSortKey,
+  direction: SortDirection,
+  teamsById: Map<string, Team>,
+  providersById: Map<string, Provider>
+): Transaction[] {
   return [...rows].sort((left, right) => {
-    const result = compareTransactions(left, right, sortKey);
-    return direction === "asc" ? result : -result;
+    const result = compareTableValues(
+      transactionSortValue(left, sortKey, teamsById, providersById),
+      transactionSortValue(right, sortKey, teamsById, providersById),
+      direction
+    );
+    return result || compareTableValues(left.date, right.date, direction) || left.id.localeCompare(right.id);
   });
 }
 
@@ -714,7 +734,7 @@ function App() {
         (matchFilter === "matched" && !transactionNeedsReview(transaction));
       return matchesQuery && matchesStatus;
     });
-    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection);
+    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById);
   }, [dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
 
   const wiseTransactions = useMemo(
@@ -1065,7 +1085,7 @@ function App() {
     }
   }
 
-  async function submitInvoice(payload: CreateInvoicePayload) {
+  async function submitInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
     const response = await fetch(`${apiBase}/invoices`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1074,8 +1094,14 @@ function App() {
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Document draft could not be created"));
     }
+    const invoice = (await response.json()) as Invoice;
     await loadDashboard();
-    setNotice(payload.documentType === "sales_invoice" ? "Sales invoice draft created." : "Supplier bill draft recorded.");
+    setNotice(
+      payload.documentType === "sales_invoice"
+        ? "Sales invoice draft saved. Choose whether to send it to Merit."
+        : "Supplier bill draft recorded."
+    );
+    return invoice;
   }
 
   async function createManualReceivable(payload: CreateManualReceivablePayload) {
@@ -1091,7 +1117,7 @@ function App() {
     setNotice(`${payload.name.trim()} added to receivables.`);
   }
 
-  async function updateInvoiceDraft(invoiceId: string, payload: UpdateInvoicePayload) {
+  async function updateInvoiceDraft(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
     const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1101,8 +1127,10 @@ function App() {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message || "Invoice draft could not be updated");
     }
+    const invoice = (await response.json()) as Invoice;
     await loadDashboard();
-    setNotice("Invoice draft updated. Nothing was written to Merit.");
+    setNotice("Invoice draft saved. Choose whether to send it to Merit.");
+    return invoice;
   }
 
   async function sendInvoices(invoiceIds: string[], mode: MeritSendMode) {
@@ -2255,41 +2283,46 @@ function WiseBankView({
           </label>
           <label>
             <Filter size={15} />
-            <select value={matchFilter} onChange={(event) => setMatchFilter(event.target.value)}>
-              <option value="needs-review">Needs review</option>
-              <option value="matched">Matched</option>
-              <option value="all">All rows</option>
-            </select>
+            <NativeSelect value={matchFilter} onValueChange={setMatchFilter}>
+              <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
+              <NativeSelectOption value="matched">Matched</NativeSelectOption>
+              <NativeSelectOption value="all">All rows</NativeSelectOption>
+            </NativeSelect>
           </label>
           <label>
             <SlidersHorizontal size={15} />
-            <select value={transactionSortKey} onChange={(event) => setTransactionSortKey(event.target.value as TransactionSortKey)}>
-              <option value="match">% match</option>
-              <option value="date">Date</option>
-              <option value="period">Period</option>
-              <option value="amount">Amount</option>
-              <option value="category">Category</option>
-              <option value="counterparty">Counterparty</option>
-            </select>
+            <NativeSelect value={transactionSortKey} onValueChange={(value) => setTransactionSortKey(value as TransactionSortKey)}>
+              <NativeSelectOption value="match">% match</NativeSelectOption>
+              <NativeSelectOption value="date">Date</NativeSelectOption>
+              <NativeSelectOption value="period">Period</NativeSelectOption>
+              <NativeSelectOption value="amount">Amount</NativeSelectOption>
+              <NativeSelectOption value="category">Category</NativeSelectOption>
+              <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
+              <NativeSelectOption value="direction">Direction</NativeSelectOption>
+              <NativeSelectOption value="cardHolder">Card holder</NativeSelectOption>
+              <NativeSelectOption value="team">Team</NativeSelectOption>
+              <NativeSelectOption value="company">Company</NativeSelectOption>
+              <NativeSelectOption value="document">Document</NativeSelectOption>
+            </NativeSelect>
           </label>
           <label>
             Order
-            <select value={transactionSortDirection} onChange={(event) => setTransactionSortDirection(event.target.value as SortDirection)}>
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
+            <NativeSelect value={transactionSortDirection} onValueChange={(value) => setTransactionSortDirection(value as SortDirection)}>
+              <NativeSelectOption value="desc">Descending</NativeSelectOption>
+              <NativeSelectOption value="asc">Ascending</NativeSelectOption>
+            </NativeSelect>
           </label>
           <label>
             Team
-            <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-              <option value="all">All teams</option>
-              <option value="unassigned">Unassigned</option>
+            <NativeSelect value={teamFilter} onValueChange={setTeamFilter}>
+              <NativeSelectOption value="all">All teams</NativeSelectOption>
+              <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
               {dashboard.teams.map((team) => (
-                <option key={team.id} value={team.id}>
+                <NativeSelectOption key={team.id} value={team.id}>
                   {team.name}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <button
             className="secondary-button"
@@ -2337,6 +2370,16 @@ function WiseBankView({
         providers={dashboard.providers}
         teamsById={teamsById}
         providersById={providersById}
+        sortKey={transactionSortKey}
+        sortDirection={transactionSortDirection}
+        onSort={(nextSortKey) => {
+          if (nextSortKey === transactionSortKey) {
+            setTransactionSortDirection(transactionSortDirection === "asc" ? "desc" : "asc");
+            return;
+          }
+          setTransactionSortKey(nextSortKey);
+          setTransactionSortDirection("asc");
+        }}
         onMatch={onMatch}
         onAssignTeam={onAssignTeam}
         onUpdateCategory={onUpdateCategory}
@@ -2438,60 +2481,60 @@ function AnalyticsView({
       <label>
         <SlidersHorizontal size={15} />
         <span>Show</span>
-        <select value={revenuePieBreakdown} onChange={(event) => setRevenuePieBreakdown(event.target.value as RevenuePieBreakdown)}>
-          <option value="team-partner">Team and partner</option>
-          <option value="team">Team only</option>
-          <option value="partner">Partner only</option>
-          <option value="category">Category only</option>
-        </select>
+        <NativeSelect value={revenuePieBreakdown} onValueChange={(value) => setRevenuePieBreakdown(value as RevenuePieBreakdown)}>
+          <NativeSelectOption value="team-partner">Team and partner</NativeSelectOption>
+          <NativeSelectOption value="team">Team only</NativeSelectOption>
+          <NativeSelectOption value="partner">Partner only</NativeSelectOption>
+          <NativeSelectOption value="category">Category only</NativeSelectOption>
+        </NativeSelect>
       </label>
       <label>
         <CircleDollarSign size={15} />
         <span>Currency</span>
-        <select value={revenuePieCurrency} onChange={(event) => setRevenuePieCurrency(event.target.value)}>
-          <option value="all">All currencies</option>
+        <NativeSelect value={revenuePieCurrency} onValueChange={setRevenuePieCurrency}>
+          <NativeSelectOption value="all">All currencies</NativeSelectOption>
           {revenueCurrencies.map((currency) => (
-            <option key={currency} value={currency}>
+            <NativeSelectOption key={currency} value={currency}>
               {currency}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <label>
         <Building2 size={15} />
         <span>Team</span>
-        <select value={revenuePieTeamId} onChange={(event) => setRevenuePieTeamId(event.target.value)}>
-          <option value="all">All teams</option>
+        <NativeSelect value={revenuePieTeamId} onValueChange={setRevenuePieTeamId}>
+          <NativeSelectOption value="all">All teams</NativeSelectOption>
           {revenueTeamOptions.map(([teamId, label]) => (
-            <option key={teamId} value={teamId}>
+            <NativeSelectOption key={teamId} value={teamId}>
               {label}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <label>
         <BadgeDollarSign size={15} />
         <span>Partner</span>
-        <select value={revenuePiePartnerId} onChange={(event) => setRevenuePiePartnerId(event.target.value)}>
-          <option value="all">All partners</option>
+        <NativeSelect value={revenuePiePartnerId} onValueChange={setRevenuePiePartnerId}>
+          <NativeSelectOption value="all">All partners</NativeSelectOption>
           {revenuePartnerOptions.map(([partnerId, label]) => (
-            <option key={partnerId} value={partnerId}>
+            <NativeSelectOption key={partnerId} value={partnerId}>
               {label}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <label>
         <Tags size={15} />
         <span>Category</span>
-        <select value={revenuePieCategory} onChange={(event) => setRevenuePieCategory(event.target.value)}>
-          <option value="all">All categories</option>
+        <NativeSelect value={revenuePieCategory} onValueChange={setRevenuePieCategory}>
+          <NativeSelectOption value="all">All categories</NativeSelectOption>
           {revenueCategoryOptions.map((category) => (
-            <option key={category} value={category}>
+            <NativeSelectOption key={category} value={category}>
               {category}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <button
         className="secondary-button"
@@ -2594,7 +2637,7 @@ function AnalyticsView({
           <div className="filters">
             <label>
               <Tags size={15} />
-              <NativeSelect value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+              <NativeSelect value={tagFilter} onValueChange={setTagFilter}>
                 <NativeSelectOption value="all">All tags</NativeSelectOption>
                 {tagOptions.map((tag) => (
                   <NativeSelectOption key={tag} value={tag}>
@@ -3290,6 +3333,9 @@ function TransactionTable({
   providers,
   teamsById,
   providersById,
+  sortKey,
+  sortDirection,
+  onSort,
   onMatch,
   onAssignTeam,
   onUpdateCategory,
@@ -3300,6 +3346,9 @@ function TransactionTable({
   providers: Provider[];
   teamsById: Map<string, Team>;
   providersById: Map<string, Provider>;
+  sortKey: TransactionSortKey;
+  sortDirection: SortDirection;
+  onSort: (sortKey: TransactionSortKey) => void;
   onMatch: (transaction: Transaction, providerId?: string) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string) => void;
@@ -3401,18 +3450,18 @@ function TransactionTable({
         </colgroup>
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Counterparty</th>
-            <th>Direction</th>
-            <th>Amount</th>
-            <th>Card holder</th>
-            <th>
-              Team <span className="column-note">Optional</span>
-            </th>
-            <th>Category</th>
-            <th>Company</th>
-            <th>Document</th>
-            <th>Actions</th>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="date">Date</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="direction">Direction</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="amount">Amount</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="cardHolder">Card holder</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} label="Team" onSort={onSort} sortKey="team">
+              <>Team <span className="column-note">Optional</span></>
+            </SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="category">Category</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="company">Company</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="document">Document</SortableTableHead>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -3462,7 +3511,7 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="team-select">
-                      <NativeSelect value={transaction.teamId ?? ""} onChange={(event) => onAssignTeam(transaction, event.target.value || undefined)}>
+                      <NativeSelect value={transaction.teamId ?? ""} onValueChange={(value) => onAssignTeam(transaction, value || undefined)}>
                         <NativeSelectOption value="">No team</NativeSelectOption>
                         {teams.map((team) => (
                           <NativeSelectOption key={team.id} value={team.id}>
@@ -3508,9 +3557,9 @@ function TransactionTable({
                         className="company-select"
                         size="sm"
                         value={provider?.id ?? ""}
-                        onChange={(event) => {
-                          if (!event.target.value) return;
-                          onMatch(transaction, event.target.value);
+                        onValueChange={(value) => {
+                          if (!value) return;
+                          onMatch(transaction, value);
                         }}
                         aria-label={`Company for ${transaction.counterparty}`}
                       >
@@ -3727,23 +3776,23 @@ function DistributionView({
         <div className="revenue-controls distribution-controls">
           <label>
             Month
-            <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
+            <NativeSelect value={selectedMonth} onValueChange={setSelectedMonth}>
               {monthOptions.map((month) => (
-                <option key={month} value={month}>
+                <NativeSelectOption key={month} value={month}>
                   {monthLabel(month)}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label>
             Currency
-            <select value={selectedCurrency} onChange={(event) => setSelectedCurrency(event.target.value)}>
+            <NativeSelect value={selectedCurrency} onValueChange={setSelectedCurrency}>
               {(selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions).map((currency) => (
-                <option key={currency} value={currency}>
+                <NativeSelectOption key={currency} value={currency}>
                   {currency}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
         <div className="wise-summary-grid distribution-summary">
@@ -4696,22 +4745,22 @@ function SettingsView({
                     <strong>{row.cardHolderName}</strong>
                     <span>{row.transactionCount > 0 ? `${row.transactionCount} Wise rows` : "Saved rule"}</span>
                   </div>
-                  <select
+                  <NativeSelect
                     value={selectedTeamId}
-                    onChange={(event) =>
+                    onValueChange={(value) =>
                       setCardHolderSelections((current) => ({
                         ...current,
-                        [row.key]: event.target.value
+                        [row.key]: value
                       }))
                     }
                   >
-                    <option value="">Choose team</option>
+                    <NativeSelectOption value="">Choose team</NativeSelectOption>
                     {dashboard.teams.map((team) => (
-                      <option key={team.id} value={team.id}>
+                      <NativeSelectOption key={team.id} value={team.id}>
                         {team.name}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                   <button
                     className="secondary-button"
                     type="button"
@@ -4749,7 +4798,7 @@ function SettingsView({
           <div className="form-grid">
             <label>
               Model
-              <NativeSelect value={modelChoice} onChange={(event) => setModelChoice(event.target.value)}>
+              <NativeSelect value={modelChoice} onValueChange={setModelChoice}>
                 {openRouterModelOptions.map((option) => (
                   <NativeSelectOption key={option.value} value={option.value}>
                     {option.label}
@@ -4917,8 +4966,8 @@ function InvoiceModal({
           Company
           <NativeSelect
             value={providerId}
-            onChange={(event) => {
-              const nextProviderId = event.target.value;
+            onValueChange={(value) => {
+              const nextProviderId = value;
               const nextProvider = providerOptions.find((item) => item.id === nextProviderId);
               setProviderId(nextProviderId);
               if (nextProvider) {
@@ -5059,7 +5108,7 @@ function ProviderModal({
             <div className="form-grid">
               <label>
                 Relationship
-                <NativeSelect value={type} onChange={(event) => setType(event.target.value as ProviderType)}>
+                <NativeSelect value={type} onValueChange={(value) => setType(value as ProviderType)}>
                   <NativeSelectOption value="client">Client</NativeSelectOption>
                   <NativeSelectOption value="supplier">Supplier</NativeSelectOption>
                 </NativeSelect>
@@ -5122,7 +5171,7 @@ function ProviderModal({
             </div>
             <label>
               Default Merit invoice tax
-              <NativeSelect value={defaultMeritTaxId} onChange={(event) => setDefaultMeritTaxId(event.target.value)}>
+              <NativeSelect value={defaultMeritTaxId} onValueChange={setDefaultMeritTaxId}>
                 <NativeSelectOption value="">No default</NativeSelectOption>
                 {taxes.map((tax) => (
                   <NativeSelectOption key={tax.id} value={tax.id}>
@@ -5272,10 +5321,10 @@ function RevenuePartnerModal({
         <div className="form-grid">
           <label>
             Company
-            <select
+            <NativeSelect
               value={providerId}
-              onChange={(event) => {
-                const nextProviderId = event.target.value;
+              onValueChange={(value) => {
+                const nextProviderId = value;
                 const nextProvider = providers.find((provider) => provider.id === nextProviderId);
                 setProviderId(nextProviderId);
                 if (nextProvider) {
@@ -5286,37 +5335,37 @@ function RevenuePartnerModal({
                 }
               }}
             >
-              <option value="">Choose a client</option>
+              <NativeSelectOption value="">Choose a client</NativeSelectOption>
               {providers
                 .filter((provider) => provider.type === "client" && provider.meritCustomerId)
                 .map((provider) => (
-                  <option key={provider.id} value={provider.id}>
+                  <NativeSelectOption key={provider.id} value={provider.id}>
                     {provider.name}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-            </select>
+            </NativeSelect>
           </label>
           <label>
             Team
-            <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
-              <option value="">No single team</option>
+            <NativeSelect value={teamId} onValueChange={setTeamId}>
+              <NativeSelectOption value="">No single team</NativeSelectOption>
               {teams.map((team) => (
-                <option key={team.id} value={team.id}>
+                <NativeSelectOption key={team.id} value={team.id}>
                   {team.name}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
         <label>
           Money in category
-          <select value={revenueCategory} onChange={(event) => setRevenueCategory(event.target.value)}>
+          <NativeSelect value={revenueCategory} onValueChange={setRevenueCategory}>
             {moneyInCategoryOptions.map((category) => (
-              <option key={category} value={category}>
+              <NativeSelectOption key={category} value={category}>
                 {category}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <div className="form-grid">
           <label>
@@ -5331,7 +5380,7 @@ function RevenuePartnerModal({
         <div className="form-grid">
           <label>
             Timezone
-            <NativeSelect value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+            <NativeSelect value={timezone} onValueChange={setTimezone}>
               {timezoneOptions.map((option) => (
                 <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
@@ -5341,7 +5390,7 @@ function RevenuePartnerModal({
           </label>
           <label>
             Network timezone
-            <NativeSelect value={networkTimezone} onChange={(event) => setNetworkTimezone(event.target.value)}>
+            <NativeSelect value={networkTimezone} onValueChange={setNetworkTimezone}>
               {timezoneOptions.map((option) => (
                 <NativeSelectOption key={option.value} value={option.value}>
                   {option.label}
@@ -5382,14 +5431,14 @@ function RevenuePartnerModal({
           <div className="form-grid">
             <label>
               Billing cadence
-              <NativeSelect value={billingCadence} onChange={(event) => setBillingCadence(event.target.value as "weekly" | "monthly")}>
+              <NativeSelect value={billingCadence} onValueChange={(value) => setBillingCadence(value as "weekly" | "monthly")}>
                 <NativeSelectOption value="weekly">Weekly · prior Monday–Sunday</NativeSelectOption>
                 <NativeSelectOption value="monthly">Monthly · calendar month</NativeSelectOption>
               </NativeSelect>
             </label>
             <label>
               Billing timezone
-              <NativeSelect value={billingTimezone} onChange={(event) => setBillingTimezone(event.target.value)}>
+              <NativeSelect value={billingTimezone} onValueChange={setBillingTimezone}>
                 {timezoneOptions.map((option) => (
                   <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
                 ))}
@@ -5399,7 +5448,7 @@ function RevenuePartnerModal({
           <div className="form-grid">
             <label>
               Default Merit tax
-              <NativeSelect value={defaultMeritTaxId} onChange={(event) => setDefaultMeritTaxId(event.target.value)}>
+              <NativeSelect value={defaultMeritTaxId} onValueChange={setDefaultMeritTaxId}>
                 <NativeSelectOption value="">Choose before sending</NativeSelectOption>
                 {taxes.map((tax) => (
                   <NativeSelectOption key={tax.id} value={tax.id}>{tax.name} · {tax.taxPct}%</NativeSelectOption>

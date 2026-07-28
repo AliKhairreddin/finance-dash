@@ -1027,6 +1027,51 @@ textarea:focus-visible {
   letter-spacing: 0;
 }
 
+.sortable-table-heading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  width: 100%;
+  margin: -6px -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  text-transform: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.sortable-table-heading:hover {
+  color: var(--app-text);
+  background: var(--row-hover);
+}
+
+.sortable-table-heading:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 1px;
+}
+
+.sortable-table-heading.active {
+  color: var(--app-text);
+}
+
+.sortable-table-heading-idle {
+  opacity: 0.42;
+}
+
+th.amount .sortable-table-heading {
+  justify-content: flex-end;
+}
+
 .column-note {
   margin-left: 6px;
   color: var(--muted);
@@ -1510,6 +1555,28 @@ textarea:focus-visible {
     background-color 0.16s ease;
 }
 
+.searchable-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.searchable-select[data-disabled] {
+  opacity: 0.5;
+}
+
+.searchable-select[data-disabled] .searchable-select-control {
+  cursor: not-allowed;
+}
+
+.searchable-select[data-size="sm"] .searchable-select-control {
+  min-height: 30px;
+}
+
+.searchable-select[data-size="sm"] .searchable-select-input {
+  min-height: 28px;
+  font-size: 0.78rem;
+}
+
 .searchable-select-control:hover {
   border-color: var(--control-border-hover);
 }
@@ -1634,6 +1701,10 @@ textarea:focus-visible {
 .searchable-select-option[data-selected] {
   color: var(--blue);
   font-weight: 680;
+}
+
+.searchable-select-option[data-disabled] {
+  opacity: 0.48;
 }
 
 .searchable-select-option-indicator {
@@ -3349,6 +3420,12 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
+.income-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .selection-action-bar {
   display: flex;
   align-items: center;
@@ -3362,7 +3439,50 @@ textarea:focus-visible {
 }
 
 .invoice-filter-bar {
-  grid-template-columns: minmax(220px, 1.5fr) repeat(5, minmax(120px, 0.8fr)) auto;
+  grid-template-columns: minmax(190px, 1.35fr) repeat(5, minmax(92px, 0.7fr)) minmax(260px, 1.6fr) max-content;
+}
+
+.created-date-filter {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.created-date-filter legend {
+  padding: 0;
+  color: var(--label-text);
+  font-size: 0.74rem;
+  font-weight: 690;
+}
+
+.created-date-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.created-date-range label {
+  position: relative;
+  display: block;
+}
+
+.created-date-range label > span {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 9px;
+  color: var(--app-muted);
+  font-size: 0.67rem;
+  font-weight: 700;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.created-date-range input {
+  padding-left: 42px;
 }
 
 .income-search-field {
@@ -4013,6 +4133,16 @@ textarea:focus-visible {
   background: var(--subtle-bg);
 }
 
+@media (max-width: 1400px) {
+  .invoice-filter-bar {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
+  .created-date-filter {
+    grid-column: span 2;
+  }
+}
+
 @media (max-width: 1180px) {
   .liquidity-hero {
     grid-template-columns: 1fr;
@@ -4487,6 +4617,16 @@ textarea:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .income-panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .income-panel-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  }
+
   .wise-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4534,6 +4674,7 @@ textarea:focus-visible {
   }
 
   .income-search-field,
+  .created-date-filter,
   .all-bank-filter-bar .search-box,
   .income-pull-button,
   .clear-filter-button {

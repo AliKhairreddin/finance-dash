@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   CreateHoldingPayload,
@@ -26,6 +27,7 @@ const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "manual", label: "Manual" },
   { value: "tune", label: "TUNE" }
 ];
+type BankTransactionSortKey = "account" | "amount" | "category" | "counterparty" | "date" | "direction" | "source";
 
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
@@ -50,35 +52,70 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
   const [source, setSource] = useState<"all" | DataSource>("all");
   const [direction, setDirection] = useState<"all" | "in" | "out">("all");
   const [match, setMatch] = useState<"all" | "matched" | "unmatched">("all");
+  const [sortKey, setSortKey] = useState<BankTransactionSortKey>("date");
+  const [sortDirection, setSortDirection] = useState<TableSortDirection>("desc");
 
   const availableSources = useMemo(
     () => [...new Set(dashboard.transactions.map((transaction) => transaction.source))].sort(),
     [dashboard.transactions]
   );
-  const rows = dashboard.transactions
-    .filter((transaction) => {
-      if (source !== "all" && transaction.source !== source) return false;
-      if (direction !== "all" && transaction.direction !== direction) return false;
-      if (match === "matched" && !transaction.matchedProviderId && !transaction.matchedInvoiceId) return false;
-      if (match === "unmatched" && (transaction.matchedProviderId || transaction.matchedInvoiceId)) return false;
-      const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-      const search = query.trim().toLowerCase();
-      return !search || `${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
-    })
-    .sort((left, right) => right.date.localeCompare(left.date));
+  const rows = useMemo(() => {
+    function sortValue(transaction: Transaction): number | string {
+      if (sortKey === "account") return transaction.accountName;
+      if (sortKey === "amount") return transaction.amount;
+      if (sortKey === "category") return transaction.category;
+      if (sortKey === "counterparty") return transaction.counterparty;
+      if (sortKey === "date") return transaction.date;
+      if (sortKey === "direction") return transaction.direction;
+      return sourceLabel(transaction.source);
+    }
+
+    return dashboard.transactions
+      .filter((transaction) => {
+        if (source !== "all" && transaction.source !== source) return false;
+        if (direction !== "all" && transaction.direction !== direction) return false;
+        if (match === "matched" && !transaction.matchedProviderId && !transaction.matchedInvoiceId) return false;
+        if (match === "unmatched" && (transaction.matchedProviderId || transaction.matchedInvoiceId)) return false;
+        const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+        const search = query.trim().toLowerCase();
+        return !search || `${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
+      })
+      .sort((left, right) =>
+        compareTableValues(sortValue(left), sortValue(right), sortDirection)
+        || compareTableValues(left.date, right.date, "desc")
+        || left.id.localeCompare(right.id)
+      );
+  }, [dashboard.transactions, direction, match, providersById, query, sortDirection, sortKey, source]);
+
+  function requestSort(nextSortKey: BankTransactionSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection("asc");
+  }
 
   return (
     <section className="panel wide-panel">
       <div className="panel-header compact"><div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div><span className="total-pill">{rows.length} rows</span></div>
       <div className="income-filter-bar all-bank-filter-bar">
         <label className="income-search-field"><Search size={15} /><Input aria-label="Search all bank transactions" placeholder="Search counterparty, account, company" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <label>Source<NativeSelect value={source} onChange={(event) => setSource(event.target.value as "all" | DataSource)}><NativeSelectOption value="all">All sources</NativeSelectOption>{availableSources.map((item) => <NativeSelectOption key={item} value={item}>{sourceLabel(item)}</NativeSelectOption>)}</NativeSelect></label>
-        <label>Direction<NativeSelect value={direction} onChange={(event) => setDirection(event.target.value as "all" | "in" | "out")}><NativeSelectOption value="all">Money in & out</NativeSelectOption><NativeSelectOption value="in">Money in</NativeSelectOption><NativeSelectOption value="out">Money out</NativeSelectOption></NativeSelect></label>
-        <label>Match<NativeSelect value={match} onChange={(event) => setMatch(event.target.value as "all" | "matched" | "unmatched")}><NativeSelectOption value="all">All match states</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption><NativeSelectOption value="unmatched">Needs review</NativeSelectOption></NativeSelect></label>
+        <label>Source<NativeSelect value={source} onValueChange={(value) => setSource(value as "all" | DataSource)}><NativeSelectOption value="all">All sources</NativeSelectOption>{availableSources.map((item) => <NativeSelectOption key={item} value={item}>{sourceLabel(item)}</NativeSelectOption>)}</NativeSelect></label>
+        <label>Direction<NativeSelect value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}><NativeSelectOption value="all">Money in & out</NativeSelectOption><NativeSelectOption value="in">Money in</NativeSelectOption><NativeSelectOption value="out">Money out</NativeSelectOption></NativeSelect></label>
+        <label>Match<NativeSelect value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}><NativeSelectOption value="all">All match states</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption><NativeSelectOption value="unmatched">Needs review</NativeSelectOption></NativeSelect></label>
       </div>
       <div className="table-wrap">
         <table className="data-table modern-income-table unified-bank-table">
-          <thead><tr><th>Date</th><th>Source</th><th>Account</th><th>Counterparty</th><th>Direction</th><th>Category / match</th><th>Amount</th></tr></thead>
+          <thead><tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="date">Date</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">Account</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="counterparty">Counterparty</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="direction">Direction</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="category">Category / match</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
+          </tr></thead>
           <tbody>
             {rows.length > 0 ? rows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -195,7 +232,7 @@ function HoldingEditorDialog({ holding, onClose, onSubmit }: { holding?: Holding
     }
   }
 
-  return <div className="modal-backdrop" role="presentation"><form className="modal holding-editor-modal" role="dialog" aria-modal="true" aria-labelledby="holding-editor-title" onSubmit={handleSubmit}><div className="modal-header"><div><p className="eyebrow">Manual holding</p><h2 id="holding-editor-title">{holding ? `Edit ${holding.name}` : "Add cash or wallet"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>{error && <div className="inline-error">{error}</div>}<label>Name<Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Kraken, Trust Wallet, office cash" /></label><div className="form-grid"><label>Location type<NativeSelect value={kind} onChange={(event) => setKind(event.target.value as HoldingKind)}><NativeSelectOption value="cash">Cash</NativeSelectOption><NativeSelectOption value="exchange">Exchange</NativeSelectOption><NativeSelectOption value="wallet">Wallet</NativeSelectOption></NativeSelect></label><label>Asset type<NativeSelect value={assetType} onChange={(event) => setAssetType(event.target.value as HoldingAssetType)}><NativeSelectOption value="fiat">Fiat</NativeSelectOption><NativeSelectOption value="crypto">Crypto</NativeSelectOption></NativeSelect></label></div><div className="form-grid"><label>Currency / asset<Input value={asset} onChange={(event) => setAsset(event.target.value.toUpperCase())} placeholder={assetType === "crypto" ? "BTC" : "USD"} /></label><label>Balance<Input type="number" min="0" step="any" value={balance} onChange={(event) => setBalance(event.target.value)} /></label></div><label>Notes<Textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional custody or access note" /></label><div className="income-callout"><CircleAlert size={16} /><span>Crypto is displayed as a native quantity. Its approximate USD value appears when Coinbase supports the asset.</span></div><div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !name.trim() || !asset.trim() || !balanceIsValid}>{submitting ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Save holding</Button></div></form></div>;
+  return <div className="modal-backdrop" role="presentation"><form className="modal holding-editor-modal" role="dialog" aria-modal="true" aria-labelledby="holding-editor-title" onSubmit={handleSubmit}><div className="modal-header"><div><p className="eyebrow">Manual holding</p><h2 id="holding-editor-title">{holding ? `Edit ${holding.name}` : "Add cash or wallet"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>{error && <div className="inline-error">{error}</div>}<label>Name<Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Kraken, Trust Wallet, office cash" /></label><div className="form-grid"><label>Location type<NativeSelect value={kind} onValueChange={(value) => setKind(value as HoldingKind)}><NativeSelectOption value="cash">Cash</NativeSelectOption><NativeSelectOption value="exchange">Exchange</NativeSelectOption><NativeSelectOption value="wallet">Wallet</NativeSelectOption></NativeSelect></label><label>Asset type<NativeSelect value={assetType} onValueChange={(value) => setAssetType(value as HoldingAssetType)}><NativeSelectOption value="fiat">Fiat</NativeSelectOption><NativeSelectOption value="crypto">Crypto</NativeSelectOption></NativeSelect></label></div><div className="form-grid"><label>Currency / asset<Input value={asset} onChange={(event) => setAsset(event.target.value.toUpperCase())} placeholder={assetType === "crypto" ? "BTC" : "USD"} /></label><label>Balance<Input type="number" min="0" step="any" value={balance} onChange={(event) => setBalance(event.target.value)} /></label></div><label>Notes<Textarea rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional custody or access note" /></label><div className="income-callout"><CircleAlert size={16} /><span>Crypto is displayed as a native quantity. Its approximate USD value appears when Coinbase supports the asset.</span></div><div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !name.trim() || !asset.trim() || !balanceIsValid}>{submitting ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Save holding</Button></div></form></div>;
 }
 
 function DeleteHoldingDialog({ holding, onClose, onDelete }: { holding: Holding; onClose: () => void; onDelete: () => Promise<void> }) {

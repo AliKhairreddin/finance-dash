@@ -1,6 +1,7 @@
 import type {
   AccountBalance,
   ApproximateUsdTotals,
+  CurrencyTotals,
   FxRate,
   Holding,
   Invoice,
@@ -173,6 +174,44 @@ export function invoiceAllocatedAmount(invoiceId: string, allocations: PaymentAl
 
 export function invoiceOutstanding(invoice: Invoice, allocations: PaymentAllocation[]): number {
   return Math.max(0, Number((invoice.amount - invoiceAllocatedAmount(invoice.id, allocations)).toFixed(2)));
+}
+
+export interface InvoiceSummaryTotals {
+  accruing: CurrencyTotals;
+  drafts: CurrencyTotals;
+  expected: CurrencyTotals;
+  open: CurrencyTotals;
+}
+
+export function calculateInvoiceSummaryTotals(
+  invoices: Invoice[],
+  accruals: RevenueAccrual[],
+  allocations: PaymentAllocation[]
+): InvoiceSummaryTotals {
+  const open: CurrencyTotals = {};
+  const drafts: CurrencyTotals = {};
+  const accruing: CurrencyTotals = {};
+
+  function addTotal(totals: CurrencyTotals, currency: string, amount: number): void {
+    totals[currency] = Number(((totals[currency] ?? 0) + amount).toFixed(2));
+  }
+
+  for (const invoice of invoices) {
+    if (invoice.documentType !== "sales_invoice") continue;
+    if (invoice.status === "draft") addTotal(drafts, invoice.currency, invoice.amount);
+    if (invoice.status === "open") addTotal(open, invoice.currency, invoiceOutstanding(invoice, allocations));
+  }
+
+  for (const accrual of accruals) {
+    if (accrual.status === "accruing") addTotal(accruing, accrual.currency, accrual.amount);
+  }
+
+  const expected: CurrencyTotals = {};
+  for (const totals of [open, drafts, accruing]) {
+    for (const [currency, amount] of Object.entries(totals)) addTotal(expected, currency, amount);
+  }
+
+  return { open, drafts, accruing, expected };
 }
 
 export function openInvoiceReceivables(invoices: Invoice[], allocations: PaymentAllocation[]): LedgerItem[] {

@@ -19,6 +19,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   ManagementReportBankAggregate,
@@ -41,6 +42,7 @@ interface ManagementReportApiResponse {
 }
 
 type PerformanceDimension = "team" | "offer" | "platform";
+type LedgerSortKey = "bank" | "company" | "date" | "nativeAmount" | "nature" | "period" | "team" | "usdAmount";
 
 const wholeNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const percentNumber = new Intl.NumberFormat("en-US", {
@@ -373,7 +375,7 @@ function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
           detail={`${selected.reportLabel} · ${selected.latestPeriodLabel}`}
           trailing={
             <label className="management-report-field">Team
-              <NativeSelect value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
+              <NativeSelect value={selected.id} onValueChange={setSelectedId}>
                 {teams.map((team) => <NativeSelectOption key={team.id} value={team.id}>{team.name}{team.active ? "" : " · inactive"}</NativeSelectOption>)}
               </NativeSelect>
             </label>
@@ -502,17 +504,45 @@ function LedgerTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState("all");
   const [bank, setBank] = useState("all");
+  const [sortKey, setSortKey] = useState<LedgerSortKey>("date");
+  const [sortDirection, setSortDirection] = useState<TableSortDirection>("desc");
   const teamOptions = useMemo(() => [...new Set(dashboard.bank.recentEntries.map((entry) => entry.segment))].filter(Boolean).sort(), [dashboard.bank.recentEntries]);
   const bankOptions = useMemo(() => [...new Set(dashboard.bank.recentEntries.map((entry) => entry.bankName))].filter(Boolean).sort(), [dashboard.bank.recentEntries]);
   const visibleEntries = useMemo(() => {
+    function sortValue(entry: ManagementReportRecentBankEntry): boolean | number | string | undefined {
+      if (sortKey === "bank") return entry.bankName;
+      if (sortKey === "company") return entry.companyName;
+      if (sortKey === "date") return entry.date;
+      if (sortKey === "nativeAmount") return entry.amountIncludingVat;
+      if (sortKey === "nature") return entry.nature;
+      if (sortKey === "period") return entry.isPostClose;
+      if (sortKey === "team") return entry.segment;
+      return entry.hasUsdAmount ? entry.amountUsd : undefined;
+    }
+
     const normalizedQuery = query.trim().toLowerCase();
-    return dashboard.bank.recentEntries.filter((entry) => {
-      if (team !== "all" && entry.segment !== team) return false;
-      if (bank !== "all" && entry.bankName !== bank) return false;
-      if (!normalizedQuery) return true;
-      return `${entry.companyName} ${entry.bankName} ${entry.segment} ${entry.nature} ${entry.accountType} ${entry.currency}`.toLowerCase().includes(normalizedQuery);
-    });
-  }, [bank, dashboard.bank.recentEntries, query, team]);
+    return dashboard.bank.recentEntries
+      .filter((entry) => {
+        if (team !== "all" && entry.segment !== team) return false;
+        if (bank !== "all" && entry.bankName !== bank) return false;
+        if (!normalizedQuery) return true;
+        return `${entry.companyName} ${entry.bankName} ${entry.segment} ${entry.nature} ${entry.accountType} ${entry.currency}`.toLowerCase().includes(normalizedQuery);
+      })
+      .sort((left, right) =>
+        compareTableValues(sortValue(left), sortValue(right), sortDirection)
+        || compareTableValues(left.date, right.date, "desc")
+        || left.entryId.localeCompare(right.entryId)
+      );
+  }, [bank, dashboard.bank.recentEntries, query, sortDirection, sortKey, team]);
+
+  function requestSort(nextSortKey: LedgerSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection("asc");
+  }
   const bankAggregates = dashboard.bank.aggregates.filter((aggregate) => aggregate.dimension === "bank");
   const kpis: ManagementReportKpi[] = [
     { id: "bank-income", label: "Bank income", value: dashboard.summary.bankIncome, unit: "currency", currency: "USD", tone: "positive", detail: `Official through ${dateLabel(dashboard.bank.officialThrough)}` },
@@ -533,16 +563,25 @@ function LedgerTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
             <span className="management-report-search"><Search size={14} aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Company, team, nature" /></span>
           </label>
           <label className="management-report-field">Team / segment
-            <NativeSelect value={team} onChange={(event) => setTeam(event.target.value)}><NativeSelectOption value="all">All teams</NativeSelectOption>{teamOptions.map((option) => <NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}</NativeSelect>
+            <NativeSelect value={team} onValueChange={setTeam}><NativeSelectOption value="all">All teams</NativeSelectOption>{teamOptions.map((option) => <NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}</NativeSelect>
           </label>
           <label className="management-report-field">Bank source
-            <NativeSelect value={bank} onChange={(event) => setBank(event.target.value)}><NativeSelectOption value="all">All banks</NativeSelectOption>{bankOptions.map((option) => <NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}</NativeSelect>
+            <NativeSelect value={bank} onValueChange={setBank}><NativeSelectOption value="all">All banks</NativeSelectOption>{bankOptions.map((option) => <NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}</NativeSelect>
           </label>
         </div>
         <div className="management-report-table-wrap">
           <table className="management-report-table">
             <caption>Sanitized recent consolidated bank entries</caption>
-            <thead><tr><th scope="col">Date</th><th scope="col">Company</th><th scope="col">Bank source</th><th scope="col">Team / segment</th><th scope="col">Nature</th><th className="amount" scope="col">Native amount</th><th className="amount" scope="col">USD amount</th><th scope="col">Period</th></tr></thead>
+            <thead><tr>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="date">Date</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="company">Company</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="bank">Bank source</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="team">Team / segment</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="nature">Nature</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="nativeAmount">Native amount</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="usdAmount">USD amount</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="period">Period</SortableTableHead>
+            </tr></thead>
             <tbody>{visibleEntries.length > 0 ? visibleEntries.map((entry) => <tr key={entry.entryId}><td>{dateLabel(entry.date)}</td><td>{entry.companyName}</td><td>{entry.bankName}</td><td>{entry.segment}</td><td className="wrap"><strong>{entry.nature}</strong><small>{entry.accountType}</small></td><td className={`amount ${bankEntryTone(entry)}`}>{money(entry.amountIncludingVat, entry.currency, 2)}</td><td className={`amount ${bankEntryTone(entry)}`}>{entry.hasUsdAmount ? money(entry.amountUsd, "USD", 2) : "—"}</td><td>{entry.isPostClose ? <span className="management-report-entity-status inactive"><Clock3 size={11} aria-hidden="true" />Post-close</span> : <span className="management-report-entity-status"><CheckCircle2 size={11} aria-hidden="true" />Official</span>}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No sanitized ledger entries match these filters.</td></tr>}</tbody>
           </table>
         </div>

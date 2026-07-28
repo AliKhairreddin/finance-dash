@@ -4,6 +4,7 @@ import {
   applyPaymentState,
   buildRevenueDraft,
   calculateApproximateUsdTotals,
+  calculateInvoiceSummaryTotals,
   calculateInvoicePredictions,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
@@ -266,6 +267,57 @@ test("partial allocations keep an invoice open until fully covered", () => {
     )[0].status,
     "paid"
   );
+});
+
+test("invoice summary totals describe only the supplied visible rows", () => {
+  const visibleOpenInvoice = openInvoice({ amount: 1000 });
+  const visibleDraft = openInvoice({
+    id: "visible-draft",
+    amount: 250,
+    currency: "EUR",
+    status: "draft",
+    meritDeliveryStatus: "not-sent",
+    externalId: undefined,
+    sentAt: undefined
+  });
+  const allocation: PaymentAllocation = {
+    id: "visible-payment",
+    invoiceId: visibleOpenInvoice.id,
+    amount: 400,
+    currency: "USD",
+    source: "wise",
+    mode: "manual",
+    paidAt: "2026-07-10",
+    createdAt: "2026-07-10T12:00:00.000Z"
+  };
+  const visibleAccrual = {
+    id: "visible-accrual",
+    partnerId: partner.id,
+    providerId: partner.providerId,
+    partnerName: partner.name,
+    revenueCategory: partner.revenueCategory,
+    source: "tune" as const,
+    billingCadence: "weekly" as const,
+    periodStart: "2026-07-20",
+    periodEnd: "2026-07-26",
+    accruedThrough: "2026-07-22",
+    amount: 125,
+    currency: "USD",
+    status: "accruing" as const,
+    revenueRunId: "run-accruing",
+    updatedAt: "2026-07-22T06:00:00.000Z"
+  };
+
+  const totals = calculateInvoiceSummaryTotals(
+    [visibleOpenInvoice, visibleDraft],
+    [visibleAccrual],
+    [allocation]
+  );
+
+  assert.deepEqual(totals.open, { USD: 600 });
+  assert.deepEqual(totals.drafts, { EUR: 250 });
+  assert.deepEqual(totals.accruing, { USD: 125 });
+  assert.deepEqual(totals.expected, { USD: 725, EUR: 250 });
 });
 
 test("open invoice receivables group outstanding balances by currency", () => {
