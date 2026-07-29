@@ -115,6 +115,7 @@ import {
   profitDistributionBucketLabels,
   profitDistributionPartners
 } from "../shared/distribution";
+import { expenseAnalyticsLabel, groupExpenseAnalytics } from "../shared/expenseAnalytics";
 import {
   hasNonZeroAccountBalance,
   isLiquidAccountBalance,
@@ -469,6 +470,13 @@ type CategoryPieSegment = {
   amount: number;
   count: number;
   color: string;
+  breakdowns?: CategoryPieBreakdown[];
+};
+
+type CategoryPieBreakdown = {
+  label: string;
+  amount: number;
+  count: number;
 };
 
 type CategoryPieGroup = {
@@ -592,6 +600,44 @@ function categoryPieGroups(
     })
     .filter((group) => group.total > 0)
     .sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
+}
+
+function expenseCategoryPieGroups(
+  rows: Transaction[],
+  providersById: Map<string, Provider>
+): CategoryPieGroup[] {
+  const companyNamesById = new Map(
+    [...providersById.entries()].map(([providerId, provider]) => [providerId, provider.name])
+  );
+  const assignedColors = new Map<string, string>();
+  const usedColors = new Set<string>();
+  let colorIndex = 0;
+
+  return groupExpenseAnalytics(rows, companyNamesById).map((group) => ({
+    currency: group.currency,
+    total: group.total,
+    segments: group.categories.map((category) => {
+      const assignedColor = assignedColors.get(category.category);
+      const color = assignedColor ?? categoryChartColor(category.category, usedColors, colorIndex);
+      if (!assignedColor) {
+        assignedColors.set(category.category, color);
+        usedColors.add(color);
+        colorIndex += 1;
+      }
+
+      return {
+        category: category.category,
+        amount: category.amount,
+        count: category.transactionCount,
+        color,
+        breakdowns: category.attributions.map((attribution) => ({
+          label: attribution.label,
+          amount: attribution.amount,
+          count: attribution.transactionCount
+        }))
+      };
+    })
+  }));
 }
 
 function formatShare(amount: number, total: number): string {
@@ -2754,21 +2800,31 @@ function AnalyticsView({
     map.set(category, [...(map.get(category) ?? []), transaction]);
     return map;
   }, new Map<string, Transaction[]>())]
-    .map(([category, transactions]) => ({
-      category,
-      transactions,
-      matched: transactions.filter((transaction) => transaction.matchedProviderId).length,
-      companies: [
-        ...new Set(
-          transactions
-            .map((transaction) => (transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name : undefined))
-            .filter(Boolean)
-        )
-      ] as string[]
-    }))
+    .map(([category, transactions]) => {
+      const companiesByName = new Map<string, string>();
+      for (const transaction of transactions) {
+        const providerName = transaction.matchedProviderId
+          ? providersById.get(transaction.matchedProviderId)?.name
+          : undefined;
+        const name = providerName || (
+          transaction.direction === "out" ? expenseAnalyticsLabel(transaction) : undefined
+        );
+        if (name) {
+          const key = normalizeLookupName(name);
+          if (!companiesByName.has(key)) companiesByName.set(key, name);
+        }
+      }
+
+      return {
+        category,
+        transactions,
+        matched: transactions.filter((transaction) => transaction.matchedProviderId).length,
+        companies: [...companiesByName.values()]
+      };
+    })
     .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
 
-  const spendPieGroups = categoryPieGroups(rows, "out");
+  const spendPieGroups = expenseCategoryPieGroups(rows, providersById);
   const revenuePieGroups = categoryPieGroups(filteredRevenueRows, "in", (transaction) =>
     revenuePieLabelForBreakdown(transaction, revenuePieBreakdown, providersById, teamsById)
   );
@@ -2860,10 +2916,15 @@ function AnalyticsView({
   const companyRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     const category = effectiveCategory(transaction);
-    const key = provider?.id ?? `unmatched-${category}`;
+    const fallbackName = transaction.direction === "out" ? expenseAnalyticsLabel(transaction) : "Unmatched counterparty";
+    const key = provider?.id ?? (
+      transaction.direction === "out"
+        ? `unmatched-${category}-${normalizeLookupName(fallbackName)}`
+        : `unmatched-${category}`
+    );
     const existing = map.get(key) ?? {
       id: key,
-      name: provider?.name ?? "Unmatched counterparty",
+      name: provider?.name ?? fallbackName,
       relationship: provider ? providerTypeLabel(provider.type) : "Unknown",
       category,
       transactions: [] as Transaction[]
@@ -3219,30 +3280,68 @@ function CategoryPiePanel({
 }
 
 function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const activeSegment = group.segments.find((segment) => segment.category === activeCategory && segment.breakdowns?.length);
+
   return (
     <div className="category-pie-group">
       <div className="category-pie-visual">
-        <CategoryPieSvg group={group} />
+        <CategoryPieSvg group={group} activeCategory={activeCategory} onActivateCategory={setActiveCategory} />
         <div className="pie-center">
           <span>{group.currency}</span>
           <strong>{compactMoney(group.total, group.currency)}</strong>
         </div>
       </div>
       <div className="category-legend" aria-label={`${group.currency} category share`}>
-        {group.segments.map((segment) => (
-          <div className="category-legend-row" key={segment.category}>
-            <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
-            <span className="legend-name" title={segment.category}>{segment.category}</span>
-            <strong>{money(segment.amount, group.currency)}</strong>
-            <small>{formatShare(segment.amount, group.total)}</small>
+        {group.segments.map((segment) => {
+          const canInspect = Boolean(segment.breakdowns?.length);
+          return (
+            <div
+              aria-label={canInspect ? `Show ${segment.category} company breakdown` : undefined}
+              className={`category-legend-row ${canInspect ? "inspectable" : ""} ${activeCategory === segment.category ? "active" : ""}`}
+              key={segment.category}
+              onClick={canInspect ? () => setActiveCategory(segment.category) : undefined}
+              onFocus={canInspect ? () => setActiveCategory(segment.category) : undefined}
+              onMouseEnter={canInspect ? () => setActiveCategory(segment.category) : undefined}
+              role={canInspect ? "button" : undefined}
+              tabIndex={canInspect ? 0 : undefined}
+            >
+              <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
+              <span className="legend-name" title={segment.category}>{segment.category}</span>
+              <strong>{money(segment.amount, group.currency)}</strong>
+              <small>{formatShare(segment.amount, group.total)}</small>
+            </div>
+          );
+        })}
+        {activeSegment?.breakdowns && (
+          <div className="category-attribution-breakdown" aria-live="polite">
+            <div className="category-attribution-heading">
+              <strong>{activeSegment.category}</strong>
+              <span>Company or transaction title</span>
+            </div>
+            {activeSegment.breakdowns.map((breakdown) => (
+              <div className="category-attribution-row" key={breakdown.label}>
+                <span title={breakdown.label}>{breakdown.label}</span>
+                <strong>{money(breakdown.amount, group.currency)}</strong>
+                <small>{formatShare(breakdown.amount, activeSegment.amount)}</small>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
 }
 
-function CategoryPieSvg({ group }: { group: CategoryPieGroup }) {
+function CategoryPieSvg({
+  group,
+  activeCategory,
+  onActivateCategory
+}: {
+  group: CategoryPieGroup;
+  activeCategory: string | null;
+  onActivateCategory: (category: string) => void;
+}) {
   const radius = 42;
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
@@ -3257,14 +3356,19 @@ function CategoryPieSvg({ group }: { group: CategoryPieGroup }) {
         offset += dash;
         return (
           <circle
-            className="pie-segment"
+            aria-label={`${segment.category}: ${money(segment.amount, group.currency)} (${formatShare(segment.amount, group.total)})`}
+            className={`pie-segment ${activeCategory === segment.category ? "active" : ""}`}
             cx="60"
             cy="60"
             r={radius}
             key={segment.category}
+            onClick={() => onActivateCategory(segment.category)}
+            onFocus={() => onActivateCategory(segment.category)}
+            onMouseEnter={() => onActivateCategory(segment.category)}
             stroke={segment.color}
             strokeDasharray={strokeDasharray}
             strokeDashoffset={strokeDashoffset}
+            tabIndex={segment.breakdowns?.length ? 0 : undefined}
           >
             <title>
               {segment.category}: {money(segment.amount, group.currency)} ({formatShare(segment.amount, group.total)})

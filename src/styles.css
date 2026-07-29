@@ -2751,6 +2751,10 @@ th.amount .sortable-table-heading {
   stroke-width: 20;
 }
 
+.pie-segment.active {
+  stroke-width: 20;
+}
+
 .pie-center {
   position: absolute;
   inset: 50% auto auto 50%;
@@ -2800,6 +2804,20 @@ th.amount .sortable-table-heading {
   font-size: 0.8rem;
 }
 
+.category-legend-row.inspectable {
+  margin: 0 -5px;
+  padding: 0 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+}
+
+.category-legend-row.inspectable:hover,
+.category-legend-row.inspectable:focus-visible,
+.category-legend-row.inspectable.active {
+  background: var(--control-bg);
+}
+
 .legend-swatch {
   width: 10px;
   height: 10px;
@@ -2818,6 +2836,59 @@ th.amount .sortable-table-heading {
   color: var(--ink);
   font-variant-numeric: lining-nums tabular-nums;
   white-space: nowrap;
+}
+
+.category-attribution-breakdown {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+.category-attribution-heading,
+.category-attribution-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.category-attribution-heading {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.category-attribution-heading span {
+  grid-column: 1 / -1;
+  color: var(--app-muted);
+  font-size: 0.7rem;
+}
+
+.category-attribution-row {
+  min-height: 24px;
+  font-size: 0.76rem;
+}
+
+.category-attribution-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-attribution-row strong {
+  font-variant-numeric: lining-nums tabular-nums;
+  white-space: nowrap;
+}
+
+.category-attribution-row small {
+  min-width: 32px;
+  color: var(--app-muted);
+  font-weight: 720;
+  text-align: right;
 }
 
 .company-list-cell {
