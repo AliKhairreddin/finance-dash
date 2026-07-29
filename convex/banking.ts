@@ -89,8 +89,18 @@ export const getActivity = query({
         .unique()
     ]);
     return {
-      accounts: accounts.map(({ syncedAt: _syncedAt, ...item }) => item),
-      transactions: transactions.map(({ syncedAt: _syncedAt, ...item }) => item),
+      accounts: accounts.map(({
+        _creationTime: _creationTime,
+        _id: _id,
+        syncedAt: _syncedAt,
+        ...item
+      }) => item),
+      transactions: transactions.map(({
+        _creationTime: _creationTime,
+        _id: _id,
+        syncedAt: _syncedAt,
+        ...item
+      }) => item),
       syncState: syncState
           ? {
             source: syncState.source,
@@ -138,7 +148,12 @@ export const getTransaction = query({
       .withIndex("by_transaction_id", (q) => q.eq("id", args.id))
       .unique();
     if (!item) return null;
-    const { syncedAt: _syncedAt, ...result } = item;
+    const {
+      _creationTime: _creationTime,
+      _id: _id,
+      syncedAt: _syncedAt,
+      ...result
+    } = item;
     return result;
   }
 });
