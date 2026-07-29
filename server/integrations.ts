@@ -146,7 +146,7 @@ export function getIntegrationStatus(
       mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
         bankIssues.revolut ?? (revolutNeeds.length === 0
-          ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
+          ? "Transactions are saved in Convex and refreshed incrementally every 15 minutes or on Sync."
           : "Revolut rows stay empty until the client ID, issuer, certificate private key, and refresh token are configured."),
       needs: revolutNeeds,
       issue: bankIssues.revolut
@@ -158,7 +158,7 @@ export function getIntegrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Slash balances and a recent transaction window sync automatically; exact dates and older activity can be loaded from the Slash view."
+          ? "Transactions are saved in Convex, refreshed incrementally every 15 minutes, and older dates are backfilled only when requested."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -226,7 +226,12 @@ export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   const token = process.env.WISE_API_TOKEN;
   const profileIds = parseWiseProfileIds(process.env.WISE_PROFILE_IDS);
   if (!token || profileIds.size === 0) return { accounts: [], transactions: [], statementIssues: [] };
-  return fetchWiseActivityForAccessibleBusinesses({ baseUrl: wiseBaseUrl, token, profileIds });
+  return fetchWiseActivityForAccessibleBusinesses({
+    baseUrl: wiseBaseUrl,
+    token,
+    profileIds,
+    includeTransactions: false
+  });
 }
 
 export async function fetchRevolutActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {

@@ -27,8 +27,14 @@ interface RevolutCredentials {
 
 interface RevolutActivityOptions extends RevolutCredentials {
   refreshToken?: string;
+  dateRange?: RevolutTransactionDateRange;
   fetcher?: typeof fetch;
   now?: number;
+}
+
+export interface RevolutTransactionDateRange {
+  fromDate: string;
+  toDate: string;
 }
 
 interface RevolutAuthorizationOptions extends RevolutCredentials {
@@ -94,6 +100,36 @@ function requiredCredential(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) throw new Error(`Revolut ${name} is required`);
   return normalized;
+}
+
+function requiredIsoDate(value: string, field: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${field} must use YYYY-MM-DD`);
+  }
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+    throw new Error(`${field} is not a valid date`);
+  }
+  return value;
+}
+
+function revolutDateRange(
+  dateRange: RevolutTransactionDateRange | undefined,
+  now: number
+): { from: string; to: string } {
+  if (!dateRange) {
+    return {
+      from: new Date(now - revolutActivityWindowMs).toISOString(),
+      to: new Date(now).toISOString()
+    };
+  }
+  const fromDate = requiredIsoDate(dateRange.fromDate, "Revolut from date");
+  const toDate = requiredIsoDate(dateRange.toDate, "Revolut to date");
+  if (fromDate > toDate) throw new Error("Revolut from date must be on or before the to date");
+  return {
+    from: `${fromDate}T00:00:00.000Z`,
+    to: `${toDate}T23:59:59.999Z`
+  };
 }
 
 function normalizedIssuer(value: string): string {
@@ -346,6 +382,7 @@ export async function fetchRevolutActivity({
   issuer,
   privateKeyPem,
   refreshToken,
+  dateRange,
   fetcher = fetch,
   now = Date.now()
 }: RevolutActivityOptions): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
@@ -367,16 +404,15 @@ export async function fetchRevolutActivity({
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json"
   };
-  const intervalEnd = new Date(now).toISOString();
-  const intervalStart = new Date(now - revolutActivityWindowMs).toISOString();
+  const interval = revolutDateRange(dateRange, now);
   const [revolutAccounts, revolutTransactions] = await Promise.all([
     fetchRevolutJson<RevolutAccount[]>(fetcher, `${baseUrl}/accounts`, { headers }),
     fetchRevolutTransactions({
       baseUrl,
       headers,
       fetcher,
-      from: intervalStart,
-      to: intervalEnd
+      from: interval.from,
+      to: interval.to
     })
   ]);
 

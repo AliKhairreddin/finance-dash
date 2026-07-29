@@ -554,7 +554,7 @@ test("live sync returns fresh rows without adding them to persisted dashboard st
   );
 });
 
-test("dashboard persistence cannot serialize live Slash rows", () => {
+test("dashboard singleton persistence contains only imported Wise rows", () => {
   const transaction = (id: string, source: Transaction["source"]): Transaction => ({
     id,
     source,
@@ -576,10 +576,7 @@ test("dashboard persistence cannot serialize live Slash rows", () => {
       transaction("wise-imported", "wise"),
       transaction("revolut-edited", "revolut")
     ]),
-    [
-      transaction("wise-imported", "wise"),
-      transaction("revolut-edited", "revolut")
-    ]
+    [transaction("wise-imported", "wise")]
   );
 });
 

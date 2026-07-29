@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConvexError } from "convex/values";
-import type { AutomationRun, Invoice, RevenueRun } from "../shared/types";
+import type { AutomationRun, Invoice, RevenueRun, Transaction } from "../shared/types";
 import {
   finalizeInvoiceCreation,
+  getWiseResetPreview,
   getState,
+  resetWiseImports,
   reserveIncomeAutomation,
   reserveInvoiceCreation,
   saveState
@@ -35,6 +37,14 @@ const finalizeInvoiceCreationHandler = handlerOf<
   { serviceToken: string; invoice: Invoice },
   { updatedAt: string }
 >(finalizeInvoiceCreation);
+const getWiseResetPreviewHandler = handlerOf<
+  { serviceToken: string },
+  { transactions: number; imports: number }
+>(getWiseResetPreview);
+const resetWiseImportsHandler = handlerOf<
+  { serviceToken: string },
+  { deletedTransactions: number; deletedImports: number; updatedAt: string }
+>(resetWiseImports);
 function convexErrorCode(error: unknown): string | undefined {
   return error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data
     ? String(error.data.code)
@@ -75,6 +85,60 @@ test("dashboard state rejects stale whole-state writes", async () => {
         return true;
       }
     );
+  });
+});
+
+test("Wise reset removes only imported Wise rows and import history", async () => {
+  await withServiceToken(async () => {
+    const transaction = (id: string, source: Transaction["source"]): Transaction => ({
+      id,
+      source,
+      accountName: "Operating",
+      date: "2026-07-28",
+      description: "Activity",
+      rawName: "Activity",
+      counterparty: "Activity",
+      amount: 10,
+      currency: "USD",
+      direction: "out",
+      status: "posted",
+      category: "Review"
+    });
+    const state = {
+      _id: "dashboard-state",
+      updatedAt: "2026-07-28T00:00:00.000Z",
+      wiseStatementTransactions: [
+        transaction("wise-1", "wise"),
+        transaction("revolut-1", "revolut")
+      ],
+      wiseStatementImports: [
+        {
+          id: "import-1",
+          balanceId: "balance-1",
+          currency: "USD",
+          periodStart: "2026-07-01",
+          periodEnd: "2026-07-28",
+          fileName: "wise.csv",
+          transactionCount: 1,
+          importedAt: "2026-07-28T00:00:00.000Z"
+        }
+      ]
+    };
+    const ctx = {
+      db: {
+        query: () => ({ withIndex: () => ({ unique: async () => state }) }),
+        patch: async (_id: string, patch: Partial<typeof state>) => Object.assign(state, patch)
+      }
+    };
+    assert.deepEqual(
+      await getWiseResetPreviewHandler(ctx, { serviceToken: "expected-token" }),
+      { transactions: 1, imports: 1 }
+    );
+    const result = await resetWiseImportsHandler(ctx, { serviceToken: "expected-token" });
+    assert.equal(result.deletedTransactions, 1);
+    assert.equal(result.deletedImports, 1);
+    assert.deepEqual(state.wiseStatementTransactions.map((item) => item.id), ["revolut-1"]);
+    assert.deepEqual(state.wiseStatementImports, []);
   });
 });
 

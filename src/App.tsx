@@ -12,7 +12,6 @@ import {
   CircleDollarSign,
   CreditCard,
   FilePlus2,
-  Filter,
   Info,
   KeyRound,
   Loader2,
@@ -48,6 +47,7 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ActiveFilterBar, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -908,13 +908,16 @@ function App() {
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(apiUrlWithSlashDateRange("/sync", dateRange), { method: "POST" });
+      const response = await fetch(
+        apiUrlWithSlashDateRange("/banks/slash/load", dateRange),
+        { method: "POST" }
+      );
       if (!response.ok) {
         throw new Error(await apiErrorMessage(response, "Slash transactions could not be loaded"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       setSlashDateRange(dateRange);
-      setNotice(`Loaded Slash transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
+      setNotice(`Loaded saved Slash transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Slash transactions could not be loaded");
     } finally {
@@ -2603,95 +2606,94 @@ function BankReconciliationView({
 
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
-      <div className="panel-header">
+      <div className="panel-header bank-reconciliation-header">
         <div>
           <p className="eyebrow">{sourceLabel} reconciliation</p>
           <h2>Match incoming payments and outgoing spend</h2>
         </div>
-        <div className="filters">
-          <div className="segmented-control" aria-label={`${sourceLabel} transaction direction`}>
-            <button className={bankDirection === "in" ? "active" : ""} onClick={() => setBankDirection("in")}>
-              <ArrowUpRight size={15} />
-              In
-            </button>
-            <button className={bankDirection === "out" ? "active" : ""} onClick={() => setBankDirection("out")}>
-              <ArrowDownRight size={15} />
-              Out
-            </button>
-          </div>
-          <label className="search-box">
-            <Search size={15} />
-            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search transactions" />
-          </label>
-          <label>
-            <Filter size={15} />
-            <NativeSelect value={matchFilter} onValueChange={setMatchFilter}>
+        <div className="list-toolbar reconciliation-toolbar">
+          <div className="list-toolbar-main">
+            <div className="segmented-control" aria-label={`${sourceLabel} transaction direction`}>
+              <button className={bankDirection === "in" ? "active" : ""} onClick={() => setBankDirection("in")}>
+                <ArrowUpRight size={15} />
+                In
+              </button>
+              <button className={bankDirection === "out" ? "active" : ""} onClick={() => setBankDirection("out")}>
+                <ArrowDownRight size={15} />
+                Out
+              </button>
+            </div>
+            <ToolbarSearchField
+              ariaLabel={`Search ${sourceLabel} transactions`}
+              placeholder="Search transactions"
+              value={searchTerm}
+              onChange={setSearchTerm}
+            />
+            <NativeSelect
+              aria-label="Match status"
+              className="promoted-filter-select"
+              value={matchFilter}
+              onValueChange={setMatchFilter}
+            >
               <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
               <NativeSelectOption value="matched">Matched</NativeSelectOption>
               <NativeSelectOption value="all">All rows</NativeSelectOption>
             </NativeSelect>
-          </label>
-          <label>
-            <SlidersHorizontal size={15} />
-            <NativeSelect value={transactionSortKey} onValueChange={(value) => setTransactionSortKey(value as TransactionSortKey)}>
-              <NativeSelectOption value="match">% match</NativeSelectOption>
-              <NativeSelectOption value="date">Date</NativeSelectOption>
-              <NativeSelectOption value="period">Period</NativeSelectOption>
-              <NativeSelectOption value="amount">Amount</NativeSelectOption>
-              <NativeSelectOption value="category">Category</NativeSelectOption>
-              <NativeSelectOption value="counterparty">Counterparty</NativeSelectOption>
-              <NativeSelectOption value="direction">Direction</NativeSelectOption>
-              <NativeSelectOption value="cardHolder">Card holder</NativeSelectOption>
-              <NativeSelectOption value="team">Team</NativeSelectOption>
-              <NativeSelectOption value="company">Company</NativeSelectOption>
-              <NativeSelectOption value="document">Document</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            Order
-            <NativeSelect value={transactionSortDirection} onValueChange={(value) => setTransactionSortDirection(value as SortDirection)}>
-              <NativeSelectOption value="desc">Descending</NativeSelectOption>
-              <NativeSelectOption value="asc">Ascending</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <label>
-            Team
-            <NativeSelect value={teamFilter} onValueChange={setTeamFilter}>
-              <NativeSelectOption value="all">All teams</NativeSelectOption>
-              <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
-              {dashboard.teams.map((team) => (
-                <NativeSelectOption key={team.id} value={team.id}>
-                  {team.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
-          <button
-            className="secondary-button"
-            onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
-            disabled={isCategorizing || rows.length === 0}
-          >
-            {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-            Auto
-          </button>
-          {onImportWiseStatements && (
-            <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-              {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-              CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                multiple
-                disabled={isImportingWise}
-                onChange={(event) => {
-                  void onImportWiseStatements(event.target.files);
-                  event.target.value = "";
-                }}
-              />
-            </label>
-          )}
+            <FilterPopover activeCount={teamFilter === "all" ? 0 : 1} title="Transaction filters">
+              <FilterFieldGroup title="Ownership">
+                <label>
+                  Team
+                  <NativeSelect aria-label="Filter transactions by team" value={teamFilter} onValueChange={setTeamFilter}>
+                    <NativeSelectOption value="all">All teams</NativeSelectOption>
+                    <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
+                    {dashboard.teams.map((team) => (
+                      <NativeSelectOption key={team.id} value={team.id}>
+                        {team.name}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              </FilterFieldGroup>
+            </FilterPopover>
+          </div>
+          <div className="list-toolbar-actions">
+            <button
+              className="secondary-button"
+              title={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
+              onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
+              disabled={isCategorizing || rows.length === 0}
+            >
+              {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+              Auto-categorize
+            </button>
+            {onImportWiseStatements && (
+              <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+                {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                Import CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  multiple
+                  disabled={isImportingWise}
+                  onChange={(event) => {
+                    void onImportWiseStatements(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            )}
+          </div>
         </div>
       </div>
+      <ActiveFilterBar
+        filters={teamFilter === "all" ? [] : [{
+          key: "team",
+          label: `Team: ${teamFilter === "unassigned" ? "Unassigned" : teamsById.get(teamFilter)?.name ?? teamFilter}`,
+          onRemove: () => setTeamFilter("all")
+        }]}
+        resultLabel={`${rows.length} transactions shown`}
+        onClearAll={() => setTeamFilter("all")}
+      />
       {rangeControls}
       <div className="wise-summary-grid">
         <SummaryTile

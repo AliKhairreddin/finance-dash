@@ -1,7 +1,8 @@
-import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Edit3, Loader2, Plus, RefreshCw, Search, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { ActiveFilterBar, type ActiveFilter, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -97,15 +98,76 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
     setSortDirection("asc");
   }
 
+  const bankActiveFilters: ActiveFilter[] = [
+    ...(source === "all" ? [] : [{
+      key: "source",
+      label: `Source: ${sourceLabel(source)}`,
+      onRemove: () => setSource("all")
+    }]),
+    ...(direction === "all" ? [] : [{
+      key: "direction",
+      label: `Direction: ${direction === "in" ? "Money in" : "Money out"}`,
+      onRemove: () => setDirection("all")
+    }]),
+    ...(match === "all" ? [] : [{
+      key: "match",
+      label: match === "matched" ? "Match: Matched" : "Match: Needs review",
+      onRemove: () => setMatch("all")
+    }])
+  ];
+
   return (
     <section className="panel wide-panel">
       <div className="panel-header compact"><div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div><span className="total-pill">{rows.length} rows</span></div>
-      <div className="income-filter-bar all-bank-filter-bar">
-        <label className="income-search-field"><Search size={15} /><Input aria-label="Search all bank transactions" placeholder="Search counterparty, account, company" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <label>Source<NativeSelect value={source} onValueChange={(value) => setSource(value as "all" | DataSource)}><NativeSelectOption value="all">All sources</NativeSelectOption>{availableSources.map((item) => <NativeSelectOption key={item} value={item}>{sourceLabel(item)}</NativeSelectOption>)}</NativeSelect></label>
-        <label>Direction<NativeSelect value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}><NativeSelectOption value="all">Money in & out</NativeSelectOption><NativeSelectOption value="in">Money in</NativeSelectOption><NativeSelectOption value="out">Money out</NativeSelectOption></NativeSelect></label>
-        <label>Match<NativeSelect value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}><NativeSelectOption value="all">All match states</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption><NativeSelectOption value="unmatched">Needs review</NativeSelectOption></NativeSelect></label>
+      <div className="list-toolbar unified-bank-toolbar">
+        <div className="list-toolbar-main">
+          <ToolbarSearchField
+            ariaLabel="Search all bank transactions"
+            className="bank-toolbar-search"
+            placeholder="Search counterparty, account, company"
+            value={query}
+            onChange={setQuery}
+          />
+          <NativeSelect
+            aria-label="Filter bank transactions by source"
+            className="promoted-filter-select bank-source-filter"
+            value={source}
+            onValueChange={(value) => setSource(value as "all" | DataSource)}
+          >
+            <NativeSelectOption value="all">All sources</NativeSelectOption>
+            {availableSources.map((item) => <NativeSelectOption key={item} value={item}>{sourceLabel(item)}</NativeSelectOption>)}
+          </NativeSelect>
+          <FilterPopover activeCount={bankActiveFilters.length} title="Bank transaction filters">
+            <FilterFieldGroup title="Transaction">
+              <label>
+                Direction
+                <NativeSelect aria-label="Filter bank transactions by direction" value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}>
+                  <NativeSelectOption value="all">Money in & out</NativeSelectOption>
+                  <NativeSelectOption value="in">Money in</NativeSelectOption>
+                  <NativeSelectOption value="out">Money out</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <label>
+                Match
+                <NativeSelect aria-label="Filter bank transactions by match state" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
+                  <NativeSelectOption value="all">All match states</NativeSelectOption>
+                  <NativeSelectOption value="matched">Matched</NativeSelectOption>
+                  <NativeSelectOption value="unmatched">Needs review</NativeSelectOption>
+                </NativeSelect>
+              </label>
+            </FilterFieldGroup>
+          </FilterPopover>
+        </div>
       </div>
+      <ActiveFilterBar
+        filters={bankActiveFilters}
+        resultLabel={`${rows.length} bank transactions shown`}
+        onClearAll={() => {
+          setSource("all");
+          setDirection("all");
+          setMatch("all");
+        }}
+      />
       <div className="table-wrap">
         <table className="data-table modern-income-table unified-bank-table">
           <thead><tr>

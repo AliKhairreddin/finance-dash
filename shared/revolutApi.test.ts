@@ -109,6 +109,8 @@ test("Revolut activity signs a fresh assertion and excludes unsuccessful transac
       ]);
     }
     assert.deepEqual(url.searchParams.getAll("state"), ["created", "pending", "completed"]);
+    assert.equal(url.searchParams.get("from"), "2026-07-01T00:00:00.000Z");
+    assert.equal(url.searchParams.get("to"), "2026-07-28T23:59:59.999Z");
     return Response.json([
       {
         id: "transaction-1",
@@ -135,6 +137,7 @@ test("Revolut activity signs a fresh assertion and excludes unsuccessful transac
     issuer: "finance.thatcanadian.dev",
     privateKeyPem,
     refreshToken: "refresh-123",
+    dateRange: { fromDate: "2026-07-01", toDate: "2026-07-28" },
     fetcher,
     now: Date.UTC(2026, 6, 28, 18, 0, 0)
   });

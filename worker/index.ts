@@ -101,7 +101,10 @@ import {
   resolveRevenuePeriod
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
-import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
+import {
+  fetchRevolutActivity as fetchRevolutApiActivity,
+  type RevolutTransactionDateRange
+} from "../shared/revolutApi";
 import {
   fetchSlashActivityForLegalEntity,
   fetchSlashTransactionForLegalEntity,
@@ -184,6 +187,18 @@ interface PersistedState {
   automationRuns: AutomationRun[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
+  bankAccounts: AccountBalance[];
+  bankSyncStates: Partial<Record<SyncedBankSource, BankSyncState>>;
+  bankTransactionBaseline: Map<string, string>;
+  dirtyBankTransactionIds: Set<string>;
+}
+
+type SyncedBankSource = "revolut" | "slash";
+
+interface BankSyncState {
+  source: SyncedBankSource;
+  coveredRanges: SlashTransactionDateRange[];
+  lastSyncedAt: string;
 }
 
 class ApiError extends Error {
@@ -392,7 +407,7 @@ export function retainPersistedTransactions(
 }
 
 export function transactionsForDashboardStorage(transactions: Transaction[]): Transaction[] {
-  return transactions.filter((transaction) => transaction.source !== "slash");
+  return transactions.filter((transaction) => transaction.source === "wise");
 }
 
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
@@ -481,17 +496,22 @@ async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
   return fetchWiseActivityForAccessibleBusinesses({
     baseUrl: wiseBaseUrl(env),
     token: env.WISE_API_TOKEN,
-    profileIds
+    profileIds,
+    includeTransactions: false
   });
 }
 
-async function fetchRevolutActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+async function fetchRevolutActivity(
+  env: Env,
+  dateRange?: RevolutTransactionDateRange
+): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
   return fetchRevolutApiActivity({
     environment: env.REVOLUT_ENVIRONMENT,
     clientId: env.REVOLUT_CLIENT_ID,
     issuer: env.REVOLUT_ISSUER,
     privateKeyPem: env.REVOLUT_PRIVATE_KEY_PEM,
-    refreshToken: env.REVOLUT_REFRESH_TOKEN
+    refreshToken: env.REVOLUT_REFRESH_TOKEN,
+    dateRange
   });
 }
 
@@ -707,6 +727,9 @@ function upsertPersistedTransaction(state: PersistedState, updated: Transaction)
         transaction.id === updated.id ? { ...transaction, ...updated } : transaction
       )
     : [updated, ...state.wiseStatementTransactions];
+  if (updated.source === "revolut" || updated.source === "slash") {
+    state.dirtyBankTransactionIds.add(updated.id);
+  }
 }
 
 async function fetchSlashTransaction(env: Env, transactionId: string): Promise<Transaction | undefined> {
@@ -1303,19 +1326,60 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-async function loadPersisted(env: Env): Promise<PersistedState> {
+const bankActivityWindowDays = 45;
+const bankSyncOverlapDays = 3;
+const bankMutationBatchSize = 200;
+
+function isoDateShift(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
+  const toDate = new Date(now).toISOString().slice(0, 10);
+  return {
+    fromDate: isoDateShift(toDate, 1 - bankActivityWindowDays),
+    toDate
+  };
+}
+
+async function readBankActivity(
+  env: Env,
+  source: SyncedBankSource,
+  dateRange: SlashTransactionDateRange
+) {
+  return getConvexClient(env).query(api.banking.getActivity, {
+    serviceToken: getConvexServiceToken(env),
+    source,
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate
+  });
+}
+
+async function loadPersisted(
+  env: Env,
+  slashDateRange: SlashTransactionDateRange = defaultBankDateRange()
+): Promise<PersistedState> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const stored = await (async () => {
-    try {
-      return await convex.query(api.dashboard.getState, { serviceToken });
-    } catch (error) {
-      throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
-    }
-  })();
+  const revolutDateRange = defaultBankDateRange();
+  const [stored, revolut, slash] = await Promise.all([
+    convex.query(api.dashboard.getState, { serviceToken }),
+    readBankActivity(env, "revolut", revolutDateRange),
+    readBankActivity(env, "slash", slashDateRange)
+  ]).catch((error: unknown) => {
+    throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
+  });
 
   const storedCategoryRules = stored?.transactionCategoryRules ?? [];
   const storedTransactions = stored?.wiseStatementTransactions ?? [];
+  const sanitizedStoredTransactions = sanitizeStoredTransactionCategories(storedTransactions);
+  const cachedTransactions = [...revolut.transactions, ...slash.transactions];
+  const allTransactions = mergeWiseStatementTransactions(
+    sanitizedStoredTransactions,
+    cachedTransactions
+  );
   const state: PersistedState = {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
@@ -1327,7 +1391,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
     transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
     wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
-    wiseStatementTransactions: sanitizeStoredTransactionCategories(storedTransactions),
+    wiseStatementTransactions: allTransactions,
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: stored?.revenueRuns ?? [],
     revenueAccruals: stored?.revenueAccruals ?? [],
@@ -1337,21 +1401,61 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     fxTrackedAssets: stored?.fxTrackedAssets ?? [],
     automationRuns: stored?.automationRuns ?? [],
     profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
-    aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
+    aiSettings: stored?.aiSettings ?? { ...defaultAiSettings },
+    bankAccounts: [...revolut.accounts, ...slash.accounts],
+    bankSyncStates: {
+      ...(revolut.syncState ? { revolut: revolut.syncState } : {}),
+      ...(slash.syncState ? { slash: slash.syncState } : {})
+    },
+    bankTransactionBaseline: new Map(
+      cachedTransactions.map((transaction) => [transaction.id, JSON.stringify(transaction)])
+    ),
+    dirtyBankTransactionIds: new Set()
   };
   if (
     JSON.stringify(state.transactionCategoryRules) !== JSON.stringify(storedCategoryRules)
-    || JSON.stringify(state.wiseStatementTransactions) !== JSON.stringify(storedTransactions)
+    || JSON.stringify(sanitizedStoredTransactions) !== JSON.stringify(storedTransactions)
   ) {
     await savePersisted(env, state);
   }
   return state;
 }
 
+async function saveBankTransactionUpdates(
+  env: Env,
+  state: PersistedState
+): Promise<void> {
+  const changed = state.wiseStatementTransactions.filter(
+    (transaction): transaction is Transaction & { source: SyncedBankSource } =>
+      (transaction.source === "revolut" || transaction.source === "slash")
+      && state.dirtyBankTransactionIds.has(transaction.id)
+      && state.bankTransactionBaseline.get(transaction.id) !== JSON.stringify(transaction)
+  );
+  for (let index = 0; index < changed.length; index += bankMutationBatchSize) {
+    const transactions = changed.slice(index, index + bankMutationBatchSize);
+    await getConvexClient(env).mutation(api.banking.saveTransactionUpdates, {
+      serviceToken: getConvexServiceToken(env),
+      transactions
+    });
+    for (const transaction of transactions) {
+      state.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
+      state.dirtyBankTransactionIds.delete(transaction.id);
+    }
+  }
+}
+
 async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const { revision, transactionCategories: _transactionCategories, ...dashboardState } = state;
+  const {
+    revision,
+    transactionCategories: _transactionCategories,
+    bankAccounts: _bankAccounts,
+    bankSyncStates: _bankSyncStates,
+    bankTransactionBaseline: _bankTransactionBaseline,
+    dirtyBankTransactionIds: _dirtyBankTransactionIds,
+    ...dashboardState
+  } = state;
   dashboardState.wiseStatementTransactions = transactionsForDashboardStorage(
     dashboardState.wiseStatementTransactions
   );
@@ -1362,7 +1466,7 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
       expectedUpdatedAt: revision
     });
     state.revision = result.updatedAt;
-    state.wiseStatementTransactions = dashboardState.wiseStatementTransactions;
+    await saveBankTransactionUpdates(env, state);
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({
@@ -1376,6 +1480,24 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
     }
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   }
+}
+
+async function getWiseResetPreview(env: Env): Promise<{ transactions: number; imports: number }> {
+  return getConvexClient(env).query(api.dashboard.getWiseResetPreview, {
+    serviceToken: getConvexServiceToken(env)
+  });
+}
+
+async function resetWiseImports(
+  env: Env,
+  confirmation: string | undefined
+): Promise<{ deletedTransactions: number; deletedImports: number; updatedAt: string }> {
+  if (confirmation !== "DELETE_WISE_TRANSACTIONS") {
+    throw new ApiError(400, "Explicit DELETE_WISE_TRANSACTIONS confirmation is required");
+  }
+  return getConvexClient(env).mutation(api.dashboard.resetWiseImports, {
+    serviceToken: getConvexServiceToken(env)
+  });
 }
 
 async function reserveIncomeAutomation(env: Env, run: AutomationRun): Promise<boolean> {
@@ -1497,7 +1619,7 @@ function integrationStatus(
       mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
         bankIssues.revolut ?? (revolutNeeds.length === 0
-          ? "Ready to mint a Business API access token and pull accounts plus transaction activity."
+          ? "Transactions are saved in Convex and refreshed incrementally every 15 minutes or on Sync."
           : "Revolut rows stay empty until the client ID, issuer, certificate private key, and refresh token are configured."),
       needs: revolutNeeds,
       issue: bankIssues.revolut
@@ -1509,7 +1631,7 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Slash balances and a recent transaction window sync automatically; exact dates and older activity can be loaded from the Slash view."
+          ? "Transactions are saved in Convex, refreshed incrementally every 15 minutes, and older dates are backfilled only when requested."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -1660,26 +1782,165 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
   };
 }
 
+async function bankSyncState(
+  env: Env,
+  source: SyncedBankSource
+): Promise<BankSyncState | null> {
+  return getConvexClient(env).query(api.banking.getSyncState, {
+    serviceToken: getConvexServiceToken(env),
+    source
+  });
+}
+
+function incrementalBankDateRange(
+  state: BankSyncState | null,
+  now = Date.now()
+): SlashTransactionDateRange {
+  const current = defaultBankDateRange(now);
+  if (!state) return current;
+  return {
+    fromDate: isoDateShift(state.lastSyncedAt.slice(0, 10), 1 - bankSyncOverlapDays),
+    toDate: current.toDate
+  };
+}
+
+async function persistBankActivity(
+  env: Env,
+  source: SyncedBankSource,
+  activity: { accounts: AccountBalance[]; transactions: Transaction[] },
+  dateRange: SlashTransactionDateRange
+): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const syncedAt = new Date().toISOString();
+  const accounts = activity.accounts.map((account) => ({ ...account, source }));
+  const transactions = activity.transactions.map((transaction) => ({ ...transaction, source }));
+  const batches = Math.max(1, Math.ceil(transactions.length / bankMutationBatchSize));
+  for (let batch = 0; batch < batches; batch += 1) {
+    await convex.mutation(api.banking.upsertActivityBatch, {
+      serviceToken,
+      source,
+      accounts: batch === 0 ? accounts : [],
+      transactions: transactions.slice(
+        batch * bankMutationBatchSize,
+        (batch + 1) * bankMutationBatchSize
+      ),
+      syncedAt
+    });
+  }
+  await convex.mutation(api.banking.completeSync, {
+    serviceToken,
+    source,
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
+    syncedAt
+  });
+}
+
+async function syncRevolutActivity(
+  env: Env,
+  dateRange?: RevolutTransactionDateRange
+): Promise<void> {
+  const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "revolut"));
+  const activity = await fetchRevolutActivity(env, range);
+  await persistBankActivity(env, "revolut", activity, range);
+}
+
+async function syncSlashActivity(
+  env: Env,
+  dateRange?: SlashTransactionDateRange
+): Promise<void> {
+  const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "slash"));
+  const activity = await fetchSlashActivity(env, range);
+  await persistBankActivity(env, "slash", activity, range);
+}
+
+async function syncLatestBankActivity(env: Env): Promise<void> {
+  const results = await Promise.allSettled([
+    syncRevolutActivity(env),
+    syncSlashActivity(env)
+  ]);
+  const failures = results.filter((result) => result.status === "rejected");
+  for (const result of failures) {
+    console.error(JSON.stringify({
+      event: "bank_sync_failed",
+      error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+    }));
+  }
+  if (failures.length > 0) throw failures[0].reason;
+}
+
+async function ensureSlashActivityRange(
+  env: Env,
+  requested: SlashTransactionDateRange
+): Promise<void> {
+  const state = await bankSyncState(env, "slash");
+  if (!state) {
+    await syncSlashActivity(env, requested);
+    return;
+  }
+  let missing = [{ ...requested }];
+  for (const covered of state.coveredRanges) {
+    missing = missing.flatMap((range) => {
+      if (covered.toDate < range.fromDate || covered.fromDate > range.toDate) return [range];
+      const parts: SlashTransactionDateRange[] = [];
+      if (covered.fromDate > range.fromDate) {
+        parts.push({
+          fromDate: range.fromDate,
+          toDate: isoDateShift(covered.fromDate, -1)
+        });
+      }
+      if (covered.toDate < range.toDate) {
+        parts.push({
+          fromDate: isoDateShift(covered.toDate, 1),
+          toDate: range.toDate
+        });
+      }
+      return parts;
+    });
+  }
+  for (const range of missing) {
+    await syncSlashActivity(env, range);
+  }
+}
+
 async function getSnapshot(
   env: Env,
   options: { refreshFxRates?: boolean; slashDateRange?: SlashTransactionDateRange } = {}
 ): Promise<DashboardSnapshot> {
-  const state = await loadPersisted(env);
+  const state = await loadPersisted(env, options.slashDateRange);
   const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
   const bankIssue = (label: string, error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     return `${label} balance sync failed: ${message.slice(0, 240)}`;
   };
-  const [wise, revolut, slash, amex, meritResults] = await Promise.all([
+  if (
+    env.REVOLUT_CLIENT_ID
+    && env.REVOLUT_ISSUER
+    && env.REVOLUT_PRIVATE_KEY_PEM
+    && env.REVOLUT_REFRESH_TOKEN
+    && !state.bankSyncStates.revolut
+  ) {
+    bankIssues.revolut = "No saved Revolut activity yet. Run Sync once to create the initial 45-day cache.";
+  }
+  if (
+    env.SLASH_API_KEY
+    && env.SLASH_LEGAL_ENTITY_ID
+    && env.SLASH_BASE_URL
+    && !state.bankSyncStates.slash
+  ) {
+    bankIssues.slash = "No saved Slash activity yet. Run Sync once to create the initial 45-day cache.";
+  }
+  const revolut = {
+    accounts: state.bankAccounts.filter((account) => account.source === "revolut"),
+    transactions: state.wiseStatementTransactions.filter((transaction) => transaction.source === "revolut")
+  };
+  const slash = {
+    accounts: state.bankAccounts.filter((account) => account.source === "slash"),
+    transactions: state.wiseStatementTransactions.filter((transaction) => transaction.source === "slash")
+  };
+  const [wise, amex, meritResults] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
-    fetchRevolutActivity(env).catch((error: unknown) => {
-      bankIssues.revolut = bankIssue("Revolut", error);
-      return { accounts: [], transactions: [] };
-    }),
-    fetchSlashActivity(env, options.slashDateRange).catch((error: unknown) => {
-      bankIssues.slash = bankIssue("Slash", error);
-      return { accounts: [], transactions: [] };
-    }),
     fetchAmexActivity(env).catch((error: unknown) => {
       bankIssues.amex = bankIssue("Amex", error);
       return { accounts: [], transactions: [] };
@@ -1737,16 +1998,11 @@ async function getSnapshot(
   const paymentAllocationsBeforeSync = state.paymentAllocations;
   state.paymentAllocations = state.paymentAllocations.filter((allocation) => liveInvoiceIds.has(allocation.invoiceId));
   const paymentAllocationsChanged = state.paymentAllocations.length !== paymentAllocationsBeforeSync.length;
-  const persistedTransactionsBeforeSync = state.wiseStatementTransactions;
-  const persistedTransactionsInLiveWindows = retainCurrentSlashTransactions(
-    state.wiseStatementTransactions,
-    slash.transactions,
-    !bankIssues.slash
+  const persistedTransactionsBeforeSync = transactionsForDashboardStorage(
+    state.wiseStatementTransactions
   );
-  const rawTransactions = mergeWiseStatementTransactions(persistedTransactionsInLiveWindows, [
+  const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
     ...wise.transactions,
-    ...revolut.transactions,
-    ...slash.transactions,
     ...amex.transactions
   ]).map((transaction) => {
     if (!transaction.matchedInvoiceId || liveInvoiceIds.has(transaction.matchedInvoiceId)) return transaction;
@@ -1773,8 +2029,7 @@ async function getSnapshot(
     allocations: state.paymentAllocations,
     providers: state.providers
   });
-  const persistedTransactionsAfterSync = retainPersistedTransactions(
-    persistedTransactionsInLiveWindows,
+  const persistedTransactionsAfterSync = transactionsForDashboardStorage(
     reconciliation.transactions
   );
   const bankStateChanged =
@@ -1888,6 +2143,14 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
 
 async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
   const state = await loadPersisted(env);
+  for (const transaction of state.wiseStatementTransactions) {
+    if (
+      transaction.matchedProviderId === providerId
+      && (transaction.source === "revolut" || transaction.source === "slash")
+    ) {
+      state.dirtyBankTransactionIds.add(transaction.id);
+    }
+  }
   const deletion = deleteProviderReferences(
     {
       providers: state.providers,
@@ -2108,6 +2371,12 @@ async function autoCategorizeState(
     if (!transactionNeedsCategorization(transaction)) return transaction;
     reviewed += 1;
     const categorized = semanticCategorizeTransaction(transaction, state.providers, state.transactionCategoryRules);
+    if (
+      (transaction.source === "revolut" || transaction.source === "slash")
+      && JSON.stringify(categorized) !== JSON.stringify(transaction)
+    ) {
+      state.dirtyBankTransactionIds.add(transaction.id);
+    }
     if (categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId) {
       semanticMatches += 1;
     }
@@ -3348,12 +3617,32 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await getManagementReportDashboard(env));
     }
 
+    if (url.pathname === "/api/admin/wise/reset-preview" && request.method === "GET") {
+      return json(await getWiseResetPreview(env));
+    }
+
+    if (url.pathname === "/api/admin/wise/reset" && request.method === "POST") {
+      const payload = (await request.json()) as { confirmation?: string };
+      return json(await resetWiseImports(env, payload.confirmation));
+    }
+
     if (url.pathname === "/api/sync" && request.method === "POST") {
       const slashDateRange = parseSlashTransactionDateRange(
         url.searchParams.get("slashFromDate"),
         url.searchParams.get("slashToDate")
       );
+      await syncLatestBankActivity(env);
       return json(await getSnapshot(env, { refreshFxRates: true, slashDateRange }));
+    }
+
+    if (url.pathname === "/api/banks/slash/load" && request.method === "POST") {
+      const slashDateRange = parseSlashTransactionDateRange(
+        url.searchParams.get("slashFromDate"),
+        url.searchParams.get("slashToDate")
+      );
+      if (!slashDateRange) throw new ApiError(400, "Slash from and to dates are required");
+      await ensureSlashActivityRange(env, slashDateRange);
+      return json(await getSnapshot(env, { slashDateRange }));
     }
 
     if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {
@@ -3540,6 +3829,18 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
+    if (controller.cron === "*/15 * * * *") {
+      try {
+        await syncLatestBankActivity(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "bank_activity_sync_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
     if (controller.cron === "17 * * * *") {
       try {
         await refreshStoredFxRates(env);

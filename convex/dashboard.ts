@@ -620,6 +620,58 @@ export const saveState = mutation({
   }
 });
 
+export const getWiseResetPreview = query({
+  args: { serviceToken: v.string() },
+  returns: v.object({
+    transactions: v.number(),
+    imports: v.number()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    return {
+      transactions:
+        state?.wiseStatementTransactions.filter((item) => item.source === "wise").length ?? 0,
+      imports: state?.wiseStatementImports.length ?? 0
+    };
+  }
+});
+
+export const resetWiseImports = mutation({
+  args: { serviceToken: v.string() },
+  returns: v.object({
+    deletedTransactions: v.number(),
+    deletedImports: v.number(),
+    updatedAt: v.string()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) {
+      throw new ConvexError({ code: "STATE_NOT_FOUND" });
+    }
+    const deletedTransactions = state.wiseStatementTransactions.filter(
+      (item) => item.source === "wise"
+    ).length;
+    const deletedImports = state.wiseStatementImports.length;
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await ctx.db.patch(state._id, {
+      wiseStatementTransactions: state.wiseStatementTransactions.filter(
+        (item) => item.source !== "wise"
+      ),
+      wiseStatementImports: [],
+      updatedAt
+    });
+    return { deletedTransactions, deletedImports, updatedAt };
+  }
+});
+
 export const reserveIncomeAutomation = mutation({
   args: { serviceToken: v.string(), run: automationRun, staleBefore: v.string() },
   returns: v.object({ reserved: v.boolean(), updatedAt: v.string() }),

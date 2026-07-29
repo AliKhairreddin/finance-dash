@@ -176,6 +176,18 @@ const transaction = v.object({
   matchReason: v.optional(v.string())
 });
 
+const syncedBankSource = v.union(v.literal("revolut"), v.literal("slash"));
+
+const accountBalance = v.object({
+  id: v.string(),
+  name: v.string(),
+  source: syncedBankSource,
+  balance: v.number(),
+  currency: v.string(),
+  updatedAt: v.string(),
+  status: v.union(v.literal("live"), v.literal("seeded"), v.literal("manual"))
+});
+
 const wiseStatementImport = v.object({
   id: v.string(),
   balanceId: v.string(),
@@ -388,6 +400,24 @@ export default defineSchema({
   })
     .index("by_category_id", ["id"])
     .index("by_name_normalized", ["nameNormalized"]),
+  bankTransactions: defineTable({
+    ...transaction.fields,
+    source: syncedBankSource,
+    syncedAt: v.string()
+  })
+    .index("by_transaction_id", ["id"])
+    .index("by_source_date", ["source", "date"]),
+  bankAccounts: defineTable({
+    ...accountBalance.fields,
+    syncedAt: v.string()
+  })
+    .index("by_account_id", ["id"])
+    .index("by_source", ["source"]),
+  bankSyncState: defineTable({
+    source: syncedBankSource,
+    coveredRanges: v.array(v.object({ fromDate: v.string(), toDate: v.string() })),
+    lastSyncedAt: v.string()
+  }).index("by_source", ["source"]),
   managementReportImports: defineTable({
     importId: v.string(),
     contentHash: v.string(),

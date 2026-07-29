@@ -8,6 +8,7 @@
     "server": "tsx watch server/index.ts",
     "auth:configure": "tsx scripts/configure-auth.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
+    "wise:reset": "tsx scripts/reset-wise.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
     "build": "tsc -b && vite build",
     "convex:dev": "convex dev --once --env-file .env.local",
@@ -49,7 +50,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.115.0"
   },
   "overrides": {
     "ws": "8.21.0"

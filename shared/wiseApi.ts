@@ -44,6 +44,7 @@ interface WiseApiOptions {
   baseUrl: string;
   token: string;
   profileIds: ReadonlySet<number>;
+  includeTransactions?: boolean;
   fetcher?: typeof fetch;
 }
 
@@ -107,6 +108,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
   baseUrl,
   token,
   profileIds,
+  includeTransactions = true,
   fetcher = fetch
 }: WiseApiOptions): Promise<WiseActivityResult> {
   const headers = { Authorization: `Bearer ${token}` };
@@ -146,6 +148,10 @@ export async function fetchWiseActivityForAccessibleBusinesses({
     updatedAt: balance.modificationTime ?? intervalEnd,
     status: "live" as const
   }));
+
+  if (!includeTransactions) {
+    return { accounts, transactions: [], statementIssues: [] };
+  }
 
   const statementResults = await Promise.all(
     profileBalances.map(async ({ profile, profileName, balance }) => {

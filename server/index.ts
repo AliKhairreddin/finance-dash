@@ -101,6 +101,16 @@ app.post("/api/sync", async (request, response, next) => {
   }
 });
 
+app.post("/api/banks/slash/load", async (request, response, next) => {
+  try {
+    const slashFromDate = typeof request.query.slashFromDate === "string" ? request.query.slashFromDate : undefined;
+    const slashToDate = typeof request.query.slashToDate === "string" ? request.query.slashToDate : undefined;
+    response.json(await syncExternalActivity(parseSlashTransactionDateRange(slashFromDate, slashToDate)));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/wise/import-statement", async (request, response, next) => {
   try {
     response.json(await importWiseStatement(request.body as ImportWiseStatementPayload));

@@ -81,3 +81,38 @@ test("discovers and labels balances across selected accessible Wise business pro
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/33/balances")), false);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/44/balances")), false);
 });
+
+test("balance-only Wise sync never requests or returns statement transactions", async () => {
+  const requestedUrls: string[] = [];
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    if (url.endsWith("/v2/profiles")) {
+      return Response.json([{ id: 11, type: "BUSINESS", businessName: "Lovemedo" }]);
+    }
+    if (url.includes("/v4/profiles/11/balances")) {
+      return Response.json([
+        {
+          id: 1101,
+          currency: "USD",
+          amount: { value: 125, currency: "USD" },
+          modificationTime: "2026-07-21T12:00:00Z"
+        }
+      ]);
+    }
+    throw new Error(`Unexpected Wise request: ${url}`);
+  };
+
+  const result = await fetchWiseActivityForAccessibleBusinesses({
+    baseUrl: "https://api.wise.test",
+    token: "test-token",
+    profileIds: new Set([11]),
+    includeTransactions: false,
+    fetcher
+  });
+
+  assert.equal(result.accounts.length, 1);
+  assert.deepEqual(result.transactions, []);
+  assert.deepEqual(result.statementIssues, []);
+  assert.equal(requestedUrls.some((url) => url.includes("balance-statements")), false);
+});
