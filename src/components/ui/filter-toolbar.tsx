@@ -2,7 +2,8 @@ import { Popover } from "@base-ui/react/popover";
 import { Filter, Search, X } from "lucide-react";
 import {
   type ChangeEvent,
-  type ReactNode
+  type ReactNode,
+  useState
 } from "react";
 import { cn } from "@/lib/utils";
 
@@ -55,8 +56,23 @@ export function FilterPopover({
   label?: string;
   title?: string;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <Popover.Root>
+    <Popover.Root
+      open={open}
+      onOpenChange={(nextOpen, eventDetails) => {
+        if (!nextOpen && (eventDetails.reason === "outside-press" || eventDetails.reason === "focus-out")) {
+          const eventTarget = eventDetails.event.target;
+          const relatedTarget = "relatedTarget" in eventDetails.event ? eventDetails.event.relatedTarget : null;
+          const isNestedSelectInteraction = [eventTarget, relatedTarget].some(
+            (target) => target instanceof Element && target.closest(".searchable-select-positioner")
+          );
+          if (isNestedSelectInteraction) return;
+        }
+        setOpen(nextOpen);
+      }}
+    >
       <Popover.Trigger className={cn("toolbar-popover-trigger", activeCount > 0 && "is-active")}>
         <Filter size={15} aria-hidden="true" />
         <span>{label}</span>
