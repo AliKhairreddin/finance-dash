@@ -655,7 +655,7 @@ textarea:focus-visible {
 .liquidity-hero-main > strong {
   color: var(--ink);
   font-size: clamp(2rem, 3.2vw, 3rem);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   line-height: 1.05;
 }
 
@@ -702,7 +702,7 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
   color: var(--ink);
   font-size: 1.12rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .liquidity-breakdown .liability strong {
@@ -763,7 +763,7 @@ textarea:focus-visible {
   margin: 4px 0 2px;
   color: var(--ink);
   font-size: 1.08rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   line-height: 1.15;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -885,7 +885,7 @@ textarea:focus-visible {
   color: var(--app-muted);
   background: var(--subtle-bg);
   font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .overview-grid {
@@ -1184,12 +1184,12 @@ th.amount .sortable-table-heading {
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .amount {
   text-align: center !important;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   white-space: nowrap;
 }
 
@@ -1992,7 +1992,7 @@ th.amount .sortable-table-heading {
   background: var(--control-bg);
   border: 1px solid var(--line);
   border-radius: 7px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   white-space: nowrap;
 }
 
@@ -2120,7 +2120,7 @@ th.amount .sortable-table-heading {
   min-width: 0;
   color: var(--ink);
   font-size: 1.05rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   line-height: 1.2;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -2249,7 +2249,7 @@ th.amount .sortable-table-heading {
 .review-amount {
   text-align: right;
   font-weight: 760;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .overview-review-list .review-row {
@@ -2604,7 +2604,7 @@ th.amount .sortable-table-heading {
   overflow: hidden;
   color: var(--ink);
   font-size: 0.92rem;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2642,7 +2642,7 @@ th.amount .sortable-table-heading {
 
 .category-legend-row strong {
   color: var(--ink);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
   white-space: nowrap;
 }
 
@@ -4164,7 +4164,7 @@ th.amount .sortable-table-heading {
   margin-top: 5px;
   font-size: 1.2rem;
   font-weight: 760;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .holding-usd-value {
@@ -5407,7 +5407,8 @@ th.amount .sortable-table-heading {
   overflow: hidden;
   color: var(--ink);
   font-size: clamp(20px, 2vw, 27px);
-  letter-spacing: -0.035em;
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: normal;
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5625,7 +5626,7 @@ th.amount .sortable-table-heading {
 .management-report-table td.amount,
 .management-report-table th.amount {
   text-align: right;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .management-report-table td.wrap {
@@ -5674,7 +5675,7 @@ th.amount .sortable-table-heading {
 
 .management-report-breakdown-copy strong {
   font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .management-report-breakdown-track {
@@ -5852,7 +5853,7 @@ th.amount .sortable-table-heading {
 .management-report-balance-list dd {
   margin: 0;
   font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .management-report-balance-total {
@@ -6131,6 +6132,7 @@ html {
 body {
   min-height: 100vh;
   color: var(--ink);
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .app-shell {
@@ -6352,7 +6354,7 @@ body {
   order: -1;
   font-size: clamp(2.35rem, 3.5vw, 3.45rem);
   font-weight: 780;
-  letter-spacing: -0.055em;
+  letter-spacing: normal;
 }
 
 .liquidity-hero-title {
@@ -6372,7 +6374,7 @@ body {
   order: -1;
   font-size: clamp(1.18rem, 1.6vw, 1.55rem);
   font-weight: 760;
-  letter-spacing: -0.035em;
+  letter-spacing: normal;
 }
 
 .liquidity-breakdown span {
@@ -6445,7 +6447,7 @@ body {
   margin: 0 28px 7px 0;
   font-size: clamp(1.35rem, 2vw, 1.8rem);
   font-weight: 780;
-  letter-spacing: -0.045em;
+  letter-spacing: normal;
   line-height: 1;
 }
 
@@ -6641,7 +6643,8 @@ body {
   margin-right: 28px;
   font-size: clamp(1.35rem, 1.8vw, 1.72rem);
   font-weight: 780;
-  letter-spacing: -0.04em;
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: normal;
   line-height: 1.05;
 }
 
@@ -6698,7 +6701,7 @@ body {
   order: -1;
   font-size: 1.28rem;
   font-weight: 770;
-  letter-spacing: -0.035em;
+  letter-spacing: normal;
 }
 
 .provider-card,
