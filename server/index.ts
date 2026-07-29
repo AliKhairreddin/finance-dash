@@ -11,6 +11,7 @@ import type {
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
+  CreateTransactionCategoryPayload,
   DeleteInvoicesPayload,
   DraftRevenueRunPayload,
   AssignWiseCardHolderTeamPayload,
@@ -23,8 +24,10 @@ import type {
   SyncRevenuePayload,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
+  UpdateTransactionCategoryDefinitionPayload,
   UpdateTransactionCategoryPayload
 } from "../shared/types";
+import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import {
   assignTransactionTeam,
   assignWiseCardHolderTeam,
@@ -35,12 +38,15 @@ import {
   createProvider,
   createRevenuePartner,
   createTeam,
+  createTransactionCategory,
   deleteInvoiceDrafts,
   deleteProvider,
   deleteRevenuePartner,
+  deleteTransactionCategoryDefinition,
   deleteHolding,
   draftRevenueRun,
   getSnapshot,
+  getOpenRouterZdrModels,
   initializeStore,
   importWiseStatement,
   matchTransaction,
@@ -55,6 +61,7 @@ import {
   syncExternalActivity,
   syncRevenue,
   updateTransactionCategory,
+  updateTransactionCategoryDefinition,
   updateHolding,
   updateInvoice,
   updateProvider,
@@ -84,9 +91,11 @@ app.get("/api/management-report", async (_request, response, next) => {
   }
 });
 
-app.post("/api/sync", async (_request, response, next) => {
+app.post("/api/sync", async (request, response, next) => {
   try {
-    response.json(await syncExternalActivity());
+    const slashFromDate = typeof request.query.slashFromDate === "string" ? request.query.slashFromDate : undefined;
+    const slashToDate = typeof request.query.slashToDate === "string" ? request.query.slashToDate : undefined;
+    response.json(await syncExternalActivity(parseSlashTransactionDateRange(slashFromDate, slashToDate)));
   } catch (error) {
     next(error);
   }
@@ -211,9 +220,46 @@ app.delete("/api/revenue-partners/:partnerId", async (request, response, next) =
   }
 });
 
+app.post("/api/settings/categories", async (request, response, next) => {
+  try {
+    response.status(201).json(await createTransactionCategory(request.body as CreateTransactionCategoryPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/categories/:categoryId", async (request, response, next) => {
+  try {
+    response.json(
+      await updateTransactionCategoryDefinition(
+        request.params.categoryId,
+        request.body as UpdateTransactionCategoryDefinitionPayload
+      )
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/settings/categories/:categoryId", async (request, response, next) => {
+  try {
+    response.json(await deleteTransactionCategoryDefinition(request.params.categoryId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/settings/ai", async (request, response, next) => {
   try {
     response.json(await saveAiSettings(request.body as SaveAiSettingsPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ai/models", async (_request, response, next) => {
+  try {
+    response.json(await getOpenRouterZdrModels());
   } catch (error) {
     next(error);
   }

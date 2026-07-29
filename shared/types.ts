@@ -187,6 +187,12 @@ export interface StoredAiSettings extends PersistedAiSettings {
   openRouterApiKey?: string;
 }
 
+export interface OpenRouterZdrModel {
+  id: string;
+  name: string;
+  contextLength?: number;
+}
+
 export interface RevenueRun {
   id: string;
   partnerId: string;
@@ -244,6 +250,18 @@ export interface TransactionCategoryRule {
   category: string;
   direction?: Direction;
   aliases: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TransactionCategoryDirection = Direction | "both";
+
+export interface TransactionCategory {
+  id: string;
+  name: string;
+  direction: TransactionCategoryDirection;
+  color: string;
+  system: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -504,6 +522,7 @@ export interface DashboardSnapshot {
   approximateUsdTotals: ApproximateUsdTotals;
   automationRuns: AutomationRun[];
   meritTaxes: MeritTax[];
+  transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
   wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementImports: WiseStatementImport[];
@@ -623,6 +642,14 @@ export interface AssignWiseCardHolderTeamPayload {
 export interface CreateTeamPayload {
   name: string;
 }
+
+export interface CreateTransactionCategoryPayload {
+  name: string;
+  direction: TransactionCategoryDirection;
+  color: string;
+}
+
+export interface UpdateTransactionCategoryDefinitionPayload extends CreateTransactionCategoryPayload {}
 
 export interface UpdateTransactionCategoryPayload {
   transactionId: string;

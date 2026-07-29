@@ -1,7 +1,7 @@
 import type { AccountBalance, Transaction } from "./types";
 
-const slashActivityWindowMs = 1000 * 60 * 60 * 24 * 45;
-const slashTransactionLimit = 500;
+export const slashDefaultActivityWindowDays = 45;
+const slashActivityWindowMs = 1000 * 60 * 60 * 24 * slashDefaultActivityWindowDays;
 
 type SlashAccountType = "debit" | "charge_card";
 type SlashBalanceType = "cash" | "credit" | "debit";
@@ -52,12 +52,49 @@ export interface SlashActivityResult {
   transactions: Transaction[];
 }
 
+export interface SlashTransactionDateRange {
+  fromDate: string;
+  toDate: string;
+}
+
 interface SlashActivityOptions {
   baseUrl: string;
   apiKey: string;
   legalEntityId: string;
+  dateRange?: SlashTransactionDateRange;
   fetcher?: typeof fetch;
   now?: number;
+}
+
+function requiredIsoDate(value: string, field: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${field} must use YYYY-MM-DD`);
+  }
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+    throw new Error(`${field} is not a valid date`);
+  }
+  return value;
+}
+
+export function parseSlashTransactionDateRange(
+  fromDate?: string | null,
+  toDate?: string | null
+): SlashTransactionDateRange | undefined {
+  const normalizedFromDate = fromDate?.trim();
+  const normalizedToDate = toDate?.trim();
+  if (!normalizedFromDate && !normalizedToDate) return undefined;
+  if (!normalizedFromDate || !normalizedToDate) {
+    throw new Error("Slash transaction loading requires both a from date and a to date");
+  }
+  const range = {
+    fromDate: requiredIsoDate(normalizedFromDate, "Slash from date"),
+    toDate: requiredIsoDate(normalizedToDate, "Slash to date")
+  };
+  if (range.fromDate > range.toDate) {
+    throw new Error("Slash from date must be on or before the to date");
+  }
+  return range;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -253,6 +290,7 @@ export async function fetchSlashActivityForLegalEntity({
   baseUrl,
   apiKey,
   legalEntityId,
+  dateRange,
   fetcher = fetch,
   now = Date.now()
 }: SlashActivityOptions): Promise<SlashActivityResult> {
@@ -264,11 +302,23 @@ export async function fetchSlashActivityForLegalEntity({
   };
   const accountsUrl = new URL("/account", baseUrl);
   const transactionsUrl = new URL("/transaction", baseUrl);
-  transactionsUrl.searchParams.set("filter:from_date", String(now - slashActivityWindowMs));
+  const validatedDateRange = dateRange
+    ? parseSlashTransactionDateRange(dateRange.fromDate, dateRange.toDate)
+    : undefined;
+  transactionsUrl.searchParams.set(
+    "filter:from_date",
+    String(validatedDateRange ? Date.parse(`${validatedDateRange.fromDate}T00:00:00.000Z`) : now - slashActivityWindowMs)
+  );
+  if (validatedDateRange) {
+    transactionsUrl.searchParams.set(
+      "filter:to_date",
+      String(Date.parse(`${validatedDateRange.toDate}T23:59:59.999Z`))
+    );
+  }
 
   const [slashAccounts, slashTransactions] = await Promise.all([
     fetchAllSlashPages(fetcher, accountsUrl, headers, parseSlashAccount),
-    fetchAllSlashPages(fetcher, transactionsUrl, headers, parseSlashTransaction, slashTransactionLimit)
+    fetchAllSlashPages(fetcher, transactionsUrl, headers, parseSlashTransaction)
   ]);
   const balancesByAccountId = new Map<string, SlashBalance[]>();
   for (const account of slashAccounts.filter((item) => item.status === "open")) {
@@ -311,7 +361,7 @@ export async function fetchSlashActivityForLegalEntity({
         currency: "USD",
         direction: signedAmount >= 0 ? "in" : "out",
         status: item.status === "pending" ? "pending" : "posted",
-        category: item.merchantData?.categoryCode?.trim() || "Slash"
+        category: "Slash"
       };
     });
 

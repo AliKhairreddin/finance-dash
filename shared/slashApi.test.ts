@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchSlashActivityForLegalEntity } from "./slashApi";
+import {
+  fetchSlashActivityForLegalEntity,
+  parseSlashTransactionDateRange
+} from "./slashApi";
 
 test("Slash activity uses the user-scoped entity header, paginates, and maps current response fields", async () => {
   const requests: Array<{ url: URL; headers: Headers }> = [];
@@ -118,7 +121,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       currency: "USD",
       direction: "out",
       status: "posted",
-      category: "5734"
+      category: "Slash"
     },
     {
       id: "slash-transaction-credit",
@@ -208,28 +211,8 @@ test("Slash charge-card accounts use the available credit balance", async () => 
   }]);
 });
 
-test("Slash activity rejects repeated pagination cursors", async () => {
-  const fetcher: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    return Response.json({
-      items: [],
-      metadata: { nextCursor: url.pathname === "/account" ? "same-account-cursor" : undefined }
-    });
-  };
-
-  await assert.rejects(
-    fetchSlashActivityForLegalEntity({
-      baseUrl: "https://api.slash.test",
-      apiKey: "slash-key",
-      legalEntityId: "legal-entity-1",
-      fetcher
-    }),
-    /repeated pagination cursor/
-  );
-});
-
-test("Slash activity stops after the latest 500 transactions", async () => {
-  let transactionRequests = 0;
+test("Slash activity loads every page inside an exact inclusive date range", async () => {
+  const transactionRequests: URL[] = [];
   const fetcher: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.pathname === "/account") {
@@ -257,18 +240,18 @@ test("Slash activity stops after the latest 500 transactions", async () => {
     }
 
     assert.equal(url.pathname, "/transaction");
-    transactionRequests += 1;
+    transactionRequests.push(url);
     const page = Number(url.searchParams.get("cursor") ?? "1");
     return Response.json({
       items: Array.from({ length: 100 }, (_, index) => ({
         id: `transaction-${page}-${index}`,
-        date: "2026-07-28T09:30:00.000Z",
+        date: "2026-06-15T09:30:00.000Z",
         description: "CARD PURCHASE",
         amountCents: -100,
         accountId: "account-debit",
         status: "posted"
       })),
-      metadata: { nextCursor: String(page + 1) }
+      metadata: { nextCursor: page < 6 ? String(page + 1) : undefined }
     });
   };
 
@@ -276,10 +259,44 @@ test("Slash activity stops after the latest 500 transactions", async () => {
     baseUrl: "https://api.slash.test",
     apiKey: "slash-key",
     legalEntityId: "legal-entity-1",
+    dateRange: { fromDate: "2026-06-01", toDate: "2026-06-30" },
     fetcher
   });
 
-  assert.equal(result.transactions.length, 500);
-  assert.equal(transactionRequests, 5);
-  assert.equal(result.transactions.at(-1)?.id, "slash-transaction-5-99");
+  assert.equal(result.transactions.length, 600);
+  assert.equal(transactionRequests.length, 6);
+  assert.equal(transactionRequests[0].searchParams.get("filter:from_date"), String(Date.parse("2026-06-01T00:00:00.000Z")));
+  assert.equal(transactionRequests[0].searchParams.get("filter:to_date"), String(Date.parse("2026-06-30T23:59:59.999Z")));
+  assert.equal(transactionRequests.at(-1)?.searchParams.get("cursor"), "6");
+});
+
+test("Slash date ranges require two valid ordered ISO dates", () => {
+  assert.equal(parseSlashTransactionDateRange(undefined, undefined), undefined);
+  assert.deepEqual(
+    parseSlashTransactionDateRange("2026-06-01", "2026-06-30"),
+    { fromDate: "2026-06-01", toDate: "2026-06-30" }
+  );
+  assert.throws(() => parseSlashTransactionDateRange("2026-06-01", undefined), /both a from date and a to date/);
+  assert.throws(() => parseSlashTransactionDateRange("2026-02-30", "2026-03-01"), /not a valid date/);
+  assert.throws(() => parseSlashTransactionDateRange("2026-07-01", "2026-06-30"), /on or before/);
+});
+
+test("Slash activity rejects repeated pagination cursors", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    return Response.json({
+      items: [],
+      metadata: { nextCursor: url.pathname === "/account" ? "same-account-cursor" : undefined }
+    });
+  };
+
+  await assert.rejects(
+    fetchSlashActivityForLegalEntity({
+      baseUrl: "https://api.slash.test",
+      apiKey: "slash-key",
+      legalEntityId: "legal-entity-1",
+      fetcher
+    }),
+    /repeated pagination cursor/
+  );
 });

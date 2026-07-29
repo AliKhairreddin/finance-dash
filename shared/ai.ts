@@ -3,15 +3,17 @@ import type {
   AiPromptResult,
   AiSettings,
   AiTransactionCategorization,
+  OpenRouterZdrModel,
   Provider,
   StoredAiSettings,
-  Transaction
+  Transaction,
+  TransactionCategory
 } from "./types";
 import {
+  initialTransactionCategories,
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
-  moneyInCategoryOptions,
-  moneyOutCategoryOptions,
+  transactionCategoryOptionsForDirection,
   transactionBusinessCategory
 } from "./categories";
 
@@ -27,10 +29,71 @@ interface OpenRouterChatResponse {
   model?: string;
 }
 
+interface OpenRouterModelsResponse {
+  data?: Array<{
+    architecture?: {
+      output_modalities?: unknown;
+    };
+    context_length?: unknown;
+    id?: unknown;
+    name?: unknown;
+  }>;
+}
+
+const openRouterZdrModelsUrl = "https://openrouter.ai/api/v1/models?zdr=true&output_modalities=text";
+
 export const defaultAiSettings: StoredAiSettings = {
   provider: "openrouter",
-  model: "~openai/gpt-latest"
+  model: "openai/gpt-5.6-sol"
 };
+
+export async function listOpenRouterZdrModels(): Promise<OpenRouterZdrModel[]> {
+  const response = await fetch(openRouterZdrModelsUrl, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`OpenRouter ZDR model catalog failed with ${response.status}`);
+  }
+
+  const body = (await response.json()) as OpenRouterModelsResponse;
+  if (!Array.isArray(body.data)) {
+    throw new Error("OpenRouter returned an invalid ZDR model catalog");
+  }
+
+  const models = new Map<string, OpenRouterZdrModel>();
+  for (const candidate of body.data) {
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    if (!id) continue;
+    const outputModalities = candidate.architecture?.output_modalities;
+    if (Array.isArray(outputModalities) && !outputModalities.includes("text")) continue;
+    const name = typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : id;
+    const contextLength =
+      typeof candidate.context_length === "number" && Number.isFinite(candidate.context_length)
+        ? candidate.context_length
+        : undefined;
+    models.set(id, { id, name, contextLength });
+  }
+
+  if (models.size === 0) {
+    throw new Error("OpenRouter returned no Zero Data Retention text models");
+  }
+
+  return [...models.values()].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+}
+
+export async function requireOpenRouterZdrModel(model: unknown): Promise<string> {
+  const normalizedModel = typeof model === "string" ? model.trim() : "";
+  if (!normalizedModel) {
+    throw new Error("OpenRouter model is required");
+  }
+  const models = await listOpenRouterZdrModels();
+  if (!models.some((candidate) => candidate.id === normalizedModel)) {
+    throw new Error("Choose a Zero Data Retention model from the OpenRouter model picker");
+  }
+  return normalizedModel;
+}
 
 export function publicAiSettings(settings: StoredAiSettings): AiSettings {
   const key = settings.openRouterApiKey?.trim();
@@ -84,7 +147,13 @@ export async function runOpenRouterPrompt(
       ...(referer ? { "HTTP-Referer": referer } : {}),
       "X-OpenRouter-Title": "Finance Dash"
     },
-    body: JSON.stringify({ model, messages })
+    body: JSON.stringify({
+      model,
+      messages,
+      provider: {
+        zdr: true
+      }
+    })
   });
 
   const text = await response.text();
@@ -137,7 +206,8 @@ function chunk<T>(rows: T[], size: number): T[][] {
 function validAiCategorization(
   value: unknown,
   providerIds: Set<string>,
-  transactionsById: Map<string, Transaction>
+  transactionsById: Map<string, Transaction>,
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[]
 ): AiTransactionCategorization | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
@@ -149,7 +219,7 @@ function validAiCategorization(
     categoryValue &&
     transaction &&
     !isReviewOnlyTransactionCategory(categoryValue) &&
-    isTransactionCategoryForDirection(categoryValue, transaction.direction)
+    isTransactionCategoryForDirection(categoryValue, transaction.direction, categories)
       ? categoryValue
       : undefined;
   const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : 0;
@@ -171,7 +241,8 @@ export async function runOpenRouterTransactionCategorization(
   settings: StoredAiSettings,
   transactions: Transaction[],
   providers: Provider[],
-  referer?: string
+  referer?: string,
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[] = initialTransactionCategories
 ): Promise<AiTransactionCategorization[]> {
   if (transactions.length === 0) return [];
 
@@ -195,8 +266,8 @@ export async function runOpenRouterTransactionCategorization(
         ].join(" "),
         prompt: JSON.stringify(
           {
-            money_in_categories: moneyInCategoryOptions,
-            money_out_categories: moneyOutCategoryOptions,
+            money_in_categories: transactionCategoryOptionsForDirection("in", categories),
+            money_out_categories: transactionCategoryOptionsForDirection("out", categories),
             provider_directory: providers.map((provider) => ({
               id: provider.id,
               name: provider.name,
@@ -232,7 +303,7 @@ export async function runOpenRouterTransactionCategorization(
     }
 
     for (const match of matches) {
-      const valid = validAiCategorization(match, providerIds, transactionsById);
+      const valid = validAiCategorization(match, providerIds, transactionsById, categories);
       if (valid) allMatches.push(valid);
     }
   }

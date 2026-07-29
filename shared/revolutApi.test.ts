@@ -164,7 +164,7 @@ test("Revolut activity signs a fresh assertion and excludes unsuccessful transac
       currency: "GBP",
       direction: "out",
       status: "posted",
-      category: "5734"
+      category: "Revolut"
     }
   ]);
 });

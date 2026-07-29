@@ -20,7 +20,10 @@ import {
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
-import { fetchSlashActivityForLegalEntity } from "../shared/slashApi";
+import {
+  fetchSlashActivityForLegalEntity,
+  type SlashTransactionDateRange
+} from "../shared/slashApi";
 import {
   fetchWiseActivityForAccessibleBusinesses,
   parseWiseProfileIds,
@@ -155,7 +158,7 @@ export function getIntegrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Ready to pull accounts, card activity, and transactions."
+          ? "Slash balances and a recent transaction window sync automatically; exact dates and older activity can be loaded from the Slash view."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -236,7 +239,9 @@ export async function fetchRevolutActivity(): Promise<{ accounts: AccountBalance
   });
 }
 
-export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+export async function fetchSlashActivity(
+  dateRange?: SlashTransactionDateRange
+): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
   const apiKey = process.env.SLASH_API_KEY?.trim();
   const legalEntityId = process.env.SLASH_LEGAL_ENTITY_ID?.trim();
   const baseUrl = process.env.SLASH_BASE_URL?.trim();
@@ -244,7 +249,8 @@ export async function fetchSlashActivity(): Promise<{ accounts: AccountBalance[]
   return fetchSlashActivityForLegalEntity({
     baseUrl,
     apiKey,
-    legalEntityId
+    legalEntityId,
+    dateRange
   });
 }
 

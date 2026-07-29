@@ -181,6 +181,10 @@ Wise balances are discovered automatically across the configured business profil
 - overlapping date ranges are safe because transaction IDs are deduplicated;
 - review unmatched companies/categories and save aliases for future imports.
 
+## Slash Transaction Loading
+
+The Slash view loads the most recent 45 calendar days by default. Use the From and To controls to load an exact inclusive UTC date range, or use **Show 45 earlier days** below the table to extend the current window. Every selected range follows Slash cursor pagination through all available transactions; it is not capped at a fixed row count.
+
 ## Integration Status
 
 | Integration | Current role |

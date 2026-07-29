@@ -153,6 +153,8 @@ const transactionCategoryRule = v.object({
   updatedAt: v.string()
 });
 
+const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
+
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
@@ -374,6 +376,18 @@ export default defineSchema({
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"]),
+  transactionCategories: defineTable({
+    id: v.string(),
+    name: v.string(),
+    nameNormalized: v.string(),
+    direction: transactionCategoryDirection,
+    color: v.string(),
+    system: v.boolean(),
+    createdAt: v.string(),
+    updatedAt: v.string()
+  })
+    .index("by_category_id", ["id"])
+    .index("by_name_normalized", ["nameNormalized"]),
   managementReportImports: defineTable({
     importId: v.string(),
     contentHash: v.string(),

@@ -408,7 +408,7 @@ export async function fetchRevolutActivity({
         currency: leg.currency,
         direction: leg.amount >= 0 ? "in" : "out",
         status: revolutStatus(activity.state),
-        category: activity.merchant?.category_code || activity.type || "Revolut"
+        category: "Revolut"
       });
     }
   }

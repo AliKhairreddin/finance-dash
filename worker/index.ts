@@ -17,6 +17,7 @@ import type {
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
+  CreateTransactionCategoryPayload,
   DashboardSnapshot,
   DataSource,
   DeleteInvoicesPayload,
@@ -49,20 +50,31 @@ import type {
   Team,
   TransactionTeamAssignment,
   Transaction,
+  TransactionCategory,
   TransactionCategoryRule,
   UpdateProviderPayload,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateTransactionCategoryPayload,
+  UpdateTransactionCategoryDefinitionPayload,
   UpdateRevenuePartnerPayload,
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
-import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import {
+  defaultAiSettings,
+  listOpenRouterZdrModels,
+  publicAiSettings,
+  requireOpenRouterZdrModel,
+  runOpenRouterPrompt,
+  runOpenRouterTransactionCategorization
+} from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
+  sanitizeStoredTransactionCategories,
+  sanitizeStoredTransactionCategoryRules,
   transactionBusinessCategory
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
@@ -90,7 +102,11 @@ import {
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
-import { fetchSlashActivityForLegalEntity } from "../shared/slashApi";
+import {
+  fetchSlashActivityForLegalEntity,
+  parseSlashTransactionDateRange,
+  type SlashTransactionDateRange
+} from "../shared/slashApi";
 import {
   emptyWiseActivity,
   fetchWiseActivityForAccessibleBusinesses,
@@ -151,6 +167,7 @@ interface PersistedState {
   invoices: Invoice[];
   manualReceivables: LedgerItem[];
   teams: Team[];
+  transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
@@ -198,6 +215,16 @@ function isValidTimezone(value: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+function categoryMutationError(error: unknown): never {
+  if (error instanceof ConvexError && isRecord(error.data)) {
+    const message = typeof error.data.message === "string" ? error.data.message : "Category update failed";
+    const code = typeof error.data.code === "string" ? error.data.code : "";
+    const status = code === "CATEGORY_NOT_FOUND" ? 404 : code === "INVALID_CATEGORY" ? 400 : 409;
+    throw new ApiError(status, message, { cause: error });
+  }
+  throw new ApiError(503, "Category storage is temporarily unavailable", { cause: error });
 }
 
 function meritWritesEnabled(env: Env): boolean {
@@ -455,7 +482,10 @@ async function fetchRevolutActivity(env: Env): Promise<{ accounts: AccountBalanc
   });
 }
 
-async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+async function fetchSlashActivity(
+  env: Env,
+  dateRange?: SlashTransactionDateRange
+): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
   const apiKey = env.SLASH_API_KEY?.trim();
   const legalEntityId = env.SLASH_LEGAL_ENTITY_ID?.trim();
   const baseUrl = env.SLASH_BASE_URL?.trim();
@@ -463,7 +493,8 @@ async function fetchSlashActivity(env: Env): Promise<{ accounts: AccountBalance[
   return fetchSlashActivityForLegalEntity({
     baseUrl,
     apiKey,
-    legalEntityId
+    legalEntityId,
+    dateRange
   });
 }
 
@@ -1255,17 +1286,20 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     }
   })();
 
-  return {
+  const storedCategoryRules = stored?.transactionCategoryRules ?? [];
+  const storedTransactions = stored?.wiseStatementTransactions ?? [];
+  const state: PersistedState = {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: stored?.invoices ?? [],
     manualReceivables: stored?.manualReceivables ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
-    transactionCategoryRules: stored?.transactionCategoryRules ?? [],
+    transactionCategories: stored?.transactionCategories ?? [],
+    transactionCategoryRules: sanitizeStoredTransactionCategoryRules(storedCategoryRules),
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
     transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
     wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
-    wiseStatementTransactions: stored?.wiseStatementTransactions ?? [],
+    wiseStatementTransactions: sanitizeStoredTransactionCategories(storedTransactions),
     wiseStatementImports: stored?.wiseStatementImports ?? [],
     revenueRuns: stored?.revenueRuns ?? [],
     revenueAccruals: stored?.revenueAccruals ?? [],
@@ -1277,12 +1311,19 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings }
   };
+  if (
+    JSON.stringify(state.transactionCategoryRules) !== JSON.stringify(storedCategoryRules)
+    || JSON.stringify(state.wiseStatementTransactions) !== JSON.stringify(storedTransactions)
+  ) {
+    await savePersisted(env, state);
+  }
+  return state;
 }
 
 async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const { revision, ...dashboardState } = state;
+  const { revision, transactionCategories: _transactionCategories, ...dashboardState } = state;
   try {
     const result = await convex.mutation(api.dashboard.saveState, {
       ...dashboardState,
@@ -1429,7 +1470,7 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Slash balances and the latest 500 transactions are synced for the configured legal entity."
+          ? "Slash balances and a recent transaction window sync automatically; exact dates and older activity can be loaded from the Slash view."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -1580,7 +1621,10 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
   };
 }
 
-async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {}): Promise<DashboardSnapshot> {
+async function getSnapshot(
+  env: Env,
+  options: { refreshFxRates?: boolean; slashDateRange?: SlashTransactionDateRange } = {}
+): Promise<DashboardSnapshot> {
   const state = await loadPersisted(env);
   const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
   const bankIssue = (label: string, error: unknown): string => {
@@ -1593,7 +1637,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
       bankIssues.revolut = bankIssue("Revolut", error);
       return { accounts: [], transactions: [] };
     }),
-    fetchSlashActivity(env).catch((error: unknown) => {
+    fetchSlashActivity(env, options.slashDateRange).catch((error: unknown) => {
       bankIssues.slash = bankIssue("Slash", error);
       return { accounts: [], transactions: [] };
     }),
@@ -1734,6 +1778,7 @@ async function getSnapshot(env: Env, options: { refreshFxRates?: boolean } = {})
     approximateUsdTotals,
     automationRuns: state.automationRuns,
     meritTaxes,
+    transactionCategories: state.transactionCategories,
     transactionCategoryRules: state.transactionCategoryRules,
     wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
@@ -1851,7 +1896,7 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
     throw new Error("Revenue partner team not found");
   }
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
-  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+  if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
     throw new Error(`Category "${revenueCategory}" is not valid for money in`);
   }
   let updated: RevenuePartner | undefined;
@@ -1926,7 +1971,7 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     throw new ApiError(400, "Revenue rule team not found");
   }
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
-  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+  if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
     throw new ApiError(400, `Category "${revenueCategory}" is not valid for money in`);
   }
   const partner: RevenuePartner = {
@@ -1975,8 +2020,7 @@ async function deleteRevenuePartner(env: Env, partnerId: string): Promise<Revenu
 }
 
 async function saveAiSettings(env: Env, payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {
-  const model = payload.model.trim();
-  if (!model) throw new Error("OpenRouter model is required");
+  const model = await requireOpenRouterZdrModel(payload.model);
 
   const state = await loadPersisted(env);
   state.aiSettings = {
@@ -2042,7 +2086,8 @@ async function autoCategorizeState(
       activeAiSettings,
       remaining,
       state.providers,
-      env.PUBLIC_APP_URL
+      env.PUBLIC_APP_URL,
+      state.transactionCategories
     );
     for (const aiResult of aiResults) {
       if (aiResult.confidence < 0.72) continue;
@@ -2129,7 +2174,7 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
   }
 
   const category = transactionBusinessCategory(payload.category);
-  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+  if (!isTransactionCategoryForDirection(category, transaction.direction, state.transactionCategories)) {
     throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
   }
   const updated: Transaction = {
@@ -2230,6 +2275,51 @@ async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
   state.teams = mergeTeamDirectory([...state.teams, team]);
   await savePersisted(env, state);
   return team;
+}
+
+async function createTransactionCategory(
+  env: Env,
+  payload: CreateTransactionCategoryPayload
+): Promise<TransactionCategory[]> {
+  const convex = getConvexClient(env);
+  try {
+    return await convex.mutation(api.dashboard.createTransactionCategory, {
+      serviceToken: getConvexServiceToken(env),
+      id: `category-${crypto.randomUUID()}`,
+      ...payload
+    });
+  } catch (error) {
+    categoryMutationError(error);
+  }
+}
+
+async function updateTransactionCategoryDefinition(
+  env: Env,
+  categoryId: string,
+  payload: UpdateTransactionCategoryDefinitionPayload
+): Promise<TransactionCategory[]> {
+  const convex = getConvexClient(env);
+  try {
+    return await convex.mutation(api.dashboard.updateTransactionCategory, {
+      serviceToken: getConvexServiceToken(env),
+      id: categoryId,
+      ...payload
+    });
+  } catch (error) {
+    categoryMutationError(error);
+  }
+}
+
+async function deleteTransactionCategoryDefinition(env: Env, categoryId: string): Promise<TransactionCategory[]> {
+  const convex = getConvexClient(env);
+  try {
+    return await convex.mutation(api.dashboard.deleteTransactionCategory, {
+      serviceToken: getConvexServiceToken(env),
+      id: categoryId
+    });
+  } catch (error) {
+    categoryMutationError(error);
+  }
 }
 
 async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
@@ -3205,7 +3295,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
-      return json(await getSnapshot(env));
+      const slashDateRange = parseSlashTransactionDateRange(
+        url.searchParams.get("slashFromDate"),
+        url.searchParams.get("slashToDate")
+      );
+      return json(await getSnapshot(env, { slashDateRange }));
     }
 
     if (url.pathname === "/api/management-report" && request.method === "GET") {
@@ -3213,7 +3307,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
-      return json(await getSnapshot(env, { refreshFxRates: true }));
+      const slashDateRange = parseSlashTransactionDateRange(
+        url.searchParams.get("slashFromDate"),
+        url.searchParams.get("slashToDate")
+      );
+      return json(await getSnapshot(env, { refreshFxRates: true, slashDateRange }));
     }
 
     if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {
@@ -3263,8 +3361,29 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await deleteRevenuePartner(env, revenuePartnerMatch[1]));
     }
 
+    const transactionCategoryDefinitionMatch = url.pathname.match(/^\/api\/settings\/categories\/([^/]+)$/);
+    if (url.pathname === "/api/settings/categories" && request.method === "POST") {
+      return json(await createTransactionCategory(env, (await request.json()) as CreateTransactionCategoryPayload), { status: 201 });
+    }
+    if (transactionCategoryDefinitionMatch && request.method === "PUT") {
+      return json(
+        await updateTransactionCategoryDefinition(
+          env,
+          decodeURIComponent(transactionCategoryDefinitionMatch[1]),
+          (await request.json()) as UpdateTransactionCategoryDefinitionPayload
+        )
+      );
+    }
+    if (transactionCategoryDefinitionMatch && request.method === "DELETE") {
+      return json(await deleteTransactionCategoryDefinition(env, decodeURIComponent(transactionCategoryDefinitionMatch[1])));
+    }
+
     if (url.pathname === "/api/settings/ai" && request.method === "POST") {
       return json(await saveAiSettings(env, (await request.json()) as SaveAiSettingsPayload));
+    }
+
+    if (url.pathname === "/api/ai/models" && request.method === "GET") {
+      return json(await listOpenRouterZdrModels());
     }
 
     if (url.pathname === "/api/ai/prompt" && request.method === "POST") {

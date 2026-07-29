@@ -1,5 +1,11 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
+import {
+  initialTransactionCategories,
+  isTransactionCategoryColor,
+  isTransactionCategoryDirection,
+  normalizeTransactionCategoryName
+} from "../shared/categories";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -133,6 +139,16 @@ const transactionCategoryRule = v.object({
   category: v.string(),
   direction: v.optional(v.union(v.literal("in"), v.literal("out"))),
   aliases: v.array(v.string()),
+  createdAt: v.string(),
+  updatedAt: v.string()
+});
+const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
+const transactionCategory = v.object({
+  id: v.string(),
+  name: v.string(),
+  direction: transactionCategoryDirection,
+  color: v.string(),
+  system: v.boolean(),
   createdAt: v.string(),
   updatedAt: v.string()
 });
@@ -314,6 +330,21 @@ function nextUpdatedAt(previous?: string): string {
   return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
 }
 
+async function listTransactionCategories(ctx: QueryCtx | MutationCtx) {
+  const categories = await ctx.db.query("transactionCategories").collect();
+  return categories
+    .map(({ id, name, direction, color, system, createdAt, updatedAt }) => ({
+      id,
+      name,
+      direction,
+      color,
+      system,
+      createdAt,
+      updatedAt
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 export const getState = query({
   args: { serviceToken: v.string() },
   returns: v.union(
@@ -323,6 +354,7 @@ export const getState = query({
       invoices: v.array(invoice),
       manualReceivables: v.array(ledgerItem),
       teams: v.array(team),
+      transactionCategories: v.array(transactionCategory),
       transactionCategoryRules: v.array(transactionCategoryRule),
       revenuePartners: v.array(revenuePartner),
       transactionTeamAssignments: v.array(transactionTeamAssignment),
@@ -343,13 +375,17 @@ export const getState = query({
   ),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
-    const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+    const [state, transactionCategories] = await Promise.all([
+      ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique(),
+      listTransactionCategories(ctx)
+    ]);
     if (!state) return null;
     return {
       providers: state.providers,
       invoices: state.invoices,
       manualReceivables: state.manualReceivables,
       teams: state.teams,
+      transactionCategories,
       transactionCategoryRules: state.transactionCategoryRules,
       revenuePartners: state.revenuePartners,
       transactionTeamAssignments: state.transactionTeamAssignments,
@@ -367,6 +403,161 @@ export const getState = query({
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
     };
+  }
+});
+
+export const seedTransactionCategories = mutation({
+  args: { serviceToken: v.string() },
+  returns: v.array(transactionCategory),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const now = new Date().toISOString();
+    for (const category of initialTransactionCategories) {
+      const existing = await ctx.db
+        .query("transactionCategories")
+        .withIndex("by_category_id", (q) => q.eq("id", category.id))
+        .unique();
+      if (existing) continue;
+      await ctx.db.insert("transactionCategories", {
+        ...category,
+        nameNormalized: category.name.toLowerCase(),
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    return listTransactionCategories(ctx);
+  }
+});
+
+export const createTransactionCategory = mutation({
+  args: {
+    serviceToken: v.string(),
+    id: v.string(),
+    name: v.string(),
+    direction: transactionCategoryDirection,
+    color: v.string()
+  },
+  returns: v.array(transactionCategory),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const name = normalizeTransactionCategoryName(args.name);
+    const nameNormalized = name.toLowerCase();
+    if (!name) throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category name is required" });
+    if (!isTransactionCategoryDirection(args.direction)) {
+      throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category type is invalid" });
+    }
+    if (!isTransactionCategoryColor(args.color)) {
+      throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category color must be a six-digit hex value" });
+    }
+    const duplicate = await ctx.db
+      .query("transactionCategories")
+      .withIndex("by_name_normalized", (q) => q.eq("nameNormalized", nameNormalized))
+      .unique();
+    if (duplicate) throw new ConvexError({ code: "CATEGORY_EXISTS", message: "A category with this name already exists" });
+    const now = new Date().toISOString();
+    await ctx.db.insert("transactionCategories", {
+      id: args.id,
+      name,
+      nameNormalized,
+      direction: args.direction,
+      color: args.color.toLowerCase(),
+      system: false,
+      createdAt: now,
+      updatedAt: now
+    });
+    return listTransactionCategories(ctx);
+  }
+});
+
+export const updateTransactionCategory = mutation({
+  args: {
+    serviceToken: v.string(),
+    id: v.string(),
+    name: v.string(),
+    direction: transactionCategoryDirection,
+    color: v.string()
+  },
+  returns: v.array(transactionCategory),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const category = await ctx.db.query("transactionCategories").withIndex("by_category_id", (q) => q.eq("id", args.id)).unique();
+    if (!category) throw new ConvexError({ code: "CATEGORY_NOT_FOUND", message: "Category not found" });
+    const name = normalizeTransactionCategoryName(args.name);
+    const nameNormalized = name.toLowerCase();
+    if (!name) throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category name is required" });
+    if (!isTransactionCategoryDirection(args.direction)) {
+      throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category type is invalid" });
+    }
+    if (!isTransactionCategoryColor(args.color)) {
+      throw new ConvexError({ code: "INVALID_CATEGORY", message: "Category color must be a six-digit hex value" });
+    }
+    if (category.system && (name !== category.name || args.direction !== category.direction)) {
+      throw new ConvexError({
+        code: "SYSTEM_CATEGORY",
+        message: "Built-in category names and types are locked because reporting rules depend on them"
+      });
+    }
+    const duplicate = await ctx.db
+      .query("transactionCategories")
+      .withIndex("by_name_normalized", (q) => q.eq("nameNormalized", nameNormalized))
+      .unique();
+    if (duplicate && duplicate.id !== category.id) {
+      throw new ConvexError({ code: "CATEGORY_EXISTS", message: "A category with this name already exists" });
+    }
+
+    if (name !== category.name) {
+      const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+      if (state) {
+        await ctx.db.patch(state._id, {
+          transactionCategoryRules: state.transactionCategoryRules.map((rule) =>
+            rule.category === category.name ? { ...rule, category: name, updatedAt: new Date().toISOString() } : rule
+          ),
+          wiseStatementTransactions: state.wiseStatementTransactions.map((transaction) =>
+            transaction.category === category.name ? { ...transaction, category: name } : transaction
+          ),
+          revenuePartners: state.revenuePartners.map((partner) =>
+            partner.revenueCategory === category.name ? { ...partner, revenueCategory: name } : partner
+          ),
+          updatedAt: nextUpdatedAt(state.updatedAt)
+        });
+      }
+    }
+
+    await ctx.db.patch(category._id, {
+      name,
+      nameNormalized,
+      direction: args.direction,
+      color: args.color.toLowerCase(),
+      updatedAt: new Date().toISOString()
+    });
+    return listTransactionCategories(ctx);
+  }
+});
+
+export const deleteTransactionCategory = mutation({
+  args: { serviceToken: v.string(), id: v.string() },
+  returns: v.array(transactionCategory),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const category = await ctx.db.query("transactionCategories").withIndex("by_category_id", (q) => q.eq("id", args.id)).unique();
+    if (!category) throw new ConvexError({ code: "CATEGORY_NOT_FOUND", message: "Category not found" });
+    if (category.system) {
+      throw new ConvexError({ code: "SYSTEM_CATEGORY", message: "Built-in categories cannot be deleted" });
+    }
+    const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+    const referenceCount = state
+      ? state.wiseStatementTransactions.filter((transaction) => transaction.category === category.name).length
+        + state.transactionCategoryRules.filter((rule) => rule.category === category.name).length
+        + state.revenuePartners.filter((partner) => partner.revenueCategory === category.name).length
+      : 0;
+    if (referenceCount > 0) {
+      throw new ConvexError({
+        code: "CATEGORY_IN_USE",
+        message: `Reassign ${referenceCount} ${referenceCount === 1 ? "reference" : "references"} before deleting this category`
+      });
+    }
+    await ctx.db.delete(category._id);
+    return listTransactionCategories(ctx);
   }
 });
 

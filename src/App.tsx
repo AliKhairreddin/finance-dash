@@ -51,6 +51,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { compareTableValues, SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
 import type {
@@ -64,6 +65,7 @@ import type {
   CreateRevenuePartnerPayload,
   CreateProviderPayload,
   CreateTeamPayload,
+  CreateTransactionCategoryPayload,
   CurrencyTotals,
   DataSource,
   DashboardSnapshot,
@@ -76,6 +78,7 @@ import type {
   InvoiceDocumentType,
   MeritSendMode,
   MeritTax,
+  OpenRouterZdrModel,
   ProfitDistributionAdjustment,
   ProfitDistributionBucket,
   ProfitDistributionPartnerId,
@@ -93,17 +96,17 @@ import type {
   SyncRevenuePayload,
   Team,
   Transaction,
+  TransactionCategory,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateProviderPayload,
-  UpdateRevenuePartnerPayload
+  UpdateRevenuePartnerPayload,
+  UpdateTransactionCategoryDefinitionPayload
 } from "../shared/types";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
   isReviewOnlyTransactionCategory,
-  moneyInCategoryOptions,
   transactionBusinessCategory,
-  transactionCategoryOptions,
   transactionCategoryOptionsForDirection
 } from "../shared/categories";
 import { convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
@@ -118,6 +121,10 @@ import {
   latestIncomeAutomationTimestamp,
   unreadIncomeAutomationCount
 } from "../shared/income";
+import {
+  slashDefaultActivityWindowDays,
+  type SlashTransactionDateRange
+} from "../shared/slashApi";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
@@ -168,18 +175,41 @@ function storedActiveTab(): ActiveTab {
   return activeTabs.find((tab) => tab === storedTab) ?? "overview";
 }
 
+function localIsoDate(daysFromToday = 0): string {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + daysFromToday);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function shiftIsoDate(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function defaultSlashTransactionDateRange(): SlashTransactionDateRange {
+  return {
+    fromDate: localIsoDate(1 - slashDefaultActivityWindowDays),
+    toDate: localIsoDate()
+  };
+}
+
+function apiUrlWithSlashDateRange(path: string, dateRange: SlashTransactionDateRange): string {
+  const query = new URLSearchParams({
+    slashFromDate: dateRange.fromDate,
+    slashToDate: dateRange.toDate
+  });
+  return `${apiBase}${path}?${query.toString()}`;
+}
+
 async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
   return body?.message || fallback;
 }
-
-const openRouterModelOptions = [
-  { label: "OpenRouter auto", value: "openrouter/auto" },
-  { label: "Latest OpenAI flagship", value: "~openai/gpt-latest" },
-  { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4.5" },
-  { label: "Gemini Pro", value: "google/gemini-2.5-pro" },
-  { label: "Custom slug", value: "custom" }
-];
 
 const timezoneOptions = [
   { label: "GMT zero", value: "UTC" },
@@ -348,9 +378,13 @@ function companyRollupStatusClass(status: string): "good" | "warning" | "" {
   return "";
 }
 
-function transactionCategoryChoices(currentCategory: string, direction: Transaction["direction"]): string[] {
+function transactionCategoryChoices(
+  currentCategory: string,
+  direction: Transaction["direction"],
+  categories: TransactionCategory[]
+): string[] {
   const current = transactionBusinessCategory(currentCategory);
-  const options = transactionCategoryOptionsForDirection(direction);
+  const options = transactionCategoryOptionsForDirection(direction, categories);
   return options.includes(current) ? [...options] : [current, ...options];
 }
 
@@ -649,10 +683,12 @@ function App() {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
   });
   const [bankTab, setBankTab] = useState<BankTab>("all");
-  const [wiseDirection, setWiseDirection] = useState<"in" | "out">("in");
+  const [bankDirection, setBankDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
+  const [slashDateRange, setSlashDateRange] = useState<SlashTransactionDateRange>(defaultSlashTransactionDateRange);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingSlash, setIsLoadingSlash] = useState(false);
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -683,7 +719,7 @@ function App() {
 
   async function loadDashboard() {
     setError(null);
-    const response = await fetch(`${apiBase}/dashboard`);
+    const response = await fetch(apiUrlWithSlashDateRange("/dashboard", slashDateRange));
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message || "Could not load dashboard data");
@@ -766,31 +802,36 @@ function App() {
   const wiseTransactions = useMemo(
     () =>
       filteredTransactions.filter((transaction) => {
-        const matchesDirection = transaction.source === "wise" && transaction.direction === wiseDirection;
+        const matchesDirection = transaction.source === "wise" && transaction.direction === bankDirection;
         const matchesTeam =
           teamFilter === "all" ||
           (teamFilter === "unassigned" && !transaction.teamId) ||
           transaction.teamId === teamFilter;
         return matchesDirection && matchesTeam;
       }),
-    [filteredTransactions, teamFilter, wiseDirection]
+    [bankDirection, filteredTransactions, teamFilter]
   );
 
-  const wiseTeamSummary = useMemo(() => {
-    const volume = sumCurrencyTotals(wiseTransactions, (transaction) => transaction.amount);
-    const matched = wiseTransactions.filter((transaction) => transaction.matchedProviderId).length;
-    const unassigned = wiseTransactions.filter((transaction) => !transaction.teamId).length;
-    return { volume, count: wiseTransactions.length, matched, unassigned };
-  }, [wiseTransactions]);
-
   const slashTransactions = useMemo(
-    () => filteredTransactions.filter((transaction) => transaction.source === "slash"),
-    [filteredTransactions]
+    () =>
+      filteredTransactions.filter((transaction) => {
+        if (transaction.source !== "slash" || transaction.direction !== bankDirection) return false;
+        return teamFilter === "all"
+          || (teamFilter === "unassigned" && !transaction.teamId)
+          || transaction.teamId === teamFilter;
+      }),
+    [bankDirection, filteredTransactions, teamFilter]
   );
 
   const revolutTransactions = useMemo(
-    () => filteredTransactions.filter((transaction) => transaction.source === "revolut"),
-    [filteredTransactions]
+    () =>
+      filteredTransactions.filter((transaction) => {
+        if (transaction.source !== "revolut" || transaction.direction !== bankDirection) return false;
+        return teamFilter === "all"
+          || (teamFilter === "unassigned" && !transaction.teamId)
+          || transaction.teamId === teamFilter;
+      }),
+    [bankDirection, filteredTransactions, teamFilter]
   );
 
   const amexTransactions = useMemo(
@@ -803,7 +844,7 @@ function App() {
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/sync`, { method: "POST" });
+      const response = await fetch(apiUrlWithSlashDateRange("/sync", slashDateRange), { method: "POST" });
       if (!response.ok) {
         throw new Error(await apiErrorMessage(response, "Sync failed"));
       }
@@ -813,6 +854,25 @@ function App() {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {
       setIsSyncing(false);
+    }
+  }
+
+  async function loadSlashTransactions(dateRange: SlashTransactionDateRange) {
+    setIsLoadingSlash(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await fetch(apiUrlWithSlashDateRange("/sync", dateRange), { method: "POST" });
+      if (!response.ok) {
+        throw new Error(await apiErrorMessage(response, "Slash transactions could not be loaded"));
+      }
+      setDashboard((await response.json()) as DashboardSnapshot);
+      setSlashDateRange(dateRange);
+      setNotice(`Loaded Slash transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Slash transactions could not be loaded");
+    } finally {
+      setIsLoadingSlash(false);
     }
   }
 
@@ -994,6 +1054,76 @@ function App() {
     }
     await loadDashboard();
     setNotice(`${payload.name.trim()} team added.`);
+  }
+
+  function applyTransactionCategories(
+    categories: TransactionCategory[],
+    renamedFrom?: string,
+    renamedTo?: string
+  ) {
+    setDashboard((current) => {
+      if (!current) return current;
+      if (!renamedFrom || !renamedTo || renamedFrom === renamedTo) {
+        return { ...current, transactionCategories: categories };
+      }
+      return {
+        ...current,
+        transactionCategories: categories,
+        transactions: current.transactions.map((transaction) =>
+          transaction.category === renamedFrom ? { ...transaction, category: renamedTo } : transaction
+        ),
+        transactionCategoryRules: current.transactionCategoryRules.map((rule) =>
+          rule.category === renamedFrom ? { ...rule, category: renamedTo } : rule
+        ),
+        revenuePartners: current.revenuePartners.map((partner) =>
+          partner.revenueCategory === renamedFrom ? { ...partner, revenueCategory: renamedTo } : partner
+        )
+      };
+    });
+  }
+
+  async function createTransactionCategory(payload: CreateTransactionCategoryPayload) {
+    const response = await fetch(`${apiBase}/settings/categories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Category could not be created"));
+    }
+    applyTransactionCategories((await response.json()) as TransactionCategory[]);
+    setNotice(`${payload.name.trim()} category added.`);
+  }
+
+  async function updateTransactionCategoryDefinition(
+    category: TransactionCategory,
+    payload: UpdateTransactionCategoryDefinitionPayload
+  ) {
+    const response = await fetch(`${apiBase}/settings/categories/${encodeURIComponent(category.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Category could not be updated"));
+    }
+    applyTransactionCategories(
+      (await response.json()) as TransactionCategory[],
+      category.name,
+      payload.name.trim().replace(/\s+/g, " ")
+    );
+    setNotice(`${payload.name.trim()} category saved.`);
+  }
+
+  async function deleteTransactionCategoryDefinition(category: TransactionCategory) {
+    const response = await fetch(`${apiBase}/settings/categories/${encodeURIComponent(category.id)}`, {
+      method: "DELETE"
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Category could not be deleted"));
+    }
+    applyTransactionCategories((await response.json()) as TransactionCategory[]);
+    setNotice(`${category.name} category deleted.`);
   }
 
   async function submitProvider(payload: CreateProviderPayload) {
@@ -1453,8 +1583,8 @@ function App() {
           dashboard={dashboard}
           activeBank={bankTab}
           setActiveBank={setBankTab}
-          wiseDirection={wiseDirection}
-          setWiseDirection={setWiseDirection}
+          bankDirection={bankDirection}
+          setBankDirection={setBankDirection}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -1466,15 +1596,17 @@ function App() {
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
           wiseTransactions={wiseTransactions}
-          wiseTeamSummary={wiseTeamSummary}
           revolutTransactions={revolutTransactions}
           slashTransactions={slashTransactions}
+          slashDateRange={slashDateRange}
           amexTransactions={amexTransactions}
           providersById={providersById}
           isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
+          isLoadingSlash={isLoadingSlash}
           onAutoCategorize={autoCategorizeTransactions}
           onImportWiseStatements={importWiseStatements}
+          onLoadSlashTransactions={loadSlashTransactions}
           onMatch={matchTransaction}
           onAssignTeam={assignTransactionTeam}
           onUpdateCategory={updateTransactionCategory}
@@ -1550,6 +1682,9 @@ function App() {
         <SettingsView
           dashboard={dashboard}
           onCreateTeam={createTeam}
+          onCreateCategory={createTransactionCategory}
+          onUpdateCategory={updateTransactionCategoryDefinition}
+          onDeleteCategory={deleteTransactionCategoryDefinition}
           onSaveAiSettings={saveAiSettings}
           onSaveWiseCardHolderTeam={assignWiseCardHolderTeam}
           onRunAiPrompt={runAiPrompt}
@@ -1597,6 +1732,7 @@ function App() {
           providers={dashboard.providers}
           teams={dashboard.teams}
           taxes={dashboard.meritTaxes}
+          categories={dashboard.transactionCategories}
           onClose={() => {
             setEditingRevenuePartner(null);
             setCreatingRevenueRuleProviderId(null);
@@ -1676,22 +1812,26 @@ function Sidebar({
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileNavRef = useRef<HTMLDivElement>(null);
-  const items: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
+  type SidebarItem = { id: ActiveTab; label: string; icon: React.ReactNode; beta?: boolean };
+  const primaryItems: SidebarItem[] = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
-    { id: "management", label: "Management", icon: <BookOpen size={17} /> },
-    { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
-    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
+    { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
   ];
-  const incomeItems: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
+  const operationsItems: SidebarItem[] = [
+    { id: "management", label: "Management", icon: <BookOpen size={17} />, beta: true },
+    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} />, beta: true }
+  ];
+  const accountingItems: SidebarItem[] = [
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> }
   ];
-  const directoryItems: Array<{ id: ActiveTab; label: string; icon: React.ReactNode }> = [
+  const workspaceItems: SidebarItem[] = [
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
-  const activeItem = [...items, ...incomeItems, ...directoryItems].find((item) => item.id === activeTab) ?? items[0];
+  const activeItem = [...primaryItems, ...operationsItems, ...accountingItems, ...workspaceItems]
+    .find((item) => item.id === activeTab) ?? primaryItems[0];
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -1717,13 +1857,13 @@ function Sidebar({
     setMobileMenuOpen(false);
   }
 
-  function navigationButton(item: { id: ActiveTab; label: string; icon: React.ReactNode }, nested = false, mobile = false) {
+  function navigationButton(item: SidebarItem, nested = false, mobile = false) {
     const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : 0;
     return (
       <Button
         key={item.id}
         aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} unread automation ${unreadCount === 1 ? "update" : "updates"}` : item.label}
-        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-notifications" : ""}`}
+        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 || item.beta ? "has-meta" : ""}`}
         onClick={() => selectTab(item.id)}
         aria-current={activeTab === item.id ? "page" : undefined}
         role={mobile ? "menuitem" : undefined}
@@ -1732,6 +1872,7 @@ function Sidebar({
       >
         {item.icon}
         <span>{item.label}</span>
+        {item.beta && <span className="sidebar-beta-badge">Beta</span>}
         {unreadCount > 0 && (
           <span aria-hidden="true" className="sidebar-notification-badge">
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -1759,12 +1900,13 @@ function Sidebar({
           </Button>
           {mobileMenuOpen && (
             <div className="mobile-nav-menu" data-testid="mobile-nav-menu" id="mobile-navigation-menu" role="menu">
+              {primaryItems.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Operations</div>
+              {operationsItems.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Accounting</div>
+              {accountingItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label">Workspace</div>
-              {items.map((item) => navigationButton(item, false, true))}
-              <div className="mobile-nav-group-label">Income</div>
-              {incomeItems.map((item) => navigationButton(item, false, true))}
-              <div className="mobile-nav-group-label">Business</div>
-              {directoryItems.map((item) => navigationButton(item, false, true))}
+              {workspaceItems.map((item) => navigationButton(item, false, true))}
             </div>
           )}
         </div>
@@ -1783,12 +1925,19 @@ function Sidebar({
         <strong>Finance</strong>
       </div>
       <nav className="sidebar-nav">
-        {items.map((item) => navigationButton(item))}
-        <div className="sidebar-section-label">Income</div>
+        {primaryItems.map((item) => navigationButton(item))}
+        <div className="sidebar-section-label">Operations</div>
         <div className="sidebar-income-group">
-          {incomeItems.map((item) => navigationButton(item, true))}
+          {operationsItems.map((item) => navigationButton(item, true))}
         </div>
-        {directoryItems.map((item) => navigationButton(item))}
+        <div className="sidebar-section-label">Accounting</div>
+        <div className="sidebar-income-group">
+          {accountingItems.map((item) => navigationButton(item, true))}
+        </div>
+        <div className="sidebar-section-label">Workspace</div>
+        <div className="sidebar-income-group">
+          {workspaceItems.map((item) => navigationButton(item, true))}
+        </div>
       </nav>
       <div className="sidebar-footer">
         <div className="sidebar-freshness">
@@ -2072,8 +2221,8 @@ function BanksView({
   dashboard,
   activeBank,
   setActiveBank,
-  wiseDirection,
-  setWiseDirection,
+  bankDirection,
+  setBankDirection,
   teamFilter,
   setTeamFilter,
   searchTerm,
@@ -2085,15 +2234,17 @@ function BanksView({
   transactionSortDirection,
   setTransactionSortDirection,
   wiseTransactions,
-  wiseTeamSummary,
   revolutTransactions,
   slashTransactions,
+  slashDateRange,
   amexTransactions,
   providersById,
   isCategorizing,
   isImportingWise,
+  isLoadingSlash,
   onAutoCategorize,
   onImportWiseStatements,
+  onLoadSlashTransactions,
   onMatch,
   onAssignTeam,
   onUpdateCategory,
@@ -2106,8 +2257,8 @@ function BanksView({
   dashboard: DashboardSnapshot;
   activeBank: BankTab;
   setActiveBank: (source: BankTab) => void;
-  wiseDirection: "in" | "out";
-  setWiseDirection: (direction: "in" | "out") => void;
+  bankDirection: "in" | "out";
+  setBankDirection: (direction: "in" | "out") => void;
   teamFilter: string;
   setTeamFilter: (teamId: string) => void;
   searchTerm: string;
@@ -2119,15 +2270,17 @@ function BanksView({
   transactionSortDirection: SortDirection;
   setTransactionSortDirection: (value: SortDirection) => void;
   wiseTransactions: Transaction[];
-  wiseTeamSummary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
   revolutTransactions: Transaction[];
   slashTransactions: Transaction[];
+  slashDateRange: SlashTransactionDateRange;
   amexTransactions: Transaction[];
   providersById: Map<string, Provider>;
   isCategorizing: boolean;
   isImportingWise: boolean;
+  isLoadingSlash: boolean;
   onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onLoadSlashTransactions: (dateRange: SlashTransactionDateRange) => Promise<void>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string) => void;
@@ -2158,6 +2311,10 @@ function BanksView({
       )
     );
   }
+  const activeSource = bankSources.find((source) => source.id === activeBank);
+  const activeSourceAccounts = activeSource ? (accountsBySource.get(activeSource.id) ?? []) : [];
+  const activeSourceBalance = sumCurrencyTotals(activeSourceAccounts, (account) => account.balance);
+  const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
 
   return (
     <div className="banks-layout">
@@ -2165,7 +2322,18 @@ function BanksView({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Banks</p>
-            <h2>Connected bank, card, and reconciliation activity</h2>
+            <div className="bank-heading-line">
+              <h2>{activeSource ? `${activeSource.label} account activity` : "Connected bank, card, and reconciliation activity"}</h2>
+              {activeSource && (
+                <span
+                  className={`bank-inline-balance ${activeSourceStatus?.mode === "live" ? "is-live" : ""}`}
+                  title={activeSourceAccounts.length > 0 ? nativeCurrencyBreakdown(activeSourceBalance) : "No live balance available"}
+                >
+                  <span>Live balance</span>
+                  <strong>{formatUsdCurrencyTotal(activeSourceBalance, dashboard.fxRates)}</strong>
+                </span>
+              )}
+            </div>
           </div>
           <div className="segmented-control bank-tabs" aria-label="Bank source">
             <button
@@ -2197,33 +2365,35 @@ function BanksView({
             </button>
           </div>
         </div>
-        <div className="wise-summary-grid bank-source-summary">
-          {bankSources.map((source) => {
-            const accounts = accountsBySource.get(source.id) ?? [];
-            const rows = rowsBySource.get(source.id) ?? [];
-            const status = statusBySource.get(source.id);
-            const accountTotals = sumCurrencyTotals(accounts, (account) => account.balance);
-            return (
-              <SummaryTile
-                key={source.id}
-                label={`${source.label} ${status?.mode ?? "partial"}`}
-                value={accounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
-                detail={accounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
-              />
-            );
-          })}
-        </div>
+        {activeBank === "all" && (
+          <div className="wise-summary-grid bank-source-summary">
+            {bankSources.map((source) => {
+              const accounts = accountsBySource.get(source.id) ?? [];
+              const rows = rowsBySource.get(source.id) ?? [];
+              const status = statusBySource.get(source.id);
+              const accountTotals = sumCurrencyTotals(accounts, (account) => account.balance);
+              return (
+                <SummaryTile
+                  key={source.id}
+                  label={`${source.label} ${status?.mode ?? "partial"}`}
+                  value={accounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
+                  detail={accounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
+                />
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {activeBank === "all" && <AllBankTransactionsView dashboard={dashboard} providersById={providersById} />}
       {activeBank === "wise" && (
-        <WiseBankView
+        <BankReconciliationView
           dashboard={dashboard}
           rows={wiseTransactions}
-          summary={wiseTeamSummary}
+          source="wise"
           providersById={providersById}
-          wiseDirection={wiseDirection}
-          setWiseDirection={setWiseDirection}
+          bankDirection={bankDirection}
+          setBankDirection={setBankDirection}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -2244,8 +2414,59 @@ function BanksView({
           onOpenInvoice={onOpenInvoice}
         />
       )}
-      {activeBank === "revolut" && <RevolutView dashboard={dashboard} rows={revolutTransactions} />}
-      {activeBank === "slash" && <SlashView dashboard={dashboard} rows={slashTransactions} />}
+      {activeBank === "revolut" && (
+        <RevolutView
+          dashboard={dashboard}
+          rows={revolutTransactions}
+          providersById={providersById}
+          bankDirection={bankDirection}
+          setBankDirection={setBankDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          isCategorizing={isCategorizing}
+          onAutoCategorize={onAutoCategorize}
+          onMatch={onMatch}
+          onAssignTeam={onAssignTeam}
+          onUpdateCategory={onUpdateCategory}
+          onOpenInvoice={onOpenInvoice}
+        />
+      )}
+      {activeBank === "slash" && (
+        <SlashView
+          dashboard={dashboard}
+          rows={slashTransactions}
+          dateRange={slashDateRange}
+          isLoadingDateRange={isLoadingSlash}
+          onLoadDateRange={onLoadSlashTransactions}
+          providersById={providersById}
+          bankDirection={bankDirection}
+          setBankDirection={setBankDirection}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
+          isCategorizing={isCategorizing}
+          onAutoCategorize={onAutoCategorize}
+          onMatch={onMatch}
+          onAssignTeam={onAssignTeam}
+          onUpdateCategory={onUpdateCategory}
+          onOpenInvoice={onOpenInvoice}
+        />
+      )}
       {activeBank === "amex" && <AmexView dashboard={dashboard} rows={amexTransactions} />}
       {activeBank === "holdings" && (
         <HoldingsView
@@ -2260,13 +2481,43 @@ function BanksView({
   );
 }
 
-function WiseBankView({
+type BankReconciliationViewProps = {
+  dashboard: DashboardSnapshot;
+  rows: Transaction[];
+  source: Extract<BankSource, "wise" | "revolut" | "slash">;
+  providersById: Map<string, Provider>;
+  bankDirection: "in" | "out";
+  setBankDirection: (direction: "in" | "out") => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  matchFilter: string;
+  setMatchFilter: (value: string) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: SortDirection;
+  setTransactionSortDirection: (value: SortDirection) => void;
+  isCategorizing: boolean;
+  isImportingWise?: boolean;
+  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
+  onImportWiseStatements?: (files: FileList | null) => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onOpenInvoice: (transaction: Transaction) => void;
+  wide?: boolean;
+  rangeControls?: ReactNode;
+  tableFooter?: ReactNode;
+};
+
+function BankReconciliationView({
   dashboard,
   rows,
-  summary,
+  source,
   providersById,
-  wiseDirection,
-  setWiseDirection,
+  bankDirection,
+  setBankDirection,
   teamFilter,
   setTeamFilter,
   searchTerm,
@@ -2284,50 +2535,35 @@ function WiseBankView({
   onMatch,
   onAssignTeam,
   onUpdateCategory,
-  onOpenInvoice
-}: {
-  dashboard: DashboardSnapshot;
-  rows: Transaction[];
-  summary: { volume: CurrencyTotals; count: number; matched: number; unassigned: number };
-  providersById: Map<string, Provider>;
-  wiseDirection: "in" | "out";
-  setWiseDirection: (direction: "in" | "out") => void;
-  teamFilter: string;
-  setTeamFilter: (teamId: string) => void;
-  searchTerm: string;
-  setSearchTerm: (value: string) => void;
-  matchFilter: string;
-  setMatchFilter: (value: string) => void;
-  transactionSortKey: TransactionSortKey;
-  setTransactionSortKey: (value: TransactionSortKey) => void;
-  transactionSortDirection: SortDirection;
-  setTransactionSortDirection: (value: SortDirection) => void;
-  isCategorizing: boolean;
-  isImportingWise: boolean;
-  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
-  onImportWiseStatements: (files: FileList | null) => Promise<void>;
-  onMatch: (transaction: Transaction, providerId?: string) => void;
-  onAssignTeam: (transaction: Transaction, teamId?: string) => void;
-  onUpdateCategory: (transaction: Transaction, category: string) => void;
-  onOpenInvoice: (transaction: Transaction) => void;
-}) {
-  const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
+  onOpenInvoice,
+  wide = false,
+  rangeControls,
+  tableFooter
+}: BankReconciliationViewProps) {
+  const sourceLabel = bankSourceLabel(source);
+  const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
+  const summary = useMemo(() => {
+    const volume = sumCurrencyTotals(rows, (transaction) => transaction.amount);
+    const matched = rows.filter((transaction) => transaction.matchedProviderId).length;
+    const unassigned = rows.filter((transaction) => !transaction.teamId).length;
+    return { volume, count: rows.length, matched, unassigned };
+  }, [rows]);
 
   return (
-    <section className="panel">
+    <section className={`panel ${wide ? "wide-panel" : ""}`}>
       <div className="panel-header">
         <div>
-          <p className="eyebrow">Wise reconciliation</p>
+          <p className="eyebrow">{sourceLabel} reconciliation</p>
           <h2>Match incoming payments and outgoing spend</h2>
         </div>
         <div className="filters">
-          <div className="segmented-control" aria-label="Wise transaction direction">
-            <button className={wiseDirection === "in" ? "active" : ""} onClick={() => setWiseDirection("in")}>
+          <div className="segmented-control" aria-label={`${sourceLabel} transaction direction`}>
+            <button className={bankDirection === "in" ? "active" : ""} onClick={() => setBankDirection("in")}>
               <ArrowUpRight size={15} />
               In
             </button>
-            <button className={wiseDirection === "out" ? "active" : ""} onClick={() => setWiseDirection("out")}>
+            <button className={bankDirection === "out" ? "active" : ""} onClick={() => setBankDirection("out")}>
               <ArrowDownRight size={15} />
               Out
             </button>
@@ -2387,22 +2623,25 @@ function WiseBankView({
             {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
             Auto
           </button>
-          <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-            {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-            CSV
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              multiple
-              disabled={isImportingWise}
-              onChange={(event) => {
-                void onImportWiseStatements(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
+          {onImportWiseStatements && (
+            <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
+              {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+              CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                multiple
+                disabled={isImportingWise}
+                onChange={(event) => {
+                  void onImportWiseStatements(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          )}
         </div>
       </div>
+      {rangeControls}
       <div className="wise-summary-grid">
         <SummaryTile
           label="Visible volume"
@@ -2413,14 +2652,15 @@ function WiseBankView({
         <SummaryTile label="Matched rows" value={String(summary.matched)} />
         <SummaryTile label="No team" value={String(summary.unassigned)} />
       </div>
-      {wiseStatus?.issue && (
+      {integrationStatus?.issue && (
         <div className="integration-alert">
           <CircleAlert size={16} />
-          <span>{wiseStatus.issue}</span>
+          <span>{integrationStatus.issue}</span>
         </div>
       )}
       <TransactionTable
         rows={rows}
+        categories={dashboard.transactionCategories}
         teams={dashboard.teams}
         providers={dashboard.providers}
         teamsById={teamsById}
@@ -2440,6 +2680,7 @@ function WiseBankView({
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
       />
+      {tableFooter}
     </section>
   );
 }
@@ -3385,6 +3626,7 @@ function CategorySearchSelect({
 
 function TransactionTable({
   rows,
+  categories,
   teams,
   providers,
   teamsById,
@@ -3398,6 +3640,7 @@ function TransactionTable({
   onOpenInvoice
 }: {
   rows: Transaction[];
+  categories: TransactionCategory[];
   teams: Team[];
   providers: Provider[];
   teamsById: Map<string, Team>;
@@ -3584,7 +3827,7 @@ function TransactionTable({
                       <div className="category-control-row">
                         <CategorySearchSelect
                           value={displayCategory}
-                          options={transactionCategoryChoices(displayCategory, transaction.direction)}
+                          options={transactionCategoryChoices(displayCategory, transaction.direction, categories)}
                           label={`Search category for ${transaction.counterparty}`}
                           onChange={(category) => onUpdateCategory(transaction, category)}
                         />
@@ -4163,10 +4406,16 @@ function DistributionAdjustmentModal({
   );
 }
 
-function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+type ConnectedBankViewProps = Omit<
+  BankReconciliationViewProps,
+  "isImportingWise" | "onImportWiseStatements" | "rangeControls" | "source" | "tableFooter" | "wide"
+>;
+
+function RevolutView({ dashboard, rows, ...reconciliationProps }: ConnectedBankViewProps) {
   const revolutAccounts = dashboard.accounts.filter((account) =>
     account.source === "revolut" && hasNonZeroAccountBalance(account)
   );
+  const allRevolutRows = dashboard.transactions.filter((transaction) => transaction.source === "revolut");
 
   return (
     <div className="split-view">
@@ -4190,38 +4439,138 @@ function RevolutView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: 
       <section className="panel">
         <div className="panel-header compact">
           <h2>Revolut movement</h2>
-          <span className="total-pill">{rows.length} rows</span>
+          <span className="total-pill">{allRevolutRows.length} rows</span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
             <span>Money in</span>
-            <strong className="good-text">{groupedTransactionMoney(rows, "in")}</strong>
+            <strong className="good-text">{groupedTransactionMoney(allRevolutRows, "in")}</strong>
           </div>
           <div className="bridge-row">
             <span>Money out</span>
-            <strong className="danger-text">{groupedTransactionMoney(rows, "out")}</strong>
+            <strong className="danger-text">{groupedTransactionMoney(allRevolutRows, "out")}</strong>
           </div>
         </div>
       </section>
 
-      <section className="panel wide-panel">
-        <div className="panel-header compact">
-          <h2>Revolut activity</h2>
-          <span className="total-pill">{rows.length} rows</span>
-        </div>
-        <BasicTransactionsTable rows={rows} />
-      </section>
+      <BankReconciliationView
+        {...reconciliationProps}
+        dashboard={dashboard}
+        rows={rows}
+        source="revolut"
+        wide
+      />
     </div>
   );
 }
 
-function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+function SlashView({
+  dashboard,
+  rows,
+  dateRange,
+  isLoadingDateRange,
+  onLoadDateRange,
+  ...reconciliationProps
+}: ConnectedBankViewProps & {
+  dateRange: SlashTransactionDateRange;
+  isLoadingDateRange: boolean;
+  onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
+}) {
+  const [draftFromDate, setDraftFromDate] = useState(dateRange.fromDate);
+  const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
   const slashAccounts = dashboard.accounts.filter((account) =>
     account.source === "slash" && hasNonZeroAccountBalance(account)
   );
-  const cashbackRows = rows.filter((row) => row.category.toLowerCase().includes("cashback"));
+  const allSlashRows = dashboard.transactions.filter((transaction) => transaction.source === "slash");
+  const cashbackRows = allSlashRows.filter((row) =>
+    `${row.counterparty} ${row.description}`.toLowerCase().includes("cashback")
+  );
   const cashback = sumCurrencyTotals(cashbackRows, (row) => row.amount);
   const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
+  const today = localIsoDate();
+  const dateRangeIsValid = Boolean(
+    draftFromDate &&
+    draftToDate &&
+    draftFromDate <= draftToDate &&
+    draftToDate <= today
+  );
+
+  useEffect(() => {
+    setDraftFromDate(dateRange.fromDate);
+    setDraftToDate(dateRange.toDate);
+  }, [dateRange.fromDate, dateRange.toDate]);
+
+  const rangeControls = (
+    <div className="slash-date-controls">
+      <div>
+        <strong>Loaded period</strong>
+        <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!dateRangeIsValid) return;
+          void onLoadDateRange({ fromDate: draftFromDate, toDate: draftToDate });
+        }}
+      >
+        <label>
+          From
+          <Input
+            type="date"
+            max={draftToDate || today}
+            required
+            value={draftFromDate}
+            onChange={(event) => setDraftFromDate(event.target.value)}
+          />
+        </label>
+        <label>
+          To
+          <Input
+            type="date"
+            min={draftFromDate || undefined}
+            max={today}
+            required
+            value={draftToDate}
+            onChange={(event) => setDraftToDate(event.target.value)}
+          />
+        </label>
+        <Button className="primary-button" type="submit" disabled={isLoadingDateRange || !dateRangeIsValid}>
+          {isLoadingDateRange ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          Load dates
+        </Button>
+        <Button
+          className="secondary-button"
+          type="button"
+          disabled={isLoadingDateRange}
+          onClick={() => {
+            const recentRange = defaultSlashTransactionDateRange();
+            setDraftFromDate(recentRange.fromDate);
+            setDraftToDate(recentRange.toDate);
+            void onLoadDateRange(recentRange);
+          }}
+        >
+          Recent {slashDefaultActivityWindowDays} days
+        </Button>
+      </form>
+    </div>
+  );
+  const tableFooter = (
+    <div className="slash-load-more">
+      <span>Showing Slash activity back to {dateLabel(dateRange.fromDate)}.</span>
+      <Button
+        className="secondary-button"
+        type="button"
+        disabled={isLoadingDateRange}
+        onClick={() => void onLoadDateRange({
+          fromDate: shiftIsoDate(dateRange.fromDate, -slashDefaultActivityWindowDays),
+          toDate: dateRange.toDate
+        })}
+      >
+        {isLoadingDateRange ? <Loader2 className="spin" size={16} /> : <ChevronDown size={16} />}
+        Show {slashDefaultActivityWindowDays} earlier days
+      </Button>
+    </div>
+  );
 
   return (
     <div className="split-view">
@@ -4250,18 +4599,20 @@ function SlashView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tr
         <div className="bridge">
           <div className="bridge-row">
             <span>Slash transactions shown</span>
-            <strong>{rows.length}</strong>
+            <strong>{allSlashRows.length}</strong>
           </div>
         </div>
       </section>
 
-      <section className="panel wide-panel">
-        <div className="panel-header compact">
-          <h2>Slash card activity</h2>
-          <span className="total-pill">{rows.length} rows</span>
-        </div>
-        <BasicTransactionsTable rows={rows} />
-      </section>
+      <BankReconciliationView
+        {...reconciliationProps}
+        dashboard={dashboard}
+        rows={rows}
+        source="slash"
+        wide
+        rangeControls={rangeControls}
+        tableFooter={tableFooter}
+      />
     </div>
   );
 }
@@ -4636,21 +4987,31 @@ function DeleteCompanyDialog({
 function SettingsView({
   dashboard,
   onCreateTeam,
+  onCreateCategory,
+  onUpdateCategory,
+  onDeleteCategory,
   onSaveAiSettings,
   onSaveWiseCardHolderTeam,
   onRunAiPrompt
 }: {
   dashboard: DashboardSnapshot;
   onCreateTeam: (payload: CreateTeamPayload) => Promise<void>;
+  onCreateCategory: (payload: CreateTransactionCategoryPayload) => Promise<void>;
+  onUpdateCategory: (
+    category: TransactionCategory,
+    payload: UpdateTransactionCategoryDefinitionPayload
+  ) => Promise<void>;
+  onDeleteCategory: (category: TransactionCategory) => Promise<void>;
   onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
   onSaveWiseCardHolderTeam: (payload: AssignWiseCardHolderTeamPayload) => Promise<void>;
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
   const meritIntegration = dashboard.integrationStatus.find((integration) => integration.id === "merit");
-  const initialModelIsPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
-  const [modelChoice, setModelChoice] = useState(initialModelIsPreset ? dashboard.aiSettings.model : "custom");
-  const [customModel, setCustomModel] = useState(initialModelIsPreset ? "" : dashboard.aiSettings.model);
+  const [selectedModel, setSelectedModel] = useState(dashboard.aiSettings.model);
+  const [zdrModels, setZdrModels] = useState<OpenRouterZdrModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelError, setModelError] = useState<string | null>(null);
   const [teamName, setTeamName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
@@ -4660,12 +5021,34 @@ function SettingsView({
   const [teamError, setTeamError] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [cardHolderError, setCardHolderError] = useState<string | null>(null);
+  const [categoryEditor, setCategoryEditor] = useState<TransactionCategory | "new" | null>(null);
+  const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<TransactionCategory | null>(null);
 
   useEffect(() => {
-    const isPreset = openRouterModelOptions.some((option) => option.value === dashboard.aiSettings.model);
-    setModelChoice(isPreset ? dashboard.aiSettings.model : "custom");
-    setCustomModel(isPreset ? "" : dashboard.aiSettings.model);
+    setSelectedModel(dashboard.aiSettings.model);
   }, [dashboard.aiSettings.model]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadZdrModels() {
+      setModelsLoading(true);
+      setModelError(null);
+      try {
+        const response = await fetch(`${apiBase}/ai/models`, { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(await apiErrorMessage(response, "Zero Data Retention models could not be loaded"));
+        }
+        setZdrModels((await response.json()) as OpenRouterZdrModel[]);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setModelError(error instanceof Error ? error.message : "Zero Data Retention models could not be loaded");
+      } finally {
+        if (!controller.signal.aborted) setModelsLoading(false);
+      }
+    }
+    void loadZdrModels();
+    return () => controller.abort();
+  }, []);
 
   const cardHolderRows = useMemo(() => {
     const rows = new Map<string, { key: string; cardHolderName: string; transactionCount: number; teamId?: string }>();
@@ -4698,7 +5081,22 @@ function SettingsView({
     return [...rows.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
   }, [dashboard.transactions, dashboard.wiseCardHolderTeamAssignments]);
 
-  const selectedModel = modelChoice === "custom" ? customModel : modelChoice;
+  const categoryUsage = useMemo(() => {
+    const usage = new Map<string, number>();
+    const add = (name: string) => usage.set(name, (usage.get(name) ?? 0) + 1);
+    for (const transaction of dashboard.transactions) add(transaction.category);
+    for (const rule of dashboard.transactionCategoryRules) add(rule.category);
+    for (const partner of dashboard.revenuePartners) {
+      if (partner.revenueCategory) add(partner.revenueCategory);
+    }
+    return usage;
+  }, [dashboard.revenuePartners, dashboard.transactionCategoryRules, dashboard.transactions]);
+
+  const modelOptions = useMemo(
+    () => zdrModels.map((model) => ({ label: `${model.name} · ${model.id}`, value: model.id })),
+    [zdrModels]
+  );
+  const selectedModelIsZdr = zdrModels.some((model) => model.id === selectedModel);
 
   async function addTeam(event: FormEvent) {
     event.preventDefault();
@@ -4760,6 +5158,70 @@ function SettingsView({
 
   return (
     <div className="settings-stack">
+      <section className="panel category-management-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Accounting setup</p>
+            <h2>Categories</h2>
+          </div>
+          <div className="row-actions">
+            <span className="total-pill">{dashboard.transactionCategories.length} categories</span>
+            <Button className="primary-button" type="button" onClick={() => setCategoryEditor("new")}>
+              <Plus size={16} />
+              Add category
+            </Button>
+          </div>
+        </div>
+        <p className="section-intro">
+          Categories are available anywhere transactions or revenue rules are classified. Built-in names and types stay locked because reporting logic depends on them.
+        </p>
+        <div className="category-management-list" role="list">
+          {dashboard.transactionCategories.map((category) => {
+            const usageCount = categoryUsage.get(category.name) ?? 0;
+            const deleteDisabled = category.system || usageCount > 0;
+            const deleteTitle = category.system
+              ? "Built-in categories cannot be deleted"
+              : usageCount > 0
+                ? `Reassign ${usageCount} ${usageCount === 1 ? "reference" : "references"} before deleting`
+                : `Delete ${category.name}`;
+            return (
+              <article className="category-management-row" key={category.id} role="listitem">
+                <span className="category-color-swatch" style={{ backgroundColor: category.color }} aria-hidden="true" />
+                <div className="category-management-name">
+                  <strong>{category.name}</strong>
+                  <span>{category.system ? "Built-in" : "Custom"}</span>
+                </div>
+                <span className={`category-direction-pill ${category.direction}`}>
+                  {category.direction === "in" ? "Money in" : category.direction === "out" ? "Money out" : "Money in & out"}
+                </span>
+                <span className="category-usage">{usageCount} {usageCount === 1 ? "reference" : "references"}</span>
+                <div className="row-actions">
+                  <Button
+                    className="icon-button"
+                    type="button"
+                    aria-label={`Edit ${category.name}`}
+                    title={`Edit ${category.name}`}
+                    onClick={() => setCategoryEditor(category)}
+                  >
+                    <Pencil size={15} />
+                  </Button>
+                  <Button
+                    className="icon-button destructive-icon-button"
+                    type="button"
+                    aria-label={`Delete ${category.name}`}
+                    title={deleteTitle}
+                    disabled={deleteDisabled}
+                    onClick={() => setCategoryDeleteTarget(category)}
+                  >
+                    <Trash2 size={15} />
+                  </Button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -4856,34 +5318,32 @@ function SettingsView({
         </div>
         <form className="settings-form" onSubmit={saveSettings}>
           <div className="docs-note">
-            <strong>Secret storage</strong>
-            <span>OpenRouter credentials are managed as an OPENROUTER_API_KEY runtime secret and are never stored in dashboard data.</span>
+            <strong>Zero Data Retention enforced</strong>
+            <span>Only models with a current OpenRouter ZDR endpoint are listed, and every AI request is restricted to ZDR providers.</span>
+            <span>OpenRouter credentials remain server-side in the OPENROUTER_API_KEY runtime secret.</span>
           </div>
-          <div className="form-grid">
+          <div className="form-grid ai-model-grid">
             <label>
               Model
-              <NativeSelect value={modelChoice} onValueChange={setModelChoice}>
-                {openRouterModelOptions.map((option) => (
-                  <NativeSelectOption key={option.value} value={option.value}>
-                    {option.label}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </label>
-            <label>
-              Model slug
-              <Input
-                value={selectedModel}
-                onChange={(event) => {
-                  setModelChoice("custom");
-                  setCustomModel(event.target.value);
-                }}
+              <SearchableSelect
+                value={selectedModelIsZdr ? selectedModel : ""}
+                options={modelOptions}
+                onValueChange={setSelectedModel}
+                placeholder={modelsLoading ? "Loading ZDR models…" : "Search Zero Data Retention models"}
+                emptyMessage="No Zero Data Retention models found"
+                ariaLabel="OpenRouter Zero Data Retention model"
+                clearable={false}
+                disabled={modelsLoading || Boolean(modelError)}
               />
             </label>
           </div>
+          {!modelsLoading && !modelError && selectedModel && !selectedModelIsZdr && (
+            <div className="inline-error">The saved model is not currently ZDR eligible. Choose a model from the picker.</div>
+          )}
+          {modelError && <div className="inline-error">{modelError}</div>}
           {aiError && <div className="inline-error">{aiError}</div>}
           <div className="modal-actions">
-            <Button className="primary-button" type="submit" disabled={busy === "save"}>
+            <Button className="primary-button" type="submit" disabled={busy === "save" || !selectedModelIsZdr}>
               {busy === "save" ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
               Save AI settings
             </Button>
@@ -4956,6 +5416,189 @@ function SettingsView({
           </span>
         </div>
       </section>
+
+      {categoryEditor && (
+        <TransactionCategoryDialog
+          category={categoryEditor === "new" ? undefined : categoryEditor}
+          onClose={() => setCategoryEditor(null)}
+          onSubmit={async (payload) => {
+            if (categoryEditor === "new") await onCreateCategory(payload);
+            else await onUpdateCategory(categoryEditor, payload);
+            setCategoryEditor(null);
+          }}
+        />
+      )}
+      {categoryDeleteTarget && (
+        <DeleteTransactionCategoryDialog
+          category={categoryDeleteTarget}
+          onClose={() => setCategoryDeleteTarget(null)}
+          onDelete={async () => {
+            await onDeleteCategory(categoryDeleteTarget);
+            setCategoryDeleteTarget(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TransactionCategoryDialog({
+  category,
+  onClose,
+  onSubmit
+}: {
+  category?: TransactionCategory;
+  onClose: () => void;
+  onSubmit: (payload: CreateTransactionCategoryPayload) => Promise<void>;
+}) {
+  const [name, setName] = useState(category?.name ?? "");
+  const [direction, setDirection] = useState<TransactionCategory["direction"]>(category?.direction ?? "out");
+  const [color, setColor] = useState(category?.color ?? "#2563eb");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const colorIsValid = /^#[0-9a-f]{6}$/i.test(color);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({ name, direction, color });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Category could not be saved");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form
+        className="modal category-editor-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="category-editor-title"
+        onSubmit={handleSubmit}
+      >
+        <div className="modal-header">
+          <div>
+            <p className="eyebrow">{category ? "Edit category" : "New category"}</p>
+            <h2 id="category-editor-title">{category ? category.name : "Add transaction category"}</h2>
+          </div>
+          <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </Button>
+        </div>
+        {category?.system && (
+          <div className="docs-note">
+            <strong>Built-in reporting category</strong>
+            <span>The name and transaction type are locked. You can still change its display color.</span>
+          </div>
+        )}
+        {error && <div className="inline-error">{error}</div>}
+        <label>
+          Name
+          <Input
+            value={name}
+            disabled={category?.system}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Client entertainment"
+            autoFocus={!category?.system}
+          />
+        </label>
+        <label>
+          Transaction type
+          <NativeSelect
+            value={direction}
+            disabled={category?.system}
+            onValueChange={(value) => setDirection(value as TransactionCategory["direction"])}
+          >
+            <NativeSelectOption value="in">Money in</NativeSelectOption>
+            <NativeSelectOption value="out">Money out</NativeSelectOption>
+            <NativeSelectOption value="both">Money in & out</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label>
+          Color
+          <div className="category-color-field">
+            <input
+              type="color"
+              value={colorIsValid ? color : "#2563eb"}
+              aria-label="Choose category color"
+              onChange={(event) => setColor(event.target.value)}
+            />
+            <Input
+              value={color}
+              aria-invalid={!colorIsValid}
+              onChange={(event) => setColor(event.target.value)}
+              placeholder="#2563eb"
+            />
+          </div>
+        </label>
+        <div className="modal-actions">
+          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            className="primary-button"
+            disabled={submitting || !name.trim() || !colorIsValid}
+          >
+            {submitting ? <Loader2 className="spin" size={16} /> : category ? <Save size={16} /> : <Plus size={16} />}
+            {category ? "Save category" : "Add category"}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function DeleteTransactionCategoryDialog({
+  category,
+  onClose,
+  onDelete
+}: {
+  category: TransactionCategory;
+  onClose: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDelete() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onDelete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Category could not be deleted");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="delete-category-title">
+        <div className="confirmation-icon" aria-hidden="true">
+          <Trash2 size={20} />
+        </div>
+        <div>
+          <p className="eyebrow">Delete category</p>
+          <h2 id="delete-category-title">Delete {category.name}?</h2>
+        </div>
+        <p className="confirmation-copy">
+          This removes the category from transaction and revenue selectors. This action cannot be undone.
+        </p>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="modal-actions">
+          <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button type="button" className="destructive-button" onClick={() => void handleDelete()} disabled={submitting}>
+            {submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+            Delete category
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -5289,6 +5932,7 @@ function RevenuePartnerModal({
   providers,
   teams,
   taxes,
+  categories,
   onClose,
   onSubmit
 }: {
@@ -5297,6 +5941,7 @@ function RevenuePartnerModal({
   providers: Provider[];
   teams: Team[];
   taxes: MeritTax[];
+  categories: TransactionCategory[];
   onClose: () => void;
   onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
 }) {
@@ -5424,7 +6069,7 @@ function RevenuePartnerModal({
         <label>
           Money in category
           <NativeSelect value={revenueCategory} onValueChange={setRevenueCategory}>
-            {moneyInCategoryOptions.map((category) => (
+            {transactionCategoryOptionsForDirection("in", categories).map((category) => (
               <NativeSelectOption key={category} value={category}>
                 {category}
               </NativeSelectOption>

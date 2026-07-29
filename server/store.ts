@@ -13,6 +13,7 @@ import type {
   CreateProviderPayload,
   CreateRevenuePartnerPayload,
   CreateTeamPayload,
+  CreateTransactionCategoryPayload,
   DashboardSnapshot,
   DraftRevenueRunPayload,
   FxRate,
@@ -41,21 +42,34 @@ import type {
   SyncRevenuePayload,
   Team,
   Transaction,
+  TransactionCategory,
   TransactionCategoryRule,
   TransactionTeamAssignment,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateProviderPayload,
   UpdateTransactionCategoryPayload,
+  UpdateTransactionCategoryDefinitionPayload,
   UpdateRevenuePartnerPayload,
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
-import { defaultAiSettings, publicAiSettings, runOpenRouterPrompt, runOpenRouterTransactionCategorization } from "../shared/ai";
+import {
+  defaultAiSettings,
+  listOpenRouterZdrModels,
+  publicAiSettings,
+  requireOpenRouterZdrModel,
+  runOpenRouterPrompt,
+  runOpenRouterTransactionCategorization
+} from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
+  initialTransactionCategories,
   isReviewOnlyTransactionCategory,
+  isTransactionCategoryColor,
+  isTransactionCategoryDirection,
   isTransactionCategoryForDirection,
+  normalizeTransactionCategoryName,
   transactionBusinessCategory
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
@@ -99,6 +113,7 @@ import {
   profitDistributionAdjustmentFromPayload,
   shouldKeepProfitDistributionAdjustment
 } from "../shared/distribution";
+import type { SlashTransactionDateRange } from "../shared/slashApi";
 import { calculateMetrics } from "./calculations";
 import {
   assertMeritWriteConfiguration,
@@ -147,6 +162,10 @@ let fxTrackedAssets: string[] = [];
 let automationRuns: AutomationRun[] = [];
 let meritTaxes: MeritTax[] = [];
 let teams: Team[] = [];
+let transactionCategories: TransactionCategory[] = initialTransactionCategories.map((category) => {
+  const now = new Date().toISOString();
+  return { ...category, createdAt: now, updatedAt: now };
+});
 let transactionCategoryRules: TransactionCategoryRule[] = [];
 let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
@@ -250,6 +269,7 @@ export async function initializeStore(): Promise<void> {
   fxTrackedAssets = persisted.fxTrackedAssets ?? [];
   automationRuns = persisted.automationRuns ?? [];
   teams = mergeTeamDirectory(persisted.teams ?? []);
+  transactionCategories = persisted.transactionCategories ?? transactionCategories;
   transactionCategoryRules = persisted.transactionCategoryRules ?? [];
   revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
   revenueRuns = persisted.revenueRuns ?? [];
@@ -274,6 +294,7 @@ async function persist(): Promise<void> {
     fxTrackedAssets,
     automationRuns,
     teams,
+    transactionCategories,
     transactionCategoryRules,
     revenuePartners,
     transactionTeamAssignments,
@@ -496,7 +517,13 @@ export async function autoCategorizeTransactions(
   });
 
   if (shouldUseAi && remaining.length > 0) {
-    const aiResults = await runOpenRouterTransactionCategorization(activeAiSettings, remaining, providers, process.env.PUBLIC_APP_URL);
+    const aiResults = await runOpenRouterTransactionCategorization(
+      activeAiSettings,
+      remaining,
+      providers,
+      process.env.PUBLIC_APP_URL,
+      transactionCategories
+    );
     for (const aiResult of aiResults) {
       if (aiResult.confidence < 0.72) continue;
       const transaction = findKnownTransaction(aiResult.transactionId);
@@ -554,6 +581,7 @@ export function getSnapshot(): DashboardSnapshot {
     approximateUsdTotals,
     automationRuns,
     meritTaxes,
+    transactionCategories,
     transactionCategoryRules,
     wiseCardHolderTeamAssignments,
     wiseStatementImports,
@@ -695,6 +723,98 @@ export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
   return team;
 }
 
+function sortedTransactionCategories(): TransactionCategory[] {
+  return [...transactionCategories].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function validatedTransactionCategoryFields(payload: CreateTransactionCategoryPayload) {
+  const name = normalizeTransactionCategoryName(payload.name);
+  if (!name) throw new Error("Category name is required");
+  if (!isTransactionCategoryDirection(payload.direction)) throw new Error("Category type is invalid");
+  if (!isTransactionCategoryColor(payload.color)) throw new Error("Category color must be a six-digit hex value");
+  return { name, direction: payload.direction, color: payload.color.toLowerCase() };
+}
+
+export async function createTransactionCategory(
+  payload: CreateTransactionCategoryPayload
+): Promise<TransactionCategory[]> {
+  const fields = validatedTransactionCategoryFields(payload);
+  if (transactionCategories.some((category) => normalizeName(category.name) === normalizeName(fields.name))) {
+    throw new Error("A category with this name already exists");
+  }
+  const now = new Date().toISOString();
+  transactionCategories = [
+    ...transactionCategories,
+    {
+      id: `category-${crypto.randomUUID()}`,
+      ...fields,
+      system: false,
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+  await persist();
+  return sortedTransactionCategories();
+}
+
+export async function updateTransactionCategoryDefinition(
+  categoryId: string,
+  payload: UpdateTransactionCategoryDefinitionPayload
+): Promise<TransactionCategory[]> {
+  const existing = transactionCategories.find((category) => category.id === categoryId);
+  if (!existing) throw new Error("Category not found");
+  const fields = validatedTransactionCategoryFields(payload);
+  if (existing.system && (fields.name !== existing.name || fields.direction !== existing.direction)) {
+    throw new Error("Built-in category names and types are locked because reporting rules depend on them");
+  }
+  if (
+    transactionCategories.some(
+      (category) => category.id !== categoryId && normalizeName(category.name) === normalizeName(fields.name)
+    )
+  ) {
+    throw new Error("A category with this name already exists");
+  }
+
+  if (fields.name !== existing.name) {
+    transactionCategoryRules = transactionCategoryRules.map((rule) =>
+      rule.category === existing.name ? { ...rule, category: fields.name, updatedAt: new Date().toISOString() } : rule
+    );
+    wiseStatementTransactions = wiseStatementTransactions.map((transaction) =>
+      transaction.category === existing.name ? { ...transaction, category: fields.name } : transaction
+    );
+    transactions = transactions.map((transaction) =>
+      transaction.category === existing.name ? { ...transaction, category: fields.name } : transaction
+    );
+    revenuePartners = revenuePartners.map((partner) =>
+      partner.revenueCategory === existing.name ? { ...partner, revenueCategory: fields.name } : partner
+    );
+  }
+
+  transactionCategories = transactionCategories.map((category) =>
+    category.id === categoryId ? { ...category, ...fields, updatedAt: new Date().toISOString() } : category
+  );
+  await persist();
+  return sortedTransactionCategories();
+}
+
+export async function deleteTransactionCategoryDefinition(categoryId: string): Promise<TransactionCategory[]> {
+  const existing = transactionCategories.find((category) => category.id === categoryId);
+  if (!existing) throw new Error("Category not found");
+  if (existing.system) throw new Error("Built-in categories cannot be deleted");
+  const referenceCount =
+    getKnownTransactions().filter((transaction) => transaction.category === existing.name).length
+    + transactionCategoryRules.filter((rule) => rule.category === existing.name).length
+    + revenuePartners.filter((partner) => partner.revenueCategory === existing.name).length;
+  if (referenceCount > 0) {
+    throw new Error(
+      `Reassign ${referenceCount} ${referenceCount === 1 ? "reference" : "references"} before deleting this category`
+    );
+  }
+  transactionCategories = transactionCategories.filter((category) => category.id !== categoryId);
+  await persist();
+  return sortedTransactionCategories();
+}
+
 export async function createProvider(payload: CreateProviderPayload): Promise<Provider> {
   const provider: Provider = {
     id: `provider-${crypto.randomUUID()}`,
@@ -801,7 +921,7 @@ function revenuePartnerFields(
   }
   if (!payload.currency?.trim()) throw new Error("Revenue currency is required");
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
-  if (!isTransactionCategoryForDirection(revenueCategory, "in")) {
+  if (!isTransactionCategoryForDirection(revenueCategory, "in", transactionCategories)) {
     throw new Error(`Category "${revenueCategory}" is not valid for money in`);
   }
 
@@ -876,8 +996,7 @@ export async function deleteRevenuePartner(partnerId: string): Promise<RevenuePa
 }
 
 export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<DashboardSnapshot> {
-  const model = payload.model.trim();
-  if (!model) throw new Error("OpenRouter model is required");
+  const model = await requireOpenRouterZdrModel(payload.model);
 
   aiSettings = {
     provider: "openrouter",
@@ -886,6 +1005,10 @@ export async function saveAiSettings(payload: SaveAiSettingsPayload): Promise<Da
   };
   await persist();
   return getSnapshot();
+}
+
+export async function getOpenRouterZdrModels() {
+  return listOpenRouterZdrModels();
 }
 
 export async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptResult> {
@@ -926,7 +1049,7 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
   }
 
   const category = transactionBusinessCategory(payload.category);
-  if (!isTransactionCategoryForDirection(category, transaction.direction)) {
+  if (!isTransactionCategoryForDirection(category, transaction.direction, transactionCategories)) {
     throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
   }
   const updated: Transaction = {
@@ -1800,11 +1923,13 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Rev
   return { runs: nextRuns };
 }
 
-export async function syncExternalActivity(): Promise<DashboardSnapshot> {
+export async function syncExternalActivity(
+  slashDateRange?: SlashTransactionDateRange
+): Promise<DashboardSnapshot> {
   const [wise, revolut, slash, amex, merit, liveMeritTaxes, meritCustomers, meritVendors] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
-    fetchSlashActivity(),
+    fetchSlashActivity(slashDateRange),
     fetchAmexActivity(),
     fetchMeritInvoices(invoices),
     fetchMeritTaxes(),

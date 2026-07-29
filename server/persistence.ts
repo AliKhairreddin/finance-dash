@@ -15,11 +15,16 @@ import type {
   ProfitDistributionAdjustment,
   Team,
   Transaction,
+  TransactionCategory,
   TransactionCategoryRule,
   TransactionTeamAssignment,
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import {
+  sanitizeStoredTransactionCategories,
+  sanitizeStoredTransactionCategoryRules
+} from "../shared/categories";
 
 function storePath(): string {
   return resolve(process.cwd(), ".local", "finance-dashboard-store.json");
@@ -35,6 +40,7 @@ export interface PersistedState {
   fxTrackedAssets: string[];
   automationRuns: AutomationRun[];
   teams: Team[];
+  transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
   transactionTeamAssignments: TransactionTeamAssignment[];
@@ -54,7 +60,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function sanitizePersistedState(value: unknown): Partial<PersistedState> {
   if (!isRecord(value)) throw new Error("Dashboard state must be a JSON object");
-  if (value.aiSettings === undefined) return value as Partial<PersistedState>;
+  const sanitized = {
+    ...value,
+    ...(Array.isArray(value.transactions)
+      ? { transactions: sanitizeStoredTransactionCategories(value.transactions as Transaction[]) }
+      : {}),
+    ...(Array.isArray(value.wiseStatementTransactions)
+      ? { wiseStatementTransactions: sanitizeStoredTransactionCategories(value.wiseStatementTransactions as Transaction[]) }
+      : {}),
+    ...(Array.isArray(value.transactionCategoryRules)
+      ? {
+          transactionCategoryRules: sanitizeStoredTransactionCategoryRules(
+            value.transactionCategoryRules as TransactionCategoryRule[]
+          )
+        }
+      : {})
+  } as Partial<PersistedState>;
+
+  if (value.aiSettings === undefined) return sanitized;
   if (!isRecord(value.aiSettings) || value.aiSettings.provider !== "openrouter" || typeof value.aiSettings.model !== "string") {
     throw new Error("Stored AI settings are invalid");
   }
@@ -63,13 +86,13 @@ export function sanitizePersistedState(value: unknown): Partial<PersistedState> 
   }
 
   return {
-    ...value,
+    ...sanitized,
     aiSettings: {
       provider: "openrouter",
       model: value.aiSettings.model,
       updatedAt: value.aiSettings.updatedAt
     }
-  } as Partial<PersistedState>;
+  };
 }
 
 export async function loadPersistedState(): Promise<Partial<PersistedState>> {
@@ -78,7 +101,7 @@ export async function loadPersistedState(): Promise<Partial<PersistedState>> {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     const sanitized = sanitizePersistedState(parsed);
-    if (isRecord(parsed) && isRecord(parsed.aiSettings) && Object.prototype.hasOwnProperty.call(parsed.aiSettings, "openRouterApiKey")) {
+    if (JSON.stringify(parsed) !== JSON.stringify(sanitized)) {
       await writeFile(path, JSON.stringify(sanitized, null, 2), "utf8");
     }
     return sanitized;
