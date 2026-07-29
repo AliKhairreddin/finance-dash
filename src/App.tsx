@@ -1858,15 +1858,15 @@ function Sidebar({
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileNavRef = useRef<HTMLDivElement>(null);
-  type SidebarItem = { id: ActiveTab; label: string; icon: React.ReactNode; beta?: boolean };
+  type SidebarItem = { id: ActiveTab; label: string; icon: React.ReactNode };
   const primaryItems: SidebarItem[] = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
     { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
   ];
   const operationsItems: SidebarItem[] = [
-    { id: "management", label: "Management", icon: <BookOpen size={17} />, beta: true },
-    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} />, beta: true }
+    { id: "management", label: "Management", icon: <BookOpen size={17} /> },
+    { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
   ];
   const accountingItems: SidebarItem[] = [
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
@@ -1909,7 +1909,7 @@ function Sidebar({
       <Button
         key={item.id}
         aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} unread automation ${unreadCount === 1 ? "update" : "updates"}` : item.label}
-        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 || item.beta ? "has-meta" : ""}`}
+        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-meta" : ""}`}
         onClick={() => selectTab(item.id)}
         aria-current={activeTab === item.id ? "page" : undefined}
         role={mobile ? "menuitem" : undefined}
@@ -1918,7 +1918,6 @@ function Sidebar({
       >
         {item.icon}
         <span>{item.label}</span>
-        {item.beta && <span className="sidebar-beta-badge">Beta</span>}
         {unreadCount > 0 && (
           <span aria-hidden="true" className="sidebar-notification-badge">
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -1947,7 +1946,10 @@ function Sidebar({
           {mobileMenuOpen && (
             <div className="mobile-nav-menu" data-testid="mobile-nav-menu" id="mobile-navigation-menu" role="menu">
               {primaryItems.map((item) => navigationButton(item, false, true))}
-              <div className="mobile-nav-group-label">Operations</div>
+              <div className="mobile-nav-group-label has-badge">
+                <span>Operations</span>
+                <span className="sidebar-beta-badge">Beta</span>
+              </div>
               {operationsItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label">Accounting</div>
               {accountingItems.map((item) => navigationButton(item, false, true))}
@@ -1972,7 +1974,10 @@ function Sidebar({
       </div>
       <nav className="sidebar-nav">
         {primaryItems.map((item) => navigationButton(item))}
-        <div className="sidebar-section-label">Operations</div>
+        <div className="sidebar-section-label has-badge">
+          <span>Operations</span>
+          <span className="sidebar-beta-badge">Beta</span>
+        </div>
         <div className="sidebar-income-group">
           {operationsItems.map((item) => navigationButton(item, true))}
         </div>
