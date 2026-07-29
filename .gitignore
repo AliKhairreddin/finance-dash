@@ -9,3 +9,4 @@ dist/
 privatecert.pem
 publiccert.cer
 revolut-refresh-token.txt
+.playwright-cli/
