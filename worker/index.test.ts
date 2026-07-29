@@ -101,6 +101,18 @@ test("dashboard API fails closed when Convex authentication is not configured", 
   assert.deepEqual(await response.json(), { message: "Dashboard storage authentication is not configured" });
 });
 
+test("dashboard API rejects incomplete Revolut date ranges before reading storage", async () => {
+  const response = await worker.fetch(
+    await authenticatedRequest("https://finance.example/api/dashboard?revolutFromDate=2026-06-01"),
+    authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    message: "Revolut transaction loading requires both a from date and a to date"
+  });
+});
+
 test("management report API fails closed when Convex storage is not configured", async () => {
   const response = await worker.fetch(
     await authenticatedRequest("https://finance.example/api/management-report"),

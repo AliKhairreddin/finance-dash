@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRevolutClientAssertion, fetchRevolutActivity, revolutReadConsentUrl } from "./revolutApi";
+import {
+  createRevolutClientAssertion,
+  fetchRevolutActivity,
+  parseRevolutTransactionDateRange,
+  revolutReadConsentUrl
+} from "./revolutApi";
 
 function base64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
@@ -79,6 +84,26 @@ test("Revolut consent URL requests read-only access", () => {
   assert.equal(consentUrl.searchParams.get("redirect_uri"), "https://finance.thatcanadian.dev");
   assert.equal(consentUrl.searchParams.get("response_type"), "code");
   assert.equal(consentUrl.searchParams.get("scope"), "READ");
+});
+
+test("Revolut date ranges require two valid ordered ISO dates", () => {
+  assert.equal(parseRevolutTransactionDateRange(undefined, undefined), undefined);
+  assert.deepEqual(
+    parseRevolutTransactionDateRange("2026-06-01", "2026-06-30"),
+    { fromDate: "2026-06-01", toDate: "2026-06-30" }
+  );
+  assert.throws(
+    () => parseRevolutTransactionDateRange("2026-06-01", undefined),
+    /both a from date and a to date/
+  );
+  assert.throws(
+    () => parseRevolutTransactionDateRange("2026-02-30", "2026-03-01"),
+    /not a valid date/
+  );
+  assert.throws(
+    () => parseRevolutTransactionDateRange("2026-07-01", "2026-06-30"),
+    /on or before/
+  );
 });
 
 test("Revolut activity signs a fresh assertion and excludes unsuccessful transactions", async () => {

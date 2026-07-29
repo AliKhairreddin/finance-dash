@@ -123,6 +123,10 @@ import {
   unreadIncomeAutomationCount
 } from "../shared/income";
 import {
+  revolutDefaultActivityWindowDays,
+  type RevolutTransactionDateRange
+} from "../shared/revolutApi";
+import {
   slashDefaultActivityWindowDays,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
@@ -137,6 +141,10 @@ type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
+type BankTransactionDateRange = {
+  fromDate: string;
+  toDate: string;
+};
 type TransactionSortKey =
   | "amount"
   | "cardHolder"
@@ -192,17 +200,31 @@ function shiftIsoDate(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function defaultSlashTransactionDateRange(): SlashTransactionDateRange {
+function defaultBankTransactionDateRange(windowDays: number): BankTransactionDateRange {
   return {
-    fromDate: localIsoDate(1 - slashDefaultActivityWindowDays),
+    fromDate: localIsoDate(1 - windowDays),
     toDate: localIsoDate()
   };
 }
 
-function apiUrlWithSlashDateRange(path: string, dateRange: SlashTransactionDateRange): string {
+function defaultRevolutTransactionDateRange(): RevolutTransactionDateRange {
+  return defaultBankTransactionDateRange(revolutDefaultActivityWindowDays);
+}
+
+function defaultSlashTransactionDateRange(): SlashTransactionDateRange {
+  return defaultBankTransactionDateRange(slashDefaultActivityWindowDays);
+}
+
+function apiUrlWithBankDateRanges(
+  path: string,
+  revolutDateRange: RevolutTransactionDateRange,
+  slashDateRange: SlashTransactionDateRange
+): string {
   const query = new URLSearchParams({
-    slashFromDate: dateRange.fromDate,
-    slashToDate: dateRange.toDate
+    revolutFromDate: revolutDateRange.fromDate,
+    revolutToDate: revolutDateRange.toDate,
+    slashFromDate: slashDateRange.fromDate,
+    slashToDate: slashDateRange.toDate
   });
   return `${apiBase}${path}?${query.toString()}`;
 }
@@ -731,9 +753,13 @@ function App() {
   const [bankTab, setBankTab] = useState<BankTab>("all");
   const [bankDirection, setBankDirection] = useState<"in" | "out">("in");
   const [teamFilter, setTeamFilter] = useState("all");
+  const [revolutDateRange, setRevolutDateRange] = useState<RevolutTransactionDateRange>(
+    defaultRevolutTransactionDateRange
+  );
   const [slashDateRange, setSlashDateRange] = useState<SlashTransactionDateRange>(defaultSlashTransactionDateRange);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingRevolut, setIsLoadingRevolut] = useState(false);
   const [isLoadingSlash, setIsLoadingSlash] = useState(false);
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
@@ -765,7 +791,7 @@ function App() {
 
   async function loadDashboard() {
     setError(null);
-    const response = await fetch(apiUrlWithSlashDateRange("/dashboard", slashDateRange));
+    const response = await fetch(apiUrlWithBankDateRanges("/dashboard", revolutDateRange, slashDateRange));
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message || "Could not load dashboard data");
@@ -890,7 +916,10 @@ function App() {
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(apiUrlWithSlashDateRange("/sync", slashDateRange), { method: "POST" });
+      const response = await fetch(
+        apiUrlWithBankDateRanges("/sync", revolutDateRange, slashDateRange),
+        { method: "POST" }
+      );
       if (!response.ok) {
         throw new Error(await apiErrorMessage(response, "Sync failed"));
       }
@@ -903,13 +932,35 @@ function App() {
     }
   }
 
+  async function loadRevolutTransactions(dateRange: RevolutTransactionDateRange) {
+    setIsLoadingRevolut(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await fetch(
+        apiUrlWithBankDateRanges("/banks/revolut/load", dateRange, slashDateRange),
+        { method: "POST" }
+      );
+      if (!response.ok) {
+        throw new Error(await apiErrorMessage(response, "Revolut transactions could not be loaded"));
+      }
+      setDashboard((await response.json()) as DashboardSnapshot);
+      setRevolutDateRange(dateRange);
+      setNotice(`Loaded saved Revolut transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Revolut transactions could not be loaded");
+    } finally {
+      setIsLoadingRevolut(false);
+    }
+  }
+
   async function loadSlashTransactions(dateRange: SlashTransactionDateRange) {
     setIsLoadingSlash(true);
     setNotice(null);
     setError(null);
     try {
       const response = await fetch(
-        apiUrlWithSlashDateRange("/banks/slash/load", dateRange),
+        apiUrlWithBankDateRanges("/banks/slash/load", revolutDateRange, dateRange),
         { method: "POST" }
       );
       if (!response.ok) {
@@ -1646,15 +1697,18 @@ function App() {
           setTransactionSortDirection={setTransactionSortDirection}
           wiseTransactions={wiseTransactions}
           revolutTransactions={revolutTransactions}
+          revolutDateRange={revolutDateRange}
           slashTransactions={slashTransactions}
           slashDateRange={slashDateRange}
           amexTransactions={amexTransactions}
           providersById={providersById}
           isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
+          isLoadingRevolut={isLoadingRevolut}
           isLoadingSlash={isLoadingSlash}
           onAutoCategorize={autoCategorizeTransactions}
           onImportWiseStatements={importWiseStatements}
+          onLoadRevolutTransactions={loadRevolutTransactions}
           onLoadSlashTransactions={loadSlashTransactions}
           onMatch={matchTransaction}
           onAssignTeam={assignTransactionTeam}
@@ -2289,15 +2343,18 @@ function BanksView({
   setTransactionSortDirection,
   wiseTransactions,
   revolutTransactions,
+  revolutDateRange,
   slashTransactions,
   slashDateRange,
   amexTransactions,
   providersById,
   isCategorizing,
   isImportingWise,
+  isLoadingRevolut,
   isLoadingSlash,
   onAutoCategorize,
   onImportWiseStatements,
+  onLoadRevolutTransactions,
   onLoadSlashTransactions,
   onMatch,
   onAssignTeam,
@@ -2325,15 +2382,18 @@ function BanksView({
   setTransactionSortDirection: (value: SortDirection) => void;
   wiseTransactions: Transaction[];
   revolutTransactions: Transaction[];
+  revolutDateRange: RevolutTransactionDateRange;
   slashTransactions: Transaction[];
   slashDateRange: SlashTransactionDateRange;
   amexTransactions: Transaction[];
   providersById: Map<string, Provider>;
   isCategorizing: boolean;
   isImportingWise: boolean;
+  isLoadingRevolut: boolean;
   isLoadingSlash: boolean;
   onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onLoadRevolutTransactions: (dateRange: RevolutTransactionDateRange) => Promise<void>;
   onLoadSlashTransactions: (dateRange: SlashTransactionDateRange) => Promise<void>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
@@ -2472,6 +2532,9 @@ function BanksView({
         <RevolutView
           dashboard={dashboard}
           rows={revolutTransactions}
+          dateRange={revolutDateRange}
+          isLoadingDateRange={isLoadingRevolut}
+          onLoadDateRange={onLoadRevolutTransactions}
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
@@ -2607,9 +2670,9 @@ function BankReconciliationView({
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
       <div className="panel-header bank-reconciliation-header">
-        <div>
+        <div className="bank-reconciliation-title">
           <p className="eyebrow">{sourceLabel} reconciliation</p>
-          <h2>Match incoming payments and outgoing spend</h2>
+          <h2>Match payments and spend</h2>
         </div>
         <div className="list-toolbar reconciliation-toolbar">
           <div className="list-toolbar-main">
@@ -2625,7 +2688,7 @@ function BankReconciliationView({
             </div>
             <ToolbarSearchField
               ariaLabel={`Search ${sourceLabel} transactions`}
-              placeholder="Search transactions"
+              placeholder="Search"
               value={searchTerm}
               onChange={setSearchTerm}
             />
@@ -2658,13 +2721,14 @@ function BankReconciliationView({
           </div>
           <div className="list-toolbar-actions">
             <button
-              className="secondary-button"
+              aria-label={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
+              className="icon-button reconciliation-auto-button"
               title={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
+              type="button"
               onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
               disabled={isCategorizing || rows.length === 0}
             >
               {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-              Auto-categorize
             </button>
             {onImportWiseStatements && (
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
@@ -4522,11 +4586,153 @@ type ConnectedBankViewProps = Omit<
   "isImportingWise" | "onImportWiseStatements" | "rangeControls" | "source" | "tableFooter" | "wide"
 >;
 
-function RevolutView({ dashboard, rows, ...reconciliationProps }: ConnectedBankViewProps) {
+function BankDateRangeControls({
+  dateRange,
+  isLoading,
+  onLoad,
+  windowDays
+}: {
+  dateRange: BankTransactionDateRange;
+  isLoading: boolean;
+  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
+  windowDays: number;
+}) {
+  const [draftFromDate, setDraftFromDate] = useState(dateRange.fromDate);
+  const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
+  const today = localIsoDate();
+  const dateRangeIsValid = Boolean(
+    draftFromDate &&
+    draftToDate &&
+    draftFromDate <= draftToDate &&
+    draftToDate <= today
+  );
+
+  useEffect(() => {
+    setDraftFromDate(dateRange.fromDate);
+    setDraftToDate(dateRange.toDate);
+  }, [dateRange.fromDate, dateRange.toDate]);
+
+  return (
+    <div className="bank-date-controls">
+      <div>
+        <strong>Loaded period</strong>
+        <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!dateRangeIsValid) return;
+          void onLoad({ fromDate: draftFromDate, toDate: draftToDate });
+        }}
+      >
+        <label>
+          From
+          <Input
+            type="date"
+            max={draftToDate || today}
+            required
+            value={draftFromDate}
+            onChange={(event) => setDraftFromDate(event.target.value)}
+          />
+        </label>
+        <label>
+          To
+          <Input
+            type="date"
+            min={draftFromDate || undefined}
+            max={today}
+            required
+            value={draftToDate}
+            onChange={(event) => setDraftToDate(event.target.value)}
+          />
+        </label>
+        <Button className="primary-button" type="submit" disabled={isLoading || !dateRangeIsValid}>
+          {isLoading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          Load dates
+        </Button>
+        <Button
+          className="secondary-button"
+          type="button"
+          disabled={isLoading}
+          onClick={() => {
+            const recentRange = defaultBankTransactionDateRange(windowDays);
+            setDraftFromDate(recentRange.fromDate);
+            setDraftToDate(recentRange.toDate);
+            void onLoad(recentRange);
+          }}
+        >
+          Recent {windowDays} days
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+function BankDateRangeFooter({
+  dateRange,
+  isLoading,
+  onLoad,
+  sourceLabel,
+  windowDays
+}: {
+  dateRange: BankTransactionDateRange;
+  isLoading: boolean;
+  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
+  sourceLabel: string;
+  windowDays: number;
+}) {
+  return (
+    <div className="bank-load-more">
+      <span>Showing {sourceLabel} activity back to {dateLabel(dateRange.fromDate)}.</span>
+      <Button
+        className="secondary-button"
+        type="button"
+        disabled={isLoading}
+        onClick={() => void onLoad({
+          fromDate: shiftIsoDate(dateRange.fromDate, -windowDays),
+          toDate: dateRange.toDate
+        })}
+      >
+        {isLoading ? <Loader2 className="spin" size={16} /> : <ChevronDown size={16} />}
+        Show {windowDays} earlier days
+      </Button>
+    </div>
+  );
+}
+
+function RevolutView({
+  dashboard,
+  rows,
+  dateRange,
+  isLoadingDateRange,
+  onLoadDateRange,
+  ...reconciliationProps
+}: ConnectedBankViewProps & {
+  dateRange: RevolutTransactionDateRange;
+  isLoadingDateRange: boolean;
+  onLoadDateRange: (dateRange: RevolutTransactionDateRange) => Promise<void>;
+}) {
   const revolutAccounts = dashboard.accounts.filter((account) =>
     account.source === "revolut" && hasNonZeroAccountBalance(account)
   );
   const allRevolutRows = dashboard.transactions.filter((transaction) => transaction.source === "revolut");
+  const rangeControls = (
+    <BankDateRangeControls
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+      windowDays={revolutDefaultActivityWindowDays}
+    />
+  );
+  const tableFooter = (
+    <BankDateRangeFooter
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+      sourceLabel="Revolut"
+      windowDays={revolutDefaultActivityWindowDays}
+    />
+  );
 
   return (
     <div className="split-view">
@@ -4570,6 +4776,8 @@ function RevolutView({ dashboard, rows, ...reconciliationProps }: ConnectedBankV
         rows={rows}
         source="revolut"
         wide
+        rangeControls={rangeControls}
+        tableFooter={tableFooter}
       />
     </div>
   );
@@ -4587,8 +4795,6 @@ function SlashView({
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
 }) {
-  const [draftFromDate, setDraftFromDate] = useState(dateRange.fromDate);
-  const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
   const slashAccounts = dashboard.accounts.filter((account) =>
     account.source === "slash" && hasNonZeroAccountBalance(account)
   );
@@ -4598,89 +4804,22 @@ function SlashView({
   );
   const cashback = sumCurrencyTotals(cashbackRows, (row) => row.amount);
   const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
-  const today = localIsoDate();
-  const dateRangeIsValid = Boolean(
-    draftFromDate &&
-    draftToDate &&
-    draftFromDate <= draftToDate &&
-    draftToDate <= today
-  );
-
-  useEffect(() => {
-    setDraftFromDate(dateRange.fromDate);
-    setDraftToDate(dateRange.toDate);
-  }, [dateRange.fromDate, dateRange.toDate]);
-
   const rangeControls = (
-    <div className="slash-date-controls">
-      <div>
-        <strong>Loaded period</strong>
-        <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!dateRangeIsValid) return;
-          void onLoadDateRange({ fromDate: draftFromDate, toDate: draftToDate });
-        }}
-      >
-        <label>
-          From
-          <Input
-            type="date"
-            max={draftToDate || today}
-            required
-            value={draftFromDate}
-            onChange={(event) => setDraftFromDate(event.target.value)}
-          />
-        </label>
-        <label>
-          To
-          <Input
-            type="date"
-            min={draftFromDate || undefined}
-            max={today}
-            required
-            value={draftToDate}
-            onChange={(event) => setDraftToDate(event.target.value)}
-          />
-        </label>
-        <Button className="primary-button" type="submit" disabled={isLoadingDateRange || !dateRangeIsValid}>
-          {isLoadingDateRange ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          Load dates
-        </Button>
-        <Button
-          className="secondary-button"
-          type="button"
-          disabled={isLoadingDateRange}
-          onClick={() => {
-            const recentRange = defaultSlashTransactionDateRange();
-            setDraftFromDate(recentRange.fromDate);
-            setDraftToDate(recentRange.toDate);
-            void onLoadDateRange(recentRange);
-          }}
-        >
-          Recent {slashDefaultActivityWindowDays} days
-        </Button>
-      </form>
-    </div>
+    <BankDateRangeControls
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+      windowDays={slashDefaultActivityWindowDays}
+    />
   );
   const tableFooter = (
-    <div className="slash-load-more">
-      <span>Showing Slash activity back to {dateLabel(dateRange.fromDate)}.</span>
-      <Button
-        className="secondary-button"
-        type="button"
-        disabled={isLoadingDateRange}
-        onClick={() => void onLoadDateRange({
-          fromDate: shiftIsoDate(dateRange.fromDate, -slashDefaultActivityWindowDays),
-          toDate: dateRange.toDate
-        })}
-      >
-        {isLoadingDateRange ? <Loader2 className="spin" size={16} /> : <ChevronDown size={16} />}
-        Show {slashDefaultActivityWindowDays} earlier days
-      </Button>
-    </div>
+    <BankDateRangeFooter
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+      sourceLabel="Slash"
+      windowDays={slashDefaultActivityWindowDays}
+    />
   );
 
   return (

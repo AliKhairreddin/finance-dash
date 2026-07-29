@@ -103,6 +103,7 @@ import {
 import type { RevenuePeriod } from "../shared/revenue";
 import {
   fetchRevolutActivity as fetchRevolutApiActivity,
+  parseRevolutTransactionDateRange,
   type RevolutTransactionDateRange
 } from "../shared/revolutApi";
 import {
@@ -199,6 +200,11 @@ interface BankSyncState {
   source: SyncedBankSource;
   coveredRanges: SlashTransactionDateRange[];
   lastSyncedAt: string;
+}
+
+interface BankDateRanges {
+  revolut?: RevolutTransactionDateRange;
+  slash?: SlashTransactionDateRange;
 }
 
 class ApiError extends Error {
@@ -1359,11 +1365,12 @@ async function readBankActivity(
 
 async function loadPersisted(
   env: Env,
-  slashDateRange: SlashTransactionDateRange = defaultBankDateRange()
+  dateRanges: BankDateRanges = {}
 ): Promise<PersistedState> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const revolutDateRange = defaultBankDateRange();
+  const revolutDateRange = dateRanges.revolut ?? defaultBankDateRange();
+  const slashDateRange = dateRanges.slash ?? defaultBankDateRange();
   const [stored, revolut, slash] = await Promise.all([
     convex.query(api.dashboard.getState, { serviceToken }),
     readBankActivity(env, "revolut", revolutDateRange),
@@ -1870,13 +1877,15 @@ async function syncLatestBankActivity(env: Env): Promise<void> {
   if (failures.length > 0) throw failures[0].reason;
 }
 
-async function ensureSlashActivityRange(
+async function ensureBankActivityRange(
   env: Env,
+  source: SyncedBankSource,
   requested: SlashTransactionDateRange
 ): Promise<void> {
-  const state = await bankSyncState(env, "slash");
+  const state = await bankSyncState(env, source);
   if (!state) {
-    await syncSlashActivity(env, requested);
+    if (source === "revolut") await syncRevolutActivity(env, requested);
+    else await syncSlashActivity(env, requested);
     return;
   }
   let missing = [{ ...requested }];
@@ -1900,15 +1909,16 @@ async function ensureSlashActivityRange(
     });
   }
   for (const range of missing) {
-    await syncSlashActivity(env, range);
+    if (source === "revolut") await syncRevolutActivity(env, range);
+    else await syncSlashActivity(env, range);
   }
 }
 
 async function getSnapshot(
   env: Env,
-  options: { refreshFxRates?: boolean; slashDateRange?: SlashTransactionDateRange } = {}
+  options: { refreshFxRates?: boolean; bankDateRanges?: BankDateRanges } = {}
 ): Promise<DashboardSnapshot> {
-  const state = await loadPersisted(env, options.slashDateRange);
+  const state = await loadPersisted(env, options.bankDateRanges);
   const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
   const bankIssue = (label: string, error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
@@ -3597,6 +3607,23 @@ export async function runIncomeAutomation(env: Env, scheduledAt: Date): Promise<
   }
 }
 
+function requestedBankDateRanges(url: URL): BankDateRanges {
+  try {
+    return {
+      revolut: parseRevolutTransactionDateRange(
+        url.searchParams.get("revolutFromDate"),
+        url.searchParams.get("revolutToDate")
+      ),
+      slash: parseSlashTransactionDateRange(
+        url.searchParams.get("slashFromDate"),
+        url.searchParams.get("slashToDate")
+      )
+    };
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "Invalid bank transaction date range");
+  }
+}
+
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
@@ -3606,11 +3633,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
-      const slashDateRange = parseSlashTransactionDateRange(
-        url.searchParams.get("slashFromDate"),
-        url.searchParams.get("slashToDate")
-      );
-      return json(await getSnapshot(env, { slashDateRange }));
+      return json(await getSnapshot(env, { bankDateRanges: requestedBankDateRanges(url) }));
     }
 
     if (url.pathname === "/api/management-report" && request.method === "GET") {
@@ -3627,22 +3650,25 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
-      const slashDateRange = parseSlashTransactionDateRange(
-        url.searchParams.get("slashFromDate"),
-        url.searchParams.get("slashToDate")
-      );
       await syncLatestBankActivity(env);
-      return json(await getSnapshot(env, { refreshFxRates: true, slashDateRange }));
+      return json(await getSnapshot(env, {
+        refreshFxRates: true,
+        bankDateRanges: requestedBankDateRanges(url)
+      }));
+    }
+
+    if (url.pathname === "/api/banks/revolut/load" && request.method === "POST") {
+      const bankDateRanges = requestedBankDateRanges(url);
+      if (!bankDateRanges.revolut) throw new ApiError(400, "Revolut from and to dates are required");
+      await ensureBankActivityRange(env, "revolut", bankDateRanges.revolut);
+      return json(await getSnapshot(env, { bankDateRanges }));
     }
 
     if (url.pathname === "/api/banks/slash/load" && request.method === "POST") {
-      const slashDateRange = parseSlashTransactionDateRange(
-        url.searchParams.get("slashFromDate"),
-        url.searchParams.get("slashToDate")
-      );
-      if (!slashDateRange) throw new ApiError(400, "Slash from and to dates are required");
-      await ensureSlashActivityRange(env, slashDateRange);
-      return json(await getSnapshot(env, { slashDateRange }));
+      const bankDateRanges = requestedBankDateRanges(url);
+      if (!bankDateRanges.slash) throw new ApiError(400, "Slash from and to dates are required");
+      await ensureBankActivityRange(env, "slash", bankDateRanges.slash);
+      return json(await getSnapshot(env, { bankDateRanges }));
     }
 
     if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {

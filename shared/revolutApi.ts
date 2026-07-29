@@ -12,7 +12,8 @@ const revolutConsentUrlByEnvironment = {
 
 const revolutClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const revolutAudience = "https://revolut.com";
-const revolutActivityWindowMs = 1000 * 60 * 60 * 24 * 45;
+export const revolutDefaultActivityWindowDays = 45;
+const revolutActivityWindowMs = 1000 * 60 * 60 * 24 * revolutDefaultActivityWindowDays;
 const revolutTransactionPageSize = 1000;
 const maxRevolutTransactionPages = 100;
 
@@ -113,6 +114,26 @@ function requiredIsoDate(value: string, field: string): string {
   return value;
 }
 
+export function parseRevolutTransactionDateRange(
+  fromDate?: string | null,
+  toDate?: string | null
+): RevolutTransactionDateRange | undefined {
+  const normalizedFromDate = fromDate?.trim();
+  const normalizedToDate = toDate?.trim();
+  if (!normalizedFromDate && !normalizedToDate) return undefined;
+  if (!normalizedFromDate || !normalizedToDate) {
+    throw new Error("Revolut transaction loading requires both a from date and a to date");
+  }
+  const range = {
+    fromDate: requiredIsoDate(normalizedFromDate, "Revolut from date"),
+    toDate: requiredIsoDate(normalizedToDate, "Revolut to date")
+  };
+  if (range.fromDate > range.toDate) {
+    throw new Error("Revolut from date must be on or before the to date");
+  }
+  return range;
+}
+
 function revolutDateRange(
   dateRange: RevolutTransactionDateRange | undefined,
   now: number
@@ -123,12 +144,11 @@ function revolutDateRange(
       to: new Date(now).toISOString()
     };
   }
-  const fromDate = requiredIsoDate(dateRange.fromDate, "Revolut from date");
-  const toDate = requiredIsoDate(dateRange.toDate, "Revolut to date");
-  if (fromDate > toDate) throw new Error("Revolut from date must be on or before the to date");
+  const parsed = parseRevolutTransactionDateRange(dateRange.fromDate, dateRange.toDate);
+  if (!parsed) throw new Error("Revolut date range is required");
   return {
-    from: `${fromDate}T00:00:00.000Z`,
-    to: `${toDate}T23:59:59.999Z`
+    from: `${parsed.fromDate}T00:00:00.000Z`,
+    to: `${parsed.toDate}T23:59:59.999Z`
   };
 }
 
