@@ -1178,6 +1178,10 @@ th.amount .sortable-table-heading {
   letter-spacing: 0;
 }
 
+.money-head > span:last-child {
+  text-align: right;
+}
+
 .money-list.dense .money-row {
   padding: 7px 10px;
 }
@@ -3068,8 +3072,10 @@ th.amount .sortable-table-heading {
   color: var(--muted);
 }
 
-.category-chart-controls select {
+.category-chart-controls select,
+.category-chart-controls .searchable-select {
   grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .category-chart-controls .secondary-button {
