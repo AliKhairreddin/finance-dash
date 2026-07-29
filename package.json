@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "tsx watch server/index.ts",
+    "auth:configure": "tsx scripts/configure-auth.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
     "build": "tsc -b && vite build",

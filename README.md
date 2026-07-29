@@ -4,7 +4,7 @@ Finance Operations Dashboard is a full-stack cash-flow and reconciliation worksp
 
 **Showcase:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
 
-> **Status:** Development/showcase deployment. The current Cloudflare Worker points at development Convex state and is not a substitute for production access controls. Do not load sensitive production finance data until authentication and the production deployment are explicitly configured.
+> **Status:** Development deployment. The Cloudflare deployment is protected by whole-site authentication and currently points at development Convex state. Do not treat the development data store as the final production environment.
 
 ## Problem and Approach
 
@@ -88,6 +88,18 @@ Invoices follow the dashboard lifecycle `draft → open → paid`. Merit payment
 ### Secret Boundaries
 
 Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker environment. Merit API ID/key and `OPENROUTER_API_KEY` are never stored in Convex or returned to the browser. Calls into Convex require a matching `CONVEX_SERVICE_TOKEN`.
+
+### Whole-Site Authentication
+
+The Cloudflare Worker authenticates every page, static asset, and API request before serving it. A successful login creates a signed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie that expires after 12 hours. The password is stored only as a salted PBKDF2-SHA-256 verifier, while the username, verifier, and independent session-signing key are encrypted Cloudflare Worker secrets.
+
+Configure or rotate the production credentials from an interactive terminal:
+
+```bash
+npm run auth:configure
+```
+
+The password prompt is hidden. The setup command sends the derived verifier and generated signing key directly to Cloudflare without printing them or writing them to disk. Missing or malformed authentication secrets lock the site and API closed.
 
 ### Regression Coverage
 
@@ -201,11 +213,10 @@ This command builds the app, deploys Convex functions using `.env.local`, and pu
 
 Before moving from showcase to production:
 
-1. add real user authentication/authorization at the application boundary;
-2. point the Worker at the production Convex deployment;
-3. configure secrets in Cloudflare and Convex rather than local files;
-4. validate each live banking/accounting integration with non-destructive tests;
-5. establish audit, backup, and incident procedures for financial data.
+1. point the Worker at the production Convex deployment;
+2. configure integration secrets in Cloudflare and Convex rather than local files;
+3. validate each live banking/accounting integration with non-destructive tests;
+4. establish audit, backup, and incident procedures for financial data.
 
 ## External Documentation
 

@@ -123,6 +123,7 @@ import {
   profitDistributionAdjustmentFromPayload,
   shouldKeepProfitDistributionAdjustment
 } from "../shared/distribution";
+import { enforceSiteAuthentication } from "./auth";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
@@ -3367,6 +3368,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const authenticationResponse = await enforceSiteAuthentication(request, env);
+    if (authenticationResponse) return authenticationResponse;
+
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
       return handleApi(request, env);

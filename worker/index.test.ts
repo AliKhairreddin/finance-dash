@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { WorkerEnv } from "../worker-configuration";
 import type { Invoice, Transaction } from "../shared/types";
+import { createAuthSessionToken } from "./auth";
 import worker, {
   createMeritInvoice,
   deliverMeritInvoice,
@@ -13,18 +15,36 @@ import worker, {
   retainCurrentSlashTransactions
 } from "./index";
 
+const workerTestAuth = {
+  AUTH_USERNAME: "finance-test",
+  AUTH_PASSWORD_HASH:
+    "pbkdf2-sha256$100000$MDEyMzQ1Njc4OWFiY2RlZg$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  AUTH_SESSION_SECRET: "worker-test-session-secret"
+};
+
+async function authenticatedRequest(url: string): Promise<Request> {
+  const token = await createAuthSessionToken(workerTestAuth.AUTH_SESSION_SECRET);
+  return new Request(url, {
+    headers: { Cookie: `__Host-finance_session=${token}` }
+  });
+}
+
+function authenticatedEnv(values: Record<string, unknown>): WorkerEnv {
+  return { ...workerTestAuth, ...values } as never;
+}
+
 test("dashboard API fails closed when Convex storage is not configured", async () => {
   let assetRequests = 0;
   const response = await worker.fetch(
-    new Request("https://finance.example/api/dashboard"),
-    {
+    await authenticatedRequest("https://finance.example/api/dashboard"),
+    authenticatedEnv({
       ASSETS: {
         async fetch() {
           assetRequests += 1;
           return new Response("asset");
         }
       }
-    } as never
+    })
   );
 
   assert.equal(response.status, 503);
@@ -34,11 +54,11 @@ test("dashboard API fails closed when Convex storage is not configured", async (
 
 test("dashboard API fails closed when Convex authentication is not configured", async () => {
   const response = await worker.fetch(
-    new Request("https://finance.example/api/dashboard"),
-    {
+    await authenticatedRequest("https://finance.example/api/dashboard"),
+    authenticatedEnv({
       ASSETS: { fetch: async () => new Response("asset") },
       CONVEX_URL: "https://example.convex.cloud"
-    } as never
+    })
   );
 
   assert.equal(response.status, 503);
@@ -47,8 +67,8 @@ test("dashboard API fails closed when Convex authentication is not configured", 
 
 test("management report API fails closed when Convex storage is not configured", async () => {
   const response = await worker.fetch(
-    new Request("https://finance.example/api/management-report"),
-    { ASSETS: { fetch: async () => new Response("asset") } } as never
+    await authenticatedRequest("https://finance.example/api/management-report"),
+    authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
   );
 
   assert.equal(response.status, 503);
