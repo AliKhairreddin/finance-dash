@@ -78,6 +78,24 @@ test("authentication fails closed when the password verifier is unsupported", as
   assert.equal(response?.status, 503);
 });
 
+test("login page matches the dashboard theme and authorizes only its nonce-scoped script", async () => {
+  const response = await enforceSiteAuthentication(
+    new Request("https://finance.example/login"),
+    testEnv as never
+  );
+  assert.equal(response?.status, 200);
+
+  const contentSecurityPolicy = response?.headers.get("Content-Security-Policy") ?? "";
+  const nonce = contentSecurityPolicy.match(/script-src 'nonce-([^']+)'/)?.[1];
+  assert.ok(nonce);
+
+  const body = await response?.text() ?? "";
+  assert.match(body, /Sign in to Finance/);
+  assert.match(body, /data-theme-toggle/);
+  assert.match(body, new RegExp(`<script nonce="${nonce}">`));
+  assert.doesNotMatch(body, /radial-gradient|#8dd8ff/);
+});
+
 test("unauthenticated requests redirect pages and reject APIs", async () => {
   const pageResponse = await enforceSiteAuthentication(
     new Request("https://finance.example/income?view=weekly"),

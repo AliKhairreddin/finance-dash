@@ -207,11 +207,12 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function securityHeaders(): Headers {
+function securityHeaders(scriptNonce?: string): Headers {
+  const scriptSource = scriptNonce ? `'nonce-${scriptNonce}'` : "'none'";
   return new Headers({
     "Cache-Control": "no-store",
     "Content-Security-Policy":
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      `default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptSource}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -219,8 +220,8 @@ function securityHeaders(): Headers {
   });
 }
 
-function htmlResponse(body: string, init: ResponseInit = {}): Response {
-  const headers = securityHeaders();
+function htmlResponse(body: string, init: ResponseInit = {}, scriptNonce?: string): Response {
+  const headers = securityHeaders(scriptNonce);
   headers.set("Content-Type", "text/html; charset=utf-8");
   if (init.headers) {
     new Headers(init.headers).forEach((value, name) => headers.set(name, value));
@@ -228,50 +229,311 @@ function htmlResponse(body: string, init: ResponseInit = {}): Response {
   return new Response(body, { ...init, headers });
 }
 
-function loginPage(returnTo: string, error?: string): string {
+function loginPage(returnTo: string, scriptNonce: string, error?: string): string {
   const errorMarkup = error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <title>Sign in · Finance Dashboard</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root {
+      color-scheme: light;
+      font-family: "Geist Variable", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --ink: #09090b;
+      --muted: #71717a;
+      --line: #e4e4e7;
+      --line-strong: #a1a1aa;
+      --panel: #ffffff;
+      --panel-soft: #fafafa;
+      --page: #ffffff;
+      --control: #ffffff;
+      --control-hover: #f4f4f5;
+      --button: #09090b;
+      --button-hover: #27272a;
+      --button-text: #ffffff;
+      --focus: rgba(24, 24, 27, .14);
+      --shadow: 0 14px 34px rgba(9, 9, 11, .08);
+      --shadow-soft: 0 8px 24px rgba(9, 9, 11, .05);
+      --error: #b42318;
+      --error-bg: #fff1f1;
+      --error-border: #ffd0cc;
+      --theme-track: #f4f4f5;
+      --theme-border: #d4d4d8;
+      --theme-option: #71717a;
+      --theme-thumb: #ffffff;
+      --theme-thumb-color: #09090b;
+      --theme-shadow: 0 6px 16px rgba(9, 9, 11, .16);
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --ink: #fafafa;
+      --muted: #a1a1aa;
+      --line: #27272a;
+      --line-strong: #52525b;
+      --panel: #050505;
+      --panel-soft: #0a0a0a;
+      --page: #000000;
+      --control: #050505;
+      --control-hover: #111111;
+      --button: #fafafa;
+      --button-hover: #e4e4e7;
+      --button-text: #000000;
+      --focus: rgba(250, 250, 250, .22);
+      --shadow: 0 16px 36px rgba(0, 0, 0, .32);
+      --shadow-soft: 0 10px 28px rgba(0, 0, 0, .42);
+      --error: #ff8f85;
+      --error-bg: rgba(180, 35, 24, .22);
+      --error-border: rgba(255, 143, 133, .34);
+      --theme-track: #050505;
+      --theme-border: #3f3f46;
+      --theme-option: #a1a1aa;
+      --theme-thumb: #fafafa;
+      --theme-thumb-color: #000000;
+      --theme-shadow: 0 8px 18px rgba(0, 0, 0, .34);
+    }
     * { box-sizing: border-box; }
-    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; color: #f5f7fa; background: radial-gradient(circle at top, #1b2638 0, #0c111b 48%, #070a10 100%); }
-    main { width: min(100%, 400px); padding: 32px; border: 1px solid #273349; border-radius: 18px; background: rgba(14, 20, 31, .94); box-shadow: 0 24px 70px rgba(0, 0, 0, .42); }
-    .mark { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 22px; border-radius: 13px; color: #08101d; background: #8dd8ff; font-size: 22px; font-weight: 800; }
-    h1 { margin: 0; font-size: 26px; letter-spacing: -.035em; }
-    .subhead { margin: 8px 0 26px; color: #9ba9bd; font-size: 14px; line-height: 1.5; }
-    label { display: block; margin: 0 0 8px; color: #c8d1de; font-size: 13px; font-weight: 650; }
-    input { width: 100%; height: 46px; margin-bottom: 18px; padding: 0 13px; border: 1px solid #344259; border-radius: 10px; outline: none; color: #f7f9fc; background: #0a101a; font: inherit; transition: border-color .15s, box-shadow .15s; }
-    input:focus { border-color: #79cfff; box-shadow: 0 0 0 3px rgba(121, 207, 255, .14); }
-    button { width: 100%; height: 46px; border: 0; border-radius: 10px; color: #07101c; background: #8dd8ff; font: inherit; font-weight: 750; cursor: pointer; }
-    button:hover { background: #a4e1ff; }
-    .error { margin: -4px 0 18px; padding: 10px 12px; border: 1px solid #713a43; border-radius: 9px; color: #ffc0c7; background: #2a151a; font-size: 13px; }
-    .note { margin: 20px 0 0; color: #68768a; font-size: 12px; text-align: center; }
+    html, body { min-height: 100%; }
+    body { min-width: 320px; min-height: 100vh; margin: 0; color: var(--ink); background: var(--page); }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 72px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--page) 94%, transparent);
+      backdrop-filter: blur(16px);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+    .brand svg { width: 19px; height: 19px; color: var(--muted); stroke-width: 1.8; }
+    .theme-toggle {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      width: 74px;
+      height: 36px;
+      padding: 3px;
+      border: 1px solid var(--theme-border);
+      border-radius: 12px;
+      color: var(--theme-option);
+      background: var(--theme-track);
+      box-shadow: var(--shadow-soft);
+      transition: border-color .16s, background-color .16s, transform .16s;
+    }
+    .theme-toggle:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+    .theme-option {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      width: 32px;
+      height: 28px;
+      align-items: center;
+      justify-content: center;
+    }
+    .theme-option svg, .theme-thumb svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+    .theme-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      z-index: 2;
+      display: grid;
+      width: 32px;
+      height: 28px;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--theme-thumb-color);
+      background: var(--theme-thumb);
+      box-shadow: var(--theme-shadow);
+      transition: color .18s, background-color .18s, transform .18s;
+    }
+    .theme-thumb .moon { display: none; }
+    html[data-theme="dark"] .theme-thumb { transform: translateX(36px); }
+    html[data-theme="dark"] .theme-thumb .sun { display: none; }
+    html[data-theme="dark"] .theme-thumb .moon { display: block; }
+    .login-shell {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 104px 24px 48px;
+    }
+    .login-card {
+      width: min(100%, 400px);
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow-soft);
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: 25px; line-height: 1.18; font-weight: 760; letter-spacing: -.04em; }
+    .subhead { margin: 9px 0 26px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .field { margin-bottom: 17px; }
+    label { display: block; margin: 0 0 7px; color: var(--ink); font-size: 13px; font-weight: 650; }
+    input {
+      width: 100%;
+      height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      outline: none;
+      color: var(--ink);
+      background: var(--control);
+      box-shadow: 0 1px 2px rgba(9, 9, 11, .04);
+      transition: border-color .16s, background-color .16s, box-shadow .16s;
+    }
+    input:hover { border-color: var(--line-strong); }
+    input:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px var(--focus); }
+    input:-webkit-autofill {
+      -webkit-text-fill-color: var(--ink);
+      box-shadow: 0 0 0 1000px var(--control) inset;
+    }
+    .submit {
+      width: 100%;
+      min-height: 42px;
+      margin-top: 3px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--button-text);
+      background: var(--button);
+      box-shadow: 0 10px 22px rgba(9, 9, 11, .16);
+      font-size: 14px;
+      font-weight: 680;
+      transition: background-color .16s, box-shadow .16s, transform .16s;
+    }
+    .submit:hover { background: var(--button-hover); transform: translateY(-1px); }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    input:focus-visible { outline: none; }
+    .error {
+      margin: -5px 0 18px;
+      padding: 10px 12px;
+      border: 1px solid var(--error-border);
+      border-radius: 10px;
+      color: var(--error);
+      background: var(--error-bg);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .session-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .session-note svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+    @media (max-width: 520px) {
+      .site-header { min-height: 64px; padding: 14px 16px; }
+      .login-shell { padding: 88px 16px 28px; }
+      .login-card { padding: 24px 22px; border-radius: 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <div class="mark" aria-hidden="true">$</div>
-    <h1>Finance Dashboard</h1>
-    <p class="subhead">Sign in to continue to the private finance workspace.</p>
-    ${errorMarkup}
-    <form method="post" action="/login">
-      <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
-    </form>
-    <p class="note">Protected by a secure, time-limited session.</p>
+  <header class="site-header">
+    <div class="brand">
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <rect width="18" height="14" x="3" y="5" rx="2" fill="none" stroke="currentColor"></rect>
+        <path d="M3 10h18M7 15h.01" fill="none" stroke="currentColor" stroke-linecap="round"></path>
+      </svg>
+      <span>Finance</span>
+    </div>
+    <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false">
+      <span class="theme-option" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+      </span>
+      <span class="theme-option" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+      </span>
+      <span class="theme-thumb" data-theme-thumb aria-hidden="true">
+        <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+        <svg class="moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+      </span>
+    </button>
+  </header>
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="login-title">
+      <p class="eyebrow">Secure access</p>
+      <h1 id="login-title">Sign in to Finance</h1>
+      <p class="subhead">Use your dashboard credentials to continue.</p>
+      ${errorMarkup}
+      <form method="post" action="/login">
+        <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="submit" type="submit">Sign in</button>
+      </form>
+      <p class="session-note">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+        Secure session · 12 hours
+      </p>
+    </section>
   </main>
+  <script nonce="${scriptNonce}">
+    (() => {
+      const key = "finance-dash-theme";
+      const root = document.documentElement;
+      const toggle = document.querySelector("[data-theme-toggle]");
+      let theme = "light";
+      try {
+        theme = localStorage.getItem(key) === "dark" ? "dark" : "light";
+      } catch {}
+      const applyTheme = () => {
+        const isDark = theme === "dark";
+        root.dataset.theme = theme;
+        toggle?.setAttribute("aria-pressed", String(isDark));
+        toggle?.setAttribute("aria-label", \`Switch to \${isDark ? "light" : "dark"} mode\`);
+      };
+      applyTheme();
+      toggle?.addEventListener("click", () => {
+        theme = theme === "dark" ? "light" : "dark";
+        try {
+          localStorage.setItem(key, theme);
+        } catch {}
+        applyTheme();
+      });
+    })();
+  </script>
 </body>
 </html>`;
+}
+
+function loginHtmlResponse(returnTo: string, error?: string, init: ResponseInit = {}): Response {
+  const scriptNonce = base64UrlEncode(crypto.getRandomValues(new Uint8Array(18)));
+  return htmlResponse(loginPage(returnTo, scriptNonce, error), init, scriptNonce);
 }
 
 async function readLoginForm(request: Request): Promise<URLSearchParams> {
@@ -354,10 +616,10 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
     if (request.method === "GET") {
       return (await hasValidSession(request, config.sessionSecret))
         ? redirect(returnTo)
-        : htmlResponse(loginPage(returnTo));
+        : loginHtmlResponse(returnTo);
     }
     if (request.method !== "POST") {
-      return htmlResponse(loginPage(returnTo), { status: 405, headers: { Allow: "GET, POST" } });
+      return loginHtmlResponse(returnTo, undefined, { status: 405, headers: { Allow: "GET, POST" } });
     }
 
     try {
@@ -369,10 +631,10 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
         const token = await createAuthSessionToken(config.sessionSecret);
         return redirect(formReturnTo, sessionCookie(token));
       }
-      return htmlResponse(loginPage(formReturnTo, "Invalid username or password."), { status: 401 });
+      return loginHtmlResponse(formReturnTo, "Invalid username or password.", { status: 401 });
     } catch (error) {
       if (!(error instanceof InvalidLoginBodyError)) throw error;
-      return htmlResponse(loginPage("/", "Invalid sign-in request."), { status: 400 });
+      return loginHtmlResponse("/", "Invalid sign-in request.", { status: 400 });
     }
   }
 
