@@ -173,18 +173,6 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
   return body?.message || fallback;
 }
 
-const pageHeaderContent: Record<ActiveTab, { eyebrow: string; title: string }> = {
-  overview: { eyebrow: "Finance overview", title: "Cash position and working capital" },
-  management: { eyebrow: "Management report", title: "Closed performance, platforms, and ownership" },
-  banks: { eyebrow: "Banking", title: "Reconcile account activity" },
-  analytics: { eyebrow: "Analytics", title: "Review spend, revenue, teams, and categories" },
-  distribution: { eyebrow: "Distribution", title: "Track partner payables and adjustments" },
-  revenue: { eyebrow: "Income · Revenue", title: "Track earned income before invoicing" },
-  invoices: { eyebrow: "Income · Invoices", title: "Prepare, deliver, and reconcile invoices" },
-  providers: { eyebrow: "Business directory", title: "Clients and suppliers" },
-  settings: { eyebrow: "Configuration", title: "Teams, integrations, and AI" }
-};
-
 const openRouterModelOptions = [
   { label: "OpenRouter auto", value: "openrouter/auto" },
   { label: "Latest OpenAI flagship", value: "~openai/gpt-latest" },
@@ -1348,45 +1336,20 @@ function App() {
     .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash") && status.mode === "partial")
     .map((status) => status.label);
   const wiseStatus = dashboard.integrationStatus.find((integration) => integration.id === "wise");
-  const pageHeader = pageHeaderContent[activeTab];
-
   return (
     <main className="app-shell">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
+        dataAsOf={maybeDate(dashboard.asOf)}
+        lastSync={maybeDate(dashboard.lastSync)}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
         onSync={syncNow}
         isSyncing={isSyncing}
       />
       <div className="main-column">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">{pageHeader.eyebrow}</p>
-            <h1>{pageHeader.title}</h1>
-            <div className="meta-row">
-              {activeTab === "management" ? (
-                <span>Legacy closed report · imported separately from live operations</span>
-              ) : (
-                <>
-                  <span>Data as of: {maybeDate(dashboard.asOf)}</span>
-                  <span className="meta-separator" aria-hidden="true">·</span>
-                  <span>Last sync: {maybeDate(dashboard.lastSync)}</span>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="topbar-actions">
-            <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
-            <Button className="primary-button" onClick={syncNow} disabled={isSyncing}>
-              {isSyncing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-              {activeTab === "management" ? "Sync live" : "Sync"}
-            </Button>
-          </div>
-        </header>
-
         {(error || notice) && (
           <div className={error ? "toast error" : "toast"} role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"}>
             {error ? <CircleAlert size={16} /> : <Check size={16} />}
@@ -1694,6 +1657,8 @@ function Sidebar({
   activeTab,
   setActiveTab,
   incomeAutomationUnreadCount,
+  dataAsOf,
+  lastSync,
   themeMode,
   onToggleTheme,
   onSync,
@@ -1702,6 +1667,8 @@ function Sidebar({
   activeTab: ActiveTab;
   setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
   incomeAutomationUnreadCount: number;
+  dataAsOf: string;
+  lastSync: string;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
   onSync: () => void;
@@ -1805,6 +1772,11 @@ function Sidebar({
         <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Sync dashboard" title="Sync dashboard">
           {isSyncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
         </Button>
+        <div className="mobile-freshness" aria-label={`Data as of ${dataAsOf}; last sync ${lastSync}`}>
+          <span>Data {dataAsOf}</span>
+          <span aria-hidden="true">·</span>
+          <span>Synced {lastSync}</span>
+        </div>
       </div>
       <div className="sidebar-brand">
         <Banknote size={19} />
@@ -1818,6 +1790,26 @@ function Sidebar({
         </div>
         {directoryItems.map((item) => navigationButton(item))}
       </nav>
+      <div className="sidebar-footer">
+        <div className="sidebar-freshness">
+          <span>
+            <small>Data as of</small>
+            <strong>{dataAsOf}</strong>
+          </span>
+          <span>
+            <small>Last sync</small>
+            <strong>{lastSync}</strong>
+          </span>
+        </div>
+        {activeTab === "management" && <p>Live operations · report imported separately</p>}
+        <div className="sidebar-utilities">
+          <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
+          <Button className="primary-button sidebar-sync-button" onClick={onSync} disabled={isSyncing} type="button">
+            {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+            {activeTab === "management" ? "Sync live" : "Sync"}
+          </Button>
+        </div>
+      </div>
     </aside>
   );
 }
