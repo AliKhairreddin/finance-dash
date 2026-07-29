@@ -5318,19 +5318,19 @@ function SettingsView({
         </div>
         <form className="settings-form" onSubmit={saveSettings}>
           <div className="docs-note">
-            <strong>Zero Data Retention enforced</strong>
-            <span>Only models with a current OpenRouter ZDR endpoint are listed, and every AI request is restricted to ZDR providers.</span>
-            <span>OpenRouter credentials remain server-side in the OPENROUTER_API_KEY runtime secret.</span>
+            <strong>OpenRouter Zero Data Retention</strong>
+            <span>Only models from OpenRouter’s current ZDR catalog are listed, and every AI request is restricted to ZDR endpoints.</span>
+            <span>Credentials remain server-side in the OPENROUTER_API_KEY runtime secret.</span>
           </div>
           <div className="form-grid ai-model-grid">
             <label>
-              Model
+              OpenRouter model
               <SearchableSelect
                 value={selectedModelIsZdr ? selectedModel : ""}
                 options={modelOptions}
                 onValueChange={setSelectedModel}
-                placeholder={modelsLoading ? "Loading ZDR models…" : "Search Zero Data Retention models"}
-                emptyMessage="No Zero Data Retention models found"
+                placeholder={modelsLoading ? "Loading OpenRouter ZDR models…" : "Search OpenRouter ZDR models"}
+                emptyMessage="No OpenRouter ZDR models found"
                 ariaLabel="OpenRouter Zero Data Retention model"
                 clearable={false}
                 disabled={modelsLoading || Boolean(modelError)}
@@ -5338,7 +5338,7 @@ function SettingsView({
             </label>
           </div>
           {!modelsLoading && !modelError && selectedModel && !selectedModelIsZdr && (
-            <div className="inline-error">The saved model is not currently ZDR eligible. Choose a model from the picker.</div>
+            <div className="inline-error">The saved model is not currently in OpenRouter’s ZDR catalog. Choose another model.</div>
           )}
           {modelError && <div className="inline-error">{modelError}</div>}
           {aiError && <div className="inline-error">{aiError}</div>}
