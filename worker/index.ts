@@ -391,6 +391,10 @@ export function retainPersistedTransactions(
   return reconciled.filter((transaction) => persistedIds.has(transaction.id));
 }
 
+export function transactionsForDashboardStorage(transactions: Transaction[]): Transaction[] {
+  return transactions.filter((transaction) => transaction.source !== "slash");
+}
+
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
   const existingKeys = new Set(existing.map((transaction) => wiseStatementTransactionKey(transaction)));
   const incomingKeys = new Set<string>();
@@ -1348,6 +1352,9 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const { revision, transactionCategories: _transactionCategories, ...dashboardState } = state;
+  dashboardState.wiseStatementTransactions = transactionsForDashboardStorage(
+    dashboardState.wiseStatementTransactions
+  );
   try {
     const result = await convex.mutation(api.dashboard.saveState, {
       ...dashboardState,
@@ -1355,7 +1362,15 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
       expectedUpdatedAt: revision
     });
     state.revision = result.updatedAt;
+    state.wiseStatementTransactions = dashboardState.wiseStatementTransactions;
   } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({
+      event: "dashboard_storage_save_failed",
+      transactionCount: dashboardState.wiseStatementTransactions.length,
+      payloadBytes: new TextEncoder().encode(JSON.stringify(dashboardState)).length,
+      cause
+    }));
     if (error instanceof ConvexError && isRecord(error.data) && error.data.code === "STATE_CONFLICT") {
       throw new ApiError(409, "Dashboard data changed while this update was saving. Retry the action.", { cause: error });
     }

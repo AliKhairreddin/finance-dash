@@ -13,7 +13,8 @@ import worker, {
   fetchMeritVendors,
   mergeInvoices,
   retainPersistedTransactions,
-  retainCurrentSlashTransactions
+  retainCurrentSlashTransactions,
+  transactionsForDashboardStorage
 } from "./index";
 
 const workerTestAuth = {
@@ -550,6 +551,35 @@ test("live sync returns fresh rows without adding them to persisted dashboard st
   assert.deepEqual(
     retainPersistedTransactions([importedWise, editedSlash], reconciled),
     [{ ...editedSlash, matchedProviderId: "provider-1" }, importedWise]
+  );
+});
+
+test("dashboard persistence cannot serialize live Slash rows", () => {
+  const transaction = (id: string, source: Transaction["source"]): Transaction => ({
+    id,
+    source,
+    accountName: "Operating",
+    date: "2026-07-28",
+    description: "CARD PURCHASE",
+    rawName: "Example Merchant",
+    counterparty: "Example Merchant",
+    amount: 10,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Card"
+  });
+
+  assert.deepEqual(
+    transactionsForDashboardStorage([
+      transaction("slash-live", "slash"),
+      transaction("wise-imported", "wise"),
+      transaction("revolut-edited", "revolut")
+    ]),
+    [
+      transaction("wise-imported", "wise"),
+      transaction("revolut-edited", "revolut")
+    ]
   );
 });
 
