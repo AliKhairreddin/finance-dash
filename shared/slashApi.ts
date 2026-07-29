@@ -66,6 +66,14 @@ interface SlashActivityOptions {
   now?: number;
 }
 
+interface SlashTransactionOptions {
+  baseUrl: string;
+  apiKey: string;
+  legalEntityId: string;
+  transactionId: string;
+  fetcher?: typeof fetch;
+}
+
 function requiredIsoDate(value: string, field: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new Error(`${field} must use YYYY-MM-DD`);
@@ -230,6 +238,24 @@ async function fetchSlashPage<T>(
   return parseSlashPage(JSON.parse(text) as unknown, parseItem);
 }
 
+async function fetchSlashResource<T>(
+  fetcher: typeof fetch,
+  url: URL,
+  headers: HeadersInit,
+  field: string,
+  parse: (value: unknown) => T
+): Promise<T> {
+  const response = await fetcher(url, { headers });
+  const text = await response.text();
+  if (!response.ok) {
+    const requestId = response.headers.get("x-request-id");
+    const requestSuffix = requestId ? ` [Slash request ${requestId}]` : "";
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}${requestSuffix}`);
+  }
+  if (!text) throw new Error(`Slash API returned an empty ${field} response`);
+  return parse(JSON.parse(text) as unknown);
+}
+
 async function fetchSlashBalances(
   fetcher: typeof fetch,
   url: URL,
@@ -286,6 +312,62 @@ function accountBalance(account: SlashAccount, balances: SlashBalance[]): SlashB
   return balance;
 }
 
+function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
+  return {
+    Accept: "application/json",
+    "User-Agent": "finance-dash/1.0 (+https://finance.thatcanadian.dev)",
+    "X-API-Key": apiKey,
+    "x-legal-entity": legalEntityId
+  };
+}
+
+function normalizeSlashTransaction(transaction: SlashTransaction, accountName: string): Transaction {
+  const signedAmount = transaction.amountCents / 100;
+  const counterparty = transaction.merchantData?.description?.trim() || transaction.description;
+  return {
+    id: `slash-${transaction.id}`,
+    source: "slash",
+    accountName,
+    date: transaction.date.slice(0, 10),
+    description: transaction.description,
+    rawName: counterparty,
+    counterparty,
+    amount: Math.abs(signedAmount),
+    currency: "USD",
+    direction: signedAmount >= 0 ? "in" : "out",
+    status: transaction.status === "pending" ? "pending" : "posted",
+    category: "Slash"
+  };
+}
+
+export async function fetchSlashTransactionForLegalEntity({
+  baseUrl,
+  apiKey,
+  legalEntityId,
+  transactionId,
+  fetcher = fetch
+}: SlashTransactionOptions): Promise<Transaction> {
+  const headers = slashHeaders(apiKey, legalEntityId);
+  const transaction = await fetchSlashResource(
+    fetcher,
+    new URL(`/transaction/${encodeURIComponent(transactionId)}`, baseUrl),
+    headers,
+    "transaction",
+    parseSlashTransaction
+  );
+  if (transaction.status === "failed") {
+    throw new Error(`Slash transaction ${transaction.id} failed and is not available in dashboard activity`);
+  }
+  const account = await fetchSlashResource(
+    fetcher,
+    new URL(`/account/${encodeURIComponent(transaction.accountId)}`, baseUrl),
+    headers,
+    "account",
+    parseSlashAccount
+  );
+  return normalizeSlashTransaction(transaction, account.name);
+}
+
 export async function fetchSlashActivityForLegalEntity({
   baseUrl,
   apiKey,
@@ -294,12 +376,7 @@ export async function fetchSlashActivityForLegalEntity({
   fetcher = fetch,
   now = Date.now()
 }: SlashActivityOptions): Promise<SlashActivityResult> {
-  const headers = {
-    Accept: "application/json",
-    "User-Agent": "finance-dash/1.0 (+https://finance.thatcanadian.dev)",
-    "X-API-Key": apiKey,
-    "x-legal-entity": legalEntityId
-  };
+  const headers = slashHeaders(apiKey, legalEntityId);
   const accountsUrl = new URL("/account", baseUrl);
   const transactionsUrl = new URL("/transaction", baseUrl);
   const validatedDateRange = dateRange
@@ -347,22 +424,7 @@ export async function fetchSlashActivityForLegalEntity({
     .map((item) => {
       const accountName = accountNameById.get(item.accountId);
       if (!accountName) throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
-      const signedAmount = item.amountCents / 100;
-      const counterparty = item.merchantData?.description?.trim() || item.description;
-      return {
-        id: `slash-${item.id}`,
-        source: "slash",
-        accountName,
-        date: item.date.slice(0, 10),
-        description: item.description,
-        rawName: counterparty,
-        counterparty,
-        amount: Math.abs(signedAmount),
-        currency: "USD",
-        direction: signedAmount >= 0 ? "in" : "out",
-        status: item.status === "pending" ? "pending" : "posted",
-        category: "Slash"
-      };
+      return normalizeSlashTransaction(item, accountName);
     });
 
   return { accounts, transactions };

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   fetchSlashActivityForLegalEntity,
+  fetchSlashTransactionForLegalEntity,
   parseSlashTransactionDateRange
 } from "./slashApi";
 
@@ -209,6 +210,64 @@ test("Slash charge-card accounts use the available credit balance", async () => 
     updatedAt: "2026-07-28T22:31:42.052Z",
     status: "live"
   }]);
+});
+
+test("Slash can load one transaction by ID without scanning the activity window", async () => {
+  const requests: URL[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    requests.push(url);
+    const headers = new Headers(init?.headers);
+    assert.equal(headers.get("X-API-Key"), "slash-key");
+    assert.equal(headers.get("x-legal-entity"), "legal-entity-1");
+
+    if (url.pathname === "/transaction/transaction-old") {
+      return Response.json({
+        id: "transaction-old",
+        date: "2025-01-15T09:30:00.000Z",
+        description: "OLD CARD PURCHASE",
+        amountCents: -12_345,
+        accountId: "account-debit",
+        status: "posted",
+        merchantData: { description: "Old Merchant" }
+      });
+    }
+    assert.equal(url.pathname, "/account/account-debit");
+    return Response.json({
+      id: "account-debit",
+      name: "Operating",
+      status: "open",
+      type: "debit",
+      balances: ["debit"]
+    });
+  };
+
+  const result = await fetchSlashTransactionForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    transactionId: "transaction-old",
+    fetcher
+  });
+
+  assert.deepEqual(result, {
+    id: "slash-transaction-old",
+    source: "slash",
+    accountName: "Operating",
+    date: "2025-01-15",
+    description: "OLD CARD PURCHASE",
+    rawName: "Old Merchant",
+    counterparty: "Old Merchant",
+    amount: 123.45,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Slash"
+  });
+  assert.deepEqual(requests.map((url) => url.pathname), [
+    "/transaction/transaction-old",
+    "/account/account-debit"
+  ]);
 });
 
 test("Slash activity loads every page inside an exact inclusive date range", async () => {

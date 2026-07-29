@@ -104,6 +104,7 @@ import type { RevenuePeriod } from "../shared/revenue";
 import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
 import {
   fetchSlashActivityForLegalEntity,
+  fetchSlashTransactionForLegalEntity,
   parseSlashTransactionDateRange,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
@@ -380,6 +381,14 @@ export function retainCurrentSlashTransactions(
   if (!authoritative) return persisted;
   const liveIds = new Set(live.map((transaction) => transaction.id));
   return persisted.filter((transaction) => transaction.source !== "slash" || liveIds.has(transaction.id));
+}
+
+export function retainPersistedTransactions(
+  persisted: Transaction[],
+  reconciled: Transaction[]
+): Transaction[] {
+  const persistedIds = new Set(persisted.map((transaction) => transaction.id));
+  return reconciled.filter((transaction) => persistedIds.has(transaction.id));
 }
 
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
@@ -687,14 +696,26 @@ function findPersistedTransaction(state: PersistedState, transactionId: string):
   return state.wiseStatementTransactions.find((transaction) => transaction.id === transactionId);
 }
 
-function updatePersistedTransaction(state: PersistedState, updated: Transaction): boolean {
-  let stored = false;
-  state.wiseStatementTransactions = state.wiseStatementTransactions.map((transaction) => {
-    if (transaction.id !== updated.id) return transaction;
-    stored = true;
-    return { ...transaction, ...updated };
+function upsertPersistedTransaction(state: PersistedState, updated: Transaction): void {
+  const existing = state.wiseStatementTransactions.find((transaction) => transaction.id === updated.id);
+  state.wiseStatementTransactions = existing
+    ? state.wiseStatementTransactions.map((transaction) =>
+        transaction.id === updated.id ? { ...transaction, ...updated } : transaction
+      )
+    : [updated, ...state.wiseStatementTransactions];
+}
+
+async function fetchSlashTransaction(env: Env, transactionId: string): Promise<Transaction | undefined> {
+  const apiKey = env.SLASH_API_KEY?.trim();
+  const legalEntityId = env.SLASH_LEGAL_ENTITY_ID?.trim();
+  const baseUrl = env.SLASH_BASE_URL?.trim();
+  if (!apiKey || !legalEntityId || !baseUrl || !transactionId.startsWith("slash-")) return undefined;
+  return fetchSlashTransactionForLegalEntity({
+    baseUrl,
+    apiKey,
+    legalEntityId,
+    transactionId: transactionId.slice("slash-".length)
   });
-  return stored;
 }
 
 async function fetchTransactionForUpdate(env: Env, transactionId: string, state?: PersistedState): Promise<Transaction | undefined> {
@@ -703,13 +724,16 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
     if (persisted) return persisted;
   }
 
-  const [wise, revolut, slash, amex] = await Promise.all([
+  if (transactionId.startsWith("slash-")) {
+    return fetchSlashTransaction(env, transactionId);
+  }
+
+  const [wise, revolut, amex] = await Promise.all([
     fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
     fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchSlashActivity(env).catch(() => ({ accounts: [], transactions: [] })),
     fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
   ]);
-  return [...wise.transactions, ...revolut.transactions, ...slash.transactions, ...amex.transactions].find(
+  return [...wise.transactions, ...revolut.transactions, ...amex.transactions].find(
     (transaction) => transaction.id === transactionId
   );
 }
@@ -1734,7 +1758,12 @@ async function getSnapshot(
     allocations: state.paymentAllocations,
     providers: state.providers
   });
-  const bankStateChanged = JSON.stringify(rawTransactions) !== JSON.stringify(persistedTransactionsBeforeSync);
+  const persistedTransactionsAfterSync = retainPersistedTransactions(
+    persistedTransactionsInLiveWindows,
+    reconciliation.transactions
+  );
+  const bankStateChanged =
+    JSON.stringify(persistedTransactionsAfterSync) !== JSON.stringify(persistedTransactionsBeforeSync);
   const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
   if (
     reconciliation.matched > 0 ||
@@ -1747,7 +1776,7 @@ async function getSnapshot(
   ) {
     state.invoices = reconciliation.invoices;
     state.paymentAllocations = reconciliation.allocations;
-    state.wiseStatementTransactions = reconciliation.transactions;
+    state.wiseStatementTransactions = persistedTransactionsAfterSync;
     await savePersisted(env, state);
   }
   const invoices = reconciliation.invoices;
@@ -2102,7 +2131,7 @@ async function autoCategorizeState(
         confidence: aiResult.confidence,
         matchReason: `AI: ${aiResult.reason}`
       };
-      if (!updatePersistedTransaction(state, updated)) continue;
+      upsertPersistedTransaction(state, updated);
       if (updated.matchedProviderId) {
         aiMatches += 1;
         state.providers = state.providers.map((item) =>
@@ -2152,7 +2181,7 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
       item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
     );
   }
-  updatePersistedTransaction(state, matchedTransaction);
+  upsertPersistedTransaction(state, matchedTransaction);
   await savePersisted(env, state);
   return enrichTransactions(
     [
@@ -2182,7 +2211,7 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
     category,
     matchReason: "Manual category"
   };
-  updatePersistedTransaction(state, updated);
+  upsertPersistedTransaction(state, updated);
 
   if (payload.rememberAlias) {
     state.transactionCategoryRules = learnCategoryAliases(state.transactionCategoryRules, transaction, category);
@@ -2382,7 +2411,7 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
       );
       const provider = state.providers.find((item) => item.id === selectedProvider.id);
       if (provider) {
-        updatePersistedTransaction(state, {
+        upsertPersistedTransaction(state, {
           ...transaction,
           matchedProviderId: selectedProvider.id,
           matchedInvoiceId: invoice.id,
@@ -2876,9 +2905,7 @@ async function recordInvoicePayment(
       confidence: 1,
       matchReason: linkedInvoiceIds.size === 1 ? "Manually allocated to invoice" : "Manually split across invoices"
     };
-    if (!updatePersistedTransaction(state, updatedTransaction)) {
-      state.wiseStatementTransactions = [updatedTransaction, ...state.wiseStatementTransactions];
-    }
+    upsertPersistedTransaction(state, updatedTransaction);
   }
   await savePersisted(env, state);
   return getSnapshot(env);

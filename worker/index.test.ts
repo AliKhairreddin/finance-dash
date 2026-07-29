@@ -12,6 +12,7 @@ import worker, {
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
   mergeInvoices,
+  retainPersistedTransactions,
   retainCurrentSlashTransactions
 } from "./index";
 
@@ -519,6 +520,36 @@ test("successful Slash sync drops transactions outside the current live window",
   assert.deepEqual(
     retainCurrentSlashTransactions([wise, slashCurrent, slashStale], [], false),
     [wise, slashCurrent, slashStale]
+  );
+});
+
+test("live sync returns fresh rows without adding them to persisted dashboard state", () => {
+  const transaction = (id: string, source: Transaction["source"], category = "Card"): Transaction => ({
+    id,
+    source,
+    accountName: "Operating",
+    date: "2026-07-28",
+    description: "CARD PURCHASE",
+    rawName: "Example Merchant",
+    counterparty: "Example Merchant",
+    amount: 10,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category
+  });
+  const importedWise = transaction("wise-imported", "wise", "Software");
+  const editedSlash = transaction("slash-edited", "slash", "Media buying");
+  const reconciled = [
+    transaction("slash-fresh-1", "slash"),
+    { ...editedSlash, matchedProviderId: "provider-1" },
+    importedWise,
+    transaction("slash-fresh-2", "slash")
+  ];
+
+  assert.deepEqual(
+    retainPersistedTransactions([importedWise, editedSlash], reconciled),
+    [{ ...editedSlash, matchedProviderId: "provider-1" }, importedWise]
   );
 });
 
