@@ -67,6 +67,17 @@ test("authentication fails closed when required secrets are missing", async () =
   assert.deepEqual(await apiResponse?.json(), { message: "Site authentication is not configured" });
 });
 
+test("authentication fails closed when the password verifier is unsupported", async () => {
+  const response = await enforceSiteAuthentication(
+    new Request("https://finance.example/login"),
+    {
+      ...testEnv,
+      AUTH_PASSWORD_HASH: testEnv.AUTH_PASSWORD_HASH.replace("$100000$", "$210000$")
+    } as never
+  );
+  assert.equal(response?.status, 503);
+});
+
 test("unauthenticated requests redirect pages and reject APIs", async () => {
   const pageResponse = await enforceSiteAuthentication(
     new Request("https://finance.example/income?view=weekly"),

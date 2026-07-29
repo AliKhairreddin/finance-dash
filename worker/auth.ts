@@ -5,6 +5,7 @@ const AUTH_COOKIE_NAME = "__Host-finance_session";
 const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
+const PASSWORD_HASH_ITERATIONS = 100_000;
 const textEncoder = new TextEncoder();
 
 type AuthEnv = Pick<Env, "AUTH_USERNAME" | "AUTH_PASSWORD_HASH" | "AUTH_SESSION_SECRET">;
@@ -50,9 +51,7 @@ function parsePasswordVerifier(value: string): PasswordVerifier | null {
   if (
     algorithm !== PASSWORD_HASH_ALGORITHM ||
     extra !== undefined ||
-    !Number.isSafeInteger(iterations) ||
-    iterations < 100_000 ||
-    iterations > 1_000_000 ||
+    iterations !== PASSWORD_HASH_ITERATIONS ||
     !salt ||
     salt.byteLength < 16 ||
     !hash ||

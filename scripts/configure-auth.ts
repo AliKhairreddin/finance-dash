@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 
-const PASSWORD_ITERATIONS = 210_000;
+// Cloudflare Workers supports PBKDF2 iteration counts up to 100,000.
+const PASSWORD_ITERATIONS = 100_000;
 
 async function readHidden(prompt: string): Promise<string> {
   if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== "function") {
