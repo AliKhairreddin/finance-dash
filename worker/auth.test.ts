@@ -88,12 +88,52 @@ test("login page matches the dashboard theme and authorizes only its nonce-scope
   const contentSecurityPolicy = response?.headers.get("Content-Security-Policy") ?? "";
   const nonce = contentSecurityPolicy.match(/script-src 'nonce-([^']+)'/)?.[1];
   assert.ok(nonce);
+  assert.match(contentSecurityPolicy, /img-src 'self'/);
+  assert.match(contentSecurityPolicy, /manifest-src 'self'/);
 
   const body = await response?.text() ?? "";
   assert.match(body, /Sign in to Finance/);
   assert.match(body, /data-theme-toggle/);
   assert.match(body, new RegExp(`<script nonce="${nonce}">`));
+  assert.match(body, /<link rel="apple-touch-icon" sizes="180x180" href="\/apple-touch-icon\.png\?v=20260729-2">/);
+  assert.match(body, /<link rel="manifest" href="\/site\.webmanifest\?v=20260729-2" crossorigin="use-credentials">/);
+  assert.match(body, /<meta name="apple-mobile-web-app-title" content="Finance">/);
   assert.doesNotMatch(body, /radial-gradient|#8dd8ff/);
+});
+
+test("only app branding assets are public before authentication", async () => {
+  const publicPaths = [
+    "/apple-touch-icon.png",
+    "/favicon.svg",
+    "/icons/icon-192.png",
+    "/icons/icon-512.png",
+    "/icons/icon-maskable-512.png",
+    "/site.webmanifest"
+  ];
+
+  for (const pathname of publicPaths) {
+    const response = await enforceSiteAuthentication(
+      new Request(`https://finance.example${pathname}`),
+      testEnv as never
+    );
+    assert.equal(response, null, pathname);
+  }
+
+  const privateAssetResponse = await enforceSiteAuthentication(
+    new Request("https://finance.example/assets/dashboard.js"),
+    testEnv as never
+  );
+  assert.equal(privateAssetResponse?.status, 303);
+  assert.equal(
+    privateAssetResponse?.headers.get("Location"),
+    "/login?returnTo=%2Fassets%2Fdashboard.js"
+  );
+
+  const brandingWriteResponse = await enforceSiteAuthentication(
+    new Request("https://finance.example/site.webmanifest", { method: "POST" }),
+    testEnv as never
+  );
+  assert.equal(brandingWriteResponse?.status, 303);
 });
 
 test("unauthenticated requests redirect pages and reject APIs", async () => {

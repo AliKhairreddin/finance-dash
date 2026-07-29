@@ -33,6 +33,40 @@ function authenticatedEnv(values: Record<string, unknown>): WorkerEnv {
   return { ...workerTestAuth, ...values } as never;
 }
 
+test("public app metadata reaches static assets without a session", async () => {
+  const assetRequests: string[] = [];
+  const env = authenticatedEnv({
+    ASSETS: {
+      async fetch(request: Request) {
+        const pathname = new URL(request.url).pathname;
+        assetRequests.push(pathname);
+        return new Response(pathname, { headers: { "Content-Type": "application/octet-stream" } });
+      }
+    }
+  });
+
+  const manifestResponse = await worker.fetch(
+    new Request("https://finance.example/site.webmanifest?v=20260729-2"),
+    env
+  );
+  assert.equal(manifestResponse.status, 200);
+  assert.equal(await manifestResponse.text(), "/site.webmanifest");
+
+  const iconResponse = await worker.fetch(
+    new Request("https://finance.example/apple-touch-icon.png?v=20260729-2"),
+    env
+  );
+  assert.equal(iconResponse.status, 200);
+  assert.equal(await iconResponse.text(), "/apple-touch-icon.png");
+
+  const privateAssetResponse = await worker.fetch(
+    new Request("https://finance.example/assets/dashboard.js"),
+    env
+  );
+  assert.equal(privateAssetResponse.status, 303);
+  assert.deepEqual(assetRequests, ["/site.webmanifest", "/apple-touch-icon.png"]);
+});
+
 test("dashboard API fails closed when Convex storage is not configured", async () => {
   let assetRequests = 0;
   const response = await worker.fetch(

@@ -91,7 +91,7 @@ Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker 
 
 ### Whole-Site Authentication
 
-The Cloudflare Worker authenticates every page, static asset, and API request before serving it. A successful login creates a signed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie that expires after 12 hours. The password is stored only as a salted PBKDF2-SHA-256 verifier, while the username, verifier, and independent session-signing key are encrypted Cloudflare Worker secrets.
+The Cloudflare Worker authenticates every page, API request, and application asset before serving it. Only the non-sensitive favicon, home-screen icons, and web app manifest are public so browsers can identify the app on the login screen. A successful login creates a signed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie that expires after 12 hours. The password is stored only as a salted PBKDF2-SHA-256 verifier, while the username, verifier, and independent session-signing key are encrypted Cloudflare Worker secrets.
 
 Configure or rotate the production credentials from an interactive terminal:
 

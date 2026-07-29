@@ -7,6 +7,14 @@ const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
 const textEncoder = new TextEncoder();
+const PUBLIC_APP_ASSET_PATHS = new Set([
+  "/apple-touch-icon.png",
+  "/favicon.svg",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/icon-maskable-512.png",
+  "/site.webmanifest"
+]);
 
 type AuthEnv = Pick<Env, "AUTH_USERNAME" | "AUTH_PASSWORD_HASH" | "AUTH_SESSION_SECRET">;
 
@@ -212,7 +220,7 @@ function securityHeaders(scriptNonce?: string): Headers {
   return new Headers({
     "Cache-Control": "no-store",
     "Content-Security-Policy":
-      `default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptSource}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+      `default-src 'none'; img-src 'self'; manifest-src 'self'; style-src 'unsafe-inline'; script-src ${scriptSource}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -237,6 +245,13 @@ function loginPage(returnTo: string, scriptNonce: string, error?: string): strin
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260729-2">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260729-2">
+  <link rel="manifest" href="/site.webmanifest?v=20260729-2" crossorigin="use-credentials">
+  <meta name="theme-color" content="#09090b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Finance">
   <title>Sign in · Finance Dashboard</title>
   <style>
     :root {
@@ -602,6 +617,13 @@ async function hasValidSession(request: Request, secret: string): Promise<boolea
 
 export async function enforceSiteAuthentication(request: Request, env: AuthEnv): Promise<Response | null> {
   const url = new URL(request.url);
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    PUBLIC_APP_ASSET_PATHS.has(url.pathname)
+  ) {
+    return null;
+  }
+
   const config = authConfig(env);
   if (!config) return authUnavailable(url.pathname);
 
