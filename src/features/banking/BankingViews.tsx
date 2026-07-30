@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Download, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import type {
   Transaction,
   UpdateHoldingPayload
 } from "../../../shared/types";
+import { exportBankTransactionsCsv } from "./exportTransactions";
 
 const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "wise", label: "Wise" },
@@ -56,6 +57,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
   const [match, setMatch] = useState<"all" | "matched" | "unmatched">("all");
   const [sortKey, setSortKey] = useState<BankTransactionSortKey>("date");
   const [sortDirection, setSortDirection] = useState<TableSortDirection>("desc");
+  const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
 
   const availableSources = useMemo(
     () => [...new Set(dashboard.transactions.map((transaction) => transaction.source))].sort(),
@@ -157,6 +159,23 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
               </label>
             </FilterFieldGroup>
           </FilterPopover>
+        </div>
+        <div className="list-toolbar-actions">
+          <Button
+            className="icon-text-button"
+            type="button"
+            disabled={rows.length === 0}
+            title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
+            onClick={() => exportBankTransactionsCsv({
+              providersById,
+              rows,
+              scope: "all",
+              teamsById
+            })}
+          >
+            <Download size={15} />
+            Export CSV
+          </Button>
         </div>
       </div>
       <ActiveFilterBar

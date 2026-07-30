@@ -11,6 +11,7 @@ import {
   CircleAlert,
   CircleDollarSign,
   CreditCard,
+  Download,
   FilePlus2,
   Info,
   KeyRound,
@@ -132,6 +133,7 @@ import {
 } from "../shared/slashApi";
 import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
+import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 
@@ -2720,6 +2722,21 @@ function BankReconciliationView({
             </FilterPopover>
           </div>
           <div className="list-toolbar-actions">
+            <Button
+              className="icon-text-button"
+              type="button"
+              disabled={rows.length === 0}
+              title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
+              onClick={() => exportBankTransactionsCsv({
+                providersById,
+                rows,
+                scope: sourceLabel,
+                teamsById
+              })}
+            >
+              <Download size={15} />
+              Export CSV
+            </Button>
             <button
               aria-label={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
               className="icon-button reconciliation-auto-button"
@@ -4922,7 +4939,24 @@ function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tra
       <section className="panel wide-panel">
         <div className="panel-header compact">
           <h2>Amex activity</h2>
-          <span className="total-pill">{rows.length} rows</span>
+          <div className="row-actions">
+            <span className="total-pill">{rows.length} rows</span>
+            <Button
+              className="icon-text-button"
+              type="button"
+              disabled={rows.length === 0}
+              title={`Export ${rows.length} Amex transaction${rows.length === 1 ? "" : "s"}`}
+              onClick={() => exportBankTransactionsCsv({
+                providersById: new Map(dashboard.providers.map((provider) => [provider.id, provider])),
+                rows,
+                scope: "amex",
+                teamsById: new Map(dashboard.teams.map((team) => [team.id, team]))
+              })}
+            >
+              <Download size={15} />
+              Export CSV
+            </Button>
+          </div>
         </div>
         <BasicTransactionsTable rows={rows} />
       </section>
