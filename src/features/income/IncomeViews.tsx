@@ -972,7 +972,7 @@ export function InvoicesView({
           <div><p className="eyebrow">Invoices</p><h2>Prepare, send, match, and record payment</h2></div>
           <div className="income-panel-actions">
             <Button className="icon-text-button" type="button" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /> Export CSV</Button>
-            <Button className="primary-button" type="button" onClick={() => setEditorRequest({ mode: "new" })}><FilePlus2 size={16} /> Create manual invoice</Button>
+            <Button className="primary-button create-manual-invoice-button" type="button" onClick={() => setEditorRequest({ mode: "new" })}><FilePlus2 size={16} /> Create manual invoice</Button>
           </div>
         </div>
 

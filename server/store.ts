@@ -71,6 +71,7 @@ import {
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
   initialTransactionCategories,
+  isRequiredTransactionCategory,
   isReviewOnlyTransactionCategory,
   isTransactionCategoryColor,
   isTransactionCategoryDirection,
@@ -160,6 +161,8 @@ import {
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates,
+  transactionMerchantKey,
+  transactionsShareMerchant,
   uniqueProviderTags
 } from "./matching";
 import { loadPersistedState, savePersistedState } from "./persistence";
@@ -468,14 +471,13 @@ function reconcileStoredPayments(now = new Date()): number {
 }
 
 function transactionCategoryNeedsReview(transaction: Transaction): boolean {
-  return isReviewOnlyTransactionCategory(transaction.category);
+  return !isRequiredTransactionCategory(transaction.category, transaction.direction, transactionCategories);
 }
 
 function transactionNeedsCategorization(transaction: Transaction): boolean {
-  const needsIncomingCompany = transaction.direction === "in" && !transaction.matchedProviderId;
-  const hasLowIncomingCompanyConfidence =
-    transaction.direction === "in" && Boolean(transaction.matchedProviderId) && (transaction.confidence ?? 0) < semanticMatchThreshold;
-  return transactionCategoryNeedsReview(transaction) || needsIncomingCompany || hasLowIncomingCompanyConfidence;
+  return transaction.classificationComplete !== true
+    || transactionCategoryNeedsReview(transaction)
+    || !transaction.merchantName?.trim();
 }
 
 function applySemanticCategorization(transaction: Transaction): { transaction: Transaction; matched: boolean; categorizedOnly: boolean } {
@@ -489,16 +491,41 @@ function applySemanticCategorization(transaction: Transaction): { transaction: T
 
 function applyAiCategorization(
   transaction: Transaction,
-  match: { providerId?: string; category?: string; confidence: number; reason: string }
+  match: { providerId?: string; category: string; merchantName: string; confidence: number; reason: string }
 ): Transaction {
   const provider = match.providerId ? providers.find((item) => item.id === match.providerId) : undefined;
-  const matchedProvider = provider && providerMatchesTransactionDirection(transaction, provider) ? provider : undefined;
+  const matchedProvider =
+    match.confidence >= 0.72
+    && provider
+    && providerMatchesTransactionDirection(transaction, provider)
+      ? provider
+      : undefined;
+  const keepEstablishedCategory =
+    (transaction.categorySource === "manual" || transaction.categorySource === "rule")
+    && isRequiredTransactionCategory(transaction.category, transaction.direction, transactionCategories);
   return {
     ...transaction,
     matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
-    category: match.category ?? transaction.category,
-    confidence: match.confidence,
-    matchReason: `AI: ${match.reason}`
+    category: keepEstablishedCategory ? transaction.category : match.category,
+    merchantName: match.merchantName,
+    merchantKey: transactionMerchantKey({ merchantName: match.merchantName }),
+    classificationComplete: true,
+    ...(keepEstablishedCategory
+      ? {}
+      : {
+          categorySource: "ai" as const,
+          categoryConfidence: match.confidence,
+          categoryReason: match.reason
+        }),
+    ...(matchedProvider
+      ? {
+          companyMatchSource: "ai" as const,
+          companyConfidence: match.confidence,
+          companyMatchReason: match.reason,
+          confidence: match.confidence,
+          matchReason: `AI: ${match.reason}`
+        }
+      : {})
   };
 }
 
@@ -541,7 +568,6 @@ export async function autoCategorizeTransactions(
       transactionCategories
     );
     for (const aiResult of aiResults) {
-      if (aiResult.confidence < 0.72) continue;
       const transaction = findKnownTransaction(aiResult.transactionId);
       if (!transaction) continue;
       const updated = applyAiCategorization(transaction, aiResult);
@@ -1059,13 +1085,33 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
     ...transaction,
     matchedProviderId: payload.providerId,
     matchedInvoiceId: payload.invoiceId,
+    companyMatchSource: "manual",
+    companyConfidence: 1,
+    companyMatchReason: "Approved company match",
     confidence: 1,
     matchReason: "Approved company match"
   };
   updateStoredTransaction(matchedTransaction);
 
-  if (payload.rememberAlias) {
+  if (payload.scope === "merchant") {
+    if (!transaction.merchantName?.trim()) {
+      throw new Error("This transaction needs an AI merchant name before a merchant-wide company rule can be saved");
+    }
     providers = providers.map((item) => (item.id === payload.providerId ? learnAliases(item, bankAliasNames(transaction)) : item));
+    const applyCompany = (item: Transaction): Transaction =>
+      transactionsShareMerchant(item, transaction)
+        ? {
+            ...item,
+            matchedProviderId: payload.providerId,
+            companyMatchSource: "manual",
+            companyConfidence: 1,
+            companyMatchReason: `Manual rule for ${transaction.merchantName}`,
+            confidence: 1,
+            matchReason: `Manual rule for ${transaction.merchantName}`
+          }
+        : item;
+    wiseStatementTransactions = wiseStatementTransactions.map(applyCompany);
+    transactions = transactions.map(applyCompany);
   }
 
   await persist();
@@ -1079,18 +1125,37 @@ export async function updateTransactionCategory(payload: UpdateTransactionCatego
   }
 
   const category = transactionBusinessCategory(payload.category);
-  if (!isTransactionCategoryForDirection(category, transaction.direction, transactionCategories)) {
+  if (!isRequiredTransactionCategory(category, transaction.direction, transactionCategories)) {
     throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
   }
   const updated: Transaction = {
     ...transaction,
     category,
+    categorySource: "manual",
+    categoryConfidence: 1,
+    categoryReason: "Manual category",
     matchReason: "Manual category"
   };
   updateStoredTransaction(updated);
 
-  if (payload.rememberAlias) {
+  if (payload.scope === "merchant") {
+    if (!transaction.merchantName?.trim()) {
+      throw new Error("This transaction needs an AI merchant name before a merchant-wide category rule can be saved");
+    }
     transactionCategoryRules = learnCategoryAliases(transactionCategoryRules, transaction, category);
+    const applyCategory = (item: Transaction): Transaction =>
+      transactionsShareMerchant(item, transaction)
+        ? {
+            ...item,
+            category,
+            categorySource: "manual",
+            categoryConfidence: 1,
+            categoryReason: `Manual rule for ${transaction.merchantName}`,
+            matchReason: `Manual rule for ${transaction.merchantName}`
+          }
+        : item;
+    wiseStatementTransactions = wiseStatementTransactions.map(applyCategory);
+    transactions = transactions.map(applyCategory);
   }
 
   await persist();

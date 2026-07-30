@@ -77,6 +77,7 @@ import {
 } from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
+  isRequiredTransactionCategory,
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
   sanitizeStoredTransactionCategories,
@@ -175,6 +176,8 @@ import {
   semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAliasCandidates,
+  transactionMerchantKey,
+  transactionsShareMerchant,
   uniqueProviderTags
 } from "../server/matching";
 
@@ -829,6 +832,13 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
     const persisted = findPersistedTransaction(state, transactionId);
     if (persisted) return persisted;
   }
+  const storedBankTransaction = await getConvexClient(env)
+    .query(api.banking.getTransaction, {
+      serviceToken: getConvexServiceToken(env),
+      id: transactionId
+    })
+    .catch(() => null);
+  if (storedBankTransaction) return storedBankTransaction;
 
   if (transactionId.startsWith("slash-")) {
     return fetchSlashTransaction(env, transactionId);
@@ -1700,7 +1710,7 @@ function integrationStatus(
       mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
         bankIssues.revolut ?? (revolutNeeds.length === 0
-          ? "Transactions are saved in Convex and refreshed incrementally every 15 minutes or on Sync."
+          ? "Transactions refresh every 15 minutes, are saved in Convex, and are categorized automatically."
           : "Revolut rows stay empty until the client ID, issuer, certificate private key, and refresh token are configured."),
       needs: revolutNeeds,
       issue: bankIssues.revolut
@@ -1712,7 +1722,7 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Transactions are saved in Convex, refreshed incrementally every 15 minutes, and older dates are backfilled only when requested."
+          ? "Transactions refresh every 15 minutes and are categorized automatically; older dates are backfilled when requested."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -1890,7 +1900,7 @@ async function persistBankActivity(
   source: SyncedBankSource,
   activity: { accounts: AccountBalance[]; transactions: Transaction[] },
   dateRange: SlashTransactionDateRange
-): Promise<void> {
+): Promise<string[]> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const syncedAt = new Date().toISOString();
@@ -1916,24 +1926,25 @@ async function persistBankActivity(
     toDate: dateRange.toDate,
     syncedAt
   });
+  return transactions.map((transaction) => transaction.id);
 }
 
 async function syncRevolutActivity(
   env: Env,
   dateRange?: RevolutTransactionDateRange
-): Promise<void> {
+): Promise<string[]> {
   const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "revolut"));
   const activity = await fetchRevolutActivity(env, range);
-  await persistBankActivity(env, "revolut", activity, range);
+  return persistBankActivity(env, "revolut", activity, range);
 }
 
 async function syncSlashActivity(
   env: Env,
   dateRange?: SlashTransactionDateRange
-): Promise<void> {
+): Promise<string[]> {
   const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "slash"));
   const activity = await fetchSlashActivity(env, range);
-  await persistBankActivity(env, "slash", activity, range);
+  return persistBankActivity(env, "slash", activity, range);
 }
 
 async function syncLatestBankActivity(env: Env): Promise<void> {
@@ -1942,6 +1953,10 @@ async function syncLatestBankActivity(env: Env): Promise<void> {
     syncSlashActivity(env)
   ]);
   const failures = results.filter((result) => result.status === "rejected");
+  const transactionIds = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (transactionIds.length > 0) {
+    await autoCategorizeStoredTransactions(env, { transactionIds, useAi: true }, 240);
+  }
   for (const result of failures) {
     console.error(JSON.stringify({
       event: "bank_sync_failed",
@@ -1985,11 +2000,16 @@ async function syncBankActivityRanges(
   env: Env,
   source: SyncedBankSource,
   ranges: SlashTransactionDateRange[]
-): Promise<void> {
+): Promise<string[]> {
+  const transactionIds: string[] = [];
   for (const range of ranges) {
-    if (source === "revolut") await syncRevolutActivity(env, range);
-    else await syncSlashActivity(env, range);
+    transactionIds.push(
+      ...(source === "revolut"
+        ? await syncRevolutActivity(env, range)
+        : await syncSlashActivity(env, range))
+    );
   }
+  return transactionIds;
 }
 
 async function loadBankActivity(
@@ -2009,9 +2029,9 @@ async function loadBankActivity(
     source,
     ranges: missingBankActivityRanges(initialActivity[index].syncState, dateRange)
   }));
-  await Promise.all(
+  const syncedTransactionIds = (await Promise.all(
     missingBySource.map(({ source, ranges }) => syncBankActivityRanges(env, source, ranges))
-  );
+  )).flat();
   const refreshedBySource = new Map<ConnectedBankSource, Awaited<ReturnType<typeof readBankActivity>>>();
   await Promise.all(
     missingBySource.map(async ({ source, ranges }) => {
@@ -2019,6 +2039,19 @@ async function loadBankActivity(
       refreshedBySource.set(source, await readBankActivity(env, source, dateRange));
     })
   );
+  if (syncedTransactionIds.length > 0) {
+    const syncedTransactions = sources.flatMap((source, index) =>
+      (refreshedBySource.get(source) ?? initialActivity[index]).transactions
+        .filter((transaction) => syncedTransactionIds.includes(transaction.id))
+    );
+    await autoCategorizeBankTransactions(env, syncedTransactions);
+    await Promise.all(
+      missingBySource.map(async ({ source, ranges }) => {
+        if (ranges.length === 0) return;
+        refreshedBySource.set(source, await readBankActivity(env, source, dateRange));
+      })
+    );
+  }
 
   const transactions = enrichTransactions(
     applyTeamAssignments(
@@ -2063,7 +2096,7 @@ async function getSnapshot(
     && env.REVOLUT_REFRESH_TOKEN
     && !state.bankSyncStates.revolut
   ) {
-    bankIssues.revolut = "No saved Revolut activity yet. Run Sync once to create the initial 45-day cache.";
+    bankIssues.revolut = "No saved Revolut activity yet. The next automatic refresh will create the initial 45-day cache.";
   }
   if (
     env.SLASH_API_KEY
@@ -2071,7 +2104,7 @@ async function getSnapshot(
     && env.SLASH_BASE_URL
     && !state.bankSyncStates.slash
   ) {
-    bankIssues.slash = "No saved Slash activity yet. Run Sync once to create the initial 45-day cache.";
+    bankIssues.slash = "No saved Slash activity yet. The next automatic refresh will create the initial 45-day cache.";
   }
   const revolut = {
     accounts: state.bankAccounts.filter((account) => account.source === "revolut"),
@@ -2490,15 +2523,24 @@ async function runAiPrompt(env: Env, payload: AiPromptPayload) {
   return runOpenRouterPrompt(runtimeAiSettings(env, state.aiSettings), payload, env.PUBLIC_APP_URL);
 }
 
-function transactionCategoryNeedsReview(transaction: Transaction): boolean {
-  return isReviewOnlyTransactionCategory(transaction.category);
+function transactionCategoryNeedsReview(
+  transaction: Transaction,
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[]
+): boolean {
+  return !isRequiredTransactionCategory(
+    transaction.category,
+    transaction.direction,
+    categories
+  );
 }
 
-function transactionNeedsCategorization(transaction: Transaction): boolean {
-  const needsIncomingCompany = transaction.direction === "in" && !transaction.matchedProviderId;
-  const hasLowIncomingCompanyConfidence =
-    transaction.direction === "in" && Boolean(transaction.matchedProviderId) && (transaction.confidence ?? 0) < semanticMatchThreshold;
-  return transactionCategoryNeedsReview(transaction) || needsIncomingCompany || hasLowIncomingCompanyConfidence;
+function transactionNeedsCategorization(
+  transaction: Transaction,
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[]
+): boolean {
+  return transaction.classificationComplete !== true
+    || transactionCategoryNeedsReview(transaction, categories)
+    || !transaction.merchantName?.trim();
 }
 
 async function autoCategorizeState(
@@ -2514,7 +2556,7 @@ async function autoCategorizeState(
 
   state.wiseStatementTransactions = state.wiseStatementTransactions.map((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return transaction;
-    if (!transactionNeedsCategorization(transaction)) return transaction;
+    if (!transactionNeedsCategorization(transaction, state.transactionCategories)) return transaction;
     reviewed += 1;
     const categorized = semanticCategorizeTransaction(transaction, state.providers, state.transactionCategoryRules);
     if (
@@ -2537,7 +2579,7 @@ async function autoCategorizeState(
   const shouldUseAi = payload.useAi !== false && Boolean(activeAiSettings.openRouterApiKey);
   const remaining = state.wiseStatementTransactions.filter((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return false;
-    return transactionNeedsCategorization(transaction);
+    return transactionNeedsCategorization(transaction, state.transactionCategories);
   });
 
   if (shouldUseAi && remaining.length > 0) {
@@ -2549,17 +2591,41 @@ async function autoCategorizeState(
       state.transactionCategories
     );
     for (const aiResult of aiResults) {
-      if (aiResult.confidence < 0.72) continue;
       const transaction = findPersistedTransaction(state, aiResult.transactionId);
       if (!transaction) continue;
       const provider = aiResult.providerId ? state.providers.find((item) => item.id === aiResult.providerId) : undefined;
-      const matchedProvider = provider && providerMatchesTransactionDirection(transaction, provider) ? provider : undefined;
+      const matchedProvider =
+        aiResult.confidence >= 0.72
+        && provider
+        && providerMatchesTransactionDirection(transaction, provider)
+          ? provider
+          : undefined;
+      const keepEstablishedCategory =
+        (transaction.categorySource === "manual" || transaction.categorySource === "rule")
+        && isRequiredTransactionCategory(transaction.category, transaction.direction, state.transactionCategories);
       const updated: Transaction = {
         ...transaction,
         matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
-        category: aiResult.category ?? transaction.category,
-        confidence: aiResult.confidence,
-        matchReason: `AI: ${aiResult.reason}`
+        category: keepEstablishedCategory ? transaction.category : aiResult.category,
+        merchantName: aiResult.merchantName,
+        merchantKey: transactionMerchantKey({ merchantName: aiResult.merchantName }),
+        classificationComplete: true,
+        ...(keepEstablishedCategory
+          ? {}
+          : {
+              categorySource: "ai" as const,
+              categoryConfidence: aiResult.confidence,
+              categoryReason: aiResult.reason
+            }),
+        ...(matchedProvider
+          ? {
+              companyMatchSource: "ai" as const,
+              companyConfidence: aiResult.confidence,
+              companyMatchReason: aiResult.reason,
+              confidence: aiResult.confidence,
+              matchReason: `AI: ${aiResult.reason}`
+            }
+          : {})
       };
       upsertPersistedTransaction(state, updated);
       if (updated.matchedProviderId) {
@@ -2576,17 +2642,110 @@ async function autoCategorizeState(
   return { semanticMatches, aiMatches, categorizedOnly, reviewed };
 }
 
+async function autoCategorizeBankTransactions(
+  env: Env,
+  transactions: Transaction[],
+  limit = 240
+): Promise<Omit<AutoCategorizeTransactionsResult, "dashboard"> | undefined> {
+  const state = await loadPersisted(env);
+  const candidates = transactions
+    .filter((transaction) => transactionNeedsCategorization(transaction, state.transactionCategories))
+    .slice(0, limit);
+  if (candidates.length === 0) return undefined;
+  for (const transaction of candidates) {
+    const existing = findPersistedTransaction(state, transaction.id);
+    state.wiseStatementTransactions = existing
+      ? state.wiseStatementTransactions.map((item) => item.id === transaction.id ? transaction : item)
+      : [transaction, ...state.wiseStatementTransactions];
+    state.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
+  }
+  const summary = await autoCategorizeState(env, state, {
+    transactionIds: candidates.map((transaction) => transaction.id),
+    useAi: true
+  });
+  await savePersisted(env, state);
+  return summary;
+}
+
+async function categorizeHistoricalBankBacklog(
+  env: Env,
+  limit = 240
+): Promise<{ processed: number; hasMore: boolean }> {
+  const backlog = await getConvexClient(env).query(api.banking.getClassificationBacklog, {
+    serviceToken: getConvexServiceToken(env),
+    limit
+  });
+  if (backlog.transactions.length > 0) {
+    await autoCategorizeBankTransactions(env, backlog.transactions);
+  }
+  console.log(JSON.stringify({
+    event: "transaction_classification_backlog",
+    processed: backlog.transactions.length,
+    hasMore: backlog.hasMore
+  }));
+  return { processed: backlog.transactions.length, hasMore: backlog.hasMore };
+}
+
+async function categorizeHistoricalWiseBacklog(
+  env: Env,
+  limit = 240
+): Promise<{ processed: number; hasMore: boolean }> {
+  const state = await loadPersisted(env);
+  const candidates = state.wiseStatementTransactions
+    .filter((transaction) => transaction.source === "wise" && transaction.classificationComplete !== true);
+  const batch = candidates.slice(0, limit);
+  if (batch.length > 0) {
+    await autoCategorizeState(env, state, {
+      transactionIds: batch.map((transaction) => transaction.id),
+      useAi: true
+    });
+    await savePersisted(env, state);
+  }
+  console.log(JSON.stringify({
+    event: "wise_transaction_classification_backlog",
+    processed: batch.length,
+    hasMore: candidates.length > batch.length
+  }));
+  return { processed: batch.length, hasMore: candidates.length > batch.length };
+}
+
 async function autoCategorizeTransactions(
   env: Env,
   payload: AutoCategorizeTransactionsPayload = {}
 ): Promise<AutoCategorizeTransactionsResult> {
-  const state = await loadPersisted(env);
-  const summary = await autoCategorizeState(env, state, payload);
-  await savePersisted(env, state);
+  const summary = await autoCategorizeStoredTransactions(env, payload);
   return {
     dashboard: await getSnapshot(env),
     ...summary
   };
+}
+
+async function autoCategorizeStoredTransactions(
+  env: Env,
+  payload: AutoCategorizeTransactionsPayload = {},
+  limit?: number
+): Promise<Omit<AutoCategorizeTransactionsResult, "dashboard">> {
+  const state = await loadPersisted(env);
+  const requestedIds = payload.transactionIds?.length ? new Set(payload.transactionIds) : undefined;
+  const limitedIds = limit
+    ? state.wiseStatementTransactions
+        .filter(
+          (transaction) =>
+            (!requestedIds || requestedIds.has(transaction.id))
+            && transactionNeedsCategorization(transaction, state.transactionCategories)
+        )
+        .slice(0, limit)
+        .map((transaction) => transaction.id)
+    : payload.transactionIds;
+  if (limit && limitedIds?.length === 0) {
+    return { semanticMatches: 0, aiMatches: 0, categorizedOnly: 0, reviewed: 0 };
+  }
+  const summary = await autoCategorizeState(env, state, {
+    ...payload,
+    transactionIds: limitedIds
+  });
+  await savePersisted(env, state);
+  return summary;
 }
 
 async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
@@ -2603,13 +2762,39 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
     ...transaction,
     matchedProviderId: payload.providerId,
     matchedInvoiceId: payload.invoiceId,
+    companyMatchSource: "manual",
+    companyConfidence: 1,
+    companyMatchReason: "Approved company match",
     confidence: 1,
     matchReason: "Approved company match"
   };
-  if (payload.rememberAlias) {
+  if (payload.scope === "merchant") {
+    if (!transaction.merchantName?.trim()) {
+      throw new Error("This transaction needs an AI merchant name before a merchant-wide company rule can be saved");
+    }
     state.providers = state.providers.map((item) =>
       item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
     );
+    state.wiseStatementTransactions = state.wiseStatementTransactions.map((item) =>
+      transactionsShareMerchant(item, transaction)
+        ? {
+            ...item,
+            matchedProviderId: provider.id,
+            companyMatchSource: "manual",
+            companyConfidence: 1,
+            companyMatchReason: `Manual rule for ${transaction.merchantName}`,
+            confidence: 1,
+            matchReason: `Manual rule for ${transaction.merchantName}`
+          }
+        : item
+    );
+    await getConvexClient(env).mutation(api.banking.applyMerchantCompany, {
+      serviceToken: getConvexServiceToken(env),
+      merchantKey: transactionMerchantKey(transaction),
+      merchantName: transaction.merchantName,
+      direction: transaction.direction,
+      providerId: provider.id
+    });
   }
   upsertPersistedTransaction(state, matchedTransaction);
   await savePersisted(env, state);
@@ -2633,18 +2818,43 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
   }
 
   const category = transactionBusinessCategory(payload.category);
-  if (!isTransactionCategoryForDirection(category, transaction.direction, state.transactionCategories)) {
+  if (!isRequiredTransactionCategory(category, transaction.direction, state.transactionCategories)) {
     throw new Error(`Category "${category}" is not valid for money ${transaction.direction === "in" ? "in" : "out"}`);
   }
   const updated: Transaction = {
     ...transaction,
     category,
+    categorySource: "manual",
+    categoryConfidence: 1,
+    categoryReason: "Manual category",
     matchReason: "Manual category"
   };
   upsertPersistedTransaction(state, updated);
 
-  if (payload.rememberAlias) {
+  if (payload.scope === "merchant") {
+    if (!transaction.merchantName?.trim()) {
+      throw new Error("This transaction needs an AI merchant name before a merchant-wide category rule can be saved");
+    }
     state.transactionCategoryRules = learnCategoryAliases(state.transactionCategoryRules, transaction, category);
+    state.wiseStatementTransactions = state.wiseStatementTransactions.map((item) =>
+      transactionsShareMerchant(item, transaction)
+        ? {
+            ...item,
+            category,
+            categorySource: "manual",
+            categoryConfidence: 1,
+            categoryReason: `Manual rule for ${transaction.merchantName}`,
+            matchReason: `Manual rule for ${transaction.merchantName}`
+          }
+        : item
+    );
+    await getConvexClient(env).mutation(api.banking.applyMerchantCategory, {
+      serviceToken: getConvexServiceToken(env),
+      merchantKey: transactionMerchantKey(transaction),
+      merchantName: transaction.merchantName,
+      direction: transaction.direction,
+      category
+    });
   }
 
   await savePersisted(env, state);
@@ -4186,12 +4396,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     const categoryMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/category$/);
     if (categoryMatch && request.method === "POST") {
-      const body = (await request.json()) as { category?: string; rememberAlias?: boolean | null };
+      const body = (await request.json()) as { category?: string; scope?: "transaction" | "merchant" };
       return json(
         await updateTransactionCategory(env, {
           transactionId: categoryMatch[1],
           category: body.category ?? "",
-          rememberAlias: body.rememberAlias !== false
+          scope: body.scope === "merchant" ? "merchant" : "transaction"
         })
       );
     }
@@ -4293,6 +4503,19 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
+    if (controller.cron === "*/1 * * * *") {
+      try {
+        await categorizeHistoricalBankBacklog(env);
+        await categorizeHistoricalWiseBacklog(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "transaction_classification_backlog_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
     if (controller.cron === "*/15 * * * *") {
       try {
         await syncLatestBankActivity(env);

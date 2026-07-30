@@ -127,6 +127,16 @@ export function isTransactionCategoryForDirection(
   return transactionCategoryOptionsForDirection(direction, categories).includes(normalized);
 }
 
+export function isRequiredTransactionCategory(
+  category: string,
+  direction: "in" | "out",
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[] = initialTransactionCategories
+): boolean {
+  const normalized = transactionBusinessCategory(category);
+  return !isReviewOnlyTransactionCategory(normalized)
+    && isTransactionCategoryForDirection(normalized, direction, categories);
+}
+
 export function normalizeTransactionCategoryName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
 }

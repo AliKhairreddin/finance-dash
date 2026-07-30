@@ -198,6 +198,7 @@ const transactionCategoryRule = v.object({
   updatedAt: v.string()
 });
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
+const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const transactionCategory = v.object({
   id: v.string(),
   name: v.string(),
@@ -225,7 +226,16 @@ const transaction = v.object({
   direction: v.union(v.literal("in"), v.literal("out")),
   status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
   category: v.string(),
+  merchantName: v.optional(v.string()),
+  merchantKey: v.optional(v.string()),
+  classificationComplete: v.optional(v.boolean()),
+  categorySource: v.optional(transactionClassificationSource),
+  categoryConfidence: v.optional(v.number()),
+  categoryReason: v.optional(v.string()),
   matchedProviderId: v.optional(v.string()),
+  companyMatchSource: v.optional(transactionClassificationSource),
+  companyConfidence: v.optional(v.number()),
+  companyMatchReason: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
   teamId: v.optional(v.string()),
   confidence: v.optional(v.number()),

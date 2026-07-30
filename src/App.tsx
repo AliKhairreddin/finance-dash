@@ -61,7 +61,6 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   AssignWiseCardHolderTeamPayload,
-  AutoCategorizeTransactionsResult,
   BankActivityLoadResult,
   ConnectedBankSource,
   CreateExpensePayload,
@@ -103,6 +102,7 @@ import type {
   Team,
   Transaction,
   TransactionCategory,
+  TransactionOverrideScope,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateProviderPayload,
@@ -401,34 +401,25 @@ function categoryNeedsReview(transaction: Transaction): boolean {
   return isReviewOnlyTransactionCategory(transaction.category);
 }
 
-function transactionNeedsCompanyReview(transaction: Transaction): boolean {
-  return transaction.direction === "in" && (!transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86);
-}
-
 function transactionNeedsReview(transaction: Transaction): boolean {
-  return categoryNeedsReview(transaction) || transactionNeedsCompanyReview(transaction);
+  return categoryNeedsReview(transaction);
 }
 
-function transactionCompanyStatus(transaction: Transaction): "Matched" | "Needs company match" | "Unmatched" {
-  if (transaction.matchedProviderId) return "Matched";
-  return transaction.direction === "in" ? "Needs company match" : "Unmatched";
+function transactionCompanyStatus(transaction: Transaction): "Company matched" | "Merchant only" {
+  return transaction.matchedProviderId ? "Company matched" : "Merchant only";
 }
 
 function companyRollupStatus(transactions: Transaction[]): string {
-  const needsCompany = transactions.some((transaction) => transactionCompanyStatus(transaction) === "Needs company match");
-  const hasUnmatched = transactions.some((transaction) => transactionCompanyStatus(transaction) === "Unmatched");
   const needsCategory = transactions.some(categoryNeedsReview);
 
-  if (needsCompany && needsCategory) return "Needs company and category";
-  if (needsCompany) return "Needs company match";
-  if (hasUnmatched && needsCategory) return "Unmatched, needs category";
   if (needsCategory) return "Needs category review";
-  if (hasUnmatched) return "Unmatched";
-  return "Matched";
+  return transactions.some((transaction) => transactionCompanyStatus(transaction) === "Company matched")
+    ? "Company matched"
+    : "Merchant only";
 }
 
 function companyRollupStatusClass(status: string): "good" | "warning" | "" {
-  if (status === "Matched") return "good";
+  if (status === "Company matched") return "good";
   if (status.startsWith("Needs") || status.includes("needs")) return "warning";
   return "";
 }
@@ -568,7 +559,7 @@ function categoryChartColor(category: string, usedColors: Set<string>, index: nu
 
 function revenuePartnerAttributionLabel(transaction: Transaction, providersById: Map<string, Provider>): string {
   const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-  return provider?.name ?? "Unmatched revenue";
+  return provider?.name ?? expenseAnalyticsLabel(transaction);
 }
 
 function revenueTeamAttributionLabel(transaction: Transaction, teamsById: Map<string, Team>): string {
@@ -584,12 +575,12 @@ function revenueAttributionLabel(
   const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
   const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
   const category = effectiveCategory(transaction);
-  const source = provider?.name ?? (category === "Media buying direct" ? "Direct revenue" : category);
+  const source = provider?.name ?? transaction.merchantName ?? (category === "Media buying direct" ? "Direct revenue" : category);
 
   if (team && provider) return `${team.name} / ${provider.name}`;
   if (team) return `${team.name} / ${source}`;
   if (provider) return `Unassigned / ${provider.name}`;
-  return category === "Uncategorized" ? "Unmatched revenue" : category;
+  return source;
 }
 
 function revenuePieLabelForBreakdown(
@@ -715,13 +706,15 @@ function transactionSortValue(
   if (sortKey === "cardHolder") return transaction.cardHolderName;
   if (sortKey === "category") return effectiveCategory(transaction);
   if (sortKey === "company") {
-    return transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name : undefined;
+    return transaction.matchedProviderId
+      ? providersById.get(transaction.matchedProviderId)?.name
+      : transaction.merchantName;
   }
-  if (sortKey === "counterparty") return transaction.counterparty;
+  if (sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
   if (sortKey === "date") return transaction.date;
   if (sortKey === "direction") return transaction.direction;
   if (sortKey === "document") return Boolean(transaction.matchedInvoiceId || expenseTransactionIds.has(transaction.id));
-  if (sortKey === "match") return transaction.confidence ?? 0;
+  if (sortKey === "match") return transaction.categoryConfidence ?? 0;
   if (sortKey === "period") return transactionPeriod(transaction);
   return transaction.teamId ? teamsById.get(transaction.teamId)?.name : undefined;
 }
@@ -833,7 +826,6 @@ function App() {
   const [isLoadingSlash, setIsLoadingSlash] = useState(false);
   const [allBankConnectedTransactions, setAllBankConnectedTransactions] = useState<Transaction[] | null>(null);
   const [isImportingWise, setIsImportingWise] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useUrlState("bankQuery", "");
@@ -930,6 +922,7 @@ function App() {
       const matchesQuery =
         !query ||
         [
+          transaction.merchantName ?? "",
           transaction.counterparty,
           transaction.description,
           transaction.rawName,
@@ -1060,12 +1053,12 @@ function App() {
         { method: "POST" }
       );
       if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Sync failed"));
+        throw new Error(await apiErrorMessage(response, "Refresh failed"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
-      setNotice("Sync complete. Connected integrations refreshed.");
+      setNotice("Refresh complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sync failed");
+      setError(err instanceof Error ? err.message : "Refresh failed");
     } finally {
       setIsSyncing(false);
     }
@@ -1208,7 +1201,11 @@ function App() {
     setNotice("Invoice draft prepared from the closed revenue period. Nothing was sent to Merit.");
   }
 
-  async function matchTransaction(transaction: Transaction, providerId?: string) {
+  async function matchTransaction(
+    transaction: Transaction,
+    providerId?: string,
+    scope: TransactionOverrideScope = "transaction"
+  ) {
     const selectedProviderId = providerId || transaction.matchedProviderId;
     if (!selectedProviderId) {
       setError("Choose a company before saving the match.");
@@ -1222,7 +1219,7 @@ function App() {
         transactionId: transaction.id,
         providerId: selectedProviderId,
         invoiceId: transaction.matchedInvoiceId,
-        rememberAlias: true
+        scope
       })
     });
     if (!response.ok) {
@@ -1230,22 +1227,34 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
-    setNotice(`Saved company alias for ${transaction.counterparty}. Future rows will auto-match.`);
+    setNotice(
+      scope === "merchant"
+        ? `Matched all ${transaction.merchantName ?? transaction.counterparty} transactions to this company.`
+        : "Company match updated for this transaction only."
+    );
   }
 
-  async function updateTransactionCategory(transaction: Transaction, category: string) {
+  async function updateTransactionCategory(
+    transaction: Transaction,
+    category: string,
+    scope: TransactionOverrideScope = "transaction"
+  ) {
     setError(null);
     const response = await fetch(`${apiBase}/transactions/${transaction.id}/category`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category, rememberAlias: true })
+      body: JSON.stringify({ category, scope })
     });
     if (!response.ok) {
       setError(await apiErrorMessage(response, "Category update failed"));
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
-    setNotice(`Saved ${category} for ${transaction.counterparty}. Future similar rows can auto-categorize.`);
+    setNotice(
+      scope === "merchant"
+        ? `Applied ${category} to all ${transaction.merchantName ?? transaction.counterparty} transactions.`
+        : `Applied ${category} to this transaction only.`
+    );
   }
 
   async function saveProfitDistributionAdjustment(payload: SaveProfitDistributionAdjustmentPayload) {
@@ -1480,31 +1489,6 @@ function App() {
       throw new Error(await apiErrorMessage(response, "AI prompt failed"));
     }
     return (await response.json()) as AiPromptResult;
-  }
-
-  async function autoCategorizeTransactions(transactionIds?: string[]) {
-    setIsCategorizing(true);
-    setNotice(null);
-    setError(null);
-    try {
-      const response = await fetch(`${apiBase}/transactions/auto-categorize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transactionIds, useAi: true })
-      });
-      if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Auto-categorization failed"));
-      }
-      const result = (await response.json()) as AutoCategorizeTransactionsResult;
-      setDashboard(result.dashboard);
-      setNotice(
-        `Reviewed ${result.reviewed} row${result.reviewed === 1 ? "" : "s"}: ${result.semanticMatches} semantic, ${result.aiMatches} AI, ${result.categorizedOnly} category-only.`
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Auto-categorization failed");
-    } finally {
-      setIsCategorizing(false);
-    }
   }
 
   async function submitInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
@@ -1904,12 +1888,10 @@ function App() {
           slashDateRange={slashDateRange}
           amexTransactions={amexTransactions}
           providersById={providersById}
-          isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
           isLoadingAllBanks={isLoadingAllBanks}
           isLoadingRevolut={isLoadingRevolut}
           isLoadingSlash={isLoadingSlash}
-          onAutoCategorize={autoCategorizeTransactions}
           onImportWiseStatements={importWiseStatements}
           onLoadAllBankTransactions={loadAllBankTransactions}
           onFilterWiseTransactions={filterWiseTransactions}
@@ -1931,8 +1913,6 @@ function App() {
           dashboard={dashboard}
           providersById={providersById}
           teamsById={teamsById}
-          isCategorizing={isCategorizing}
-          onAutoCategorize={() => void autoCategorizeTransactions()}
         />
       )}
 
@@ -2249,7 +2229,7 @@ function Sidebar({
           )}
         </div>
         <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-        <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Sync dashboard" title="Sync dashboard">
+        <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Refresh dashboard now" title="Refresh dashboard now">
           {isSyncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
         </Button>
         <div className="mobile-freshness" aria-label={`Data as of ${dataAsOf}; last sync ${lastSync}`}>
@@ -2294,9 +2274,9 @@ function Sidebar({
         {activeTab === "management" && <p>Live operations · report imported separately</p>}
         <div className="sidebar-utilities">
           <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-          <Button className="primary-button sidebar-sync-button" onClick={onSync} disabled={isSyncing} type="button">
+          <Button className="primary-button sidebar-sync-button" onClick={onSync} disabled={isSyncing} type="button" title="Bank activity refreshes automatically every 15 minutes">
             {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            {activeTab === "management" ? "Sync live" : "Sync"}
+            Refresh
           </Button>
         </div>
       </div>
@@ -2348,7 +2328,7 @@ function Overview({
   onCreateManualReceivable: (payload: CreateManualReceivablePayload) => Promise<void>;
 }) {
   const [manualReceivableOpen, setManualReceivableOpen] = useState(false);
-  const reviewRows = dashboard.transactions.filter((transaction) => !transaction.matchedProviderId || (transaction.confidence ?? 0) < 0.86).slice(0, 5);
+  const reviewRows = dashboard.transactions.filter(categoryNeedsReview).slice(0, 5);
   const payableMonths = Array.from(new Set(dashboard.payables.flatMap((payable) => Object.keys(payable.monthBuckets))));
   const hasPayables = dashboard.payables.length > 0;
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
@@ -2520,7 +2500,7 @@ function Overview({
                       {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
                     </div>
                     <div className="review-copy">
-                      <strong>{transaction.counterparty}</strong>
+                      <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
                       <span>{transaction.description}</span>
                     </div>
                     <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
@@ -2539,7 +2519,7 @@ function Overview({
                 );
               })
             ) : (
-              <div className="empty-state">All transactions are matched and categorized</div>
+              <div className="empty-state">All transactions are categorized</div>
             )}
           </div>
         </section>
@@ -2584,12 +2564,10 @@ function BanksView({
   slashDateRange,
   amexTransactions,
   providersById,
-  isCategorizing,
   isImportingWise,
   isLoadingAllBanks,
   isLoadingRevolut,
   isLoadingSlash,
-  onAutoCategorize,
   onImportWiseStatements,
   onLoadAllBankTransactions,
   onFilterWiseTransactions,
@@ -2629,12 +2607,10 @@ function BanksView({
   slashDateRange: SlashTransactionDateRange;
   amexTransactions: Transaction[];
   providersById: Map<string, Provider>;
-  isCategorizing: boolean;
   isImportingWise: boolean;
   isLoadingAllBanks: boolean;
   isLoadingRevolut: boolean;
   isLoadingSlash: boolean;
-  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
   onLoadAllBankTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onFilterWiseTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
@@ -2725,6 +2701,21 @@ function BanksView({
               Cash & wallets
             </button>
           </div>
+          <div className="bank-source-select">
+            <NativeSelect
+              aria-label="Bank source"
+              value={activeBank}
+              onValueChange={(value) => setActiveBank(value as BankTab)}
+            >
+              <NativeSelectOption value="all">All bank activity</NativeSelectOption>
+              {bankSources.map((source) => (
+                <NativeSelectOption key={source.id} value={source.id}>
+                  {source.label}
+                </NativeSelectOption>
+              ))}
+              <NativeSelectOption value="holdings">Cash & wallets</NativeSelectOption>
+            </NativeSelect>
+          </div>
         </div>
         {activeBank === "all" && (
           <div className="wise-summary-grid bank-source-summary">
@@ -2779,9 +2770,7 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
-          isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
-          onAutoCategorize={onAutoCategorize}
           onImportWiseStatements={onImportWiseStatements}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
@@ -2817,8 +2806,6 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
-          isCategorizing={isCategorizing}
-          onAutoCategorize={onAutoCategorize}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -2845,8 +2832,6 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
-          isCategorizing={isCategorizing}
-          onAutoCategorize={onAutoCategorize}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -2884,13 +2869,11 @@ type BankReconciliationViewProps = {
   setTransactionSortKey: (value: TransactionSortKey) => void;
   transactionSortDirection: SortDirection;
   setTransactionSortDirection: (value: SortDirection) => void;
-  isCategorizing: boolean;
   isImportingWise?: boolean;
-  onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
   onImportWiseStatements?: (files: FileList | null) => Promise<void>;
-  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onMatch: (transaction: Transaction, providerId: string | undefined, scope: TransactionOverrideScope) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
-  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
   wide?: boolean;
   rangeControls?: ReactNode;
@@ -2914,9 +2897,7 @@ function BankReconciliationView({
   setTransactionSortKey,
   transactionSortDirection,
   setTransactionSortDirection,
-  isCategorizing,
   isImportingWise,
-  onAutoCategorize,
   onImportWiseStatements,
   onMatch,
   onAssignTeam,
@@ -2931,9 +2912,8 @@ function BankReconciliationView({
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const summary = useMemo(() => {
     const volume = sumCurrencyTotals(rows, (transaction) => transaction.amount);
-    const matched = rows.filter((transaction) => transaction.matchedProviderId).length;
     const unassigned = rows.filter((transaction) => !transaction.teamId).length;
-    return { volume, count: rows.length, matched, unassigned };
+    return { volume, count: rows.length, unassigned };
   }, [rows]);
 
   return (
@@ -2962,13 +2942,13 @@ function BankReconciliationView({
               onChange={setSearchTerm}
             />
             <NativeSelect
-              aria-label="Match status"
+              aria-label="Category status"
               className="promoted-filter-select"
               value={matchFilter}
               onValueChange={setMatchFilter}
             >
-              <NativeSelectOption value="needs-review">Needs review</NativeSelectOption>
-              <NativeSelectOption value="matched">Matched</NativeSelectOption>
+              <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
+              <NativeSelectOption value="matched">Categorized</NativeSelectOption>
               <NativeSelectOption value="all">All rows</NativeSelectOption>
             </NativeSelect>
             <FilterPopover activeCount={teamFilter === "all" ? 0 : 1} title="Transaction filters">
@@ -3004,16 +2984,6 @@ function BankReconciliationView({
               <Download size={15} />
               Export CSV
             </Button>
-            <button
-              aria-label={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
-              className="icon-button reconciliation-auto-button"
-              title={`Auto-categorize ${rows.length} transaction${rows.length === 1 ? "" : "s"} in this view`}
-              type="button"
-              onClick={() => void onAutoCategorize(rows.map((transaction) => transaction.id))}
-              disabled={isCategorizing || rows.length === 0}
-            >
-              {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-            </button>
             {onImportWiseStatements && (
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
                 {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
@@ -3050,7 +3020,7 @@ function BankReconciliationView({
           detail={nativeCurrencyBreakdown(summary.volume)}
         />
         <SummaryTile label="Transactions" value={String(summary.count)} />
-        <SummaryTile label="Matched rows" value={String(summary.matched)} />
+        <SummaryTile label="Categorized" value={String(rows.length - rows.filter(categoryNeedsReview).length)} />
         <SummaryTile label="No team" value={String(summary.unassigned)} />
       </div>
       {integrationStatus?.issue && (
@@ -3090,15 +3060,11 @@ function BankReconciliationView({
 function AnalyticsView({
   dashboard,
   providersById,
-  teamsById,
-  isCategorizing,
-  onAutoCategorize
+  teamsById
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   teamsById: Map<string, Team>;
-  isCategorizing: boolean;
-  onAutoCategorize: () => void;
 }) {
   const [tagFilter, setTagFilter] = useUrlState("analyticsTag", "all");
   const tagOptions = useMemo(() => companyTagOptions(dashboard.providers), [dashboard.providers]);
@@ -3131,8 +3097,10 @@ function AnalyticsView({
   ].sort(([, left], [, right]) => left.localeCompare(right));
   const revenuePartnerOptions = [
     ...revenueRows.reduce((map, transaction) => {
-      const key = transaction.matchedProviderId ?? "unmatched";
-      const label = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId)?.name ?? transaction.matchedProviderId : "Unmatched revenue";
+      const label = transaction.matchedProviderId
+        ? providersById.get(transaction.matchedProviderId)?.name ?? transaction.matchedProviderId
+        : expenseAnalyticsLabel(transaction);
+      const key = transaction.matchedProviderId ?? `merchant-${normalizeLookupName(label)}`;
       map.set(key, label);
       return map;
     }, new Map<string, string>())
@@ -3140,7 +3108,8 @@ function AnalyticsView({
   const revenueCategoryOptions = [...new Set(revenueRows.map(effectiveCategory))].sort((left, right) => left.localeCompare(right));
   const filteredRevenueRows = revenueRows.filter((transaction) => {
     const teamKey = transaction.teamId ?? "unassigned";
-    const partnerKey = transaction.matchedProviderId ?? "unmatched";
+    const partnerKey = transaction.matchedProviderId
+      ?? `merchant-${normalizeLookupName(expenseAnalyticsLabel(transaction))}`;
     return (
       (revenuePieCurrency === "all" || transaction.currency === revenuePieCurrency) &&
       (revenuePieTeamId === "all" || teamKey === revenuePieTeamId) &&
@@ -3276,12 +3245,8 @@ function AnalyticsView({
   const companyRows = [...rows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     const category = effectiveCategory(transaction);
-    const fallbackName = transaction.direction === "out" ? expenseAnalyticsLabel(transaction) : "Unmatched counterparty";
-    const key = provider?.id ?? (
-      transaction.direction === "out"
-        ? `unmatched-${category}-${normalizeLookupName(fallbackName)}`
-        : `unmatched-${category}`
-    );
+    const fallbackName = expenseAnalyticsLabel(transaction);
+    const key = provider?.id ?? `unmatched-${category}-${normalizeLookupName(fallbackName)}`;
     const existing = map.get(key) ?? {
       id: key,
       name: provider?.name ?? fallbackName,
@@ -3365,10 +3330,6 @@ function AnalyticsView({
                 ))}
               </NativeSelect>
             </label>
-            <Button className="secondary-button" onClick={onAutoCategorize} disabled={isCategorizing || dashboard.transactions.length === 0}>
-              {isCategorizing ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-              Auto
-            </Button>
           </div>
         </div>
         <div className="wise-summary-grid categorization-summary">
@@ -3546,8 +3507,8 @@ function AnalyticsView({
                 {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
               </div>
               <div>
-                <strong>{transaction.counterparty}</strong>
-                <span>{effectiveCategory(transaction)} · {transaction.matchReason ?? "Needs review"}</span>
+                <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
+                <span>{effectiveCategory(transaction)} · {transaction.categoryReason ?? "AI classification pending"}</span>
               </div>
               <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
             </article>
@@ -4114,12 +4075,17 @@ function TransactionTable({
   sortKey: TransactionSortKey;
   sortDirection: SortDirection;
   onSort: (sortKey: TransactionSortKey) => void;
-  onMatch: (transaction: Transaction, providerId?: string) => void;
+  onMatch: (transaction: Transaction, providerId: string | undefined, scope: TransactionOverrideScope) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
-  onUpdateCategory: (transaction: Transaction, category: string) => void;
+  onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
+  const [pendingOverride, setPendingOverride] = useState<
+    | { kind: "category"; transaction: Transaction; value: string }
+    | { kind: "company"; transaction: Transaction; value: string }
+    | null
+  >(null);
   const [visibleRowCount, setVisibleRowCount] = useState(transactionTablePageSize);
   const expenseByTransactionId = useMemo(
     () => new Map(expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
@@ -4204,8 +4170,68 @@ function TransactionTable({
     );
   }
 
+  function applyPendingOverride(scope: TransactionOverrideScope) {
+    if (!pendingOverride) return;
+    if (pendingOverride.kind === "category") {
+      onUpdateCategory(pendingOverride.transaction, pendingOverride.value, scope);
+    } else {
+      onMatch(pendingOverride.transaction, pendingOverride.value, scope);
+    }
+    setPendingOverride(null);
+  }
+
+  const pendingMerchantName = pendingOverride?.transaction.merchantName?.trim();
+  const pendingValueLabel = pendingOverride?.kind === "company"
+    ? providersById.get(pendingOverride.value)?.name ?? pendingOverride.value
+    : pendingOverride?.value;
+
   return (
     <div className="table-wrap">
+      {pendingOverride && createPortal(
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setPendingOverride(null)}>
+          <div
+            className="modal confirmation-modal transaction-override-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="transaction-override-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Manual override</p>
+                <h2 id="transaction-override-title">
+                  Apply {pendingOverride.kind === "category" ? "category" : "company"} change
+                </h2>
+              </div>
+              <Button className="icon-button" type="button" aria-label="Close" onClick={() => setPendingOverride(null)}>
+                <X size={16} />
+              </Button>
+            </div>
+            <p>
+              Set <strong>{pendingValueLabel}</strong> for {pendingMerchantName ?? pendingOverride.transaction.counterparty}.
+            </p>
+            <div className="modal-actions transaction-override-actions">
+              <Button className="secondary-button" type="button" onClick={() => applyPendingOverride("transaction")}>
+                This transaction only
+              </Button>
+              <Button
+                type="button"
+                disabled={!pendingMerchantName}
+                title={pendingMerchantName ? `Apply to every ${pendingMerchantName} transaction` : "AI merchant identification is still pending"}
+                onClick={() => applyPendingOverride("merchant")}
+              >
+                All {pendingMerchantName ?? "equivalent"} transactions
+              </Button>
+            </div>
+            <small>
+              {pendingMerchantName
+                ? "The merchant-wide choice updates existing equivalents and teaches future transactions."
+                : "Merchant-wide changes become available after AI merchant identification completes."}
+            </small>
+          </div>
+        </div>,
+        document.body
+      )}
       {detailPopover && createPortal(
         <div
           id="transaction-detail-popover"
@@ -4255,9 +4281,9 @@ function TransactionTable({
               const expectedProviderType = providerTypeForTransaction(transaction);
               const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
-              const confidence = transaction.confidence ?? 0;
+              const categoryConfidence = transaction.categoryConfidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
-              const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
+              const categoryDetail = `${(categoryConfidence * 100).toFixed(0)}% · ${transaction.categoryReason ?? "AI classification pending"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
               const documentTitle = transaction.direction === "in"
@@ -4265,21 +4291,15 @@ function TransactionTable({
                 : expense
                   ? `Expense documented as ${expense.recordNumber}`
                   : "Review expense and attach source document";
-              const categoryActionTitle = "Save category and remember alias";
               const providerOptions = expectedProviderType === "client" ? clientProviders : supplierProviders;
-              const companyPlaceholder = transaction.direction === "in" ? "Needs client" : "Optional supplier";
-              const companyActionTitle = provider
-                ? "Save suggested company match"
-                : transaction.direction === "in"
-                  ? "No suggested company to save"
-                  : "Company match is optional for money out";
+              const companyPlaceholder = transaction.direction === "in" ? "Optional client" : "Optional supplier";
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
                   <td className="counterparty-cell">
-                    <strong>{transaction.counterparty}</strong>
+                    <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
                     <small className="transaction-detail-line">
-                      <span className="transaction-detail-text">{transaction.description}</span>
+                      <span className="transaction-detail-text">{transaction.counterparty} · {transaction.description}</span>
                       {detailInfoButton(
                         counterpartyDetailId,
                         transaction.counterparty,
@@ -4325,19 +4345,11 @@ function TransactionTable({
                         <CategorySearchSelect
                           value={displayCategory}
                           options={transactionCategoryChoices(displayCategory, transaction.direction, categories)}
-                          label={`Search category for ${transaction.counterparty}`}
-                          onChange={(category) => onUpdateCategory(transaction, category)}
+                          label={`Search category for ${transaction.merchantName ?? transaction.counterparty}`}
+                          onChange={(category) => setPendingOverride({ kind: "category", transaction, value: category })}
                         />
-                        <Button
-                          className="icon-button"
-                          title={categoryActionTitle}
-                          aria-label={categoryActionTitle}
-                          onClick={() => onUpdateCategory(transaction, displayCategory)}
-                        >
-                          <Save size={15} />
-                        </Button>
                       </div>
-                      <small className={`transaction-detail-line ${confidence >= 0.86 ? "good-text" : confidence > 0 ? "warning-text" : ""}`}>
+                      <small className={`transaction-detail-line ${categoryConfidence >= 0.86 ? "good-text" : categoryConfidence > 0 ? "warning-text" : ""}`}>
                         <span className="transaction-detail-text">{categoryDetail}</span>
                         {detailInfoButton(
                           categoryDetailId,
@@ -4356,7 +4368,7 @@ function TransactionTable({
                         value={provider?.id ?? ""}
                         onValueChange={(value) => {
                           if (!value) return;
-                          onMatch(transaction, value);
+                          setPendingOverride({ kind: "company", transaction, value });
                         }}
                         aria-label={`Company for ${transaction.counterparty}`}
                       >
@@ -4383,20 +4395,6 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="row-actions">
-                      {provider ? (
-                        <Button
-                          className="icon-button"
-                          title={companyActionTitle}
-                          aria-label={companyActionTitle}
-                          onClick={() => onMatch(transaction, provider.id)}
-                        >
-                          <ShieldCheck size={16} />
-                        </Button>
-                      ) : (
-                        <span className="action-placeholder" title={companyActionTitle}>
-                          —
-                        </span>
-                      )}
                       <Button className="icon-button" title={documentTitle} disabled={Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
                         {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
@@ -4407,7 +4405,7 @@ function TransactionTable({
             })
           ) : (
             <tr>
-              <td colSpan={9}>No live transactions</td>
+              <td colSpan={10}>No live transactions</td>
             </tr>
           )}
         </tbody>
@@ -4955,6 +4953,7 @@ function BankDateRangeControls({
       <div>
         <strong>Selected period</strong>
         <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
+        <small>New Revolut and Slash activity refreshes every 15 minutes and is categorized automatically.</small>
       </div>
       <form
         onSubmit={(event) => {

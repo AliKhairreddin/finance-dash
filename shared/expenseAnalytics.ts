@@ -40,7 +40,10 @@ export function expenseAnalyticsLabel(transaction: Transaction, matchedCompanyNa
   const companyName = matchedCompanyName?.trim();
   if (companyName) return companyName;
 
-  return transaction.counterparty.trim() || transaction.rawName.trim() || transaction.description.trim();
+  return transaction.merchantName?.trim()
+    || transaction.counterparty.trim()
+    || transaction.rawName.trim()
+    || transaction.description.trim();
 }
 
 export function groupExpenseAnalytics(
@@ -63,7 +66,9 @@ export function groupExpenseAnalytics(
       transactionCount: 0,
       attributions: new Map<string, MutableAttribution>()
     };
-    const key = attributionKey(label);
+    const key = matchedCompanyName
+      ? attributionKey(label)
+      : transaction.merchantKey || attributionKey(label);
     const attribution = categoryTotal.attributions.get(key) ?? {
       label,
       amount: 0,

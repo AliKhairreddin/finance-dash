@@ -76,3 +76,25 @@ test("expense analytics groups repeated unassigned transaction titles once and s
     }
   ]);
 });
+
+test("expense analytics groups noisy bank descriptors by the AI merchant name without a company match", () => {
+  const transactions = [
+    { ...expense("pizza-1", "POS 10983 PIZZA HUT #442 TORONTO", 25), merchantName: "Pizza Hut", merchantKey: "pizzahut" },
+    { ...expense("pizza-2", "CARD 8841 PIZZAHUT 000442 CA", 35), merchantName: "PizzaHut", merchantKey: "pizzahut" }
+  ];
+
+  assert.deepEqual(groupExpenseAnalytics(transactions, new Map()), [
+    {
+      currency: "USD",
+      total: 60,
+      categories: [
+        {
+          category: "Software subscription",
+          amount: 60,
+          transactionCount: 2,
+          attributions: [{ label: "Pizza Hut", amount: 60, transactionCount: 2 }]
+        }
+      ]
+    }
+  ]);
+});

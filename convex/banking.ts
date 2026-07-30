@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 
 const syncedBankSource = v.union(v.literal("revolut"), v.literal("slash"));
+const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 
 const transaction = v.object({
   id: v.string(),
@@ -21,7 +22,16 @@ const transaction = v.object({
   direction: v.union(v.literal("in"), v.literal("out")),
   status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
   category: v.string(),
+  merchantName: v.optional(v.string()),
+  merchantKey: v.optional(v.string()),
+  classificationComplete: v.optional(v.boolean()),
+  categorySource: v.optional(transactionClassificationSource),
+  categoryConfidence: v.optional(v.number()),
+  categoryReason: v.optional(v.string()),
   matchedProviderId: v.optional(v.string()),
+  companyMatchSource: v.optional(transactionClassificationSource),
+  companyConfidence: v.optional(v.number()),
+  companyMatchReason: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
   teamId: v.optional(v.string()),
   confidence: v.optional(v.number()),
@@ -198,7 +208,16 @@ export const upsertActivityBatch = mutation({
         await ctx.db.patch(existing._id, {
           ...fresh,
           category: existing.category,
+          merchantName: existing.merchantName ?? fresh.merchantName,
+          merchantKey: existing.merchantKey ?? fresh.merchantKey,
+          classificationComplete: existing.classificationComplete ?? fresh.classificationComplete,
+          categorySource: existing.categorySource ?? fresh.categorySource,
+          categoryConfidence: existing.categoryConfidence ?? fresh.categoryConfidence,
+          categoryReason: existing.categoryReason ?? fresh.categoryReason,
           matchedProviderId: existing.matchedProviderId ?? fresh.matchedProviderId,
+          companyMatchSource: existing.companyMatchSource ?? fresh.companyMatchSource,
+          companyConfidence: existing.companyConfidence ?? fresh.companyConfidence,
+          companyMatchReason: existing.companyMatchReason ?? fresh.companyMatchReason,
           matchedInvoiceId: existing.matchedInvoiceId ?? fresh.matchedInvoiceId,
           teamId: existing.teamId ?? fresh.teamId,
           confidence: existing.confidence ?? fresh.confidence,
@@ -232,6 +251,94 @@ export const saveTransactionUpdates = mutation({
       updated += 1;
     }
     return { updated };
+  }
+});
+
+export const getClassificationBacklog = query({
+  args: {
+    serviceToken: v.string(),
+    limit: v.number()
+  },
+  returns: v.object({
+    transactions: v.array(transaction),
+    hasMore: v.boolean()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const limit = Math.max(1, Math.min(500, Math.trunc(args.limit)));
+    const rows = await ctx.db
+      .query("bankTransactions")
+      .withIndex("by_classification_complete", (q) => q.eq("classificationComplete", undefined))
+      .take(limit + 1);
+    return {
+      transactions: rows.slice(0, limit).map(({
+        _creationTime: _creationTime,
+        _id: _id,
+        syncedAt: _syncedAt,
+        ...item
+      }) => item),
+      hasMore: rows.length > limit
+    };
+  }
+});
+
+export const applyMerchantCategory = mutation({
+  args: {
+    serviceToken: v.string(),
+    merchantKey: v.string(),
+    merchantName: v.string(),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    category: v.string()
+  },
+  returns: v.object({ updated: v.number() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const rows = await ctx.db
+      .query("bankTransactions")
+      .withIndex("by_merchant_direction", (q) =>
+        q.eq("merchantKey", args.merchantKey).eq("direction", args.direction)
+      )
+      .collect();
+    for (const row of rows) {
+      await ctx.db.patch(row._id, {
+        category: args.category,
+        categorySource: "manual",
+        categoryConfidence: 1,
+        categoryReason: `Manual rule for ${args.merchantName}`
+      });
+    }
+    return { updated: rows.length };
+  }
+});
+
+export const applyMerchantCompany = mutation({
+  args: {
+    serviceToken: v.string(),
+    merchantKey: v.string(),
+    merchantName: v.string(),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    providerId: v.string()
+  },
+  returns: v.object({ updated: v.number() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const rows = await ctx.db
+      .query("bankTransactions")
+      .withIndex("by_merchant_direction", (q) =>
+        q.eq("merchantKey", args.merchantKey).eq("direction", args.direction)
+      )
+      .collect();
+    for (const row of rows) {
+      await ctx.db.patch(row._id, {
+        matchedProviderId: args.providerId,
+        companyMatchSource: "manual",
+        companyConfidence: 1,
+        companyMatchReason: `Manual rule for ${args.merchantName}`,
+        confidence: 1,
+        matchReason: `Manual rule for ${args.merchantName}`
+      });
+    }
+    return { updated: rows.length };
   }
 });
 

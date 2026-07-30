@@ -440,7 +440,16 @@ export interface Transaction {
   direction: Direction;
   status: "posted" | "pending" | "settled";
   category: string;
+  merchantName?: string;
+  merchantKey?: string;
+  classificationComplete?: boolean;
+  categorySource?: "ai" | "rule" | "manual";
+  categoryConfidence?: number;
+  categoryReason?: string;
   matchedProviderId?: string;
+  companyMatchSource?: "ai" | "rule" | "manual";
+  companyConfidence?: number;
+  companyMatchReason?: string;
   matchedInvoiceId?: string;
   teamId?: string;
   confidence?: number;
@@ -729,8 +738,10 @@ export interface MatchTransactionPayload {
   transactionId: string;
   providerId: string;
   invoiceId?: string;
-  rememberAlias: boolean;
+  scope: TransactionOverrideScope;
 }
+
+export type TransactionOverrideScope = "transaction" | "merchant";
 
 export interface AssignTransactionTeamPayload {
   transactionId: string;
@@ -757,7 +768,7 @@ export interface UpdateTransactionCategoryDefinitionPayload extends CreateTransa
 export interface UpdateTransactionCategoryPayload {
   transactionId: string;
   category: string;
-  rememberAlias: boolean;
+  scope: TransactionOverrideScope;
 }
 
 export interface SaveProfitDistributionAdjustmentPayload {
@@ -860,7 +871,8 @@ export interface AiPromptResult {
 export interface AiTransactionCategorization {
   transactionId: string;
   providerId?: string;
-  category?: string;
+  category: string;
+  merchantName: string;
   confidence: number;
   reason: string;
 }

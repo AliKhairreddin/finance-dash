@@ -20,6 +20,7 @@ import type {
   Transaction,
   UpdateHoldingPayload
 } from "../../../shared/types";
+import { isRequiredTransactionCategory } from "../../../shared/categories";
 import { exportBankTransactionsCsv } from "./exportTransactions";
 
 const transactionSources: Array<{ value: DataSource; label: string }> = [
@@ -96,7 +97,7 @@ export function AllBankTransactionsView({
       if (sortKey === "account") return transaction.accountName;
       if (sortKey === "amount") return transaction.amount;
       if (sortKey === "category") return transaction.category;
-      if (sortKey === "counterparty") return transaction.counterparty;
+      if (sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
       if (sortKey === "date") return transaction.date;
       if (sortKey === "direction") return transaction.direction;
       return sourceLabel(transaction.source);
@@ -106,19 +107,19 @@ export function AllBankTransactionsView({
       .filter((transaction) => {
         if (source !== "all" && transaction.source !== source) return false;
         if (direction !== "all" && transaction.direction !== direction) return false;
-        const expense = expenseByTransactionId.get(transaction.id);
-        if (match === "matched" && !transaction.matchedProviderId && !transaction.matchedInvoiceId && !expense) return false;
-        if (match === "unmatched" && (transaction.matchedProviderId || transaction.matchedInvoiceId || expense)) return false;
+        const categorized = isRequiredTransactionCategory(transaction.category, transaction.direction, dashboard.transactionCategories);
+        if (match === "matched" && !categorized) return false;
+        if (match === "unmatched" && categorized) return false;
         const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
         const search = query.trim().toLowerCase();
-        return !search || `${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
+        return !search || `${transaction.merchantName ?? ""} ${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
       })
       .sort((left, right) =>
         compareTableValues(sortValue(left), sortValue(right), sortDirection)
         || compareTableValues(left.date, right.date, "desc")
         || left.id.localeCompare(right.id)
       );
-  }, [direction, expenseByTransactionId, match, providersById, query, sortDirection, sortKey, source, transactions]);
+  }, [dashboard.transactionCategories, direction, match, providersById, query, sortDirection, sortKey, source, transactions]);
 
   useEffect(() => {
     setVisibleRowCount(bankTablePageSize);
@@ -148,7 +149,7 @@ export function AllBankTransactionsView({
     }]),
     ...(match === "all" ? [] : [{
       key: "match",
-      label: match === "matched" ? "Match: Matched" : "Match: Needs review",
+      label: match === "matched" ? "Category: Ready" : "Category: Needs review",
       onRemove: () => setMatch("all")
     }])
   ];
@@ -185,11 +186,11 @@ export function AllBankTransactionsView({
                 </NativeSelect>
               </label>
               <label>
-                Match
-                <NativeSelect aria-label="Filter bank transactions by match state" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
-                  <NativeSelectOption value="all">All match states</NativeSelectOption>
-                  <NativeSelectOption value="matched">Matched</NativeSelectOption>
-                  <NativeSelectOption value="unmatched">Needs review</NativeSelectOption>
+                Category status
+                <NativeSelect aria-label="Filter bank transactions by category state" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
+                  <NativeSelectOption value="all">All categories</NativeSelectOption>
+                  <NativeSelectOption value="matched">Categorized</NativeSelectOption>
+                  <NativeSelectOption value="unmatched">Needs category</NativeSelectOption>
                 </NativeSelect>
               </label>
             </FilterFieldGroup>
@@ -231,14 +232,14 @@ export function AllBankTransactionsView({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">Account</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="counterparty">Counterparty</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="direction">Direction</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="category">Category / match</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="category">Category / company</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
           </tr></thead>
           <tbody>
             {rows.length > 0 ? visibleRows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const expense = expenseByTransactionId.get(transaction.id);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.counterparty}</strong><small>{transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Needs review")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.merchantName ?? transaction.counterparty}</strong><small>{transaction.counterparty} · {transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
             }) : <tr><td colSpan={7}>No transactions match these filters</td></tr>}
           </tbody>
         </table>

@@ -21,7 +21,16 @@ const transaction: Transaction = {
   direction: "out",
   status: "posted",
   category: "Software",
+  merchantName: "Example Software",
+  merchantKey: "examplesoftware",
+  classificationComplete: true,
+  categorySource: "ai",
+  categoryConfidence: 0.91,
+  categoryReason: "Known SaaS merchant",
   matchedProviderId: "provider-1",
+  companyMatchSource: "ai",
+  companyConfidence: 0.94,
+  companyMatchReason: "Known supplier",
   matchedInvoiceId: "invoice-1",
   teamId: "team-1",
   confidence: 0.94,
@@ -41,7 +50,8 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   assert.match(csv, /,1234\.56,/);
   assert.match(csv, /,18\.52,1\.5,/);
   assert.match(csv, /"Operations","Example, Inc\."/);
-  assert.match(csv, /"invoice-1",0\.94,"Known supplier","wise-transaction-1"$/);
+  assert.match(csv, /"Software","Yes","ai",0\.91,"Known SaaS merchant"/);
+  assert.match(csv, /"Example, Inc\.","ai",0\.94,"Known supplier","invoice-1","wise-transaction-1"$/);
 });
 
 test("buildTransactionCsv preserves an empty export as a header-only CSV", () => {

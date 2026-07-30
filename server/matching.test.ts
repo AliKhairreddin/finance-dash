@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalProviders, mergeProviderDirectory } from "./matching";
+import type { Transaction } from "../shared/types";
+import {
+  canonicalProviders,
+  mergeProviderDirectory,
+  transactionMerchantKey,
+  transactionsShareMerchant
+} from "./matching";
 
 test("mergeProviderDirectory does not restore deleted default companies", () => {
   assert.deepEqual(mergeProviderDirectory([]), []);
@@ -9,4 +15,36 @@ test("mergeProviderDirectory does not restore deleted default companies", () => 
 test("mergeProviderDirectory keeps and normalizes companies that are actually stored", () => {
   const storedProvider = canonicalProviders[0];
   assert.deepEqual(mergeProviderDirectory([storedProvider]), [storedProvider]);
+});
+
+test("merchant equivalence uses the AI-normalized name and transaction direction", () => {
+  const transaction = {
+    id: "pizza-1",
+    source: "wise",
+    accountName: "USD",
+    date: "2026-07-30",
+    description: "POS 10983 PIZZA HUT #442 TORONTO",
+    rawName: "POS 10983 PIZZA HUT #442 TORONTO",
+    counterparty: "PIZZA HUT #442",
+    merchantName: "Pizza Hut",
+    amount: 25,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Food and meals"
+  } satisfies Transaction;
+  const equivalent: Transaction = {
+    ...transaction,
+    id: "pizza-2",
+    merchantName: "  PIZZA   HUT "
+  };
+  const refund: Transaction = {
+    ...transaction,
+    id: "pizza-refund",
+    direction: "in"
+  };
+
+  assert.equal(transactionMerchantKey(transaction), "pizzahut");
+  assert.equal(transactionsShareMerchant(transaction, equivalent), true);
+  assert.equal(transactionsShareMerchant(transaction, refund), false);
 });

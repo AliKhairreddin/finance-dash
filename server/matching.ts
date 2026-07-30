@@ -356,6 +356,18 @@ export function normalizeCardHolderName(value: string): string {
   return normalizeName(value);
 }
 
+export function transactionMerchantKey(transaction: Pick<Transaction, "merchantName">): string {
+  return normalizeName(transaction.merchantName ?? "").replace(/\s+/g, "");
+}
+
+export function transactionsShareMerchant(
+  left: Pick<Transaction, "direction" | "merchantName">,
+  right: Pick<Transaction, "direction" | "merchantName">
+): boolean {
+  const leftKey = transactionMerchantKey(left);
+  return Boolean(leftKey) && left.direction === right.direction && leftKey === transactionMerchantKey(right);
+}
+
 export function mergeWiseCardHolderTeamAssignments(assignments: WiseCardHolderTeamAssignment[]): WiseCardHolderTeamAssignment[] {
   const byName = new Map<string, WiseCardHolderTeamAssignment>();
   for (const assignment of canonicalWiseCardHolderTeamAssignments) {
@@ -661,15 +673,27 @@ export function enrichTransactions(
 ): Transaction[] {
   return transactions.map((transaction) => {
     const learned = learnedCategory(transaction, categoryMemory);
-    const ruleCategory = learned ?? businessCategory(transaction);
+    const ruleCategory = transaction.categorySource === "manual"
+      ? undefined
+      : learned ?? businessCategory(transaction);
     const existingCategory = transactionBusinessCategory(transaction.category);
+    const categoryConfidence = learned ? learned.confidence : 0.74;
 
     if (transaction.matchedProviderId) {
       return {
         ...transaction,
         category: ruleCategory?.category ?? existingCategory,
-        confidence: transaction.confidence ?? 1,
-        matchReason: transaction.matchReason ?? ruleCategory?.reason ?? "Manual company match"
+        ...(ruleCategory
+          ? {
+              categorySource: "rule" as const,
+              categoryConfidence,
+              categoryReason: ruleCategory.reason
+            }
+          : {}),
+        companyConfidence: transaction.companyConfidence ?? transaction.confidence ?? 1,
+        companyMatchReason: transaction.companyMatchReason ?? transaction.matchReason ?? "Manual company match",
+        confidence: transaction.companyConfidence ?? transaction.confidence ?? 1,
+        matchReason: transaction.companyMatchReason ?? transaction.matchReason ?? "Manual company match"
       };
     }
 
@@ -682,10 +706,12 @@ export function enrichTransactions(
     const best = ranked[0];
     if (!best) {
       if (ruleCategory) {
-        const categoryConfidence = learned ? learned.confidence : 0.74;
         return {
           ...transaction,
           category: ruleCategory.category,
+          categorySource: "rule",
+          categoryConfidence,
+          categoryReason: ruleCategory.reason,
           confidence: categoryConfidence,
           matchReason: ruleCategory.reason
         };
@@ -697,6 +723,20 @@ export function enrichTransactions(
       ...transaction,
       matchedProviderId: best.confidence >= semanticMatchThreshold ? best.provider.id : undefined,
       category: ruleCategory?.category ?? existingCategory,
+      ...(ruleCategory
+        ? {
+            categorySource: "rule" as const,
+            categoryConfidence,
+            categoryReason: ruleCategory.reason
+          }
+        : {}),
+      ...(best.confidence >= semanticMatchThreshold
+        ? {
+            companyMatchSource: "rule" as const,
+            companyConfidence: best.confidence,
+            companyMatchReason: best.reason
+          }
+        : {}),
       confidence: best.confidence >= semanticMatchThreshold ? best.confidence : ruleCategory ? Math.max(0.74, best.confidence) : best.confidence,
       matchReason: best.confidence >= semanticMatchThreshold ? best.reason : ruleCategory?.reason ?? best.reason
     };

@@ -2529,10 +2529,6 @@ th.amount .sortable-table-heading {
   min-width: 142px;
 }
 
-.reconciliation-auto-button {
-  flex: 0 0 34px;
-}
-
 .reconciliation-toolbar .toolbar-popover-trigger {
   gap: 5px;
   padding-inline: 9px;
@@ -2984,6 +2980,10 @@ th.amount .sortable-table-heading {
 .bank-tabs {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.bank-source-select {
+  display: none;
 }
 
 .bank-source-summary {
@@ -3666,6 +3666,21 @@ th.amount .sortable-table-heading {
 .confirmation-modal .modal-actions {
   justify-content: flex-end;
   margin-top: 2px;
+}
+
+.transaction-override-modal .modal-header,
+.transaction-override-modal > p,
+.transaction-override-modal > small {
+  grid-column: 1 / -1;
+}
+
+.transaction-override-modal > small {
+  color: var(--app-muted);
+  line-height: 1.45;
+}
+
+.transaction-override-actions {
+  flex-wrap: wrap;
 }
 
 .merit-confirmation-modal .confirmation-icon {
@@ -4648,6 +4663,13 @@ th.amount .sortable-table-heading {
 .bank-load-more span {
   color: var(--app-muted);
   font-size: 0.76rem;
+}
+
+.bank-date-controls > div small {
+  max-width: 320px;
+  color: var(--app-muted);
+  font-size: 0.7rem;
+  line-height: 1.35;
 }
 
 .bank-date-controls form {
@@ -7761,16 +7783,42 @@ body {
   }
 
   .reconciliation-toolbar .list-toolbar-actions {
-    display: flex;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    width: 100%;
   }
 
-  .reconciliation-toolbar .reconciliation-auto-button {
-    width: 36px;
+  .reconciliation-toolbar .list-toolbar-actions > *,
+  .reconciliation-toolbar .list-toolbar-actions .file-button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
   }
 
-  .reconciliation-toolbar .file-button {
-    width: auto;
+  .bank-tabs {
+    display: none;
+  }
+
+  .bank-source-select {
+    display: block;
+    width: 100%;
+  }
+
+  .bank-source-select .searchable-select {
+    width: 100%;
+  }
+
+  .create-manual-invoice-button {
+    min-width: 0;
+    gap: 5px;
+    padding-inline: 8px;
+    font-size: 0.76rem;
+    letter-spacing: -0.015em;
+  }
+
+  .create-manual-invoice-button svg {
+    width: 14px;
+    height: 14px;
   }
 
   .reconciliation-toolbar .segmented-control {
@@ -8053,6 +8101,26 @@ body {
 
   .expense-editor-modal .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .bank-source-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+    overscroll-behavior-inline: auto;
+    scroll-snap-type: none;
+  }
+
+  .bank-source-summary .summary-tile {
+    min-width: 0;
+    flex: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    scroll-snap-align: none;
+  }
+
+  .bank-source-summary .summary-tile:last-child {
+    border-bottom: 0;
   }
 }
 

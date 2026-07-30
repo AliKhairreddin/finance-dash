@@ -369,7 +369,7 @@ app.post("/api/transactions/:transactionId/category", async (request, response, 
     const payload = {
       transactionId: request.params.transactionId,
       category: request.body?.category,
-      rememberAlias: request.body?.rememberAlias !== false
+      scope: request.body?.scope === "merchant" ? "merchant" as const : "transaction" as const
     } satisfies UpdateTransactionCategoryPayload;
     if (!payload.category?.trim()) {
       response.status(400).json({ message: "category is required" });
