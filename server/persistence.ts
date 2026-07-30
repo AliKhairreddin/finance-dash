@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type {
   AutomationRun,
+  ExpenseRecord,
   FxRate,
   Holding,
   Invoice,
@@ -33,6 +34,7 @@ function storePath(): string {
 export interface PersistedState {
   providers: Provider[];
   invoices: Invoice[];
+  expenses: ExpenseRecord[];
   manualReceivables: LedgerItem[];
   paymentAllocations: PaymentAllocation[];
   holdings: Holding[];

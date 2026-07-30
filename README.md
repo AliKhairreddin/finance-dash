@@ -22,7 +22,10 @@ The system follows three rules:
 - Separate incoming and outgoing reconciliation queues.
 - Suggest companies and categories from saved aliases, while requiring an explicit review before learning a new mapping.
 - Assign transactions and cardholders to teams for filtered operating views.
-- Create local sales-invoice drafts for incoming funds and supplier-bill drafts for outgoing funds.
+- Pull recurring client revenue through configured APIs, keep invoice preparation on the Revenue page, and reserve transaction-row invoice drafting for exceptional incoming payments.
+- Record outgoing bank payments as paid expenses, or enter unpaid supplier bills first and match the later bank payment by exact amount and currency.
+- Preserve supplier-issued receipts and invoices as protected source documents; when an original cannot be obtained, generate a clearly labelled internal missing-document declaration PDF linked to the bank payment.
+- Capture Estonia/EU-oriented supplier identity, registry and VAT numbers, economic content, business purpose, supply and due dates, native currency, and VAT treatment, including 24%, 13%, 9%, zero-rated, exempt, and reverse-charge cases.
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
 - Preview partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations without persisting manual searches.
@@ -47,6 +50,7 @@ flowchart LR
     API --> R["Revolut / Slash / Amex adapters"]
     API --> T["TUNE partner revenue"]
     API --> M["Merit invoice adapter"]
+    API --> D["Protected expense source documents"]
     CRON["Cloudflare scheduled event"] --> API
     SHEET["Management Report workbook"] --> IMPORT["Validated manual import"]
     IMPORT --> C
@@ -72,6 +76,12 @@ Counterparty and category aliases are created from reviewed matches. Revenue rul
 ### Stale-Write Protection
 
 Convex state includes revision-aware write protection so an older browser snapshot cannot silently overwrite newer decisions.
+
+### Expense Source Documents
+
+The Expenses workspace separates accounting records from bank movements. Supplier bills can be recorded before payment and become payables; a later outgoing transaction can be matched only when its currency and gross amount agree. Paid card or bank expenses can be recorded directly from the transaction row.
+
+The preferred evidence is always the supplier-issued receipt or invoice, stored privately and linked to the expense record. If the supplier document is unavailable, an operator can generate an internal source-document declaration from the outgoing bank transaction and entered business details. That PDF is visibly marked as not being a supplier receipt or VAT invoice, and the workflow records no deductible input VAT for it.
 
 ### Explicit Merit Writes and Delivery
 

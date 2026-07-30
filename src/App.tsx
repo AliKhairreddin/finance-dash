@@ -13,6 +13,7 @@ import {
   CreditCard,
   Download,
   FilePlus2,
+  ReceiptText,
   Info,
   KeyRound,
   Loader2,
@@ -61,6 +62,7 @@ import type {
   AiPromptResult,
   AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsResult,
+  CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
   CreateManualReceivablePayload,
@@ -73,11 +75,11 @@ import type {
   DashboardSnapshot,
   DeleteInvoicesPayload,
   DraftRevenueRunPayload,
+  ExpenseRecord,
   FxRate,
   ImportWiseStatementPayload,
   ImportWiseStatementResult,
   Invoice,
-  InvoiceDocumentType,
   MeritSendMode,
   MeritTax,
   OpenRouterZdrModel,
@@ -136,10 +138,11 @@ import { parseWiseStatementCsv } from "../shared/wiseStatements";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
+import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "revenue", "invoices", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "revenue", "invoices", "expenses", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -352,10 +355,6 @@ function providerTagLabel(provider?: Provider): string {
 
 function providerTypeForTransaction(transaction: Pick<Transaction, "direction">): ProviderType {
   return transaction.direction === "in" ? "client" : "supplier";
-}
-
-function providerTypeForDocument(documentType: InvoiceDocumentType): ProviderType {
-  return documentType === "sales_invoice" ? "client" : "supplier";
 }
 
 function providerDueDate(provider?: Provider, issueDate = new Date().toISOString().slice(0, 10)): string {
@@ -687,7 +686,8 @@ function transactionSortValue(
   transaction: Transaction,
   sortKey: TransactionSortKey,
   teamsById: Map<string, Team>,
-  providersById: Map<string, Provider>
+  providersById: Map<string, Provider>,
+  expenseTransactionIds: Set<string>
 ): boolean | number | string | undefined {
   if (sortKey === "amount") return transaction.amount;
   if (sortKey === "cardHolder") return transaction.cardHolderName;
@@ -698,7 +698,7 @@ function transactionSortValue(
   if (sortKey === "counterparty") return transaction.counterparty;
   if (sortKey === "date") return transaction.date;
   if (sortKey === "direction") return transaction.direction;
-  if (sortKey === "document") return Boolean(transaction.matchedInvoiceId);
+  if (sortKey === "document") return Boolean(transaction.matchedInvoiceId || expenseTransactionIds.has(transaction.id));
   if (sortKey === "match") return transaction.confidence ?? 0;
   if (sortKey === "period") return transactionPeriod(transaction);
   return transaction.teamId ? teamsById.get(transaction.teamId)?.name : undefined;
@@ -709,12 +709,13 @@ function sortTransactions(
   sortKey: TransactionSortKey,
   direction: SortDirection,
   teamsById: Map<string, Team>,
-  providersById: Map<string, Provider>
+  providersById: Map<string, Provider>,
+  expenseTransactionIds: Set<string>
 ): Transaction[] {
   return [...rows].sort((left, right) => {
     const result = compareTableValues(
-      transactionSortValue(left, sortKey, teamsById, providersById),
-      transactionSortValue(right, sortKey, teamsById, providersById),
+      transactionSortValue(left, sortKey, teamsById, providersById, expenseTransactionIds),
+      transactionSortValue(right, sortKey, teamsById, providersById, expenseTransactionIds),
       direction
     );
     return result || compareTableValues(left.date, right.date, direction) || left.id.localeCompare(right.id);
@@ -804,6 +805,7 @@ function App() {
     allowedValues: ["asc", "desc"]
   });
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
+  const [expenseTransaction, setExpenseTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
@@ -898,8 +900,9 @@ function App() {
         (matchFilter === "matched" && !transactionNeedsReview(transaction));
       return matchesQuery && matchesStatus;
     });
-    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById);
-  }, [dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
+    const expenseTransactionIds = new Set((dashboard?.expenses ?? []).flatMap((expense) => expense.transactionId ? [expense.transactionId] : []));
+    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById, expenseTransactionIds);
+  }, [dashboard?.expenses, dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
 
   const wiseTransactions = useMemo(
     () =>
@@ -1390,6 +1393,39 @@ function App() {
     return invoice;
   }
 
+  async function submitExpense(payload: CreateExpensePayload): Promise<ExpenseRecord> {
+    const response = await fetch(`${apiBase}/expenses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Expense record could not be created"));
+    const expense = (await response.json()) as ExpenseRecord;
+    await loadDashboard();
+    setNotice(
+      expense.paymentStatus === "paid"
+        ? "Paid expense saved with its accounting source document."
+        : "Supplier bill saved and included in payables."
+    );
+    return expense;
+  }
+
+  async function matchExpensePayment(expenseId: string, transactionId: string): Promise<void> {
+    const response = await fetch(`${apiBase}/expenses/${encodeURIComponent(expenseId)}/match-payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactionId })
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Supplier bill could not be matched to the payment"));
+    await loadDashboard();
+    setNotice("Outgoing bank payment matched to the supplier bill.");
+  }
+
+  function openTransactionDocument(transaction: Transaction) {
+    if (transaction.direction === "in") setInvoiceTransaction(transaction);
+    else setExpenseTransaction(transaction);
+  }
+
   async function createManualReceivable(payload: CreateManualReceivablePayload) {
     const response = await fetch(`${apiBase}/receivables`, {
       method: "POST",
@@ -1699,7 +1735,7 @@ function App() {
           <Overview
             dashboard={dashboard}
             providersById={providersById}
-            onOpenInvoice={setInvoiceTransaction}
+            onOpenInvoice={openTransactionDocument}
             onQuickMatch={matchTransaction}
             onCreateManualReceivable={createManualReceivable}
           />
@@ -1743,7 +1779,7 @@ function App() {
           onMatch={matchTransaction}
           onAssignTeam={assignTransactionTeam}
           onUpdateCategory={updateTransactionCategory}
-          onOpenInvoice={setInvoiceTransaction}
+          onOpenInvoice={openTransactionDocument}
           onCreateHolding={createHolding}
           onUpdateHolding={updateHolding}
           onDeleteHolding={deleteHolding}
@@ -1784,6 +1820,15 @@ function App() {
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
           onRecordPayment={recordInvoicePayment}
+        />
+      )}
+
+      {activeTab === "expenses" && (
+        <ExpensesView
+          apiBase={apiBase}
+          dashboard={dashboard}
+          onCreateExpense={submitExpense}
+          onMatchPayment={matchExpensePayment}
         />
       )}
 
@@ -1834,6 +1879,24 @@ function App() {
           onSubmit={async (payload) => {
             await submitInvoice(payload);
             setInvoiceTransaction(null);
+          }}
+        />
+      )}
+
+      {expenseTransaction && (
+        <ExpenseEditorDialog
+          apiBase={apiBase}
+          dashboard={dashboard}
+          transaction={expenseTransaction}
+          onClose={() => setExpenseTransaction(null)}
+          onCreateExpense={async (payload) => {
+            const expense = await submitExpense(payload);
+            setExpenseTransaction(null);
+            return expense;
+          }}
+          onMatchPayment={async (expenseId, transactionId) => {
+            await matchExpensePayment(expenseId, transactionId);
+            setExpenseTransaction(null);
           }}
         />
       )}
@@ -1957,7 +2020,8 @@ function Sidebar({
   ];
   const accountingItems: SidebarItem[] = [
     { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
-    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> }
+    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
+    { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> }
   ];
   const workspaceItems: SidebarItem[] = [
     { id: "providers", label: "Companies", icon: <Tags size={17} /> },
@@ -2822,6 +2886,7 @@ function BankReconciliationView({
       )}
       <TransactionTable
         rows={rows}
+        expenses={dashboard.expenses}
         categories={dashboard.transactionCategories}
         teams={dashboard.teams}
         providers={dashboard.providers}
@@ -3850,6 +3915,7 @@ function CategorySearchSelect({
 
 function TransactionTable({
   rows,
+  expenses,
   categories,
   teams,
   providers,
@@ -3864,6 +3930,7 @@ function TransactionTable({
   onOpenInvoice
 }: {
   rows: Transaction[];
+  expenses: ExpenseRecord[];
   categories: TransactionCategory[];
   teams: Team[];
   providers: Provider[];
@@ -3991,6 +4058,7 @@ function TransactionTable({
         <tbody>
           {rows.length > 0 ? (
             rows.map((transaction) => {
+              const expense = expenses.find((item) => item.transactionId === transaction.id);
               const expectedProviderType = providerTypeForTransaction(transaction);
               const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
@@ -3999,7 +4067,11 @@ function TransactionTable({
               const categoryDetail = `${(confidence * 100).toFixed(0)}% · ${transaction.matchReason ?? "Needs review"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
-              const documentTitle = transaction.direction === "in" ? "Create sales invoice draft" : "Record supplier bill draft";
+              const documentTitle = transaction.direction === "in"
+                ? "Create exceptional sales invoice draft"
+                : expense
+                  ? `Expense documented as ${expense.recordNumber}`
+                  : "Review expense and attach source document";
               const categoryActionTitle = "Save category and remember alias";
               const providerOptions = providers.filter((item) => item.type === expectedProviderType);
               const companyPlaceholder = transaction.direction === "in" ? "Needs client" : "Optional supplier";
@@ -4102,8 +4174,8 @@ function TransactionTable({
                     </div>
                   </td>
                   <td>
-                    {transaction.matchedInvoiceId ? (
-                      <span className="status-pill good">Linked</span>
+                    {transaction.matchedInvoiceId || expense ? (
+                      <span className="status-pill good">{expense ? "Expense linked" : "Invoice linked"}</span>
                     ) : (
                       <span className="status-pill">None</span>
                     )}
@@ -4124,8 +4196,8 @@ function TransactionTable({
                           —
                         </span>
                       )}
-                      <Button className="icon-button" title={documentTitle} onClick={() => onOpenInvoice(transaction)}>
-                        <FilePlus2 size={16} />
+                      <Button className="icon-button" title={documentTitle} disabled={Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
+                        {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
                     </div>
                   </td>
@@ -5938,11 +6010,8 @@ function InvoiceModal({
   onClose: () => void;
   onSubmit: (payload: CreateInvoicePayload) => Promise<void>;
 }) {
-  const documentType = transaction.direction === "in" ? "sales_invoice" : "supplier_bill";
-  const documentTitle = documentType === "sales_invoice" ? "Create sales invoice draft" : "Record supplier bill draft";
-  const expectedProviderType = providerTypeForDocument(documentType);
-  const providerOptions = providers.filter((item) => item.type === expectedProviderType);
-  const selectedProvider = provider?.type === expectedProviderType ? provider : undefined;
+  const providerOptions = providers.filter((item) => item.type === "client");
+  const selectedProvider = provider?.type === "client" ? provider : undefined;
   const [providerId, setProviderId] = useState(selectedProvider?.id || "");
   const [customerName, setCustomerName] = useState(selectedProvider?.legalName || selectedProvider?.name || bankInvoiceName(transaction));
   const [amount, setAmount] = useState(String(Math.abs(transaction.amount)));
@@ -5959,7 +6028,7 @@ function InvoiceModal({
       await onSubmit({
         transactionId: transaction.id,
         providerId: providerId || undefined,
-        documentType,
+        documentType: "sales_invoice",
         customerName,
         amount: Number(amount),
         currency: transaction.currency,
@@ -5979,7 +6048,7 @@ function InvoiceModal({
         <div className="modal-header">
           <div>
             <p className="eyebrow">Finance document</p>
-            <h2>{documentTitle}</h2>
+            <h2>Create exceptional sales invoice draft</h2>
           </div>
           <Button type="button" className="icon-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -6005,7 +6074,7 @@ function InvoiceModal({
               }
             }}
           >
-            <NativeSelectOption value="">No {expectedProviderType} selected</NativeSelectOption>
+            <NativeSelectOption value="">No client selected</NativeSelectOption>
             {providerOptions.map((item) => (
               <NativeSelectOption key={item.id} value={item.id}>
                 {item.name}
@@ -6014,7 +6083,7 @@ function InvoiceModal({
           </NativeSelect>
         </label>
         <label>
-          {documentType === "sales_invoice" ? "Customer name" : "Supplier name"}
+          Customer name
           <Input value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
         </label>
         <div className="form-grid">

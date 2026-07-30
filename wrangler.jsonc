@@ -28,6 +28,7 @@
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
     "MERIT_CREATE_INVOICE_PATH": "/v2/sendinvoice",
     "MERIT_DELIVER_INVOICE_PATH": "/v2/sendinvoicebyemail",
+    "MERIT_DEFAULT_COUNTRY_CODE": "EE",
     // Merit writes only occur after an explicit dashboard save/deliver action; scheduled revenue work creates local drafts.
     "MERIT_WRITES_ENABLED": "true",
     "REVENUE_TIMEZONE": "Asia/Beirut",

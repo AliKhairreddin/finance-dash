@@ -8,6 +8,7 @@ import type {
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   CreateHoldingPayload,
+  CreateExpensePayload,
   CreateInvoicePayload,
   CreateManualReceivablePayload,
   CreateProviderPayload,
@@ -16,6 +17,8 @@ import type {
   CreateTransactionCategoryPayload,
   DashboardSnapshot,
   DraftRevenueRunPayload,
+  ExpenseDocument,
+  ExpenseRecord,
   FxRate,
   Holding,
   ImportWiseStatementPayload,
@@ -25,6 +28,7 @@ import type {
   LedgerItem,
   MeritTax,
   MatchTransactionPayload,
+  MatchExpensePaymentPayload,
   PaymentAllocation,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
@@ -73,6 +77,12 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import {
+  expensePayables,
+  nextExpenseRecordNumber,
+  validateExpenseAmounts
+} from "../shared/expenses";
+import { generateMissingReceiptDeclarationPdf } from "../shared/missingReceiptPdf";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
@@ -151,9 +161,11 @@ import {
   uniqueProviderTags
 } from "./matching";
 import { loadPersistedState, savePersistedState } from "./persistence";
+import { saveLocalExpenseDocument } from "./expenseDocuments";
 
 let providers: Provider[] = [];
 let invoices: Invoice[] = [];
+let expenses: ExpenseRecord[] = [];
 let manualReceivables: LedgerItem[] = [];
 let paymentAllocations: PaymentAllocation[] = [];
 let holdings: Holding[] = [];
@@ -263,6 +275,7 @@ export async function initializeStore(): Promise<void> {
   providers = mergeProviderDirectory(persisted.providers ?? []);
   paymentAllocations = persisted.paymentAllocations ?? [];
   invoices = applyPaymentState(persisted.invoices ?? [], paymentAllocations);
+  expenses = persisted.expenses ?? [];
   manualReceivables = persisted.manualReceivables ?? [];
   holdings = persisted.holdings ?? [];
   fxRates = persisted.fxRates ?? [];
@@ -287,6 +300,7 @@ async function persist(): Promise<void> {
   await savePersistedState({
     providers,
     invoices,
+    expenses,
     manualReceivables,
     paymentAllocations,
     holdings,
@@ -556,14 +570,15 @@ export function getSnapshot(): DashboardSnapshot {
   const matchedTransactions = getMatchedTransactions();
   const paymentAwareInvoices = applyPaymentState(invoices, paymentAllocations);
   const receivables = [...openInvoiceReceivables(paymentAwareInvoices, paymentAllocations), ...manualReceivables];
-  const metrics = calculateMetrics(accounts, receivables, [], [], []);
+  const payables = expensePayables(expenses);
+  const metrics = calculateMetrics(accounts, receivables, [], payables, []);
   const approximateUsdTotals = calculateApproximateUsdTotals(accounts, holdings, fxRates);
   return {
     asOf: new Date().toISOString(),
     accounts,
     receivables,
     openBalances: [],
-    payables: [],
+    payables,
     investments: [],
     providers,
     teams,
@@ -574,6 +589,7 @@ export function getSnapshot(): DashboardSnapshot {
     aiSettings: publicAiSettings(runtimeAiSettings()),
     transactions: matchedTransactions,
     invoices: paymentAwareInvoices,
+    expenses,
     paymentAllocations,
     invoicePredictions: calculateInvoicePredictions(paymentAwareInvoices, paymentAllocations),
     holdings,
@@ -869,6 +885,11 @@ export async function deleteProvider(providerId: string): Promise<Provider> {
   invoices = deletion.invoices;
   revenuePartners = deletion.revenuePartners;
   revenueRuns = deletion.revenueRuns;
+  expenses = expenses.map((expense) => {
+    if (expense.providerId !== providerId) return expense;
+    const { providerId: _providerId, ...withoutProvider } = expense;
+    return withoutProvider;
+  });
   transactions = deletion.transactions;
   wiseStatementTransactions = deletion.wiseStatementTransactions;
   await persist();
@@ -1121,6 +1142,213 @@ export async function createManualReceivable(payload: CreateManualReceivablePayl
   manualReceivables = [receivable, ...manualReceivables];
   await persist();
   return receivable;
+}
+
+function validateExpensePayload(payload: CreateExpensePayload): {
+  provider?: Provider;
+  transaction?: Transaction;
+  category: string;
+} {
+  const supplierName = payload.supplierName.trim();
+  const businessPurpose = payload.businessPurpose.trim();
+  const description = payload.description.trim();
+  if (!supplierName || !businessPurpose || !description) {
+    throw new Error("Supplier, economic content, and business purpose are required");
+  }
+  if (!/^[A-Z]{3}$/.test(payload.currency.trim().toUpperCase())) {
+    throw new Error("Expense currency must be a three-letter ISO code");
+  }
+  validateExpenseAmounts(payload);
+  const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, "out", transactionCategories)) {
+    throw new Error(`Category "${category}" is not valid for money out`);
+  }
+  const provider = payload.providerId ? providers.find((item) => item.id === payload.providerId) : undefined;
+  if (payload.providerId && (!provider || provider.type !== "supplier")) {
+    throw new Error("Expense records require a supplier company");
+  }
+  if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
+    throw new Error("Expense team not found");
+  }
+  const transaction = payload.transactionId ? findKnownTransaction(payload.transactionId) : undefined;
+  if (payload.transactionId && (!transaction || transaction.direction !== "out")) {
+    throw new Error("Paid expenses require an outgoing bank transaction");
+  }
+  if (transaction) {
+    if (payload.recordType !== "paid_expense" || payload.paymentStatus !== "paid") {
+      throw new Error("An outgoing bank transaction can only create a paid expense");
+    }
+    if (transaction.currency !== payload.currency.trim().toUpperCase() || Math.abs(transaction.amount - payload.grossAmount) > 0.01) {
+      throw new Error("Expense currency and gross amount must match the outgoing bank transaction");
+    }
+    if (expenses.some((expense) => expense.transactionId === transaction.id)) {
+      throw new Error("This bank transaction already has an expense record");
+    }
+  } else if (payload.recordType !== "supplier_bill" || payload.paymentStatus !== "unpaid" || !payload.dueDate) {
+    throw new Error("Records without a bank transaction must be unpaid supplier bills with a due date");
+  }
+  if (payload.document.mode === "upload" && !payload.sourceDocumentNumber?.trim()) {
+    throw new Error("Supplier receipt or invoice number is required");
+  }
+  if (payload.sourceDocumentNumber?.trim()) {
+    const normalizedDocumentNumber = payload.sourceDocumentNumber.trim().toLowerCase();
+    const duplicate = expenses.some((expense) =>
+      expense.sourceDocumentNumber?.toLowerCase() === normalizedDocumentNumber
+      && (provider ? expense.providerId === provider.id : expense.supplierName.toLowerCase() === supplierName.toLowerCase())
+    );
+    if (duplicate) throw new Error("This supplier document number is already recorded");
+  }
+  if (payload.document.mode === "generate_missing_receipt") {
+    if (!transaction || !payload.document.reason.trim()) {
+      throw new Error("A linked bank transaction and missing-document reason are required");
+    }
+    if (payload.document.confirmation !== "MISSING_SOURCE_DOCUMENT_CONFIRMED") {
+      throw new Error("Missing source document confirmation is required");
+    }
+    if (payload.vatAmount !== 0 || payload.vatTreatment !== "not_applicable") {
+      throw new Error("Input VAT cannot be recorded from an internally generated missing-document declaration");
+    }
+  }
+  return { provider, transaction, category };
+}
+
+export async function createExpense(payload: CreateExpensePayload): Promise<ExpenseRecord> {
+  const { provider, transaction, category } = validateExpensePayload(payload);
+  const createdAt = new Date().toISOString();
+  const issueDate = normalizedDate(payload.issueDate, "Issue date");
+  const transactionDate = payload.transactionDate
+    ? normalizedDate(payload.transactionDate, "Transaction date")
+    : transaction?.date;
+  const dueDate = payload.dueDate ? normalizedDate(payload.dueDate, "Due date") : undefined;
+  if (dueDate && dueDate < issueDate) throw new Error("Due date cannot be before issue date");
+  const expense: ExpenseRecord = {
+    id: `expense-${crypto.randomUUID()}`,
+    recordNumber: nextExpenseRecordNumber(expenses, issueDate),
+    recordType: payload.recordType,
+    paymentStatus: payload.paymentStatus,
+    transactionId: transaction?.id,
+    providerId: provider?.id,
+    teamId: cleanOptional(payload.teamId),
+    supplierName: payload.supplierName.trim(),
+    supplierRegistrationNumber: cleanOptional(payload.supplierRegistrationNumber),
+    supplierVatNumber: cleanOptional(payload.supplierVatNumber)?.toUpperCase(),
+    sourceDocumentNumber: cleanOptional(payload.sourceDocumentNumber),
+    issueDate,
+    transactionDate,
+    dueDate,
+    paidAt: payload.paymentStatus === "paid" ? transaction?.date ?? issueDate : undefined,
+    category,
+    businessPurpose: payload.businessPurpose.trim(),
+    description: payload.description.trim(),
+    netAmount: Number(payload.netAmount.toFixed(2)),
+    vatAmount: Number(payload.vatAmount.toFixed(2)),
+    grossAmount: Number(payload.grossAmount.toFixed(2)),
+    vatRate: payload.vatRate,
+    vatTreatment: payload.vatTreatment,
+    currency: payload.currency.trim().toUpperCase(),
+    missingDocumentReason: payload.document.mode === "generate_missing_receipt" ? payload.document.reason.trim() : undefined,
+    declarationConfirmedAt: payload.document.mode === "generate_missing_receipt" ? createdAt : undefined,
+    documents: [],
+    createdAt,
+    updatedAt: createdAt
+  };
+
+  let document: ExpenseDocument;
+  if (payload.document.mode === "upload") {
+    const file = payload.document.file;
+    document = {
+      id: `expense-document-${crypto.randomUUID()}`,
+      kind: file.kind,
+      fileName: file.fileName.trim(),
+      contentType: file.contentType,
+      size: file.size,
+      storageId: file.storageId,
+      createdAt
+    };
+  } else {
+    const bytes = await generateMissingReceiptDeclarationPdf(expense, transaction!);
+    const fileName = `${expense.recordNumber}-missing-source-document.pdf`;
+    document = {
+      id: `expense-document-${crypto.randomUUID()}`,
+      kind: "missing_receipt_declaration",
+      fileName,
+      contentType: "application/pdf",
+      size: bytes.byteLength,
+      storageId: await saveLocalExpenseDocument(bytes, fileName, "application/pdf"),
+      createdAt
+    };
+  }
+  expense.documents = [document];
+  expenses = [expense, ...expenses];
+
+  if (transaction) {
+    updateStoredTransaction({
+      ...transaction,
+      matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+      category,
+      teamId: expense.teamId ?? transaction.teamId,
+      confidence: 1,
+      matchReason: "Paid expense reviewed with source document"
+    });
+    if (expense.teamId) {
+      transactionTeamAssignments = [
+        { transactionId: transaction.id, teamId: expense.teamId, updatedAt: createdAt },
+        ...transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
+      ];
+    }
+    if (provider) {
+      providers = providers.map((item) =>
+        item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
+      );
+    }
+  }
+  await persist();
+  return expense;
+}
+
+export async function matchExpensePayment(expenseId: string, payload: MatchExpensePaymentPayload): Promise<ExpenseRecord> {
+  const expense = expenses.find((item) => item.id === expenseId);
+  if (!expense || expense.recordType !== "supplier_bill" || expense.paymentStatus !== "unpaid") {
+    throw new Error("Unpaid supplier bill not found");
+  }
+  const transaction = findKnownTransaction(payload.transactionId);
+  if (!transaction || transaction.direction !== "out") throw new Error("Outgoing bank transaction not found");
+  if (expenses.some((item) => item.id !== expense.id && item.transactionId === transaction.id)) {
+    throw new Error("This bank transaction already has an expense record");
+  }
+  if (expense.currency !== transaction.currency || Math.abs(expense.grossAmount - transaction.amount) > 0.01) {
+    throw new Error("Supplier bill currency and gross amount must match the bank transaction");
+  }
+  const updatedAt = new Date().toISOString();
+  const updated: ExpenseRecord = {
+    ...expense,
+    paymentStatus: "paid",
+    transactionId: transaction.id,
+    transactionDate: expense.transactionDate ?? transaction.date,
+    paidAt: transaction.date,
+    updatedAt
+  };
+  expenses = expenses.map((item) => item.id === expense.id ? updated : item);
+  updateStoredTransaction({
+    ...transaction,
+    matchedProviderId: expense.providerId ?? transaction.matchedProviderId,
+    category: expense.category,
+    teamId: expense.teamId ?? transaction.teamId,
+    confidence: 1,
+    matchReason: `Matched to supplier bill ${expense.recordNumber}`
+  });
+  if (expense.teamId) {
+    transactionTeamAssignments = [
+      { transactionId: transaction.id, teamId: expense.teamId, updatedAt },
+      ...transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
+    ];
+  }
+  await persist();
+  return updated;
+}
+
+export function expenseDocumentById(documentId: string): ExpenseDocument | undefined {
+  return expenses.flatMap((expense) => expense.documents).find((document) => document.id === documentId);
 }
 
 export async function createInvoice(payload: CreateInvoicePayload): Promise<Invoice> {
@@ -1399,6 +1627,7 @@ async function updateCurrentFxRates(): Promise<void> {
     ...accounts.map((account) => account.currency),
     ...holdings.map((holding) => holding.asset),
     ...invoices.map((invoice) => invoice.currency),
+    ...expenses.map((expense) => expense.currency),
     ...manualReceivables.map((receivable) => receivable.currency),
     ...revenuePartners.map((partner) => partner.currency),
     ...revenueRuns.map((run) => run.currency),

@@ -24,6 +24,14 @@ export type HoldingKind = "cash" | "exchange" | "wallet";
 
 export type HoldingAssetType = "fiat" | "crypto";
 
+export type ExpenseRecordType = "paid_expense" | "supplier_bill";
+
+export type ExpensePaymentStatus = "paid" | "unpaid";
+
+export type ExpenseDocumentKind = "vendor_receipt" | "vendor_invoice" | "missing_receipt_declaration";
+
+export type ExpenseVatTreatment = "standard" | "reduced" | "zero" | "exempt" | "reverse_charge" | "not_applicable";
+
 export type CurrencyTotals = Record<string, number>;
 
 export interface AccountBalance {
@@ -324,6 +332,48 @@ export interface InvoicePaymentPrediction {
   latestDays?: number;
 }
 
+export interface ExpenseDocument {
+  id: string;
+  kind: ExpenseDocumentKind;
+  fileName: string;
+  contentType: string;
+  size: number;
+  storageId: string;
+  createdAt: string;
+}
+
+export interface ExpenseRecord {
+  id: string;
+  recordNumber: string;
+  recordType: ExpenseRecordType;
+  paymentStatus: ExpensePaymentStatus;
+  transactionId?: string;
+  providerId?: string;
+  teamId?: string;
+  supplierName: string;
+  supplierRegistrationNumber?: string;
+  supplierVatNumber?: string;
+  sourceDocumentNumber?: string;
+  issueDate: string;
+  transactionDate?: string;
+  dueDate?: string;
+  paidAt?: string;
+  category: string;
+  businessPurpose: string;
+  description: string;
+  netAmount: number;
+  vatAmount: number;
+  grossAmount: number;
+  vatRate?: number;
+  vatTreatment: ExpenseVatTreatment;
+  currency: string;
+  missingDocumentReason?: string;
+  declarationConfirmedAt?: string;
+  documents: ExpenseDocument[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Holding {
   id: string;
   name: string;
@@ -515,6 +565,7 @@ export interface DashboardSnapshot {
   aiSettings: AiSettings;
   transactions: Transaction[];
   invoices: Invoice[];
+  expenses: ExpenseRecord[];
   paymentAllocations: PaymentAllocation[];
   invoicePredictions: InvoicePaymentPrediction[];
   holdings: Holding[];
@@ -565,6 +616,45 @@ export interface CreateInvoicePayload {
   taxId?: string;
   periodStart?: string;
   periodEnd?: string;
+}
+
+export interface UploadedExpenseDocumentPayload {
+  kind: Extract<ExpenseDocumentKind, "vendor_receipt" | "vendor_invoice">;
+  fileName: string;
+  contentType: string;
+  size: number;
+  storageId: string;
+}
+
+export interface CreateExpensePayload {
+  recordType: ExpenseRecordType;
+  paymentStatus: ExpensePaymentStatus;
+  transactionId?: string;
+  providerId?: string;
+  teamId?: string;
+  supplierName: string;
+  supplierRegistrationNumber?: string;
+  supplierVatNumber?: string;
+  sourceDocumentNumber?: string;
+  issueDate: string;
+  transactionDate?: string;
+  dueDate?: string;
+  category: string;
+  businessPurpose: string;
+  description: string;
+  netAmount: number;
+  vatAmount: number;
+  grossAmount: number;
+  vatRate?: number;
+  vatTreatment: ExpenseVatTreatment;
+  currency: string;
+  document:
+    | { mode: "upload"; file: UploadedExpenseDocumentPayload }
+    | { mode: "generate_missing_receipt"; reason: string; confirmation: "MISSING_SOURCE_DOCUMENT_CONFIRMED" };
+}
+
+export interface MatchExpensePaymentPayload {
+  transactionId: string;
 }
 
 export interface UpdateInvoicePayload {

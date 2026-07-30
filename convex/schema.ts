@@ -126,6 +126,60 @@ const invoice = v.object({
   updatedAt: v.string()
 });
 
+const expenseDocumentKind = v.union(
+  v.literal("vendor_receipt"),
+  v.literal("vendor_invoice"),
+  v.literal("missing_receipt_declaration")
+);
+const expenseVatTreatment = v.union(
+  v.literal("standard"),
+  v.literal("reduced"),
+  v.literal("zero"),
+  v.literal("exempt"),
+  v.literal("reverse_charge"),
+  v.literal("not_applicable")
+);
+const expenseDocument = v.object({
+  id: v.string(),
+  kind: expenseDocumentKind,
+  fileName: v.string(),
+  contentType: v.string(),
+  size: v.number(),
+  storageId: v.string(),
+  createdAt: v.string()
+});
+const expenseRecord = v.object({
+  id: v.string(),
+  recordNumber: v.string(),
+  recordType: v.union(v.literal("paid_expense"), v.literal("supplier_bill")),
+  paymentStatus: v.union(v.literal("paid"), v.literal("unpaid")),
+  transactionId: v.optional(v.string()),
+  providerId: v.optional(v.string()),
+  teamId: v.optional(v.string()),
+  supplierName: v.string(),
+  supplierRegistrationNumber: v.optional(v.string()),
+  supplierVatNumber: v.optional(v.string()),
+  sourceDocumentNumber: v.optional(v.string()),
+  issueDate: v.string(),
+  transactionDate: v.optional(v.string()),
+  dueDate: v.optional(v.string()),
+  paidAt: v.optional(v.string()),
+  category: v.string(),
+  businessPurpose: v.string(),
+  description: v.string(),
+  netAmount: v.number(),
+  vatAmount: v.number(),
+  grossAmount: v.number(),
+  vatRate: v.optional(v.number()),
+  vatTreatment: expenseVatTreatment,
+  currency: v.string(),
+  missingDocumentReason: v.optional(v.string()),
+  declarationConfirmedAt: v.optional(v.string()),
+  documents: v.array(expenseDocument),
+  createdAt: v.string(),
+  updatedAt: v.string()
+});
+
 const team = v.object({
   id: v.string(),
   name: v.string(),
@@ -369,6 +423,7 @@ export default defineSchema({
     key: v.string(),
     providers: v.array(provider),
     invoices: v.array(invoice),
+    expenses: v.array(expenseRecord),
     manualReceivables: v.array(ledgerItem),
     teams: v.array(team),
     transactionCategoryRules: v.array(transactionCategoryRule),

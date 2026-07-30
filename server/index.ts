@@ -5,6 +5,7 @@ import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
   AutoCategorizeTransactionsPayload,
+  CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
   CreateManualReceivablePayload,
@@ -17,6 +18,7 @@ import type {
   AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
+  MatchExpensePaymentPayload,
   RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
@@ -32,6 +34,7 @@ import {
   assignTransactionTeam,
   assignWiseCardHolderTeam,
   autoCategorizeTransactions,
+  createExpense,
   createHolding,
   createInvoice,
   createManualReceivable,
@@ -47,9 +50,11 @@ import {
   draftRevenueRun,
   getSnapshot,
   getOpenRouterZdrModels,
+  expenseDocumentById,
   initializeStore,
   importWiseStatement,
   matchTransaction,
+  matchExpensePayment,
   previewInvoiceDuplicate,
   recordInvoicePayment,
   refreshFxRates,
@@ -67,12 +72,32 @@ import {
   updateProvider,
   updateRevenuePartner
 } from "./store";
+import {
+  readLocalExpenseDocument,
+  saveLocalExpenseDocument
+} from "./expenseDocuments";
 import { loadManagementReportDashboard } from "./managementReportStore";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
 
 app.use(cors());
+app.post(
+  "/api/expense-documents/upload",
+  express.raw({ type: ["application/pdf", "image/jpeg", "image/png", "image/webp"], limit: "10mb" }),
+  async (request, response, next) => {
+    try {
+      const contentType = request.headers["content-type"]?.split(";")[0]?.trim() ?? "";
+      const encodedName = typeof request.headers["x-file-name"] === "string" ? request.headers["x-file-name"] : "";
+      const fileName = encodedName ? decodeURIComponent(encodedName) : "expense-document";
+      if (!Buffer.isBuffer(request.body)) throw new Error("Expense document body is required");
+      const storageId = await saveLocalExpenseDocument(request.body, fileName, contentType);
+      response.status(201).json({ storageId, size: request.body.byteLength });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_request, response) => {
@@ -372,6 +397,39 @@ app.post("/api/invoices", async (request, response, next) => {
       return;
     }
     response.status(201).json(await createInvoice(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/expenses", async (request, response, next) => {
+  try {
+    response.status(201).json(await createExpense(request.body as CreateExpensePayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/expenses/:expenseId/match-payment", async (request, response, next) => {
+  try {
+    response.json(await matchExpensePayment(request.params.expenseId, request.body as MatchExpensePaymentPayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/expense-documents/:documentId", async (request, response, next) => {
+  try {
+    const document = expenseDocumentById(request.params.documentId);
+    if (!document) {
+      response.status(404).json({ message: "Expense document not found" });
+      return;
+    }
+    const bytes = await readLocalExpenseDocument(document.storageId);
+    const safeFileName = document.fileName.replaceAll(/[\r\n"]/g, "_");
+    response.setHeader("Content-Type", document.contentType);
+    response.setHeader("Content-Disposition", `inline; filename="${safeFileName}"`);
+    response.send(Buffer.from(bytes));
   } catch (error) {
     next(error);
   }

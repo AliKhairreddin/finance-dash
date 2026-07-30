@@ -69,6 +69,10 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
     allowedValues: ["asc", "desc"]
   });
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
+  const expenseByTransactionId = useMemo(
+    () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
+    [dashboard.expenses]
+  );
 
   const availableSources = useMemo(
     () => [...new Set(dashboard.transactions.map((transaction) => transaction.source))].sort(),
@@ -89,8 +93,9 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
       .filter((transaction) => {
         if (source !== "all" && transaction.source !== source) return false;
         if (direction !== "all" && transaction.direction !== direction) return false;
-        if (match === "matched" && !transaction.matchedProviderId && !transaction.matchedInvoiceId) return false;
-        if (match === "unmatched" && (transaction.matchedProviderId || transaction.matchedInvoiceId)) return false;
+        const expense = expenseByTransactionId.get(transaction.id);
+        if (match === "matched" && !transaction.matchedProviderId && !transaction.matchedInvoiceId && !expense) return false;
+        if (match === "unmatched" && (transaction.matchedProviderId || transaction.matchedInvoiceId || expense)) return false;
         const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
         const search = query.trim().toLowerCase();
         return !search || `${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
@@ -100,7 +105,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
         || compareTableValues(left.date, right.date, "desc")
         || left.id.localeCompare(right.id)
       );
-  }, [dashboard.transactions, direction, match, providersById, query, sortDirection, sortKey, source]);
+  }, [dashboard.transactions, direction, expenseByTransactionId, match, providersById, query, sortDirection, sortKey, source]);
 
   function requestSort(nextSortKey: BankTransactionSortKey) {
     if (nextSortKey === sortKey) {
@@ -212,7 +217,8 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
           <tbody>
             {rows.length > 0 ? rows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.counterparty}</strong><small>{transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Needs review")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
+              const expense = expenseByTransactionId.get(transaction.id);
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.counterparty}</strong><small>{transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Needs review")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
             }) : <tr><td colSpan={7}>No transactions match these filters</td></tr>}
           </tbody>
         </table>

@@ -626,7 +626,7 @@ function meritCustomer(invoice: Invoice, provider?: Provider): Record<string, un
   const configuredCountry = provider?.country?.trim().toUpperCase();
   const countryCode = /^[A-Z]{2}$/.test(configuredCountry ?? "")
     ? configuredCountry
-    : process.env.MERIT_DEFAULT_COUNTRY_CODE || "CA";
+    : process.env.MERIT_DEFAULT_COUNTRY_CODE || "EE";
   return {
     Name: provider?.legalName?.trim() || invoice.customerName,
     NotTDCustomer: true,

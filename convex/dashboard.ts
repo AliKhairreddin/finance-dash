@@ -1,4 +1,5 @@
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import {
   initialTransactionCategories,
@@ -127,6 +128,60 @@ const invoice = v.object({
   taxId: v.optional(v.string()),
   sentAt: v.optional(v.string()),
   paidAt: v.optional(v.string()),
+  createdAt: v.string(),
+  updatedAt: v.string()
+});
+
+const expenseDocumentKind = v.union(
+  v.literal("vendor_receipt"),
+  v.literal("vendor_invoice"),
+  v.literal("missing_receipt_declaration")
+);
+const expenseVatTreatment = v.union(
+  v.literal("standard"),
+  v.literal("reduced"),
+  v.literal("zero"),
+  v.literal("exempt"),
+  v.literal("reverse_charge"),
+  v.literal("not_applicable")
+);
+const expenseDocument = v.object({
+  id: v.string(),
+  kind: expenseDocumentKind,
+  fileName: v.string(),
+  contentType: v.string(),
+  size: v.number(),
+  storageId: v.string(),
+  createdAt: v.string()
+});
+const expenseRecord = v.object({
+  id: v.string(),
+  recordNumber: v.string(),
+  recordType: v.union(v.literal("paid_expense"), v.literal("supplier_bill")),
+  paymentStatus: v.union(v.literal("paid"), v.literal("unpaid")),
+  transactionId: v.optional(v.string()),
+  providerId: v.optional(v.string()),
+  teamId: v.optional(v.string()),
+  supplierName: v.string(),
+  supplierRegistrationNumber: v.optional(v.string()),
+  supplierVatNumber: v.optional(v.string()),
+  sourceDocumentNumber: v.optional(v.string()),
+  issueDate: v.string(),
+  transactionDate: v.optional(v.string()),
+  dueDate: v.optional(v.string()),
+  paidAt: v.optional(v.string()),
+  category: v.string(),
+  businessPurpose: v.string(),
+  description: v.string(),
+  netAmount: v.number(),
+  vatAmount: v.number(),
+  grossAmount: v.number(),
+  vatRate: v.optional(v.number()),
+  vatTreatment: expenseVatTreatment,
+  currency: v.string(),
+  missingDocumentReason: v.optional(v.string()),
+  declarationConfirmedAt: v.optional(v.string()),
+  documents: v.array(expenseDocument),
   createdAt: v.string(),
   updatedAt: v.string()
 });
@@ -352,6 +407,7 @@ export const getState = query({
     v.object({
       providers: v.array(provider),
       invoices: v.array(invoice),
+      expenses: v.array(expenseRecord),
       manualReceivables: v.array(ledgerItem),
       teams: v.array(team),
       transactionCategories: v.array(transactionCategory),
@@ -383,6 +439,7 @@ export const getState = query({
     return {
       providers: state.providers,
       invoices: state.invoices,
+      expenses: state.expenses,
       manualReceivables: state.manualReceivables,
       teams: state.teams,
       transactionCategories,
@@ -403,6 +460,34 @@ export const getState = query({
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
     };
+  }
+});
+
+export const generateExpenseDocumentUploadUrl = mutation({
+  args: { serviceToken: v.string() },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    return ctx.storage.generateUploadUrl();
+  }
+});
+
+export const getExpenseDocumentUrl = query({
+  args: { serviceToken: v.string(), storageId: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    return ctx.storage.getUrl(args.storageId as Id<"_storage">);
+  }
+});
+
+export const deleteExpenseDocument = mutation({
+  args: { serviceToken: v.string(), storageId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await ctx.storage.delete(args.storageId as Id<"_storage">);
+    return null;
   }
 });
 
@@ -565,6 +650,7 @@ export const saveState = mutation({
   args: {
     providers: v.array(provider),
     invoices: v.array(invoice),
+    expenses: v.array(expenseRecord),
     manualReceivables: v.array(ledgerItem),
     teams: v.array(team),
     transactionCategoryRules: v.array(transactionCategoryRule),
@@ -595,6 +681,7 @@ export const saveState = mutation({
     const dashboardState = {
       providers: args.providers,
       invoices: args.invoices,
+      expenses: args.expenses,
       manualReceivables: args.manualReceivables,
       teams: args.teams,
       transactionCategoryRules: args.transactionCategoryRules,

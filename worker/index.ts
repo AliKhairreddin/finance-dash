@@ -11,6 +11,7 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
   CreateManualReceivablePayload,
@@ -22,6 +23,8 @@ import type {
   DataSource,
   DeleteInvoicesPayload,
   DraftRevenueRunPayload,
+  ExpenseDocument,
+  ExpenseRecord,
   FxRate,
   Holding,
   ImportWiseStatementPayload,
@@ -32,6 +35,7 @@ import type {
   LedgerItem,
   MeritTax,
   MatchTransactionPayload,
+  MatchExpensePaymentPayload,
   PaymentAllocation,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
@@ -78,6 +82,12 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import {
+  expensePayables,
+  nextExpenseRecordNumber,
+  validateExpenseAmounts
+} from "../shared/expenses";
+import { generateMissingReceiptDeclarationPdf } from "../shared/missingReceiptPdf";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import { invoiceCopyPayload } from "../shared/invoiceCopies";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
@@ -170,6 +180,7 @@ interface PersistedState {
   revision: string | null;
   providers: Provider[];
   invoices: Invoice[];
+  expenses: ExpenseRecord[];
   manualReceivables: LedgerItem[];
   teams: Team[];
   transactionCategories: TransactionCategory[];
@@ -309,6 +320,66 @@ function providerType(payload: CreateProviderPayload | UpdateProviderPayload): P
 
 function providerTypeForInvoiceDocument(documentType: CreateInvoicePayload["documentType"]): Provider["type"] {
   return documentType === "sales_invoice" ? "client" : "supplier";
+}
+
+const allowedExpenseDocumentContentTypes = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp"
+]);
+const maximumExpenseDocumentBytes = 10 * 1024 * 1024;
+
+function expenseDate(value: string | undefined, label: string): string {
+  const normalized = value?.trim();
+  if (!normalized || !/^\d{4}-\d{2}-\d{2}$/.test(normalized) || Number.isNaN(Date.parse(`${normalized}T00:00:00.000Z`))) {
+    throw new ApiError(400, `${label} must use YYYY-MM-DD`);
+  }
+  return normalized;
+}
+
+function validateExpenseDocumentUpload(contentType: string, byteLength: number): void {
+  if (!allowedExpenseDocumentContentTypes.has(contentType)) {
+    throw new ApiError(415, "Expense documents must be PDF, JPEG, PNG, or WebP files");
+  }
+  if (byteLength <= 0 || byteLength > maximumExpenseDocumentBytes) {
+    throw new ApiError(413, "Expense documents must be between 1 byte and 10 MB");
+  }
+}
+
+async function uploadExpenseDocumentToConvex(
+  env: Env,
+  bytes: Uint8Array,
+  contentType: string
+): Promise<string> {
+  validateExpenseDocumentUpload(contentType, bytes.byteLength);
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const uploadUrl = await convex.mutation(api.dashboard.generateExpenseDocumentUploadUrl, { serviceToken });
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": contentType },
+    body: new Blob([bytes.slice().buffer as ArrayBuffer], { type: contentType })
+  });
+  const result = (await response.json().catch(() => null)) as { storageId?: string; message?: string } | null;
+  if (!response.ok || !result?.storageId) {
+    throw new ApiError(503, result?.message || "Expense document storage is temporarily unavailable");
+  }
+  return result.storageId;
+}
+
+async function expenseDocumentUrl(env: Env, storageId: string): Promise<string | null> {
+  return getConvexClient(env).query(api.dashboard.getExpenseDocumentUrl, {
+    serviceToken: getConvexServiceToken(env),
+    storageId
+  });
+}
+
+async function storedExpenseDocument(env: Env, documentId: string): Promise<ExpenseDocument | undefined> {
+  const state = await getConvexClient(env).query(api.dashboard.getState, {
+    serviceToken: getConvexServiceToken(env)
+  });
+  return state?.expenses.flatMap((expense) => expense.documents).find((document) => document.id === documentId);
 }
 
 function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): string[] {
@@ -799,7 +870,7 @@ function meritCountryCode(providerCountry: string | undefined, configuredDefault
     const normalized = candidate?.trim().toUpperCase();
     if (normalized && /^[A-Z]{2}$/.test(normalized)) return normalized;
   }
-  return "CA";
+  return "EE";
 }
 
 function base64(bytes: ArrayBuffer): string {
@@ -1391,6 +1462,7 @@ async function loadPersisted(
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
     invoices: stored?.invoices ?? [],
+    expenses: stored ? stored.expenses : [],
     manualReceivables: stored?.manualReceivables ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategories: stored?.transactionCategories ?? [],
@@ -2062,6 +2134,7 @@ async function getSnapshot(
   const invoices = reconciliation.invoices;
   const transactions = reconciliation.transactions;
   const receivables = [...openInvoiceReceivables(invoices, reconciliation.allocations), ...state.manualReceivables];
+  const payables = expensePayables(state.expenses);
   const approximateUsdTotals = calculateApproximateUsdTotals(accounts, state.holdings, state.fxRates);
 
   return {
@@ -2069,7 +2142,7 @@ async function getSnapshot(
     accounts,
     receivables,
     openBalances: [],
-    payables: [],
+    payables,
     investments: [],
     providers: state.providers,
     teams: state.teams,
@@ -2080,6 +2153,7 @@ async function getSnapshot(
     aiSettings: publicAiSettings(runtimeAiSettings(env, state.aiSettings)),
     transactions,
     invoices,
+    expenses: state.expenses,
     paymentAllocations: reconciliation.allocations,
     invoicePredictions: calculateInvoicePredictions(invoices, reconciliation.allocations),
     holdings: state.holdings,
@@ -2101,7 +2175,7 @@ async function getSnapshot(
       approximateUsdTotals.excludedAssets,
       approximateUsdTotals.staleAssets
     ),
-    metrics: calculateMetrics(accounts, receivables, [], [], []),
+    metrics: calculateMetrics(accounts, receivables, [], payables, []),
     profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
     lastSync: new Date().toISOString()
   };
@@ -2178,6 +2252,11 @@ async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
   state.invoices = deletion.invoices;
   state.revenuePartners = deletion.revenuePartners;
   state.revenueRuns = deletion.revenueRuns;
+  state.expenses = state.expenses.map((expense) => {
+    if (expense.providerId !== providerId) return expense;
+    const { providerId: _providerId, ...withoutProvider } = expense;
+    return withoutProvider;
+  });
   state.wiseStatementTransactions = deletion.wiseStatementTransactions;
   await savePersisted(env, state);
   return deletion.deletedProvider;
@@ -2643,6 +2722,228 @@ async function deleteTransactionCategoryDefinition(env: Env, categoryId: string)
   } catch (error) {
     categoryMutationError(error);
   }
+}
+
+async function validateExpensePayload(
+  env: Env,
+  state: PersistedState,
+  payload: CreateExpensePayload
+): Promise<{ provider?: Provider; transaction?: Transaction; category: string }> {
+  if (!payload.supplierName?.trim() || !payload.businessPurpose?.trim() || !payload.description?.trim()) {
+    throw new ApiError(400, "Supplier, economic content, and business purpose are required");
+  }
+  if (!/^[A-Z]{3}$/.test(payload.currency?.trim().toUpperCase())) {
+    throw new ApiError(400, "Expense currency must be a three-letter ISO code");
+  }
+  try {
+    validateExpenseAmounts(payload);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "Expense amounts are invalid");
+  }
+  const category = transactionBusinessCategory(payload.category);
+  if (!isTransactionCategoryForDirection(category, "out", state.transactionCategories)) {
+    throw new ApiError(400, `Category "${category}" is not valid for money out`);
+  }
+  const provider = payload.providerId ? state.providers.find((item) => item.id === payload.providerId) : undefined;
+  if (payload.providerId && (!provider || provider.type !== "supplier")) {
+    throw new ApiError(400, "Expense records require a supplier company");
+  }
+  if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
+    throw new ApiError(400, "Expense team not found");
+  }
+  const transaction = payload.transactionId
+    ? await fetchTransactionForUpdate(env, payload.transactionId, state)
+    : undefined;
+  if (payload.transactionId && (!transaction || transaction.direction !== "out")) {
+    throw new ApiError(400, "Paid expenses require an outgoing bank transaction");
+  }
+  if (transaction) {
+    if (payload.recordType !== "paid_expense" || payload.paymentStatus !== "paid") {
+      throw new ApiError(400, "An outgoing bank transaction can only create a paid expense");
+    }
+    if (
+      transaction.currency !== payload.currency.trim().toUpperCase()
+      || Math.abs(transaction.amount - payload.grossAmount) > 0.01
+    ) {
+      throw new ApiError(400, "Expense currency and gross amount must match the outgoing bank transaction");
+    }
+    if (state.expenses.some((expense) => expense.transactionId === transaction.id)) {
+      throw new ApiError(409, "This bank transaction already has an expense record");
+    }
+  } else if (payload.recordType !== "supplier_bill" || payload.paymentStatus !== "unpaid" || !payload.dueDate) {
+    throw new ApiError(400, "Records without a bank transaction must be unpaid supplier bills with a due date");
+  }
+  if (payload.document.mode === "upload" && !payload.sourceDocumentNumber?.trim()) {
+    throw new ApiError(400, "Supplier receipt or invoice number is required");
+  }
+  if (payload.sourceDocumentNumber?.trim()) {
+    const normalizedDocumentNumber = payload.sourceDocumentNumber.trim().toLowerCase();
+    const supplierName = payload.supplierName.trim().toLowerCase();
+    const duplicate = state.expenses.some((expense) =>
+      expense.sourceDocumentNumber?.toLowerCase() === normalizedDocumentNumber
+      && (provider ? expense.providerId === provider.id : expense.supplierName.toLowerCase() === supplierName)
+    );
+    if (duplicate) throw new ApiError(409, "This supplier document number is already recorded");
+  }
+  if (payload.document.mode === "generate_missing_receipt") {
+    if (
+      !transaction
+      || !payload.document.reason.trim()
+      || payload.document.confirmation !== "MISSING_SOURCE_DOCUMENT_CONFIRMED"
+    ) {
+      throw new ApiError(400, "A linked bank transaction, reason, and missing source document confirmation are required");
+    }
+    if (payload.vatAmount !== 0 || payload.vatTreatment !== "not_applicable") {
+      throw new ApiError(400, "Input VAT cannot be recorded from an internally generated missing-document declaration");
+    }
+  } else {
+    validateExpenseDocumentUpload(payload.document.file.contentType, payload.document.file.size);
+    if (!payload.document.file.storageId?.trim() || !payload.document.file.fileName?.trim()) {
+      throw new ApiError(400, "Uploaded expense document details are required");
+    }
+  }
+  return { provider, transaction, category };
+}
+
+async function createExpense(env: Env, payload: CreateExpensePayload): Promise<ExpenseRecord> {
+  const state = await loadPersisted(env);
+  const { provider, transaction, category } = await validateExpensePayload(env, state, payload);
+  const createdAt = new Date().toISOString();
+  const issueDate = expenseDate(payload.issueDate, "Issue date");
+  const transactionDate = payload.transactionDate
+    ? expenseDate(payload.transactionDate, "Transaction date")
+    : transaction?.date;
+  const dueDate = payload.dueDate ? expenseDate(payload.dueDate, "Due date") : undefined;
+  if (dueDate && dueDate < issueDate) throw new ApiError(400, "Due date cannot be before issue date");
+  const expense: ExpenseRecord = {
+    id: `expense-${crypto.randomUUID()}`,
+    recordNumber: nextExpenseRecordNumber(state.expenses, issueDate),
+    recordType: payload.recordType,
+    paymentStatus: payload.paymentStatus,
+    transactionId: transaction?.id,
+    providerId: provider?.id,
+    teamId: cleanOptional(payload.teamId),
+    supplierName: payload.supplierName.trim(),
+    supplierRegistrationNumber: cleanOptional(payload.supplierRegistrationNumber),
+    supplierVatNumber: cleanOptional(payload.supplierVatNumber)?.toUpperCase(),
+    sourceDocumentNumber: cleanOptional(payload.sourceDocumentNumber),
+    issueDate,
+    transactionDate,
+    dueDate,
+    paidAt: payload.paymentStatus === "paid" ? transaction?.date ?? issueDate : undefined,
+    category,
+    businessPurpose: payload.businessPurpose.trim(),
+    description: payload.description.trim(),
+    netAmount: Number(payload.netAmount.toFixed(2)),
+    vatAmount: Number(payload.vatAmount.toFixed(2)),
+    grossAmount: Number(payload.grossAmount.toFixed(2)),
+    vatRate: payload.vatRate,
+    vatTreatment: payload.vatTreatment,
+    currency: payload.currency.trim().toUpperCase(),
+    missingDocumentReason: payload.document.mode === "generate_missing_receipt" ? payload.document.reason.trim() : undefined,
+    declarationConfirmedAt: payload.document.mode === "generate_missing_receipt" ? createdAt : undefined,
+    documents: [],
+    createdAt,
+    updatedAt: createdAt
+  };
+
+  let document: ExpenseDocument;
+  if (payload.document.mode === "upload") {
+    const file = payload.document.file;
+    document = {
+      id: `expense-document-${crypto.randomUUID()}`,
+      kind: file.kind,
+      fileName: file.fileName.trim(),
+      contentType: file.contentType,
+      size: file.size,
+      storageId: file.storageId,
+      createdAt
+    };
+  } else {
+    const bytes = await generateMissingReceiptDeclarationPdf(expense, transaction!);
+    const fileName = `${expense.recordNumber}-missing-source-document.pdf`;
+    document = {
+      id: `expense-document-${crypto.randomUUID()}`,
+      kind: "missing_receipt_declaration",
+      fileName,
+      contentType: "application/pdf",
+      size: bytes.byteLength,
+      storageId: await uploadExpenseDocumentToConvex(env, bytes, "application/pdf"),
+      createdAt
+    };
+  }
+  expense.documents = [document];
+  state.expenses = [expense, ...state.expenses];
+
+  if (transaction) {
+    upsertPersistedTransaction(state, {
+      ...transaction,
+      matchedProviderId: provider?.id ?? transaction.matchedProviderId,
+      category,
+      teamId: expense.teamId ?? transaction.teamId,
+      confidence: 1,
+      matchReason: "Paid expense reviewed with source document"
+    });
+    if (expense.teamId) {
+      state.transactionTeamAssignments = [
+        { transactionId: transaction.id, teamId: expense.teamId, updatedAt: createdAt },
+        ...state.transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
+      ];
+    }
+    if (provider) {
+      state.providers = state.providers.map((item) =>
+        item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
+      );
+    }
+  }
+  await savePersisted(env, state);
+  return expense;
+}
+
+async function matchExpensePayment(
+  env: Env,
+  expenseId: string,
+  payload: MatchExpensePaymentPayload
+): Promise<ExpenseRecord> {
+  const state = await loadPersisted(env);
+  const expense = state.expenses.find((item) => item.id === expenseId);
+  if (!expense || expense.recordType !== "supplier_bill" || expense.paymentStatus !== "unpaid") {
+    throw new ApiError(404, "Unpaid supplier bill not found");
+  }
+  const transaction = await fetchTransactionForUpdate(env, payload.transactionId, state);
+  if (!transaction || transaction.direction !== "out") throw new ApiError(404, "Outgoing bank transaction not found");
+  if (state.expenses.some((item) => item.id !== expense.id && item.transactionId === transaction.id)) {
+    throw new ApiError(409, "This bank transaction already has an expense record");
+  }
+  if (expense.currency !== transaction.currency || Math.abs(expense.grossAmount - transaction.amount) > 0.01) {
+    throw new ApiError(400, "Supplier bill currency and gross amount must match the bank transaction");
+  }
+  const updatedAt = new Date().toISOString();
+  const updated: ExpenseRecord = {
+    ...expense,
+    paymentStatus: "paid",
+    transactionId: transaction.id,
+    transactionDate: expense.transactionDate ?? transaction.date,
+    paidAt: transaction.date,
+    updatedAt
+  };
+  state.expenses = state.expenses.map((item) => item.id === expense.id ? updated : item);
+  upsertPersistedTransaction(state, {
+    ...transaction,
+    matchedProviderId: expense.providerId ?? transaction.matchedProviderId,
+    category: expense.category,
+    teamId: expense.teamId ?? transaction.teamId,
+    confidence: 1,
+    matchReason: `Matched to supplier bill ${expense.recordNumber}`
+  });
+  if (expense.teamId) {
+    state.transactionTeamAssignments = [
+      { transactionId: transaction.id, teamId: expense.teamId, updatedAt },
+      ...state.transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
+    ];
+  }
+  await savePersisted(env, state);
+  return updated;
 }
 
 async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<Invoice> {
@@ -3320,6 +3621,7 @@ function trackedFxAssets(
     ...accounts.map((account) => account.currency),
     ...state.holdings.map((holding) => holding.asset),
     ...state.invoices.map((invoice) => invoice.currency),
+    ...state.expenses.map((expense) => expense.currency),
     ...liveInvoices.map((invoice) => invoice.currency),
     ...state.manualReceivables.map((receivable) => receivable.currency),
     ...state.revenuePartners.map((partner) => partner.currency),
@@ -3640,6 +3942,26 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return json(await getManagementReportDashboard(env));
     }
 
+    if (url.pathname === "/api/expense-documents/upload" && request.method === "POST") {
+      const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+      const declaredLength = Number(request.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > maximumExpenseDocumentBytes) {
+        throw new ApiError(413, "Expense documents cannot exceed 10 MB");
+      }
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const storageId = await uploadExpenseDocumentToConvex(env, bytes, contentType);
+      return json({ storageId, size: bytes.byteLength }, { status: 201 });
+    }
+
+    const expenseDocumentMatch = url.pathname.match(/^\/api\/expense-documents\/([^/]+)$/);
+    if (expenseDocumentMatch && request.method === "GET") {
+      const document = await storedExpenseDocument(env, decodeURIComponent(expenseDocumentMatch[1]));
+      if (!document) throw new ApiError(404, "Expense document not found");
+      const storageUrl = await expenseDocumentUrl(env, document.storageId);
+      if (!storageUrl) throw new ApiError(404, "Expense document file not found");
+      return Response.redirect(storageUrl, 302);
+    }
+
     if (url.pathname === "/api/admin/wise/reset-preview" && request.method === "GET") {
       return json(await getWiseResetPreview(env));
     }
@@ -3783,6 +4105,21 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/invoices" && request.method === "POST") {
       return json(await createInvoice(env, (await request.json()) as CreateInvoicePayload), { status: 201 });
+    }
+
+    if (url.pathname === "/api/expenses" && request.method === "POST") {
+      return json(await createExpense(env, (await request.json()) as CreateExpensePayload), { status: 201 });
+    }
+
+    const expensePaymentMatch = url.pathname.match(/^\/api\/expenses\/([^/]+)\/match-payment$/);
+    if (expensePaymentMatch && request.method === "POST") {
+      return json(
+        await matchExpensePayment(
+          env,
+          decodeURIComponent(expensePaymentMatch[1]),
+          (await request.json()) as MatchExpensePaymentPayload
+        )
+      );
     }
 
     if (url.pathname === "/api/invoices" && request.method === "DELETE") {
