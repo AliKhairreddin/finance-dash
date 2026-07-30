@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlState } from "@/lib/url-state";
 import type {
   ManagementReportBankAggregate,
   ManagementReportBusinessUnit,
@@ -43,6 +44,7 @@ interface ManagementReportApiResponse {
 
 type PerformanceDimension = "team" | "offer" | "platform";
 type LedgerSortKey = "bank" | "company" | "date" | "nativeAmount" | "nature" | "period" | "team" | "usdAmount";
+type ManagementReportSection = "summary" | "performance" | "ledger" | "ownership";
 
 const wholeNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const percentNumber = new Intl.NumberFormat("en-US", {
@@ -362,8 +364,14 @@ function teamKpis(team: ManagementReportBusinessUnit): ManagementReportKpi[] {
 }
 
 function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
-  const [selectedId, setSelectedId] = useState(teams[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useUrlState("managementTeam", teams[0]?.id ?? "");
   const selected = teams.find((team) => team.id === selectedId) ?? teams[0];
+
+  useEffect(() => {
+    if (teams.length > 0 && !teams.some((team) => team.id === selectedId)) {
+      setSelectedId(teams[0].id);
+    }
+  }, [selectedId, setSelectedId, teams]);
 
   if (!selected) return <div className="management-report-state"><div className="management-report-state-content"><p>No team performance was parsed.</p></div></div>;
 
@@ -465,7 +473,9 @@ function PlatformPerformance({ platforms }: { platforms: ManagementReportPlatfor
 }
 
 function PerformanceTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
-  const [dimension, setDimension] = useState<PerformanceDimension>("team");
+  const [dimension, setDimension] = useUrlState<PerformanceDimension>("managementDimension", "team", {
+    allowedValues: ["team", "offer", "platform"]
+  });
   const teams = dashboard.businessUnits.filter((unit) => unit.kind === "team");
 
   return (
@@ -501,11 +511,15 @@ function BankAggregateTable({ aggregates }: { aggregates: ManagementReportBankAg
 }
 
 function LedgerTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
-  const [query, setQuery] = useState("");
-  const [team, setTeam] = useState("all");
-  const [bank, setBank] = useState("all");
-  const [sortKey, setSortKey] = useState<LedgerSortKey>("date");
-  const [sortDirection, setSortDirection] = useState<TableSortDirection>("desc");
+  const [query, setQuery] = useUrlState("managementLedgerQuery", "");
+  const [team, setTeam] = useUrlState("managementLedgerTeam", "all");
+  const [bank, setBank] = useUrlState("managementLedgerBank", "all");
+  const [sortKey, setSortKey] = useUrlState<LedgerSortKey>("managementLedgerSort", "date", {
+    allowedValues: ["bank", "company", "date", "nativeAmount", "nature", "period", "team", "usdAmount"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("managementLedgerOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
   const teamOptions = useMemo(() => [...new Set(dashboard.bank.recentEntries.map((entry) => entry.segment))].filter(Boolean).sort(), [dashboard.bank.recentEntries]);
   const bankOptions = useMemo(() => [...new Set(dashboard.bank.recentEntries.map((entry) => entry.bankName))].filter(Boolean).sort(), [dashboard.bank.recentEntries]);
   const visibleEntries = useMemo(() => {
@@ -648,6 +662,10 @@ function OwnershipTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
 }
 
 export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
+  const [section, setSection] = useUrlState<ManagementReportSection>("managementSection", "summary", {
+    allowedValues: ["summary", "performance", "ledger", "ownership"],
+    history: "push"
+  });
   const [dashboard, setDashboard] = useState<ManagementReportDashboard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -714,7 +732,11 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
   return (
     <section className="management-report-view" aria-label="Management report">
       <StatusBand dashboard={dashboard} />
-      <Tabs className="management-report-tabs" defaultValue="summary">
+      <Tabs
+        className="management-report-tabs"
+        value={section}
+        onValueChange={(value) => setSection(value as ManagementReportSection)}
+      >
         <TabsList className="management-report-tab-list">
           <TabsTrigger className="management-report-tab-trigger" value="summary">Summary</TabsTrigger>
           <TabsTrigger className="management-report-tab-trigger" value="performance">Performance</TabsTrigger>

@@ -33,6 +33,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
+import { isIsoDate, useUrlState } from "@/lib/url-state";
 import type {
   BillingCadence,
   CreateInvoicePayload,
@@ -251,21 +252,39 @@ export function RevenueView({
   onDraftRevenueRun: (run: RevenueRun) => Promise<void>;
   onOpenInvoices: () => void;
 }) {
-  const [periodPreset, setPeriodPreset] = useState<RevenuePeriodPreset>("last-week");
-  const [partnerId, setPartnerId] = useState("all");
-  const [currency, setCurrency] = useState("all");
-  const [cadence, setCadence] = useState<"all" | BillingCadence>("all");
-  const [status, setStatus] = useState("all");
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
+  const [periodPreset, setPeriodPreset] = useUrlState<RevenuePeriodPreset>("revenuePeriod", "last-week", {
+    allowedValues: ["last-week", "this-week", "last-7-days", "this-month", "custom"]
+  });
+  const [partnerId, setPartnerId] = useUrlState("revenuePartner", "all");
+  const [currency, setCurrency] = useUrlState("revenueCurrency", "all");
+  const [cadence, setCadence] = useUrlState<"all" | BillingCadence>("revenueCadence", "all", {
+    allowedValues: ["all", "weekly", "monthly"]
+  });
+  const [status, setStatus] = useUrlState<string>("revenueStatus", "all", {
+    allowedValues: ["all", "pulled", "drafted", "invoiced", "accruing", "failed"]
+  });
+  const [periodStart, setPeriodStart] = useUrlState("revenueStart", "", { isValid: isIsoDate });
+  const [periodEnd, setPeriodEnd] = useUrlState("revenueEnd", "", { isValid: isIsoDate });
   const [busy, setBusy] = useState(false);
   const [draftingRunId, setDraftingRunId] = useState<string | null>(null);
   const [pullResults, setPullResults] = useState<RevenueRun[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [runSortKey, setRunSortKey] = useState<RevenueRunSortKey>("period");
-  const [runSortDirection, setRunSortDirection] = useState<TableSortDirection>("desc");
-  const [accrualSortKey, setAccrualSortKey] = useState<RevenueAccrualSortKey>("period");
-  const [accrualSortDirection, setAccrualSortDirection] = useState<TableSortDirection>("asc");
+  const [runSortKey, setRunSortKey] = useUrlState<RevenueRunSortKey>("revenueRunSort", "period", {
+    allowedValues: ["activity", "amount", "cadence", "company", "invoice", "period", "status"]
+  });
+  const [runSortDirection, setRunSortDirection] = useUrlState<TableSortDirection>("revenueRunOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const [accrualSortKey, setAccrualSortKey] = useUrlState<RevenueAccrualSortKey>(
+    "revenueAccrualSort",
+    "period",
+    { allowedValues: ["accruedThrough", "amount", "cadence", "company", "period", "status"] }
+  );
+  const [accrualSortDirection, setAccrualSortDirection] = useUrlState<TableSortDirection>(
+    "revenueAccrualOrder",
+    "asc",
+    { allowedValues: ["asc", "desc"] }
+  );
 
   const partnersById = useMemo(
     () => new Map(dashboard.revenuePartners.map((partner) => [partner.id, partner])),
@@ -614,17 +633,30 @@ export function InvoicesView({
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
 }) {
-  const [tab, setTab] = useState<InvoiceTab>("all");
-  const [query, setQuery] = useState("");
-  const [companyId, setCompanyId] = useState("all");
-  const [currency, setCurrency] = useState("all");
-  const [statusFilter, setStatusFilter] = useState<InvoiceStatusFilter>("all");
-  const [deliveryFilter, setDeliveryFilter] = useState<InvoiceDeliveryFilter>("all");
-  const [cadence, setCadence] = useState<"all" | BillingCadence | "manual">("all");
-  const [createdDateFrom, setCreatedDateFrom] = useState("");
-  const [createdDateTo, setCreatedDateTo] = useState("");
-  const [sortKey, setSortKey] = useState<InvoiceSortKey>("period");
-  const [sortDirection, setSortDirection] = useState<TableSortDirection>("asc");
+  const [tab, setTab] = useUrlState<InvoiceTab>("invoiceTab", "all", {
+    allowedValues: ["all", "active", "paid"],
+    history: "push"
+  });
+  const [query, setQuery] = useUrlState("invoiceQuery", "");
+  const [companyId, setCompanyId] = useUrlState("invoiceCompany", "all");
+  const [currency, setCurrency] = useUrlState("invoiceCurrency", "all");
+  const [statusFilter, setStatusFilter] = useUrlState<InvoiceStatusFilter>("invoiceStatus", "all", {
+    allowedValues: ["all", "draft", "open", "accruing"]
+  });
+  const [deliveryFilter, setDeliveryFilter] = useUrlState<InvoiceDeliveryFilter>("invoiceDelivery", "all", {
+    allowedValues: ["all", "not-sent", "saved", "delivered", "delivery-failed"]
+  });
+  const [cadence, setCadence] = useUrlState<"all" | BillingCadence | "manual">("invoiceCadence", "all", {
+    allowedValues: ["all", "weekly", "monthly", "manual"]
+  });
+  const [createdDateFrom, setCreatedDateFrom] = useUrlState("invoiceCreatedFrom", "", { isValid: isIsoDate });
+  const [createdDateTo, setCreatedDateTo] = useUrlState("invoiceCreatedTo", "", { isValid: isIsoDate });
+  const [sortKey, setSortKey] = useUrlState<InvoiceSortKey>("invoiceSort", "period", {
+    allowedValues: ["amount", "cadence", "company", "created", "forecast", "period", "status"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("invoiceOrder", "asc", {
+    allowedValues: ["asc", "desc"]
+  });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editorRequest, setEditorRequest] = useState<InvoiceEditorRequest | null>(null);
   const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);

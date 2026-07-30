@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
+import { useUrlState } from "@/lib/url-state";
 import type {
   CreateHoldingPayload,
   DashboardSnapshot,
@@ -51,12 +52,22 @@ function sourceLabel(source: DataSource): string {
 }
 
 export function AllBankTransactionsView({ dashboard, providersById }: { dashboard: DashboardSnapshot; providersById: Map<string, Provider> }) {
-  const [query, setQuery] = useState("");
-  const [source, setSource] = useState<"all" | DataSource>("all");
-  const [direction, setDirection] = useState<"all" | "in" | "out">("all");
-  const [match, setMatch] = useState<"all" | "matched" | "unmatched">("all");
-  const [sortKey, setSortKey] = useState<BankTransactionSortKey>("date");
-  const [sortDirection, setSortDirection] = useState<TableSortDirection>("desc");
+  const [query, setQuery] = useUrlState("allBankQuery", "");
+  const [source, setSource] = useUrlState<"all" | DataSource>("allBankSource", "all", {
+    allowedValues: ["all", ...transactionSources.map((item) => item.value)]
+  });
+  const [direction, setDirection] = useUrlState<"all" | "in" | "out">("allBankDirection", "all", {
+    allowedValues: ["all", "in", "out"]
+  });
+  const [match, setMatch] = useUrlState<"all" | "matched" | "unmatched">("allBankMatch", "all", {
+    allowedValues: ["all", "matched", "unmatched"]
+  });
+  const [sortKey, setSortKey] = useUrlState<BankTransactionSortKey>("allBankSort", "date", {
+    allowedValues: ["account", "amount", "category", "counterparty", "date", "direction", "source"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("allBankOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
 
   const availableSources = useMemo(

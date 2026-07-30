@@ -55,6 +55,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { compareTableValues, SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
+import { useUrlDateRangeState, useUrlState } from "@/lib/url-state";
 import type {
   AiPromptPayload,
   AiPromptResult,
@@ -178,13 +179,21 @@ type DirectoryDeleteTarget =
   | { kind: "provider"; provider: Provider }
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
-const activeTabStorageKey = "finance-dash-active-tab";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
-
-function storedActiveTab(): ActiveTab {
-  const storedTab = window.sessionStorage.getItem(activeTabStorageKey);
-  return activeTabs.find((tab) => tab === storedTab) ?? "overview";
-}
+const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "holdings"];
+const transactionSortKeys: readonly TransactionSortKey[] = [
+  "amount",
+  "cardHolder",
+  "category",
+  "company",
+  "counterparty",
+  "date",
+  "direction",
+  "document",
+  "match",
+  "period",
+  "team"
+];
 
 function localIsoDate(daysFromToday = 0): string {
   const date = new Date();
@@ -748,17 +757,34 @@ function App() {
     return window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light";
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
-  const [activeTab, setActiveTab] = useState<ActiveTab>(storedActiveTab);
+  const [activeTab, setActiveTab] = useUrlState<ActiveTab>("page", "overview", {
+    allowedValues: activeTabs,
+    clearOtherSearchParams: true,
+    history: "push"
+  });
   const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
   });
-  const [bankTab, setBankTab] = useState<BankTab>("all");
-  const [bankDirection, setBankDirection] = useState<"in" | "out">("in");
-  const [teamFilter, setTeamFilter] = useState("all");
-  const [revolutDateRange, setRevolutDateRange] = useState<RevolutTransactionDateRange>(
-    defaultRevolutTransactionDateRange
+  const [bankTab, setBankTab] = useUrlState<BankTab>("bankView", "all", {
+    allowedValues: bankTabs,
+    history: "push"
+  });
+  const [bankDirection, setBankDirection] = useUrlState<"in" | "out">("bankDirection", "in", {
+    allowedValues: ["in", "out"]
+  });
+  const [teamFilter, setTeamFilter] = useUrlState("bankTeam", "all");
+  const defaultRevolutRange = useMemo(defaultRevolutTransactionDateRange, []);
+  const defaultSlashRange = useMemo(defaultSlashTransactionDateRange, []);
+  const [revolutDateRange, setRevolutDateRange] = useUrlDateRangeState(
+    "revolutFrom",
+    "revolutTo",
+    defaultRevolutRange
   );
-  const [slashDateRange, setSlashDateRange] = useState<SlashTransactionDateRange>(defaultSlashTransactionDateRange);
+  const [slashDateRange, setSlashDateRange] = useUrlDateRangeState(
+    "slashFrom",
+    "slashTo",
+    defaultSlashRange
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoadingRevolut, setIsLoadingRevolut] = useState(false);
@@ -767,10 +793,16 @@ function App() {
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [matchFilter, setMatchFilter] = useState("needs-review");
-  const [transactionSortKey, setTransactionSortKey] = useState<TransactionSortKey>("date");
-  const [transactionSortDirection, setTransactionSortDirection] = useState<SortDirection>("desc");
+  const [searchTerm, setSearchTerm] = useUrlState("bankQuery", "");
+  const [matchFilter, setMatchFilter] = useUrlState<string>("bankMatch", "needs-review", {
+    allowedValues: ["needs-review", "matched", "all"]
+  });
+  const [transactionSortKey, setTransactionSortKey] = useUrlState<TransactionSortKey>("bankSort", "date", {
+    allowedValues: transactionSortKeys
+  });
+  const [transactionSortDirection, setTransactionSortDirection] = useUrlState<SortDirection>("bankOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -782,10 +814,6 @@ function App() {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
     window.localStorage.setItem(themeStorageKey, themeMode);
   }, [themeMode]);
-
-  useEffect(() => {
-    window.sessionStorage.setItem(activeTabStorageKey, activeTab);
-  }, [activeTab]);
 
   function toggleThemeMode() {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));
@@ -2832,7 +2860,7 @@ function AnalyticsView({
   isCategorizing: boolean;
   onAutoCategorize: () => void;
 }) {
-  const [tagFilter, setTagFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useUrlState("analyticsTag", "all");
   const tagOptions = useMemo(() => companyTagOptions(dashboard.providers), [dashboard.providers]);
 
   useEffect(() => {
@@ -2846,11 +2874,15 @@ function AnalyticsView({
     return providerHasTag(provider, tagFilter);
   });
   const needsReview = rows.filter(transactionNeedsReview);
-  const [revenuePieBreakdown, setRevenuePieBreakdown] = useState<RevenuePieBreakdown>("team-partner");
-  const [revenuePieCurrency, setRevenuePieCurrency] = useState("all");
-  const [revenuePieTeamId, setRevenuePieTeamId] = useState("all");
-  const [revenuePiePartnerId, setRevenuePiePartnerId] = useState("all");
-  const [revenuePieCategory, setRevenuePieCategory] = useState("all");
+  const [revenuePieBreakdown, setRevenuePieBreakdown] = useUrlState<RevenuePieBreakdown>(
+    "analyticsRevenueBreakdown",
+    "team-partner",
+    { allowedValues: ["team-partner", "team", "partner", "category"] }
+  );
+  const [revenuePieCurrency, setRevenuePieCurrency] = useUrlState("analyticsRevenueCurrency", "all");
+  const [revenuePieTeamId, setRevenuePieTeamId] = useUrlState("analyticsRevenueTeam", "all");
+  const [revenuePiePartnerId, setRevenuePiePartnerId] = useUrlState("analyticsRevenuePartner", "all");
+  const [revenuePieCategory, setRevenuePieCategory] = useUrlState("analyticsRevenueCategory", "all");
   const revenueRows = rows.filter((transaction) => transaction.direction === "in");
   const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
   const revenueTeamOptions = [
@@ -4181,8 +4213,12 @@ function DistributionView({
     [distribution.months]
   );
   const currencyOptions = useMemo(() => distribution.currencies.map((currency) => currency.currency), [distribution.currencies]);
-  const [selectedMonth, setSelectedMonth] = useState(monthOptions[0] ?? new Date().toISOString().slice(0, 7));
-  const [selectedCurrency, setSelectedCurrency] = useState(
+  const [selectedMonth, setSelectedMonth] = useUrlState(
+    "distributionMonth",
+    monthOptions[0] ?? new Date().toISOString().slice(0, 7)
+  );
+  const [selectedCurrency, setSelectedCurrency] = useUrlState(
+    "distributionCurrency",
     currencyOptions.includes("EUR") ? "EUR" : currencyOptions[0] ?? "EUR"
   );
   const [editingAdjustment, setEditingAdjustment] = useState<DistributionAdjustmentTarget | null>(null);
@@ -5030,8 +5066,10 @@ function ProvidersView({
   onDeleteProvider: (provider: Provider) => void;
   onDeleteRevenuePartner: (partner: RevenuePartner) => void;
 }) {
-  const [scope, setScope] = useState<"all" | ProviderType>("all");
-  const [query, setQuery] = useState("");
+  const [scope, setScope] = useUrlState<"all" | ProviderType>("companyType", "all", {
+    allowedValues: ["all", "client", "supplier"]
+  });
+  const [query, setQuery] = useUrlState("companyQuery", "");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleProviders = providers.filter((provider) => {
     if (scope !== "all" && provider.type !== scope) return false;
