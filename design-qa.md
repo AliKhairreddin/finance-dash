@@ -1,76 +1,101 @@
-# Banking experience design QA
+# Compact dashboard summary-strip design QA
 
 ## Scope
 
-This report consolidates the final visual and interaction checks for:
-
-- Wise coverage messaging and provider badges
-- The compact reconciliation toolbar
-- Shared Revolut and Slash date-range loading
+This pass verifies the shared compact summary strip used across the dashboard, with focused coverage of the All, Wise, Revolut, and Slash bank tabs.
 
 ## Evidence
 
-- Toolbar source visual: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-1385ed82-81ac-4e96-ba7c-f35c4221c4d4.png`
-- Toolbar implementation screenshot: `/tmp/finance-toolbar-slash.png`
-- Toolbar comparison: `/tmp/finance-toolbar-comparison.png`
-- Overview comparison: `/tmp/finance-dash-design-qa/overview-source-left-local-right.jpg`
-- Banks comparison: `/tmp/finance-dash-design-qa/banks-source-left-local-right.jpg`
-- Focused bank views:
-  - `/tmp/finance-dash-design-qa/local-banks-slash-light.jpg`
-  - `/tmp/finance-dash-design-qa/local-banks-revolut-dark.jpg`
-  - `/tmp/finance-dash-design-qa/local-banks-wise-dark.jpg`
-- Settings check: `/tmp/finance-dash-design-qa/local-settings-wise-note-dark.jpg`
-- Final toolbar viewport checks: 1309, 1180, and 760 CSS px
-- Final Revolut date-range check: local dashboard in dark mode at 1309 × 765 CSS px
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-8db73b32-fb3f-4835-931a-8292fdd77250.png`
+- Production Slash implementation: `/tmp/finance-summary-production-slash-full.png`
+- Focused production strip: `/tmp/finance-summary-production-slash-crop.png`
+- Same-input before/after comparison: `/tmp/finance-summary-production-comparison.png`
+- Supporting production views:
+  - `/tmp/finance-summary-production-full.png`
+  - `/tmp/finance-summary-production-wise-full.png`
+  - `/tmp/finance-summary-production-revolut-full.png`
+- Local responsive implementation: `http://127.0.0.1:5173/`
+- Local implementation capture: `/tmp/finance-summary-local-full.png`
+
+## Viewport and normalization
+
+- Desktop viewport: 1312 × 769 CSS px.
+- Source image: 2440 × 238 px at Retina density; normalized to 1082 × 105 px for the focused comparison.
+- Production implementation: 1312 × 769 px at device pixel ratio 1.
+- Production focused strip: 1082 × 48 px.
+- Combined comparison: 2164 × 126 px, with equal-width source and implementation regions.
+- Responsive check: 390 × 844 CSS px. The summary remained one horizontal scroll row with four 320 × 52 px segments inside a 368 × 54 px viewport.
+
+## State
+
+- Focused parity state: Slash reconciliation, incoming transactions, Jun 15–Jul 29, 2026.
+- The source and production comparison both show $2,857,452.85 visible volume, 92 transactions, 0 matched rows, 92 rows without a team, and the native-currency detail.
+- Additional live checks covered All, Wise, and Revolut.
 
 ## Findings
 
 No actionable P0, P1, or P2 issues remain.
 
-### Wise coverage and source identity
+### Fonts and typography
 
-- Wise is shown as live when balance retrieval succeeds. Manual transaction and statement imports are no longer presented as a balance-sync failure.
-- Settings keeps the workflow explicit: “Balances sync automatically. Transactions and statements are imported manually from Wise CSVs.”
-- Unified-ledger source badges reuse the account-table provider tokens: Wise green, Revolut blue, and Slash warm gold.
-- Provider identity remains available in text and does not rely on color alone.
+- Geist remains unchanged and matches the surrounding dashboard.
+- Uppercase labels retain the existing weight, tracking, and hierarchy.
+- Values use tabular numerals, stay visually dominant, and remain legible in the reduced height.
+- Long native-currency details truncate on a single line rather than increasing the strip height.
 
-### Compact reconciliation toolbar
+### Spacing and layout rhythm
 
-- The reconciliation header is 56 px tall in the final desktop view and stays on one row.
-- The heading is shortened to “Match payments and spend,” the search placeholder is “Search,” and the icon-only Auto-categorize action retains a descriptive accessible name and title.
-- Direction, search, status, Filters, and automation controls maintain 8–10 px gaps.
-- The worst-case Wise toolbar, including Import CSV, fits at 1180 px without overlap.
-- At mobile width, the 36 px automation action stays right-aligned beside Import CSV.
+- The focused live strip is 48 px tall, versus approximately 105 px after source-density normalization.
+- Four metrics remain in one segmented row on desktop.
+- Labels and values share the primary row; the native-currency breakdown occupies a compact second line only where present.
+- Borders, 12 px outer radius, and internal dividers align with the dashboard panels.
+- Mobile uses one horizontally scrollable row instead of a two-row or four-row stack.
 
-### Revolut and Slash date ranges
+### Colors and visual tokens
 
-- Revolut and Slash now share the same Loaded period, From, To, Load dates, Recent 45 days, and Show 45 earlier days controls.
-- The Revolut controls fit cleanly between the reconciliation toolbar and metric cards without changing table density.
-- Date inputs have visible labels, enforce ordered dates, prevent future end dates, and retain keyboard-native date input behavior.
-- Loading is scoped per bank so a Revolut range request does not disable the Slash loader, and vice versa.
+- The strip uses the existing panel, border, muted-text, primary-text, and hover tokens.
+- No new colors, gradients, or elevation treatments were introduced.
+- Light-theme contrast remains consistent with adjacent table headers and controls.
+
+### Image quality and asset fidelity
+
+- The target contains no image assets or non-standard icons.
+- No placeholders, recreated icons, SVG drawings, or raster substitutions were introduced.
+- Screenshots were captured at native density and normalized only for the focused comparison.
+
+### Copy and content
+
+- All source information remains visible: metric label, value, and native-currency detail where available.
+- All, Wise, Revolut, and Slash retain their existing labels and live data.
+- No copy was removed to achieve the height reduction.
+
+## Full-view comparison evidence
+
+- All renders as one compact segmented summary bar directly below the bank tabs.
+- Wise keeps its empty-state metrics in one 54 px row.
+- Revolut and Slash keep their date controls, compact summary strip, and table in the expected order without overlap.
+- The table begins materially higher in the viewport, which is the intended outcome.
+
+## Focused comparison evidence
+
+The same-input comparison shows the original four large cards on the left and the production segmented strip on the right. The implementation preserves all five visible information elements in the first metric (label, USD value, native label, native value, and grouping) while reducing the component to less than half the normalized source height.
 
 ## Interaction and runtime checks
 
-- Filters opens the Ownership panel.
-- Auto-categorize retains a descriptive accessible name while icon-only.
-- Navigated through Overview, Banks, and Settings in light and dark themes.
-- Filtered the unified ledger by Wise, Revolut, and Slash and verified the correct source treatment.
-- Revolut and Slash date controls render with the expected default 45-day period and earlier-period action.
-- Desktop and mobile reconciliation layouts remain usable.
-- Browser console errors after final local renders: none.
+- Switched live production through All, Wise, Revolut, and Slash.
+- Verified the selected bank state and data changed correctly on each tab.
+- Verified the responsive strip stays one row at 390 px and exposes horizontal scrolling without a visible scrollbar.
+- Local browser console warnings/errors: none.
+- `npm run check`: passed (125 tests passed, 1 intentionally skipped).
 
 ## Comparison history
 
-1. Wise balance success was previously downgraded because statement endpoints were unavailable.
-   - Fixed by separating fatal balance-sync failures from the expected manual statement workflow.
-2. Unified-ledger badges previously used neutral colors.
-   - Fixed by mapping ledger sources to the shared provider tokens.
-3. The reconciliation controls previously wrapped into an approximately 120 px header.
-   - Fixed with a one-row desktop toolbar, shorter copy, and a compact automation action.
-4. The 1180 px Wise variant briefly allowed Filters and Auto-categorize to overlap.
-   - Fixed by tightening control dimensions and spacing.
-5. Slash had date-range loading while Revolut exposed only the default activity window.
-   - Fixed by extracting shared date controls and adding cache-aware Revolut range loading.
+1. The source used four independent cards with large vertical padding and a normalized height of approximately 105 px.
+   - Replaced the cards with a shared segmented strip using inline label/value alignment and a conditional detail row.
+2. The first responsive pass exposed a horizontal scrollbar that added 11 px of height.
+   - Hid the scrollbar while retaining touch/trackpad scrolling and partial-next-segment affordance.
+3. The final live production pass confirmed identical Slash values and labels in a 48 px strip.
+   - No further visual fixes were required.
 
 ## Follow-up polish
 
