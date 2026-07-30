@@ -176,6 +176,7 @@ import {
   providerTypeForTransactionDirection,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
+  transactionAiGroupKey,
   transactionAliasCandidates,
   transactionMerchantKey,
   transactionsShareMerchant,
@@ -2584,58 +2585,71 @@ async function autoCategorizeState(
   });
 
   if (shouldUseAi && remaining.length > 0) {
+    const transactionsByGroup = new Map<string, Transaction[]>();
+    for (const transaction of remaining) {
+      const key = transactionAiGroupKey(transaction);
+      transactionsByGroup.set(key, [...(transactionsByGroup.get(key) ?? []), transaction]);
+    }
+    const aiTargetsByRepresentativeId = new Map<string, Transaction[]>();
+    const representatives = [...transactionsByGroup.values()].map((group) => {
+      const representative = group[0];
+      aiTargetsByRepresentativeId.set(representative.id, group);
+      return representative;
+    });
     const aiResults = await runOpenRouterTransactionCategorization(
       activeAiSettings,
-      remaining,
+      representatives,
       aiProviderDirectoryForTransactions(remaining, state.providers),
       env.PUBLIC_APP_URL,
       state.transactionCategories
     );
     for (const aiResult of aiResults) {
-      const transaction = findPersistedTransaction(state, aiResult.transactionId);
-      if (!transaction) continue;
-      const provider = aiResult.providerId ? state.providers.find((item) => item.id === aiResult.providerId) : undefined;
-      const matchedProvider =
-        aiResult.confidence >= 0.72
-        && provider
-        && providerMatchesTransactionDirection(transaction, provider)
-          ? provider
-          : undefined;
-      const keepEstablishedCategory =
-        (transaction.categorySource === "manual" || transaction.categorySource === "rule")
-        && isRequiredTransactionCategory(transaction.category, transaction.direction, state.transactionCategories);
-      const updated: Transaction = {
-        ...transaction,
-        matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
-        category: keepEstablishedCategory ? transaction.category : aiResult.category,
-        merchantName: aiResult.merchantName,
-        merchantKey: transactionMerchantKey({ merchantName: aiResult.merchantName }),
-        classificationComplete: true,
-        ...(keepEstablishedCategory
-          ? {}
-          : {
-              categorySource: "ai" as const,
-              categoryConfidence: aiResult.confidence,
-              categoryReason: aiResult.reason
-            }),
-        ...(matchedProvider
-          ? {
-              companyMatchSource: "ai" as const,
-              companyConfidence: aiResult.confidence,
-              companyMatchReason: aiResult.reason,
-              confidence: aiResult.confidence,
-              matchReason: `AI: ${aiResult.reason}`
-            }
-          : {})
-      };
-      upsertPersistedTransaction(state, updated);
-      if (updated.matchedProviderId) {
-        aiMatches += 1;
-        state.providers = state.providers.map((item) =>
-          item.id === updated.matchedProviderId ? learnAliases(item, bankAliasNames(transaction)) : item
-        );
-      } else {
-        categorizedOnly += 1;
+      for (const target of aiTargetsByRepresentativeId.get(aiResult.transactionId) ?? []) {
+        const transaction = findPersistedTransaction(state, target.id);
+        if (!transaction) continue;
+        const provider = aiResult.providerId ? state.providers.find((item) => item.id === aiResult.providerId) : undefined;
+        const matchedProvider =
+          aiResult.confidence >= 0.72
+          && provider
+          && providerMatchesTransactionDirection(transaction, provider)
+            ? provider
+            : undefined;
+        const keepEstablishedCategory =
+          (transaction.categorySource === "manual" || transaction.categorySource === "rule")
+          && isRequiredTransactionCategory(transaction.category, transaction.direction, state.transactionCategories);
+        const updated: Transaction = {
+          ...transaction,
+          matchedProviderId: matchedProvider?.id ?? transaction.matchedProviderId,
+          category: keepEstablishedCategory ? transaction.category : aiResult.category,
+          merchantName: aiResult.merchantName,
+          merchantKey: transactionMerchantKey({ merchantName: aiResult.merchantName }),
+          classificationComplete: true,
+          ...(keepEstablishedCategory
+            ? {}
+            : {
+                categorySource: "ai" as const,
+                categoryConfidence: aiResult.confidence,
+                categoryReason: aiResult.reason
+              }),
+          ...(matchedProvider
+            ? {
+                companyMatchSource: "ai" as const,
+                companyConfidence: aiResult.confidence,
+                companyMatchReason: aiResult.reason,
+                confidence: aiResult.confidence,
+                matchReason: `AI: ${aiResult.reason}`
+              }
+            : {})
+        };
+        upsertPersistedTransaction(state, updated);
+        if (updated.matchedProviderId) {
+          aiMatches += 1;
+          state.providers = state.providers.map((item) =>
+            item.id === updated.matchedProviderId ? learnAliases(item, bankAliasNames(transaction)) : item
+          );
+        } else {
+          categorizedOnly += 1;
+        }
       }
     }
   }

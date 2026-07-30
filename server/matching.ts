@@ -368,6 +368,20 @@ export function transactionsShareMerchant(
   return Boolean(leftKey) && left.direction === right.direction && leftKey === transactionMerchantKey(right);
 }
 
+export function transactionAiGroupKey(
+  transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
+): string {
+  const genericTokens = new Set(["ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
+  const counterpartyTokens = normalizeName(transaction.counterparty)
+    .split(" ")
+    .filter((token) => token && !/^\d+$/.test(token));
+  const meaningfulCounterparty = counterpartyTokens.some((token) => token.length >= 3 && !genericTokens.has(token));
+  const basis = meaningfulCounterparty
+    ? counterpartyTokens.filter((token) => !genericTokens.has(token)).join(" ")
+    : normalizeName(`${transaction.counterparty} ${transaction.rawName} ${transaction.description}`);
+  return `${transaction.direction}:${basis}`;
+}
+
 export function mergeWiseCardHolderTeamAssignments(assignments: WiseCardHolderTeamAssignment[]): WiseCardHolderTeamAssignment[] {
   const byName = new Map<string, WiseCardHolderTeamAssignment>();
   for (const assignment of canonicalWiseCardHolderTeamAssignments) {

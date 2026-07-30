@@ -5,6 +5,7 @@ import {
   aiProviderDirectoryForTransactions,
   canonicalProviders,
   mergeProviderDirectory,
+  transactionAiGroupKey,
   transactionMerchantKey,
   transactionsShareMerchant
 } from "./matching";
@@ -48,6 +49,46 @@ test("merchant equivalence uses the AI-normalized name and transaction direction
   assert.equal(transactionMerchantKey(transaction), "pizzahut");
   assert.equal(transactionsShareMerchant(transaction, equivalent), true);
   assert.equal(transactionsShareMerchant(transaction, refund), false);
+});
+
+test("AI groups repeated merchant descriptors while keeping generic transfers distinct", () => {
+  const pizzaBase: Transaction = {
+    id: "pizza-1",
+    source: "slash",
+    accountName: "Slash USD",
+    date: "2026-07-30",
+    description: "POS 10983 PIZZA HUT #442 TORONTO",
+    rawName: "POS 10983 PIZZA HUT #442 TORONTO",
+    counterparty: "CARD PAYMENT PIZZA HUT #442",
+    amount: 25,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Uncategorized"
+  };
+  const pizzaVariant: Transaction = {
+    ...pizzaBase,
+    id: "pizza-2",
+    counterparty: "PIZZA HUT 9911",
+    description: "POS 88421 PIZZA HUT STORE 109"
+  };
+  const transferOne: Transaction = {
+    ...pizzaBase,
+    id: "transfer-1",
+    counterparty: "ACH TRANSFER 8842",
+    rawName: "ACH TRANSFER REF 8842",
+    description: "ACH TRANSFER REF 8842"
+  };
+  const transferTwo: Transaction = {
+    ...transferOne,
+    id: "transfer-2",
+    counterparty: "ACH TRANSFER 9921",
+    rawName: "ACH TRANSFER REF 9921",
+    description: "ACH TRANSFER REF 9921"
+  };
+
+  assert.equal(transactionAiGroupKey(pizzaBase), transactionAiGroupKey(pizzaVariant));
+  assert.notEqual(transactionAiGroupKey(transferOne), transactionAiGroupKey(transferTwo));
 });
 
 test("AI receives only plausible company candidates for each transaction", () => {

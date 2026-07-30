@@ -161,6 +161,7 @@ import {
   providerTypeForTransactionDirection,
   semanticCategorizeTransaction,
   semanticMatchThreshold,
+  transactionAiGroupKey,
   transactionAliasCandidates,
   transactionMerchantKey,
   transactionsShareMerchant,
@@ -561,26 +562,39 @@ export async function autoCategorizeTransactions(
   });
 
   if (shouldUseAi && remaining.length > 0) {
+    const transactionsByGroup = new Map<string, Transaction[]>();
+    for (const transaction of remaining) {
+      const key = transactionAiGroupKey(transaction);
+      transactionsByGroup.set(key, [...(transactionsByGroup.get(key) ?? []), transaction]);
+    }
+    const aiTargetsByRepresentativeId = new Map<string, Transaction[]>();
+    const representatives = [...transactionsByGroup.values()].map((group) => {
+      const representative = group[0];
+      aiTargetsByRepresentativeId.set(representative.id, group);
+      return representative;
+    });
     const aiResults = await runOpenRouterTransactionCategorization(
       activeAiSettings,
-      remaining,
+      representatives,
       aiProviderDirectoryForTransactions(remaining, providers),
       process.env.PUBLIC_APP_URL,
       transactionCategories
     );
     for (const aiResult of aiResults) {
-      const transaction = findKnownTransaction(aiResult.transactionId);
-      if (!transaction) continue;
-      const updated = applyAiCategorization(transaction, aiResult);
-      if (!updateStoredTransaction(updated)) continue;
-      if (updated.matchedProviderId) {
-        aiMatches += 1;
-        const provider = providers.find((item) => item.id === updated.matchedProviderId);
-        if (provider) {
-          providers = providers.map((item) => (item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item));
+      for (const target of aiTargetsByRepresentativeId.get(aiResult.transactionId) ?? []) {
+        const transaction = findKnownTransaction(target.id);
+        if (!transaction) continue;
+        const updated = applyAiCategorization(transaction, aiResult);
+        if (!updateStoredTransaction(updated)) continue;
+        if (updated.matchedProviderId) {
+          aiMatches += 1;
+          const provider = providers.find((item) => item.id === updated.matchedProviderId);
+          if (provider) {
+            providers = providers.map((item) => (item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item));
+          }
+        } else {
+          categorizedOnly += 1;
         }
-      } else {
-        categorizedOnly += 1;
       }
     }
   }
