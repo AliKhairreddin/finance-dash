@@ -666,6 +666,28 @@ export function scoreProvider(transaction: Transaction, provider: Provider): { c
   return { confidence: 0, reason: "No alias match" };
 }
 
+export function aiProviderDirectoryForTransactions(
+  transactions: Transaction[],
+  providers: Provider[]
+): Provider[] {
+  const selected = new Map<string, Provider>();
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  for (const transaction of transactions) {
+    if (transaction.matchedProviderId) {
+      const matched = providersById.get(transaction.matchedProviderId);
+      if (matched) selected.set(matched.id, matched);
+    }
+    providers
+      .filter((provider) => providerMatchesTransactionDirection(transaction, provider))
+      .map((provider) => ({ provider, confidence: scoreProvider(transaction, provider).confidence }))
+      .filter((candidate) => candidate.confidence > 0)
+      .sort((left, right) => right.confidence - left.confidence)
+      .slice(0, 3)
+      .forEach(({ provider }) => selected.set(provider.id, provider));
+  }
+  return [...selected.values()];
+}
+
 export function enrichTransactions(
   transactions: Transaction[],
   providers: Provider[],

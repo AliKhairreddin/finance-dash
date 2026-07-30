@@ -148,6 +148,7 @@ import {
   wiseSyncIssue as describeWiseSyncIssue
 } from "./integrations";
 import {
+  aiProviderDirectoryForTransactions,
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
@@ -563,7 +564,7 @@ export async function autoCategorizeTransactions(
     const aiResults = await runOpenRouterTransactionCategorization(
       activeAiSettings,
       remaining,
-      providers,
+      aiProviderDirectoryForTransactions(remaining, providers),
       process.env.PUBLIC_APP_URL,
       transactionCategories
     );

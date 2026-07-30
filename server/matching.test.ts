@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Transaction } from "../shared/types";
 import {
+  aiProviderDirectoryForTransactions,
   canonicalProviders,
   mergeProviderDirectory,
   transactionMerchantKey,
@@ -47,4 +48,26 @@ test("merchant equivalence uses the AI-normalized name and transaction direction
   assert.equal(transactionMerchantKey(transaction), "pizzahut");
   assert.equal(transactionsShareMerchant(transaction, equivalent), true);
   assert.equal(transactionsShareMerchant(transaction, refund), false);
+});
+
+test("AI receives only plausible company candidates for each transaction", () => {
+  const transaction: Transaction = {
+    id: "cursor-1",
+    source: "slash",
+    accountName: "Slash USD",
+    date: "2026-07-30",
+    description: "CURSOR AI SUBSCRIPTION 8842",
+    rawName: "CURSOR AI SUBSCRIPTION 8842",
+    counterparty: "CURSOR AI",
+    amount: 40,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Uncategorized"
+  };
+  const selected = aiProviderDirectoryForTransactions([transaction], canonicalProviders);
+
+  assert.ok(selected.some((provider) => provider.name.toLowerCase() === "cursor"));
+  assert.ok(selected.length <= 3);
+  assert.ok(selected.every((provider) => provider.type === "supplier"));
 });

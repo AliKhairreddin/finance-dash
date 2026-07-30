@@ -163,6 +163,7 @@ import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import { calculateMetrics } from "../server/calculations";
 import {
+  aiProviderDirectoryForTransactions,
   enrichTransactions,
   learnAliases,
   learnCategoryAliases,
@@ -2586,7 +2587,7 @@ async function autoCategorizeState(
     const aiResults = await runOpenRouterTransactionCategorization(
       activeAiSettings,
       remaining,
-      state.providers,
+      aiProviderDirectoryForTransactions(remaining, state.providers),
       env.PUBLIC_APP_URL,
       state.transactionCategories
     );
