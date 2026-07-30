@@ -220,6 +220,10 @@ const transaction = v.object({
   cardHolderName: v.optional(v.string()),
   amount: v.number(),
   currency: v.string(),
+  cashback: v.optional(v.object({
+    amount: v.number(),
+    rate: v.number()
+  })),
   direction: v.union(v.literal("in"), v.literal("out")),
   status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
   category: v.string(),

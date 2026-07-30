@@ -218,6 +218,10 @@ const transaction = v.object({
   cardHolderName: v.optional(v.string()),
   amount: v.number(),
   currency: v.string(),
+  cashback: v.optional(v.object({
+    amount: v.number(),
+    rate: v.number()
+  })),
   direction: v.union(v.literal("in"), v.literal("out")),
   status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
   category: v.string(),
@@ -459,6 +463,30 @@ export const getState = query({
       profitDistributionAdjustments: state.profitDistributionAdjustments,
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
+    };
+  }
+});
+
+export const getBankContext = query({
+  args: { serviceToken: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      providers: v.array(provider),
+      transactionCategoryRules: v.array(transactionCategoryRule),
+      transactionTeamAssignments: v.array(transactionTeamAssignment),
+      wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment)
+    })
+  ),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+    if (!state) return null;
+    return {
+      providers: state.providers,
+      transactionCategoryRules: state.transactionCategoryRules,
+      transactionTeamAssignments: state.transactionTeamAssignments,
+      wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments
     };
   }
 });

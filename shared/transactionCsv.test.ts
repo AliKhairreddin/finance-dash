@@ -14,6 +14,10 @@ const transaction: Transaction = {
   cardHolderName: "Taylor",
   amount: 1234.56,
   currency: "USD",
+  cashback: {
+    amount: 18.52,
+    rate: 1.5
+  },
   direction: "out",
   status: "posted",
   category: "Software",
@@ -35,6 +39,7 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   assert.match(csv, /"Subscription, ""annual"""/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.com""\)"/);
   assert.match(csv, /,1234\.56,/);
+  assert.match(csv, /,18\.52,1\.5,/);
   assert.match(csv, /"Operations","Example, Inc\."/);
   assert.match(csv, /"invoice-1",0\.94,"Known supplier","wise-transaction-1"$/);
 });

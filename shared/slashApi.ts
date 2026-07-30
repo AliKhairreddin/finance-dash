@@ -34,6 +34,10 @@ interface SlashTransaction {
   amountCents: number;
   accountId: string;
   status: SlashTransactionStatus;
+  cashbackInfo?: {
+    amountCents: number;
+    rate: number;
+  };
   merchantData?: {
     description?: string;
     categoryCode?: string;
@@ -191,6 +195,9 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
   const merchantData = payload.merchantData === undefined
     ? undefined
     : requiredRecord(payload.merchantData, "transaction.merchantData");
+  const cashbackInfo = payload.cashbackInfo === undefined
+    ? undefined
+    : requiredRecord(payload.cashbackInfo, "transaction.cashbackInfo");
   return {
     id: requiredString(payload.id, "transaction.id"),
     date: requiredString(payload.date, "transaction.date"),
@@ -198,6 +205,14 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
     amountCents: requiredNumber(payload.amountCents, "transaction.amountCents"),
     accountId: requiredString(payload.accountId, "transaction.accountId"),
     status,
+    ...(cashbackInfo
+      ? {
+          cashbackInfo: {
+            amountCents: requiredNumber(cashbackInfo.amountCents, "transaction.cashbackInfo.amountCents"),
+            rate: requiredNumber(cashbackInfo.rate, "transaction.cashbackInfo.rate")
+          }
+        }
+      : {}),
     ...(merchantData
       ? {
           merchantData: {
@@ -334,6 +349,14 @@ function normalizeSlashTransaction(transaction: SlashTransaction, accountName: s
     counterparty,
     amount: Math.abs(signedAmount),
     currency: "USD",
+    ...(transaction.cashbackInfo
+      ? {
+          cashback: {
+            amount: transaction.cashbackInfo.amountCents / 100,
+            rate: transaction.cashbackInfo.rate
+          }
+        }
+      : {}),
     direction: signedAmount >= 0 ? "in" : "out",
     status: transaction.status === "pending" ? "pending" : "posted",
     category: "Slash"

@@ -7,6 +7,8 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  BankActivityLoadResult,
+  ConnectedBankSource,
   CreateHoldingPayload,
   CreateExpensePayload,
   CreateInvoicePayload,
@@ -699,7 +701,9 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
   return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
 }
 
-export async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+export async function assignWiseCardHolderTeam(
+  payload: AssignWiseCardHolderTeamPayload
+): Promise<WiseCardHolderTeamAssignment> {
   const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
   const teamId = canonicalTeamId(payload.teamId);
   if (!cardHolderName) {
@@ -709,15 +713,20 @@ export async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeam
     throw new Error("Team not found");
   }
 
+  const assignment: WiseCardHolderTeamAssignment = {
+    cardHolderName,
+    teamId,
+    updatedAt: new Date().toISOString()
+  };
   wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
     ...wiseCardHolderTeamAssignments.filter(
       (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
     ),
-    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+    assignment
   ]);
 
   await persist();
-  return getSnapshot();
+  return assignment;
 }
 
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
@@ -2268,4 +2277,65 @@ export async function syncExternalActivity(
   lastSync = new Date().toISOString();
   await persist();
   return getSnapshot();
+}
+
+export async function loadBankActivity(
+  sources: ConnectedBankSource[],
+  dateRange: SlashTransactionDateRange
+): Promise<BankActivityLoadResult> {
+  const activity = await Promise.all(
+    sources.map(async (source) => ({
+      source,
+      result: source === "revolut"
+        ? await fetchRevolutActivity(dateRange)
+        : await fetchSlashActivity(dateRange)
+    }))
+  );
+  const loadedTransactions = activity.flatMap(({ source, result }) =>
+    result.transactions.map((transaction) => ({ ...transaction, source }))
+  );
+  for (const { source, result } of activity) {
+    if (result.accounts.length > 0) {
+      accounts = [
+        ...accounts.filter((account) => account.source !== source),
+        ...result.accounts.map((account) => ({ ...account, source }))
+      ];
+    }
+  }
+
+  const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+  const loadedIds = new Set(loadedTransactions.map((transaction) => transaction.id));
+  const mergedTransactions = loadedTransactions.map((transaction) => {
+    const existing = existingById.get(transaction.id);
+    if (!existing) return transaction;
+    return {
+      ...transaction,
+      category: existing.category,
+      matchedProviderId: existing.matchedProviderId ?? transaction.matchedProviderId,
+      matchedInvoiceId: existing.matchedInvoiceId ?? transaction.matchedInvoiceId,
+      teamId: existing.teamId ?? transaction.teamId,
+      confidence: existing.confidence ?? transaction.confidence,
+      matchReason: existing.matchReason ?? transaction.matchReason
+    };
+  });
+  transactions = [
+    ...mergedTransactions,
+    ...transactions.filter((transaction) => !loadedIds.has(transaction.id))
+  ];
+  lastSync = new Date().toISOString();
+  await persist();
+
+  return {
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
+    sources,
+    transactions: getMatchedTransactions()
+      .filter((transaction) =>
+        (transaction.source === "revolut" || transaction.source === "slash")
+        && sources.includes(transaction.source)
+        && transaction.date >= dateRange.fromDate
+        && transaction.date <= dateRange.toDate
+      )
+      .sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id))
+  };
 }

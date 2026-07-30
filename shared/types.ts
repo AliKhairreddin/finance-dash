@@ -433,6 +433,10 @@ export interface Transaction {
   cardHolderName?: string;
   amount: number;
   currency: string;
+  cashback?: {
+    amount: number;
+    rate: number;
+  };
   direction: Direction;
   status: "posted" | "pending" | "settled";
   category: string;
@@ -596,6 +600,15 @@ export interface ImportWiseStatementSummary {
   processedTransactions: number;
   newTransactions: number;
   duplicateTransactions: number;
+}
+
+export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash">;
+
+export interface BankActivityLoadResult {
+  fromDate: string;
+  toDate: string;
+  sources: ConnectedBankSource[];
+  transactions: Transaction[];
 }
 
 export interface ImportWiseStatementResult {

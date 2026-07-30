@@ -62,6 +62,8 @@ import type {
   AiPromptResult,
   AssignWiseCardHolderTeamPayload,
   AutoCategorizeTransactionsResult,
+  BankActivityLoadResult,
+  ConnectedBankSource,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -105,7 +107,8 @@ import type {
   UpdateInvoicePayload,
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload,
-  UpdateTransactionCategoryDefinitionPayload
+  UpdateTransactionCategoryDefinitionPayload,
+  WiseCardHolderTeamAssignment
 } from "../shared/types";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
@@ -197,6 +200,7 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
   "period",
   "team"
 ];
+const transactionTablePageSize = 200;
 
 function localIsoDate(daysFromToday = 0): string {
   const date = new Date();
@@ -212,6 +216,24 @@ function shiftIsoDate(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function transactionIsInDateRange(
+  transaction: Transaction,
+  dateRange: BankTransactionDateRange
+): boolean {
+  return transaction.date >= dateRange.fromDate && transaction.date <= dateRange.toDate;
+}
+
+function replaceConnectedBankTransactions(
+  transactions: Transaction[],
+  result: BankActivityLoadResult
+): Transaction[] {
+  const replacedSources = new Set<DataSource>(result.sources);
+  return [
+    ...transactions.filter((transaction) => !replacedSources.has(transaction.source)),
+    ...result.transactions
+  ].sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id));
 }
 
 function defaultBankTransactionDateRange(windowDays: number): BankTransactionDateRange {
@@ -776,6 +798,24 @@ function App() {
   const [teamFilter, setTeamFilter] = useUrlState("bankTeam", "all");
   const defaultRevolutRange = useMemo(defaultRevolutTransactionDateRange, []);
   const defaultSlashRange = useMemo(defaultSlashTransactionDateRange, []);
+  const defaultAllBankRange = useMemo(
+    () => defaultBankTransactionDateRange(revolutDefaultActivityWindowDays),
+    []
+  );
+  const defaultWiseRange = useMemo(
+    () => defaultBankTransactionDateRange(revolutDefaultActivityWindowDays),
+    []
+  );
+  const [allBankDateRange, setAllBankDateRange] = useUrlDateRangeState(
+    "allBankFrom",
+    "allBankTo",
+    defaultAllBankRange
+  );
+  const [wiseDateRange, setWiseDateRange] = useUrlDateRangeState(
+    "wiseFrom",
+    "wiseTo",
+    defaultWiseRange
+  );
   const [revolutDateRange, setRevolutDateRange] = useUrlDateRangeState(
     "revolutFrom",
     "revolutTo",
@@ -788,8 +828,10 @@ function App() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoadingAllBanks, setIsLoadingAllBanks] = useState(false);
   const [isLoadingRevolut, setIsLoadingRevolut] = useState(false);
   const [isLoadingSlash, setIsLoadingSlash] = useState(false);
+  const [allBankConnectedTransactions, setAllBankConnectedTransactions] = useState<Transaction[] | null>(null);
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -876,7 +918,11 @@ function App() {
   }, [dashboard?.teams]);
 
   const filteredTransactions = useMemo(() => {
-    const rows = dashboard?.transactions ?? [];
+    const activeSource: BankSource | undefined =
+      bankTab === "all" || bankTab === "holdings" ? undefined : bankTab;
+    const rows = activeTab === "banks" && activeSource
+      ? (dashboard?.transactions ?? []).filter((transaction) => transaction.source === activeSource)
+      : [];
     const query = searchTerm.trim().toLowerCase();
     const matchingRows = rows.filter((transaction) => {
       const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -902,19 +948,37 @@ function App() {
     });
     const expenseTransactionIds = new Set((dashboard?.expenses ?? []).flatMap((expense) => expense.transactionId ? [expense.transactionId] : []));
     return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById, expenseTransactionIds);
-  }, [dashboard?.expenses, dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
+  }, [activeTab, bankTab, dashboard?.expenses, dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
+
+  const allBankTransactions = useMemo(() => {
+    if (activeTab !== "banks" || bankTab !== "all") return [];
+    const dashboardTransactions = dashboard?.transactions ?? [];
+    const connectedTransactions = allBankConnectedTransactions
+      ?? dashboardTransactions.filter(
+        (transaction) => transaction.source === "revolut" || transaction.source === "slash"
+      );
+    return [
+      ...dashboardTransactions.filter(
+        (transaction) => transaction.source !== "revolut" && transaction.source !== "slash"
+      ),
+      ...connectedTransactions
+    ].filter((transaction) => transactionIsInDateRange(transaction, allBankDateRange));
+  }, [activeTab, allBankConnectedTransactions, allBankDateRange, bankTab, dashboard?.transactions]);
 
   const wiseTransactions = useMemo(
     () =>
       filteredTransactions.filter((transaction) => {
-        const matchesDirection = transaction.source === "wise" && transaction.direction === bankDirection;
+        const matchesDirection =
+          transaction.source === "wise"
+          && transaction.direction === bankDirection
+          && transactionIsInDateRange(transaction, wiseDateRange);
         const matchesTeam =
           teamFilter === "all" ||
           (teamFilter === "unassigned" && !transaction.teamId) ||
           transaction.teamId === teamFilter;
         return matchesDirection && matchesTeam;
       }),
-    [bankDirection, filteredTransactions, teamFilter]
+    [bankDirection, filteredTransactions, teamFilter, wiseDateRange]
   );
 
   const slashTransactions = useMemo(
@@ -944,6 +1008,48 @@ function App() {
     [filteredTransactions]
   );
 
+  async function requestBankActivity(
+    dateRange: BankTransactionDateRange,
+    sources: ConnectedBankSource[]
+  ): Promise<BankActivityLoadResult> {
+    const response = await fetch(`${apiBase}/banks/activity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fromDate: dateRange.fromDate,
+        toDate: dateRange.toDate,
+        sources
+      })
+    });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Bank activity could not be loaded"));
+    }
+    return (await response.json()) as BankActivityLoadResult;
+  }
+
+  function applyConnectedBankActivity(result: BankActivityLoadResult) {
+    setDashboard((current) =>
+      current
+        ? { ...current, transactions: replaceConnectedBankTransactions(current.transactions, result) }
+        : current
+    );
+  }
+
+  function applyTransactionUpdate(updated: Transaction) {
+    setDashboard((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        transactions: current.transactions.map((transaction) =>
+          transaction.id === updated.id ? updated : transaction
+        )
+      };
+    });
+    setAllBankConnectedTransactions((current) =>
+      current?.map((transaction) => transaction.id === updated.id ? updated : transaction) ?? current
+    );
+  }
+
   async function syncNow() {
     setIsSyncing(true);
     setNotice(null);
@@ -965,19 +1071,33 @@ function App() {
     }
   }
 
+  async function loadAllBankTransactions(dateRange: BankTransactionDateRange) {
+    setIsLoadingAllBanks(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await requestBankActivity(dateRange, ["revolut", "slash"]);
+      setAllBankConnectedTransactions(result.transactions);
+      setAllBankDateRange(dateRange);
+      setNotice(`Loaded bank activity from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bank activity could not be loaded");
+    } finally {
+      setIsLoadingAllBanks(false);
+    }
+  }
+
+  async function filterWiseTransactions(dateRange: BankTransactionDateRange) {
+    setWiseDateRange(dateRange);
+  }
+
   async function loadRevolutTransactions(dateRange: RevolutTransactionDateRange) {
     setIsLoadingRevolut(true);
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(
-        apiUrlWithBankDateRanges("/banks/revolut/load", dateRange, slashDateRange),
-        { method: "POST" }
-      );
-      if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Revolut transactions could not be loaded"));
-      }
-      setDashboard((await response.json()) as DashboardSnapshot);
+      const result = await requestBankActivity(dateRange, ["revolut"]);
+      applyConnectedBankActivity(result);
       setRevolutDateRange(dateRange);
       setNotice(`Loaded saved Revolut transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
     } catch (err) {
@@ -992,14 +1112,8 @@ function App() {
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(
-        apiUrlWithBankDateRanges("/banks/slash/load", revolutDateRange, dateRange),
-        { method: "POST" }
-      );
-      if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Slash transactions could not be loaded"));
-      }
-      setDashboard((await response.json()) as DashboardSnapshot);
+      const result = await requestBankActivity(dateRange, ["slash"]);
+      applyConnectedBankActivity(result);
       setSlashDateRange(dateRange);
       setNotice(`Loaded saved Slash transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
     } catch (err) {
@@ -1115,7 +1229,7 @@ function App() {
       setError(await apiErrorMessage(response, "Match failed"));
       return;
     }
-    await loadDashboard();
+    applyTransactionUpdate((await response.json()) as Transaction);
     setNotice(`Saved company alias for ${transaction.counterparty}. Future rows will auto-match.`);
   }
 
@@ -1130,7 +1244,7 @@ function App() {
       setError(await apiErrorMessage(response, "Category update failed"));
       return;
     }
-    await loadDashboard();
+    applyTransactionUpdate((await response.json()) as Transaction);
     setNotice(`Saved ${category} for ${transaction.counterparty}. Future similar rows can auto-categorize.`);
   }
 
@@ -1159,7 +1273,7 @@ function App() {
       setError(await apiErrorMessage(response, "Team assignment failed"));
       return;
     }
-    await loadDashboard();
+    applyTransactionUpdate((await response.json()) as Transaction);
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
   }
 
@@ -1172,7 +1286,26 @@ function App() {
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Card holder team assignment failed"));
     }
-    setDashboard((await response.json()) as DashboardSnapshot);
+    const assignment = (await response.json()) as WiseCardHolderTeamAssignment;
+    const normalizedName = assignment.cardHolderName.trim().replace(/\s+/g, " ").toLowerCase();
+    setDashboard((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        wiseCardHolderTeamAssignments: [
+          assignment,
+          ...current.wiseCardHolderTeamAssignments.filter(
+            (item) => item.cardHolderName.trim().replace(/\s+/g, " ").toLowerCase() !== normalizedName
+          )
+        ],
+        transactions: current.transactions.map((transaction) =>
+          transaction.source === "wise"
+          && transaction.cardHolderName?.trim().replace(/\s+/g, " ").toLowerCase() === normalizedName
+            ? { ...transaction, teamId: assignment.teamId }
+            : transaction
+        )
+      };
+    });
     setNotice(`Assigned ${payload.cardHolderName.trim()} to ${teamsById.get(payload.teamId)?.name ?? "team"}.`);
   }
 
@@ -1761,7 +1894,10 @@ function App() {
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          allBankTransactions={allBankTransactions}
+          allBankDateRange={allBankDateRange}
           wiseTransactions={wiseTransactions}
+          wiseDateRange={wiseDateRange}
           revolutTransactions={revolutTransactions}
           revolutDateRange={revolutDateRange}
           slashTransactions={slashTransactions}
@@ -1770,10 +1906,13 @@ function App() {
           providersById={providersById}
           isCategorizing={isCategorizing}
           isImportingWise={isImportingWise}
+          isLoadingAllBanks={isLoadingAllBanks}
           isLoadingRevolut={isLoadingRevolut}
           isLoadingSlash={isLoadingSlash}
           onAutoCategorize={autoCategorizeTransactions}
           onImportWiseStatements={importWiseStatements}
+          onLoadAllBankTransactions={loadAllBankTransactions}
+          onFilterWiseTransactions={filterWiseTransactions}
           onLoadRevolutTransactions={loadRevolutTransactions}
           onLoadSlashTransactions={loadSlashTransactions}
           onMatch={matchTransaction}
@@ -2435,7 +2574,10 @@ function BanksView({
   setTransactionSortKey,
   transactionSortDirection,
   setTransactionSortDirection,
+  allBankTransactions,
+  allBankDateRange,
   wiseTransactions,
+  wiseDateRange,
   revolutTransactions,
   revolutDateRange,
   slashTransactions,
@@ -2444,10 +2586,13 @@ function BanksView({
   providersById,
   isCategorizing,
   isImportingWise,
+  isLoadingAllBanks,
   isLoadingRevolut,
   isLoadingSlash,
   onAutoCategorize,
   onImportWiseStatements,
+  onLoadAllBankTransactions,
+  onFilterWiseTransactions,
   onLoadRevolutTransactions,
   onLoadSlashTransactions,
   onMatch,
@@ -2474,7 +2619,10 @@ function BanksView({
   setTransactionSortKey: (value: TransactionSortKey) => void;
   transactionSortDirection: SortDirection;
   setTransactionSortDirection: (value: SortDirection) => void;
+  allBankTransactions: Transaction[];
+  allBankDateRange: BankTransactionDateRange;
   wiseTransactions: Transaction[];
+  wiseDateRange: BankTransactionDateRange;
   revolutTransactions: Transaction[];
   revolutDateRange: RevolutTransactionDateRange;
   slashTransactions: Transaction[];
@@ -2483,10 +2631,13 @@ function BanksView({
   providersById: Map<string, Provider>;
   isCategorizing: boolean;
   isImportingWise: boolean;
+  isLoadingAllBanks: boolean;
   isLoadingRevolut: boolean;
   isLoadingSlash: boolean;
   onAutoCategorize: (transactionIds?: string[]) => Promise<void>;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onLoadAllBankTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
+  onFilterWiseTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onLoadRevolutTransactions: (dateRange: RevolutTransactionDateRange) => Promise<void>;
   onLoadSlashTransactions: (dateRange: SlashTransactionDateRange) => Promise<void>;
   onMatch: (transaction: Transaction, providerId?: string) => void;
@@ -2501,6 +2652,12 @@ function BanksView({
   const rowsBySource = new Map<BankSource, Transaction[]>();
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
+  const displayedBankTransactions = activeBank === "all" ? allBankTransactions : dashboard.transactions;
+  for (const source of bankSources) rowsBySource.set(source.id, []);
+  for (const transaction of displayedBankTransactions) {
+    if (!isBankSource(transaction.source)) continue;
+    rowsBySource.get(transaction.source)?.push(transaction);
+  }
   for (const status of dashboard.integrationStatus) {
     const source = status.id as DataSource;
     if (status.id !== "openrouter" && status.id !== "coinbase" && isBankSource(source)) {
@@ -2508,10 +2665,6 @@ function BanksView({
     }
   }
   for (const source of bankSources) {
-    rowsBySource.set(
-      source.id,
-      dashboard.transactions.filter((transaction) => transaction.source === source.id)
-    );
     accountsBySource.set(
       source.id,
       dashboard.accounts.filter((account) =>
@@ -2593,7 +2746,21 @@ function BanksView({
         )}
       </section>
 
-      {activeBank === "all" && <AllBankTransactionsView dashboard={dashboard} providersById={providersById} />}
+      {activeBank === "all" && (
+        <AllBankTransactionsView
+          dashboard={dashboard}
+          providersById={providersById}
+          transactions={allBankTransactions}
+          rangeControls={(
+            <BankDateRangeControls
+              dateRange={allBankDateRange}
+              isLoading={isLoadingAllBanks}
+              onLoad={onLoadAllBankTransactions}
+              windowDays={revolutDefaultActivityWindowDays}
+            />
+          )}
+        />
+      )}
       {activeBank === "wise" && (
         <BankReconciliationView
           dashboard={dashboard}
@@ -2620,6 +2787,14 @@ function BanksView({
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
+          rangeControls={(
+            <BankDateRangeControls
+              dateRange={wiseDateRange}
+              isLoading={false}
+              onLoad={onFilterWiseTransactions}
+              windowDays={revolutDefaultActivityWindowDays}
+            />
+          )}
         />
       )}
       {activeBank === "revolut" && (
@@ -3945,6 +4120,24 @@ function TransactionTable({
   onOpenInvoice: (transaction: Transaction) => void;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
+  const [visibleRowCount, setVisibleRowCount] = useState(transactionTablePageSize);
+  const expenseByTransactionId = useMemo(
+    () => new Map(expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
+    [expenses]
+  );
+  const clientProviders = useMemo(
+    () => providers.filter((provider) => provider.type === "client"),
+    [providers]
+  );
+  const supplierProviders = useMemo(
+    () => providers.filter((provider) => provider.type === "supplier"),
+    [providers]
+  );
+  const visibleRows = rows.slice(0, visibleRowCount);
+
+  useEffect(() => {
+    setVisibleRowCount(transactionTablePageSize);
+  }, [rows]);
 
   useEffect(() => {
     if (!detailPopover) return;
@@ -4057,8 +4250,8 @@ function TransactionTable({
         </thead>
         <tbody>
           {rows.length > 0 ? (
-            rows.map((transaction) => {
-              const expense = expenses.find((item) => item.transactionId === transaction.id);
+            visibleRows.map((transaction) => {
+              const expense = expenseByTransactionId.get(transaction.id);
               const expectedProviderType = providerTypeForTransaction(transaction);
               const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
@@ -4073,7 +4266,7 @@ function TransactionTable({
                   ? `Expense documented as ${expense.recordNumber}`
                   : "Review expense and attach source document";
               const categoryActionTitle = "Save category and remember alias";
-              const providerOptions = providers.filter((item) => item.type === expectedProviderType);
+              const providerOptions = expectedProviderType === "client" ? clientProviders : supplierProviders;
               const companyPlaceholder = transaction.direction === "in" ? "Needs client" : "Optional supplier";
               const companyActionTitle = provider
                 ? "Save suggested company match"
@@ -4094,6 +4287,14 @@ function TransactionTable({
                         `Show counterparty description for ${transaction.counterparty}`
                       )}
                     </small>
+                    {transaction.cashback && (
+                      <small className="good-text">
+                        Cashback earned {money(transaction.cashback.amount, transaction.currency)}
+                        {transaction.amount > 0
+                          ? ` · ${((transaction.cashback.amount / transaction.amount) * 100).toFixed(2)}% effective`
+                          : ""}
+                      </small>
+                    )}
                   </td>
                   <td>
                     <span className={`direction-label ${transaction.direction}`}>
@@ -4211,6 +4412,18 @@ function TransactionTable({
           )}
         </tbody>
       </table>
+      {visibleRows.length < rows.length && (
+        <div className="bank-table-pagination">
+          <span>Showing {visibleRows.length} of {rows.length} transactions</span>
+          <Button
+            className="secondary-button"
+            type="button"
+            onClick={() => setVisibleRowCount((current) => current + transactionTablePageSize)}
+          >
+            Show {Math.min(transactionTablePageSize, rows.length - visibleRows.length)} more
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -4740,7 +4953,7 @@ function BankDateRangeControls({
   return (
     <div className="bank-date-controls">
       <div>
-        <strong>Loaded period</strong>
+        <strong>Selected period</strong>
         <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
       </div>
       <form
@@ -4773,7 +4986,7 @@ function BankDateRangeControls({
         </label>
         <Button className="primary-button" type="submit" disabled={isLoading || !dateRangeIsValid}>
           {isLoading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          Load dates
+          Apply period
         </Button>
         <Button
           className="secondary-button"
@@ -4924,10 +5137,19 @@ function SlashView({
     account.source === "slash" && hasNonZeroAccountBalance(account)
   );
   const allSlashRows = dashboard.transactions.filter((transaction) => transaction.source === "slash");
-  const cashbackRows = allSlashRows.filter((row) =>
-    `${row.counterparty} ${row.description}`.toLowerCase().includes("cashback")
+  const cashbackPurchaseRows = allSlashRows.filter((row) => row.cashback);
+  const cashbackEarned = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.cashback?.amount ?? 0);
+  const cashbackEligibleSpend = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.amount);
+  const cashbackCreditRows = allSlashRows.filter((row) =>
+    row.direction === "in"
+    && `${row.counterparty} ${row.description}`.toLowerCase().includes("cashback")
   );
-  const cashback = sumCurrencyTotals(cashbackRows, (row) => row.amount);
+  const cashbackCredited = sumCurrencyTotals(cashbackCreditRows, (row) => row.amount);
+  const cashbackEarnedUsd = cashbackEarned.USD ?? 0;
+  const cashbackEligibleSpendUsd = cashbackEligibleSpend.USD ?? 0;
+  const effectiveCashbackRate = cashbackEligibleSpendUsd > 0
+    ? (cashbackEarnedUsd / cashbackEligibleSpendUsd) * 100
+    : undefined;
   const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
   const rangeControls = (
     <BankDateRangeControls
@@ -4968,13 +5190,27 @@ function SlashView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Slash cashback</h2>
-          <span className="total-pill good" title={nativeCurrencyBreakdown(cashback)}>{formatUsdCurrencyTotal(cashback, dashboard.fxRates)}</span>
+          <h2>Slash cashback earned</h2>
+          <span className="total-pill good" title={nativeCurrencyBreakdown(cashbackEarned)}>
+            {formatUsdCurrencyTotal(cashbackEarned, dashboard.fxRates)}
+          </span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
-            <span>Slash transactions shown</span>
-            <strong>{allSlashRows.length}</strong>
+            <span>Eligible purchases</span>
+            <strong>{cashbackPurchaseRows.length}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Eligible spend</span>
+            <strong>{formatUsdCurrencyTotal(cashbackEligibleSpend, dashboard.fxRates)}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Effective cashback rate</span>
+            <strong>{effectiveCashbackRate === undefined ? "—" : `${effectiveCashbackRate.toFixed(2)}%`}</strong>
+          </div>
+          <div className="bridge-row">
+            <span>Cashback credited</span>
+            <strong>{formatUsdCurrencyTotal(cashbackCredited, dashboard.fxRates)}</strong>
           </div>
         </div>
       </section>

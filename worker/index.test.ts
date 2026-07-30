@@ -11,6 +11,7 @@ import worker, {
   fetchMeritInvoiceCopyDetails,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
+  missingBankActivityRanges,
   mergeInvoices,
   retainPersistedTransactions,
   retainCurrentSlashTransactions,
@@ -24,10 +25,13 @@ const workerTestAuth = {
   AUTH_SESSION_SECRET: "worker-test-session-secret"
 };
 
-async function authenticatedRequest(url: string): Promise<Request> {
+async function authenticatedRequest(url: string, init: RequestInit = {}): Promise<Request> {
   const token = await createAuthSessionToken(workerTestAuth.AUTH_SESSION_SECRET);
+  const headers = new Headers(init.headers);
+  headers.set("Cookie", `__Host-finance_session=${token}`);
   return new Request(url, {
-    headers: { Cookie: `__Host-finance_session=${token}` }
+    ...init,
+    headers
   });
 }
 
@@ -111,6 +115,54 @@ test("dashboard API rejects incomplete Revolut date ranges before reading storag
   assert.deepEqual(await response.json(), {
     message: "Revolut transaction loading requires both a from date and a to date"
   });
+});
+
+test("bank activity API validates sources before reading storage", async () => {
+  const response = await worker.fetch(
+    await authenticatedRequest("https://finance.example/api/banks/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fromDate: "2026-06-01",
+        toDate: "2026-06-30",
+        sources: ["wise"]
+      })
+    }),
+    authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    message: "Bank activity sources must be Revolut or Slash"
+  });
+});
+
+test("bank activity range loading requests only uncovered dates", () => {
+  const requested = { fromDate: "2026-05-01", toDate: "2026-07-31" };
+  const state = {
+    source: "slash" as const,
+    coveredRanges: [
+      { fromDate: "2026-05-15", toDate: "2026-05-31" },
+      { fromDate: "2026-06-15", toDate: "2026-07-15" }
+    ],
+    lastSyncedAt: "2026-07-15T12:00:00.000Z"
+  };
+
+  assert.deepEqual(missingBankActivityRanges(state, requested), [
+    { fromDate: "2026-05-01", toDate: "2026-05-14" },
+    { fromDate: "2026-06-01", toDate: "2026-06-14" },
+    { fromDate: "2026-07-16", toDate: "2026-07-31" }
+  ]);
+  assert.deepEqual(
+    missingBankActivityRanges(
+      {
+        ...state,
+        coveredRanges: [{ fromDate: "2026-05-01", toDate: "2026-07-31" }]
+      },
+      requested
+    ),
+    []
+  );
 });
 
 test("management report API fails closed when Convex storage is not configured", async () => {

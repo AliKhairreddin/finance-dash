@@ -19,7 +19,10 @@ import {
 } from "../shared/merit";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
-import { fetchRevolutActivity as fetchRevolutApiActivity } from "../shared/revolutApi";
+import {
+  fetchRevolutActivity as fetchRevolutApiActivity,
+  type RevolutTransactionDateRange
+} from "../shared/revolutApi";
 import {
   fetchSlashActivityForLegalEntity,
   type SlashTransactionDateRange
@@ -234,13 +237,16 @@ export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   });
 }
 
-export async function fetchRevolutActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+export async function fetchRevolutActivity(
+  dateRange?: RevolutTransactionDateRange
+): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
   return fetchRevolutApiActivity({
     environment: process.env.REVOLUT_ENVIRONMENT,
     clientId: process.env.REVOLUT_CLIENT_ID,
     issuer: process.env.REVOLUT_ISSUER,
     privateKeyPem: process.env.REVOLUT_PRIVATE_KEY_PEM,
-    refreshToken: process.env.REVOLUT_REFRESH_TOKEN
+    refreshToken: process.env.REVOLUT_REFRESH_TOKEN,
+    dateRange
   });
 }
 

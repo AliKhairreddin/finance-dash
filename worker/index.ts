@@ -11,6 +11,8 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  BankActivityLoadResult,
+  ConnectedBankSource,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -205,7 +207,7 @@ interface PersistedState {
   dirtyBankTransactionIds: Set<string>;
 }
 
-type SyncedBankSource = "revolut" | "slash";
+type SyncedBankSource = ConnectedBankSource;
 
 interface BankSyncState {
   source: SyncedBankSource;
@@ -1949,16 +1951,12 @@ async function syncLatestBankActivity(env: Env): Promise<void> {
   if (failures.length > 0) throw failures[0].reason;
 }
 
-async function ensureBankActivityRange(
-  env: Env,
-  source: SyncedBankSource,
+export function missingBankActivityRanges(
+  state: BankSyncState | null,
   requested: SlashTransactionDateRange
-): Promise<void> {
-  const state = await bankSyncState(env, source);
+): SlashTransactionDateRange[] {
   if (!state) {
-    if (source === "revolut") await syncRevolutActivity(env, requested);
-    else await syncSlashActivity(env, requested);
-    return;
+    return [{ ...requested }];
   }
   let missing = [{ ...requested }];
   for (const covered of state.coveredRanges) {
@@ -1980,22 +1978,84 @@ async function ensureBankActivityRange(
       return parts;
     });
   }
-  for (const range of missing) {
+  return missing;
+}
+
+async function syncBankActivityRanges(
+  env: Env,
+  source: SyncedBankSource,
+  ranges: SlashTransactionDateRange[]
+): Promise<void> {
+  for (const range of ranges) {
     if (source === "revolut") await syncRevolutActivity(env, range);
     else await syncSlashActivity(env, range);
   }
+}
+
+async function loadBankActivity(
+  env: Env,
+  sources: ConnectedBankSource[],
+  dateRange: SlashTransactionDateRange
+): Promise<BankActivityLoadResult> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const [context, initialActivity] = await Promise.all([
+    convex.query(api.dashboard.getBankContext, { serviceToken }),
+    Promise.all(sources.map((source) => readBankActivity(env, source, dateRange)))
+  ]);
+  if (!context) throw new ApiError(503, "Dashboard bank context is not initialized");
+
+  const missingBySource = sources.map((source, index) => ({
+    source,
+    ranges: missingBankActivityRanges(initialActivity[index].syncState, dateRange)
+  }));
+  await Promise.all(
+    missingBySource.map(({ source, ranges }) => syncBankActivityRanges(env, source, ranges))
+  );
+  const refreshedBySource = new Map<ConnectedBankSource, Awaited<ReturnType<typeof readBankActivity>>>();
+  await Promise.all(
+    missingBySource.map(async ({ source, ranges }) => {
+      if (ranges.length === 0) return;
+      refreshedBySource.set(source, await readBankActivity(env, source, dateRange));
+    })
+  );
+
+  const transactions = enrichTransactions(
+    applyTeamAssignments(
+      sources.flatMap((source, index) =>
+        (refreshedBySource.get(source) ?? initialActivity[index]).transactions
+      ),
+      context.transactionTeamAssignments,
+      context.wiseCardHolderTeamAssignments
+    ),
+    mergeProviderDirectory(context.providers),
+    sanitizeStoredTransactionCategoryRules(context.transactionCategoryRules)
+  ).sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id));
+
+  return {
+    fromDate: dateRange.fromDate,
+    toDate: dateRange.toDate,
+    sources,
+    transactions
+  };
 }
 
 async function getSnapshot(
   env: Env,
   options: { refreshFxRates?: boolean; bankDateRanges?: BankDateRanges } = {}
 ): Promise<DashboardSnapshot> {
-  const state = await loadPersisted(env, options.bankDateRanges);
   const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
   const bankIssue = (label: string, error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     return `${label} balance sync failed: ${message.slice(0, 240)}`;
   };
+  const statePromise = loadPersisted(env, options.bankDateRanges);
+  const wisePromise = fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error)));
+  const amexPromise = fetchAmexActivity(env).catch((error: unknown) => {
+    bankIssues.amex = bankIssue("Amex", error);
+    return { accounts: [], transactions: [] };
+  });
+  const state = await statePromise;
   if (
     env.REVOLUT_CLIENT_ID
     && env.REVOLUT_ISSUER
@@ -2022,11 +2082,8 @@ async function getSnapshot(
     transactions: state.wiseStatementTransactions.filter((transaction) => transaction.source === "slash")
   };
   const [wise, amex, meritResults] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
-    fetchAmexActivity(env).catch((error: unknown) => {
-      bankIssues.amex = bankIssue("Amex", error);
-      return { accounts: [], transactions: [] };
-    }),
+    wisePromise,
+    amexPromise,
     Promise.allSettled([
       fetchMeritInvoices(env, state.invoices),
       fetchMeritTaxes(env),
@@ -2636,7 +2693,10 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
   };
 }
 
-async function assignWiseCardHolderTeam(env: Env, payload: AssignWiseCardHolderTeamPayload): Promise<DashboardSnapshot> {
+async function assignWiseCardHolderTeam(
+  env: Env,
+  payload: AssignWiseCardHolderTeamPayload
+): Promise<WiseCardHolderTeamAssignment> {
   const state = await loadPersisted(env);
   const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
   const teamId = canonicalTeamId(payload.teamId);
@@ -2647,15 +2707,20 @@ async function assignWiseCardHolderTeam(env: Env, payload: AssignWiseCardHolderT
     throw new Error("Team not found");
   }
 
+  const assignment: WiseCardHolderTeamAssignment = {
+    cardHolderName,
+    teamId,
+    updatedAt: new Date().toISOString()
+  };
   state.wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
     ...state.wiseCardHolderTeamAssignments.filter(
       (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
     ),
-    { cardHolderName, teamId, updatedAt: new Date().toISOString() }
+    assignment
   ]);
 
   await savePersisted(env, state);
-  return getSnapshot(env);
+  return assignment;
 }
 
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
@@ -3926,6 +3991,38 @@ function requestedBankDateRanges(url: URL): BankDateRanges {
   }
 }
 
+function bankActivityRequest(value: unknown): {
+  dateRange: SlashTransactionDateRange;
+  sources: ConnectedBankSource[];
+} {
+  if (!isRecord(value)) throw new ApiError(400, "Bank activity request is required");
+  const rawSources = value.sources;
+  if (!Array.isArray(rawSources) || rawSources.length === 0) {
+    throw new ApiError(400, "Choose at least one bank source");
+  }
+  const sources: ConnectedBankSource[] = [];
+  for (const source of rawSources) {
+    if (source !== "revolut" && source !== "slash") {
+      throw new ApiError(400, "Bank activity sources must be Revolut or Slash");
+    }
+    if (!sources.includes(source)) sources.push(source);
+  }
+  try {
+    const dateRange = parseSlashTransactionDateRange(
+      typeof value.fromDate === "string" ? value.fromDate : undefined,
+      typeof value.toDate === "string" ? value.toDate : undefined
+    );
+    if (!dateRange) throw new ApiError(400, "Bank activity from and to dates are required");
+    return { dateRange, sources };
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const message = error instanceof Error
+      ? error.message.replaceAll("Slash", "Bank activity")
+      : "Invalid bank activity date range";
+    throw new ApiError(400, message);
+  }
+}
+
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
@@ -3979,18 +4076,22 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       }));
     }
 
-    if (url.pathname === "/api/banks/revolut/load" && request.method === "POST") {
-      const bankDateRanges = requestedBankDateRanges(url);
-      if (!bankDateRanges.revolut) throw new ApiError(400, "Revolut from and to dates are required");
-      await ensureBankActivityRange(env, "revolut", bankDateRanges.revolut);
-      return json(await getSnapshot(env, { bankDateRanges }));
-    }
-
-    if (url.pathname === "/api/banks/slash/load" && request.method === "POST") {
-      const bankDateRanges = requestedBankDateRanges(url);
-      if (!bankDateRanges.slash) throw new ApiError(400, "Slash from and to dates are required");
-      await ensureBankActivityRange(env, "slash", bankDateRanges.slash);
-      return json(await getSnapshot(env, { bankDateRanges }));
+    if (url.pathname === "/api/banks/activity" && request.method === "POST") {
+      const startedAt = Date.now();
+      const { dateRange, sources } = bankActivityRequest(await request.json());
+      const result = await loadBankActivity(env, sources, dateRange);
+      const durationMs = Date.now() - startedAt;
+      console.log(JSON.stringify({
+        event: "bank_activity_loaded",
+        durationMs,
+        fromDate: result.fromDate,
+        toDate: result.toDate,
+        sources: result.sources,
+        transactions: result.transactions.length
+      }));
+      return json(result, {
+        headers: { "server-timing": `bank-activity;dur=${durationMs}` }
+      });
     }
 
     if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {

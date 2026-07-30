@@ -59,6 +59,10 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             amountCents: -12_345,
             accountId: "account-debit",
             status: "posted",
+            cashbackInfo: {
+              amountCents: 185,
+              rate: 1.5
+            },
             merchantData: {
               description: "Example Merchant",
               categoryCode: "5734"
@@ -120,6 +124,10 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       counterparty: "Example Merchant",
       amount: 123.45,
       currency: "USD",
+      cashback: {
+        amount: 1.85,
+        rate: 1.5
+      },
       direction: "out",
       status: "posted",
       category: "Slash"

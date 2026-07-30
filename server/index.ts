@@ -5,6 +5,7 @@ import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
   AutoCategorizeTransactionsPayload,
+  ConnectedBankSource,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -53,6 +54,7 @@ import {
   expenseDocumentById,
   initializeStore,
   importWiseStatement,
+  loadBankActivity,
   matchTransaction,
   matchExpensePayment,
   previewInvoiceDuplicate,
@@ -126,11 +128,27 @@ app.post("/api/sync", async (request, response, next) => {
   }
 });
 
-app.post("/api/banks/slash/load", async (request, response, next) => {
+app.post("/api/banks/activity", async (request, response, next) => {
   try {
-    const slashFromDate = typeof request.query.slashFromDate === "string" ? request.query.slashFromDate : undefined;
-    const slashToDate = typeof request.query.slashToDate === "string" ? request.query.slashToDate : undefined;
-    response.json(await syncExternalActivity(parseSlashTransactionDateRange(slashFromDate, slashToDate)));
+    const rawSources = request.body?.sources;
+    if (!Array.isArray(rawSources) || rawSources.length === 0) {
+      response.status(400).json({ message: "Choose at least one bank source" });
+      return;
+    }
+    const sources: ConnectedBankSource[] = [];
+    for (const source of rawSources) {
+      if (source !== "revolut" && source !== "slash") {
+        response.status(400).json({ message: "Bank activity sources must be Revolut or Slash" });
+        return;
+      }
+      if (!sources.includes(source)) sources.push(source);
+    }
+    const dateRange = parseSlashTransactionDateRange(request.body?.fromDate, request.body?.toDate);
+    if (!dateRange) {
+      response.status(400).json({ message: "Bank activity from and to dates are required" });
+      return;
+    }
+    response.json(await loadBankActivity(sources, dateRange));
   } catch (error) {
     next(error);
   }

@@ -1,5 +1,5 @@
 import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Download, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { ActiveFilterBar, type ActiveFilter, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
@@ -51,7 +51,19 @@ function sourceLabel(source: DataSource): string {
   return transactionSources.find((item) => item.value === source)?.label ?? source;
 }
 
-export function AllBankTransactionsView({ dashboard, providersById }: { dashboard: DashboardSnapshot; providersById: Map<string, Provider> }) {
+const bankTablePageSize = 200;
+
+export function AllBankTransactionsView({
+  dashboard,
+  providersById,
+  rangeControls,
+  transactions
+}: {
+  dashboard: DashboardSnapshot;
+  providersById: Map<string, Provider>;
+  rangeControls: ReactNode;
+  transactions: Transaction[];
+}) {
   const [query, setQuery] = useUrlState("allBankQuery", "");
   const [source, setSource] = useUrlState<"all" | DataSource>("allBankSource", "all", {
     allowedValues: ["all", ...transactionSources.map((item) => item.value)]
@@ -68,6 +80,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("allBankOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
+  const [visibleRowCount, setVisibleRowCount] = useState(bankTablePageSize);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const expenseByTransactionId = useMemo(
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
@@ -75,8 +88,8 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
   );
 
   const availableSources = useMemo(
-    () => [...new Set(dashboard.transactions.map((transaction) => transaction.source))].sort(),
-    [dashboard.transactions]
+    () => [...new Set(transactions.map((transaction) => transaction.source))].sort(),
+    [transactions]
   );
   const rows = useMemo(() => {
     function sortValue(transaction: Transaction): number | string {
@@ -89,7 +102,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
       return sourceLabel(transaction.source);
     }
 
-    return dashboard.transactions
+    return transactions
       .filter((transaction) => {
         if (source !== "all" && transaction.source !== source) return false;
         if (direction !== "all" && transaction.direction !== direction) return false;
@@ -105,7 +118,13 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
         || compareTableValues(left.date, right.date, "desc")
         || left.id.localeCompare(right.id)
       );
-  }, [dashboard.transactions, direction, expenseByTransactionId, match, providersById, query, sortDirection, sortKey, source]);
+  }, [direction, expenseByTransactionId, match, providersById, query, sortDirection, sortKey, source, transactions]);
+
+  useEffect(() => {
+    setVisibleRowCount(bankTablePageSize);
+  }, [direction, match, query, sortDirection, sortKey, source, transactions]);
+
+  const visibleRows = rows.slice(0, visibleRowCount);
 
   function requestSort(nextSortKey: BankTransactionSortKey) {
     if (nextSortKey === sortKey) {
@@ -203,6 +222,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
           setMatch("all");
         }}
       />
+      {rangeControls}
       <div className="table-wrap">
         <table className="data-table modern-income-table unified-bank-table">
           <thead><tr>
@@ -215,7 +235,7 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
           </tr></thead>
           <tbody>
-            {rows.length > 0 ? rows.map((transaction) => {
+            {rows.length > 0 ? visibleRows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const expense = expenseByTransactionId.get(transaction.id);
               return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.counterparty}</strong><small>{transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Needs review")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
@@ -223,6 +243,18 @@ export function AllBankTransactionsView({ dashboard, providersById }: { dashboar
           </tbody>
         </table>
       </div>
+      {visibleRows.length < rows.length && (
+        <div className="bank-table-pagination">
+          <span>Showing {visibleRows.length} of {rows.length} transactions</span>
+          <Button
+            className="secondary-button"
+            type="button"
+            onClick={() => setVisibleRowCount((current) => current + bankTablePageSize)}
+          >
+            Show {Math.min(bankTablePageSize, rows.length - visibleRows.length)} more
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

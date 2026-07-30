@@ -195,6 +195,8 @@ Wise balances are discovered automatically across the configured business profil
 
 The Slash view loads the most recent 45 calendar days by default. Use the From and To controls to load an exact inclusive UTC date range, or use **Show 45 earlier days** below the table to extend the current window. Every selected range follows Slash cursor pagination through all available transactions; it is not capped at a fixed row count.
 
+Eligible Slash card purchases retain the API's native cashback amount and rate. The Slash summary separates cashback earned on purchases from cashback credits posted to the account, and each eligible transaction displays its earned amount and effective rate.
+
 ## Integration Status
 
 | Integration | Current role |

@@ -4681,6 +4681,16 @@ th.amount .sortable-table-heading {
   background: var(--subtle-bg);
 }
 
+.bank-table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 0;
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
 .unified-bank-table {
   min-width: 980px;
 }
