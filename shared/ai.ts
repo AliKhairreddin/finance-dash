@@ -330,7 +330,7 @@ export async function runOpenRouterTransactionCategorization(
   };
 
   const allMatches: AiTransactionCategorization[] = [];
-  for (const wave of chunk(chunk(transactions, 60), 4)) {
+  for (const wave of chunk(chunk(transactions, 20), 12)) {
     const results = await Promise.all(wave.map(categorizeBatch));
     allMatches.push(...results.flat());
   }

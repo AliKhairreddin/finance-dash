@@ -489,6 +489,11 @@ export default defineSchema({
     coveredRanges: v.array(v.object({ fromDate: v.string(), toDate: v.string() })),
     lastSyncedAt: v.string()
   }).index("by_source", ["source"]),
+  workerLeases: defineTable({
+    key: v.string(),
+    token: v.string(),
+    expiresAt: v.number()
+  }).index("by_key", ["key"]),
   managementReportImports: defineTable({
     importId: v.string(),
     contentHash: v.string(),

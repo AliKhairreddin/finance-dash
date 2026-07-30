@@ -282,6 +282,51 @@ export const getClassificationBacklog = query({
   }
 });
 
+export const claimClassificationBackfill = mutation({
+  args: {
+    serviceToken: v.string(),
+    token: v.string(),
+    leaseMs: v.number()
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const key = "transaction-classification-backfill";
+    const now = Date.now();
+    const lease = await ctx.db
+      .query("workerLeases")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    if (lease && lease.expiresAt > now) return false;
+    const next = {
+      key,
+      token: args.token,
+      expiresAt: now + Math.max(60_000, Math.min(15 * 60_000, Math.trunc(args.leaseMs)))
+    };
+    if (lease) await ctx.db.patch(lease._id, next);
+    else await ctx.db.insert("workerLeases", next);
+    return true;
+  }
+});
+
+export const releaseClassificationBackfill = mutation({
+  args: {
+    serviceToken: v.string(),
+    token: v.string()
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const lease = await ctx.db
+      .query("workerLeases")
+      .withIndex("by_key", (q) => q.eq("key", "transaction-classification-backfill"))
+      .unique();
+    if (!lease || lease.token !== args.token) return false;
+    await ctx.db.delete(lease._id);
+    return true;
+  }
+});
+
 export const applyMerchantCategory = mutation({
   args: {
     serviceToken: v.string(),

@@ -2663,7 +2663,18 @@ async function autoCategorizeBankTransactions(
     transactionIds: candidates.map((transaction) => transaction.id),
     useAi: true
   });
-  await savePersisted(env, state);
+  const candidateIds = new Set(candidates.map((transaction) => transaction.id));
+  const updates = state.wiseStatementTransactions.filter(
+    (transaction): transaction is Transaction & { source: SyncedBankSource } =>
+      candidateIds.has(transaction.id)
+      && (transaction.source === "revolut" || transaction.source === "slash")
+  );
+  for (let index = 0; index < updates.length; index += bankMutationBatchSize) {
+    await getConvexClient(env).mutation(api.banking.saveTransactionUpdates, {
+      serviceToken: getConvexServiceToken(env),
+      transactions: updates.slice(index, index + bankMutationBatchSize)
+    });
+  }
   return summary;
 }
 
@@ -2707,6 +2718,37 @@ async function categorizeHistoricalWiseBacklog(
     hasMore: candidates.length > batch.length
   }));
   return { processed: batch.length, hasMore: candidates.length > batch.length };
+}
+
+async function runHistoricalClassificationBackfill(env: Env): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const token = crypto.randomUUID();
+  const claimed = await convex.mutation(api.banking.claimClassificationBackfill, {
+    serviceToken,
+    token,
+    leaseMs: 10 * 60_000
+  });
+  if (!claimed) {
+    console.log(JSON.stringify({ event: "transaction_classification_backlog_skipped", reason: "active_lease" }));
+    return;
+  }
+  try {
+    await categorizeHistoricalBankBacklog(env);
+    await categorizeHistoricalWiseBacklog(env);
+  } finally {
+    try {
+      await convex.mutation(api.banking.releaseClassificationBackfill, {
+        serviceToken,
+        token
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "transaction_classification_backlog_release_failed",
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
 }
 
 async function autoCategorizeTransactions(
@@ -4505,8 +4547,7 @@ export default {
     const failures: unknown[] = [];
     if (controller.cron === "*/1 * * * *") {
       try {
-        await categorizeHistoricalBankBacklog(env);
-        await categorizeHistoricalWiseBacklog(env);
+        await runHistoricalClassificationBackfill(env);
       } catch (error) {
         console.error(JSON.stringify({
           event: "transaction_classification_backlog_failed",
