@@ -66,6 +66,8 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   BankAnalyticsAggregate,
+  BankAnalyticsCategoryCompaniesPage,
+  BankAnalyticsCategoryCompany,
   BankAnalyticsRelationship,
   BankAnalyticsSnapshot,
   CreateExpensePayload,
@@ -253,7 +255,7 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
 ];
 const transactionTablePageSize = 200;
 const bankHistoryLoadIncrementDays = 30;
-const analyticsBuildPollLimit = 30;
+const analyticsBuildPollLimit = 120;
 const analyticsBuildMaxWaitMs = 120_000;
 const analyticsBuildDefaultRetryMs = 1_000;
 const analyticsMonthOptions = [
@@ -270,6 +272,34 @@ const analyticsMonthOptions = [
   "November",
   "December"
 ] as const;
+
+type AnalyticsCategoryView = {
+  direction: "in" | "out";
+  currency: string;
+  category: string;
+};
+
+function analyticsCategoryViewValue(selection: AnalyticsCategoryView): string {
+  return `${selection.direction}:${selection.currency}:${selection.category}`;
+}
+
+function parseAnalyticsCategoryView(value: string): AnalyticsCategoryView | null {
+  const firstSeparator = value.indexOf(":");
+  const secondSeparator = value.indexOf(":", firstSeparator + 1);
+  if (firstSeparator < 0 || secondSeparator < 0) return null;
+  const direction = value.slice(0, firstSeparator);
+  const currency = value.slice(firstSeparator + 1, secondSeparator);
+  const category = value.slice(secondSeparator + 1).trim();
+  if (
+    (direction !== "in" && direction !== "out")
+    || !/^[A-Z0-9]{2,12}$/.test(currency)
+    || !category
+    || category.length > 160
+  ) {
+    return null;
+  }
+  return { direction, currency, category };
+}
 
 function localIsoDate(daysFromToday = 0): string {
   const date = new Date();
@@ -3244,6 +3274,10 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
   const [periodQuarter, setPeriodQuarter] = useUrlState<string>("analyticsQuarter", String(currentAnalyticsQuarter), {
     allowedValues: ["1", "2", "3", "4"]
   });
+  const [categoryViewValue, setCategoryViewValue] = useUrlState("analyticsCategoryView", "", {
+    isValid: (value) => parseAnalyticsCategoryView(value) !== null
+  });
+  const categoryView = parseAnalyticsCategoryView(categoryViewValue);
   const analyticsYearOptions = useMemo(
     () => Array.from({ length: currentAnalyticsYear - 2000 + 1 }, (_, index) => String(currentAnalyticsYear - index)),
     [currentAnalyticsYear]
@@ -3270,6 +3304,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
     snapshot: BankAnalyticsSnapshot;
   } | null>(null);
   const [isLoadingAnalyticsPeriod, setIsLoadingAnalyticsPeriod] = useState(false);
+  const [analyticsBuildReason, setAnalyticsBuildReason] = useState<"historical-coverage" | "snapshot" | null>(null);
   const [analyticsPeriodError, setAnalyticsPeriodError] = useState<string | null>(null);
   const [analyticsLoadAttempt, setAnalyticsLoadAttempt] = useState(0);
 
@@ -3303,6 +3338,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
       toDate: selectedAnalyticsRange.toDate
     });
     setIsLoadingAnalyticsPeriod(true);
+    setAnalyticsBuildReason(null);
     setAnalyticsPeriodError(null);
     setLoadedAnalyticsPeriod(null);
 
@@ -3311,10 +3347,11 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
       for (let poll = 0; poll < analyticsBuildPollLimit; poll += 1) {
         const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal: controller.signal });
         if (response.status === 202) {
-          const body = (await response.json().catch(() => null)) as { status?: string } | null;
+          const body = (await response.json().catch(() => null)) as { status?: string; reason?: string } | null;
           if (body?.status !== "building") {
             throw new Error("Analytics returned an invalid build status");
           }
+          setAnalyticsBuildReason(body.reason === "historical-coverage" ? "historical-coverage" : "snapshot");
           const delayMs = analyticsRetryAfterMs(response.headers.get("Retry-After"));
           const remainingMs = analyticsBuildMaxWaitMs - (Date.now() - startedAt);
           if (poll + 1 >= analyticsBuildPollLimit || remainingMs <= 0 || delayMs > remainingMs) {
@@ -3335,6 +3372,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
           throw new Error("Analytics returned a snapshot for the wrong period");
         }
         setLoadedAnalyticsPeriod({ key: selectedAnalyticsRangeKey, snapshot });
+        setAnalyticsBuildReason(null);
         return;
       }
       throw new Error("Analytics is still building. Retry in a moment.");
@@ -3344,6 +3382,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setLoadedAnalyticsPeriod(null);
+        setAnalyticsBuildReason(null);
         setAnalyticsPeriodError(error instanceof Error ? error.message : "Analytics snapshot could not be loaded");
       })
       .finally(() => {
@@ -3360,6 +3399,107 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
   const categoryRows = analytics?.categories ?? [];
   const spendPieGroups = analyticsCategoryPieGroups(categoryRows, "out");
   const revenuePieGroups = analyticsCategoryPieGroups(categoryRows, "in");
+  const categoryViewKey = categoryView
+    ? `${selectedAnalyticsRangeKey}:${analyticsCategoryViewValue(categoryView)}`
+    : "";
+  const [loadedCategoryCompanies, setLoadedCategoryCompanies] = useState<{
+    key: string;
+    companies: BankAnalyticsCategoryCompany[];
+  } | null>(null);
+  const [isLoadingCategoryCompanies, setIsLoadingCategoryCompanies] = useState(false);
+  const [categoryCompaniesError, setCategoryCompaniesError] = useState<string | null>(null);
+  const [categoryCompaniesAttempt, setCategoryCompaniesAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!categoryView || !analytics) {
+      setLoadedCategoryCompanies(null);
+      setIsLoadingCategoryCompanies(false);
+      setCategoryCompaniesError(null);
+      return;
+    }
+    const selection = categoryView;
+    const controller = new AbortController();
+    const companies = new Map<string, BankAnalyticsCategoryCompany>();
+    const seenCursors = new Set<string>();
+    setLoadedCategoryCompanies({ key: categoryViewKey, companies: [] });
+    setIsLoadingCategoryCompanies(true);
+    setCategoryCompaniesError(null);
+
+    async function loadCategoryCompanies(): Promise<void> {
+      let cursor: string | null = null;
+      for (let pageNumber = 0; pageNumber < 1_000; pageNumber += 1) {
+        const query = new URLSearchParams({
+          fromDate: selectedAnalyticsRange.fromDate,
+          toDate: selectedAnalyticsRange.toDate,
+          direction: selection.direction,
+          currency: selection.currency,
+          category: selection.category,
+          limit: String(transactionTablePageSize)
+        });
+        if (cursor) query.set("cursor", cursor);
+        const response = await fetch(`${apiBase}/analytics/category-companies?${query.toString()}`, {
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(await apiErrorMessage(response, "Category companies could not be loaded"));
+        }
+        const page = (await response.json()) as BankAnalyticsCategoryCompaniesPage;
+        if (
+          page.version !== 1
+          || page.fromDate !== selectedAnalyticsRange.fromDate
+          || page.toDate !== selectedAnalyticsRange.toDate
+          || page.direction !== selection.direction
+          || page.currency !== selection.currency
+          || page.category !== selection.category
+        ) {
+          throw new Error("Category companies returned data for the wrong slice");
+        }
+        for (const company of page.companies) {
+          const existing = companies.get(company.companyKey);
+          companies.set(company.companyKey, {
+            ...company,
+            merchantName: existing?.merchantName ?? company.merchantName,
+            amount: (existing?.amount ?? 0) + company.amount,
+            transactionCount: (existing?.transactionCount ?? 0) + company.transactionCount
+          });
+        }
+        setLoadedCategoryCompanies({
+          key: categoryViewKey,
+          companies: [...companies.values()]
+        });
+        if (page.isDone) return;
+        if (!page.continueCursor || seenCursors.has(page.continueCursor)) {
+          throw new Error("Category companies pagination did not advance");
+        }
+        seenCursors.add(page.continueCursor);
+        cursor = page.continueCursor;
+      }
+      throw new Error("Category companies exceeded the supported page limit");
+    }
+
+    void loadCategoryCompanies()
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setCategoryCompaniesError(error instanceof Error ? error.message : "Category companies could not be loaded");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoadingCategoryCompanies(false);
+      });
+    return () => controller.abort();
+  }, [
+    analytics,
+    categoryCompaniesAttempt,
+    categoryView?.category,
+    categoryView?.currency,
+    categoryView?.direction,
+    categoryViewKey,
+    selectedAnalyticsRange.fromDate,
+    selectedAnalyticsRange.toDate
+  ]);
+
+  const categoryCompanies = loadedCategoryCompanies?.key === categoryViewKey
+    ? loadedCategoryCompanies.companies
+    : [];
   const analyticsTeamsById = new Map(
     (analytics?.teams ?? []).map((team) => [team.teamId ?? "", team] as const)
   );
@@ -3455,6 +3595,39 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
         }]
       : [])
   ];
+  const categoryCompanyRows = categoryCompanies.map((company) => ({
+    ...company,
+    name: company.providerId
+      ? dashboard.providers.find((provider) => provider.id === company.providerId)?.name ?? company.merchantName
+      : company.merchantName,
+    kind: company.providerId ? "Matched company" : "Merchant"
+  })).sort((left, right) => right.amount - left.amount || left.name.localeCompare(right.name));
+  const selectedCategorySegment = categoryView
+    ? (categoryView.direction === "out" ? spendPieGroups : revenuePieGroups)
+      .find((group) => group.currency === categoryView.currency)
+      ?.segments.find((segment) => segment.category === categoryView.category)
+    : undefined;
+  const selectedCategoryTotal = selectedCategorySegment?.amount
+    ?? categoryCompanyRows.reduce((sum, company) => sum + company.amount, 0);
+
+  function inspectAnalyticsCategory(selection: AnalyticsCategoryView): void {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("analyticsCategoryView", analyticsCategoryViewValue(selection));
+    window.history.pushState(
+      { ...window.history.state, analyticsCategoryViewEntry: true },
+      "",
+      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
+    );
+    window.dispatchEvent(new Event("finance-dash:url-state-change"));
+  }
+
+  function closeAnalyticsCategory(): void {
+    if (window.history.state?.analyticsCategoryViewEntry === true) {
+      window.history.back();
+      return;
+    }
+    setCategoryViewValue("");
+  }
 
   return (
     <div className="categorization-layout">
@@ -3526,10 +3699,12 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
                 ))}
               </NativeSelect>
             )}
-            <span className="analytics-period-status">
-              <span className="analytics-period-value">
+            <span className="analytics-period-status" aria-live="polite">
+              <span className={`analytics-period-value ${isLoadingAnalyticsPeriod ? "loading" : ""}`}>
                 {isLoadingAnalyticsPeriod && <Loader2 className="spin" aria-hidden="true" size={13} />}
-                {analyticsPeriodLabel(periodSelection, analyticsToday)}
+                {isLoadingAnalyticsPeriod
+                  ? `${analyticsBuildReason === "historical-coverage" ? "Syncing" : "Building"} ${analyticsPeriodLabel(periodSelection, analyticsToday)}…`
+                  : analyticsPeriodLabel(periodSelection, analyticsToday)}
                 {analytics && <> · {analytics.summary.transactionCount.toLocaleString()} transactions</>}
               </span>
               <InfoPopover label="analytics period data">
@@ -3564,26 +3739,47 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
             value={formatUsdCurrencyTotal(summary?.moneyOut ?? {}, dashboard.fxRates)}
             detail={nativeCurrencyBreakdown(summary?.moneyOut ?? {})}
           />
-          <SummaryTile label="Owners" value={String(summary?.activeTeamCount ?? 0)} />
-          <SummaryTile label="Sources" value={String(summary?.activeSourceCount ?? 0)} />
-          <SummaryTile label="Needs review" value={String(summary?.needsReviewCount ?? 0)} />
+          <SummaryTile label="Owners" value={analytics ? String(summary?.activeTeamCount ?? 0) : "—"} />
+          <SummaryTile label="Sources" value={analytics ? String(summary?.activeSourceCount ?? 0) : "—"} />
+          <SummaryTile label="Needs review" value={analytics ? String(summary?.needsReviewCount ?? 0) : "—"} />
         </div>
       </section>
 
-      <CategoryPiePanel
-        title="Spend by category"
-        tone="danger"
-        groups={spendPieGroups}
-        rates={dashboard.fxRates}
-        emptyLabel="No spend transactions yet"
-      />
-      <CategoryPiePanel
-        title="Revenue by category"
-        tone="good"
-        groups={revenuePieGroups}
-        rates={dashboard.fxRates}
-        emptyLabel="No revenue transactions yet"
-      />
+      {categoryView && analytics ? (
+        <AnalyticsCategoryCompaniesPanel
+          selection={categoryView}
+          periodLabel={analyticsPeriodLabel(periodSelection, analyticsToday)}
+          total={selectedCategoryTotal}
+          rows={categoryCompanyRows}
+          loading={isLoadingCategoryCompanies}
+          error={categoryCompaniesError}
+          onBack={closeAnalyticsCategory}
+          onRetry={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
+        />
+      ) : (
+        <>
+          <CategoryPiePanel
+            title="Spend by category"
+            direction="out"
+            tone="danger"
+            groups={spendPieGroups}
+            rates={dashboard.fxRates}
+            emptyLabel="No spend transactions yet"
+            loading={isLoadingAnalyticsPeriod}
+            onInspectCategory={inspectAnalyticsCategory}
+          />
+          <CategoryPiePanel
+            title="Revenue by category"
+            direction="in"
+            tone="good"
+            groups={revenuePieGroups}
+            rates={dashboard.fxRates}
+            emptyLabel="No revenue transactions yet"
+            loading={isLoadingAnalyticsPeriod}
+            onInspectCategory={inspectAnalyticsCategory}
+          />
+
+          {analytics && <>
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -3779,24 +3975,112 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
           </table>
         </div>
       </section>
+          </>}
+        </>
+      )}
     </div>
+  );
+}
+
+function AnalyticsCategoryCompaniesPanel({
+  selection,
+  periodLabel,
+  total,
+  rows,
+  loading,
+  error,
+  onBack,
+  onRetry
+}: {
+  selection: AnalyticsCategoryView;
+  periodLabel: string;
+  total: number;
+  rows: Array<BankAnalyticsCategoryCompany & { name: string; kind: string }>;
+  loading: boolean;
+  error: string | null;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="panel wide-panel analytics-category-companies">
+      <div className="panel-header analytics-category-companies-header">
+        <div className="analytics-category-title">
+          <Button type="button" className="icon-button" aria-label="Back to category charts" onClick={onBack}>
+            <ChevronLeft aria-hidden="true" size={17} />
+          </Button>
+          <div>
+            <p className="eyebrow">{periodLabel} · {selection.direction === "out" ? "Spend" : "Revenue"}</p>
+            <h2>{selection.category}</h2>
+          </div>
+        </div>
+        <div className="analytics-category-summary">
+          {loading && <Loader2 className="spin" aria-hidden="true" size={15} />}
+          <span>{rows.length.toLocaleString()} {rows.length === 1 ? "company" : "companies"}</span>
+          <strong>{money(total, selection.currency)}</strong>
+        </div>
+      </div>
+      {error ? (
+        <div className="analytics-category-state danger-text" role="alert">
+          <span>{error}</span>
+          <Button type="button" className="secondary-button" onClick={onRetry}>
+            <RefreshCw aria-hidden="true" size={14} /> Retry
+          </Button>
+        </div>
+      ) : rows.length > 0 ? (
+        <div className="analytics-company-list">
+          <div className="analytics-company-list-head" aria-hidden="true">
+            <span>Company or merchant</span>
+            <span>Transactions</span>
+            <span>Amount</span>
+            <span>Share</span>
+          </div>
+          <ol aria-label={`${selection.category} company and merchant shares`}>
+            {rows.map((company) => (
+              <li key={company.companyKey}>
+                <span className="analytics-company-name">
+                  <strong>{company.name}</strong>
+                  <small>{company.kind}</small>
+                </span>
+                <span data-label="Transactions">{company.transactionCount.toLocaleString()}</span>
+                <strong data-label="Amount">{money(company.amount, selection.currency)}</strong>
+                <strong data-label="Share">{formatShare(company.amount, total)}</strong>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : (
+        <div className="analytics-category-state">
+          {loading ? (
+            <><Loader2 className="spin" aria-hidden="true" size={16} /> Loading companies and merchants…</>
+          ) : (
+            "No companies or merchants make up this category in the selected period."
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
 function CategoryPiePanel({
   title,
+  direction,
   tone,
   groups,
   rates,
   emptyLabel,
-  controls
+  controls,
+  loading,
+  onInspectCategory
 }: {
   title: string;
+  direction: "in" | "out";
   tone: "good" | "danger";
   groups: CategoryPieGroup[];
   rates: FxRate[];
   emptyLabel: string;
   controls?: ReactNode;
+  loading: boolean;
+  onInspectCategory: (selection: AnalyticsCategoryView) => void;
 }) {
   const nativeTotals = Object.fromEntries(groups.map((group) => [group.currency, group.total]));
 
@@ -3809,19 +4093,35 @@ function CategoryPiePanel({
       {controls}
       <div className="category-chart-body">
         {groups.length > 0 ? (
-          groups.map((group) => <CategoryPieGroupView group={group} key={group.currency} />)
+          groups.map((group) => (
+            <CategoryPieGroupView
+              direction={direction}
+              group={group}
+              key={group.currency}
+              onInspectCategory={onInspectCategory}
+            />
+          ))
         ) : (
-          <div className="money-empty">{emptyLabel}</div>
+          <div className="money-empty category-chart-empty">
+            {loading && <Loader2 className="spin" aria-hidden="true" size={15} />}
+            {loading ? "Syncing transactions…" : emptyLabel}
+          </div>
         )}
       </div>
     </section>
   );
 }
 
-function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
-  const detailId = useId();
+function CategoryPieGroupView({
+  direction,
+  group,
+  onInspectCategory
+}: {
+  direction: "in" | "out";
+  group: CategoryPieGroup;
+  onInspectCategory: (selection: AnalyticsCategoryView) => void;
+}) {
   const [activeCategory, setActiveCategory] = useState<string | null>(group.segments[0]?.category ?? null);
-  const activeSegment = group.segments.find((segment) => segment.category === activeCategory) ?? group.segments[0];
 
   useEffect(() => {
     if (!group.segments.some((segment) => segment.category === activeCategory)) {
@@ -3832,31 +4132,25 @@ function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
   return (
     <div className="category-pie-group">
       <div className="category-pie-visual">
-        <CategoryPieSvg group={group} activeCategory={activeCategory} onActivateCategory={setActiveCategory} />
+        <CategoryPieSvg
+          group={group}
+          activeCategory={activeCategory}
+          onActivateCategory={setActiveCategory}
+          onInspectCategory={(category) => onInspectCategory({ direction, currency: group.currency, category })}
+        />
         <div className="pie-center">
           <span>{group.currency}</span>
           <strong>{compactMoney(group.total, group.currency)}</strong>
         </div>
       </div>
       <div className="category-legend">
-        {activeSegment && (
-          <div className="category-slice-detail" id={detailId} role="status" aria-live="polite" aria-atomic="true">
-            <span className="category-slice-name">
-              <span className="legend-swatch" style={{ backgroundColor: activeSegment.color }} />
-              <strong title={activeSegment.category}>{activeSegment.category}</strong>
-            </span>
-            <strong>{money(activeSegment.amount, group.currency)}</strong>
-            <span>{formatShare(activeSegment.amount, group.total)} · {activeSegment.count.toLocaleString()} {activeSegment.count === 1 ? "transaction" : "transactions"}</span>
-          </div>
-        )}
         <div className="category-legend-list" aria-label={`${group.currency} category share`}>
           {group.segments.map((segment) => (
             <button
-              aria-label={`Inspect ${segment.category}: ${money(segment.amount, group.currency)}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
-              aria-pressed={activeCategory === segment.category}
+              aria-label={`Open ${segment.category}: ${money(segment.amount, group.currency)}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
               className={`category-legend-row ${activeCategory === segment.category ? "active" : ""}`}
               key={segment.category}
-              onClick={() => setActiveCategory(segment.category)}
+              onClick={() => onInspectCategory({ direction, currency: group.currency, category: segment.category })}
               onFocus={() => setActiveCategory(segment.category)}
               onMouseEnter={() => setActiveCategory(segment.category)}
               type="button"
@@ -3865,6 +4159,7 @@ function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
               <span className="legend-name" title={segment.category}>{segment.category}</span>
               <strong>{money(segment.amount, group.currency)}</strong>
               <small>{formatShare(segment.amount, group.total)}</small>
+              <ChevronRight aria-hidden="true" size={15} />
             </button>
           ))}
         </div>
@@ -3876,11 +4171,13 @@ function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
 function CategoryPieSvg({
   group,
   activeCategory,
-  onActivateCategory
+  onActivateCategory,
+  onInspectCategory
 }: {
   group: CategoryPieGroup;
   activeCategory: string | null;
   onActivateCategory: (category: string) => void;
+  onInspectCategory: (category: string) => void;
 }) {
   let angle = -90;
 
@@ -3904,7 +4201,7 @@ function CategoryPieSvg({
             d={categoryDonutSegmentPath(startAngle, angle)}
             fill={segment.color}
             key={segment.category}
-            onClick={() => onActivateCategory(segment.category)}
+            onClick={() => onInspectCategory(segment.category)}
             onMouseEnter={() => onActivateCategory(segment.category)}
           >
             <title>

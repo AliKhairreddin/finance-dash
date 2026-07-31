@@ -31,6 +31,7 @@ import type {
   UpdateTransactionCategoryPayload
 } from "../shared/types";
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
+import { transactionBusinessCategory } from "../shared/categories";
 import {
   assignTransactionTeam,
   autoCategorizeTransactions,
@@ -53,6 +54,7 @@ import {
   getInvoicePaymentCandidates,
   getOpenRouterZdrModels,
   expenseDocumentById,
+  getAnalyticsCategoryCompaniesPage,
   getAnalyticsSnapshot,
   initializeStore,
   importWiseStatement,
@@ -126,6 +128,46 @@ app.get("/api/analytics", (request, response, next) => {
       return;
     }
     response.json(getAnalyticsSnapshot(fromDate, toDate));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/analytics/category-companies", (request, response, next) => {
+  try {
+    const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
+    const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
+    const today = new Date().toISOString().slice(0, 10);
+    const direction = request.query.direction;
+    const currency = typeof request.query.currency === "string" ? request.query.currency.trim().toUpperCase() : "";
+    const rawCategory = typeof request.query.category === "string" ? request.query.category.trim() : "";
+    const category = transactionBusinessCategory(rawCategory);
+    const rawLimit = typeof request.query.limit === "string" ? request.query.limit : "200";
+    const limit = /^\d+$/.test(rawLimit) ? Number(rawLimit) : 0;
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
+      || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
+      || fromDate > toDate
+      || toDate > today
+      || (direction !== "in" && direction !== "out")
+      || !/^[A-Z0-9]{2,12}$/.test(currency)
+      || !rawCategory
+      || category.length > 160
+      || limit < 1
+      || limit > 200
+    ) {
+      response.status(400).json({ message: "Analytics category selection is invalid" });
+      return;
+    }
+    response.json(getAnalyticsCategoryCompaniesPage({
+      fromDate,
+      toDate,
+      direction,
+      currency,
+      category,
+      cursor: typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null,
+      limit
+    }));
   } catch (error) {
     next(error);
   }

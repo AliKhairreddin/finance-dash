@@ -9,6 +9,8 @@ import {
   type ProfitDistributionPaymentFact
 } from "../shared/distribution";
 import { assertBankActivityBatchBudget } from "../shared/bankRecordValidation";
+import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
+import { transactionBusinessCategory } from "../shared/categories";
 import {
   bankProviderTransactionId,
   isCurrentBankTransactionId,
@@ -721,6 +723,96 @@ export const getActivityCoverage = query({
         })
       };
     }));
+  }
+});
+
+export const getAnalyticsCategoryCompaniesPage = query({
+  args: {
+    serviceToken: v.string(),
+    fromDate: v.string(),
+    toDate: v.string(),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    currency: v.string(),
+    category: v.string(),
+    paginationOpts: paginationOptsValidator
+  },
+  returns: v.object({
+    companies: v.array(v.object({
+      companyKey: v.string(),
+      providerId: v.optional(v.string()),
+      merchantName: v.string(),
+      amount: v.number(),
+      transactionCount: v.number()
+    })),
+    continueCursor: v.string(),
+    isDone: v.boolean()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    assertDateRange(args.fromDate, args.toDate);
+    const category = transactionBusinessCategory(args.category);
+    const currency = args.currency.trim().toUpperCase();
+    if (
+      !args.category.trim()
+      || category.length > 160
+      || !/^[A-Z0-9]{2,12}$/.test(currency)
+    ) {
+      throw new ConvexError({ code: "INVALID_ANALYTICS_CATEGORY_SELECTION" });
+    }
+    const requestedItems = Math.trunc(args.paginationOpts.numItems);
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.max(1, Math.min(maximumActivityPageSize, requestedItems)),
+      maximumRowsRead: maximumActivityRowsRead,
+      maximumBytesRead: maximumActivityBytesRead
+    };
+    const bindings = await ctx.db.query("bankConnectionBindings").take(allBankSources.length + 1);
+    if (bindings.length > allBankSources.length) {
+      throw new ConvexError({ code: "BANK_CONNECTION_BINDING_LIMIT_EXCEEDED" });
+    }
+    const query = category === "Uncategorized"
+      ? ctx.db
+        .query("bankTransactions")
+        .withIndex("by_direction_currency_date_id", (q) =>
+          q.eq("direction", args.direction)
+            .eq("currency", currency)
+            .gte("date", args.fromDate)
+            .lte("date", args.toDate)
+        )
+      : ctx.db
+        .query("bankTransactions")
+        .withIndex("by_category_direction_currency_date_id", (q) =>
+          q.eq("category", category)
+            .eq("direction", args.direction)
+            .eq("currency", currency)
+            .gte("date", args.fromDate)
+            .lte("date", args.toDate)
+        );
+    const page = await query
+      .filter((q) => {
+        const activeConnections = bindings.map((binding) => q.and(
+          q.eq(q.field("source"), binding.source),
+          q.eq(q.field("connectionKey"), binding.connectionKey)
+        ));
+        return q.and(
+          q.eq(q.field("identityVersion"), 2),
+          activeConnections.length === 0
+            ? q.eq(q.field("connectionKey"), "__no_active_bank_connection__")
+            : q.or(...activeConnections)
+        );
+      })
+      .paginate(paginationOpts);
+    return {
+      companies: aggregateAnalyticsCategoryCompanies(page.page, {
+        fromDate: args.fromDate,
+        toDate: args.toDate,
+        direction: args.direction,
+        currency,
+        category
+      }),
+      continueCursor: page.continueCursor,
+      isDone: page.isDone
+    };
   }
 });
 

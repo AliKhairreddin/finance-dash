@@ -6,6 +6,7 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  BankAnalyticsCategoryCompaniesPage,
   BankAnalyticsSnapshot,
   BankTransactionSource,
   CreateHoldingPayload,
@@ -61,6 +62,7 @@ import type {
   WiseStatementImport
 } from "../shared/types";
 import { createBankAnalyticsAccumulator } from "../shared/analytics";
+import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import {
   defaultAiSettings,
   listOpenRouterZdrModels,
@@ -2400,6 +2402,51 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): BankAnal
       .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
   );
   return accumulator.finish();
+}
+
+export function getAnalyticsCategoryCompaniesPage(options: {
+  fromDate: string;
+  toDate: string;
+  direction: "in" | "out";
+  currency: string;
+  category: string;
+  cursor: string | null;
+  limit: number;
+}): BankAnalyticsCategoryCompaniesPage {
+  const category = transactionBusinessCategory(options.category);
+  const currency = options.currency.trim().toUpperCase();
+  const candidates = getMatchedTransactions()
+    .filter((transaction) =>
+      transaction.date >= options.fromDate
+      && transaction.date <= options.toDate
+      && transaction.direction === options.direction
+      && transaction.currency.trim().toUpperCase() === currency
+      && transactionBusinessCategory(transaction.category) === category
+    )
+    .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id));
+  const start = options.cursor
+    ? candidates.findIndex((transaction) => localTransactionCursor(transaction) === options.cursor) + 1
+    : 0;
+  if (options.cursor && start === 0) throw new Error("Analytics category cursor is stale");
+  const page = candidates.slice(start, start + options.limit);
+  const isDone = start + page.length >= candidates.length;
+  return {
+    version: 1,
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    direction: options.direction,
+    currency,
+    category,
+    companies: aggregateAnalyticsCategoryCompanies(page, {
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      direction: options.direction,
+      currency,
+      category
+    }),
+    continueCursor: isDone || page.length === 0 ? null : localTransactionCursor(page.at(-1)!),
+    isDone
+  };
 }
 
 export function getInvoicePaymentCandidates(

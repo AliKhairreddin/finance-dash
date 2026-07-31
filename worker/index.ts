@@ -10,6 +10,7 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  BankAnalyticsCategoryCompaniesPage,
   BankAnalyticsSnapshot,
   BankTransactionSource,
   CreateExpensePayload,
@@ -1703,7 +1704,7 @@ function bankAnalyticsDateRange(url: URL): BankAnalyticsDateRange {
 
 function analyticsBuildingResponse(): Response {
   return json(
-    { status: "building" },
+    { status: "building", reason: "snapshot" },
     { status: 202, headers: { "Retry-After": "1" } }
   );
 }
@@ -5305,6 +5306,39 @@ function transactionPageOptions(url: URL): Parameters<typeof readTransactionPage
   };
 }
 
+function analyticsCategoryCompaniesOptions(url: URL): {
+  fromDate: string;
+  toDate: string;
+  direction: "in" | "out";
+  currency: string;
+  category: string;
+  cursor: string | null;
+  limit: number;
+} {
+  const range = bankAnalyticsDateRange(url);
+  const direction = url.searchParams.get("direction");
+  if (direction !== "in" && direction !== "out") {
+    throw new ApiError(400, "Analytics category direction is invalid");
+  }
+  const currency = url.searchParams.get("currency")?.trim().toUpperCase() ?? "";
+  if (!/^[A-Z0-9]{2,12}$/.test(currency)) {
+    throw new ApiError(400, "Analytics category currency is invalid");
+  }
+  const rawCategory = url.searchParams.get("category")?.trim() ?? "";
+  const category = transactionBusinessCategory(rawCategory);
+  if (!rawCategory || category.length > 160) {
+    throw new ApiError(400, "Analytics category is invalid");
+  }
+  return {
+    ...range,
+    direction,
+    currency,
+    category,
+    cursor: opaqueCursor(url.searchParams.get("cursor")),
+    limit: boundedPageLimit(url.searchParams.get("limit"))
+  };
+}
+
 async function handleApi(
   request: Request,
   env: Env,
@@ -5343,10 +5377,38 @@ async function handleApi(
         else void run;
         return json(
           { status: "building", reason: "historical-coverage", jobs: jobs.map((job) => job.key) },
-          { status: 202, headers: { "Retry-After": "5" } }
+          { status: 202, headers: { "Retry-After": "1" } }
         );
       }
       return await getBankAnalyticsSnapshot(env, range);
+    }
+
+    if (url.pathname === "/api/analytics/category-companies" && request.method === "GET") {
+      const options = analyticsCategoryCompaniesOptions(url);
+      const result = await getConvexClient(env).query(api.banking.getAnalyticsCategoryCompaniesPage, {
+        serviceToken: getConvexServiceToken(env),
+        fromDate: options.fromDate,
+        toDate: options.toDate,
+        direction: options.direction,
+        currency: options.currency,
+        category: options.category,
+        paginationOpts: {
+          cursor: options.cursor,
+          numItems: options.limit
+        }
+      });
+      const response: BankAnalyticsCategoryCompaniesPage = {
+        version: 1,
+        fromDate: options.fromDate,
+        toDate: options.toDate,
+        direction: options.direction,
+        currency: options.currency,
+        category: options.category,
+        companies: result.companies,
+        continueCursor: result.isDone ? null : result.continueCursor,
+        isDone: result.isDone
+      };
+      return json(response);
     }
 
     if (url.pathname === "/api/transactions" && request.method === "GET") {

@@ -662,6 +662,27 @@ export interface BankAnalyticsCategoryBreakdown extends BankAnalyticsAggregate {
   category: string;
 }
 
+export interface BankAnalyticsCategoryCompany {
+  companyKey: string;
+  providerId?: string;
+  merchantName: string;
+  amount: number;
+  transactionCount: number;
+}
+
+/** One bounded page of exact merchant/company contributions for a category slice. */
+export interface BankAnalyticsCategoryCompaniesPage {
+  version: 1;
+  fromDate: string;
+  toDate: string;
+  direction: Direction;
+  currency: string;
+  category: string;
+  companies: BankAnalyticsCategoryCompany[];
+  continueCursor: string | null;
+  isDone: boolean;
+}
+
 export interface BankAnalyticsTeamBreakdown extends BankAnalyticsAggregate {
   teamId: string | null;
   teamName: string;

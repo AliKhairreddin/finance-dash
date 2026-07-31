@@ -583,6 +583,8 @@ export default defineSchema({
     .index("by_source_status_date_id", ["source", "status", "date", "id"])
     .index("by_date_id", ["date", "id"])
     .index("by_direction_date_id", ["direction", "date", "id"])
+    .index("by_direction_currency_date_id", ["direction", "currency", "date", "id"])
+    .index("by_category_direction_currency_date_id", ["category", "direction", "currency", "date", "id"])
     .index("by_direction_currency_status_date_id", ["direction", "currency", "status", "date", "id"])
     .index("by_source_date_id", ["source", "date", "id"])
     .index("by_source_direction_date_id", ["source", "direction", "date", "id"])

@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 import { ConvexError } from "convex/values";
 import {
   claimLease,
+  finishBackfillAttempt,
   registerAccountSet,
   retryBackfill,
   saveCheckpoint
@@ -44,6 +45,23 @@ type RetryBackfillHandler = (
 
 const retryBackfillHandler = (
   retryBackfill as unknown as { _handler: RetryBackfillHandler }
+)._handler;
+
+type FinishBackfillHandler = (
+  context: { db: unknown },
+  args: {
+    serviceToken: string;
+    key: string;
+    connectionKey: string;
+    attemptToken: string;
+    complete: boolean;
+    error?: string;
+    terminal?: boolean;
+  }
+) => Promise<RetryBackfillResult>;
+
+const finishBackfillHandler = (
+  finishBackfillAttempt as unknown as { _handler: FinishBackfillHandler }
 )._handler;
 
 interface TestBackfillJob {
@@ -238,6 +256,29 @@ test("retryBackfill does not reveal jobs from another connection", async () => {
     (error: unknown) => errorCode(error) === "BACKFILL_JOB_NOT_FOUND"
   );
   assert.equal(patches.length, 0);
+});
+
+test("a successful checkpoint page is eligible for continuation without a long idle gap", async () => {
+  const job = makeJob({
+    status: "running",
+    attemptToken: "current-attempt",
+    attempts: 3,
+    consecutiveFailures: 0
+  });
+  const { context } = makeContext(job);
+  const startedAt = Date.now();
+  const result = await finishBackfillHandler(context, {
+    serviceToken,
+    key: job.key,
+    connectionKey,
+    attemptToken: "current-attempt",
+    complete: false
+  });
+
+  assert.equal(result.status, "queued");
+  assert.equal(result.consecutiveFailures, 0);
+  const continuationDelay = Date.parse(result.nextAttemptAt) - startedAt;
+  assert.ok(continuationDelay >= 900 && continuationDelay <= 1_500, String(continuationDelay));
 });
 
 type MemoryRow = Record<string, unknown> & { _id: string };

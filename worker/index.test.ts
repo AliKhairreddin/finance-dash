@@ -274,6 +274,27 @@ test("Analytics API validates its bounded period before reading storage", async 
   assert.deepEqual(await valid.json(), { message: "Dashboard storage is not configured" });
 });
 
+test("Analytics category companies API validates the exact slice before reading storage", async () => {
+  const base = "fromDate=2026-07-01&toDate=2026-07-31";
+  const invalidRequests = [
+    { query: "", message: "Analytics fromDate and toDate are required" },
+    { query: base, message: "Analytics category direction is invalid" },
+    { query: `${base}&direction=sideways`, message: "Analytics category direction is invalid" },
+    { query: `${base}&direction=out&currency=$&category=Travel`, message: "Analytics category currency is invalid" },
+    { query: `${base}&direction=out&currency=USD`, message: "Analytics category is invalid" },
+    { query: `${base}&direction=out&currency=USD&category=Travel&limit=201`, message: "Transaction limit must be between 1 and 200" }
+  ];
+
+  for (const invalid of invalidRequests) {
+    const response = await worker.fetch(
+      await authenticatedRequest(`https://finance.example/api/analytics/category-companies?${invalid.query}`),
+      authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+    );
+    assert.equal(response.status, 400, invalid.query);
+    assert.deepEqual(await response.json(), { message: invalid.message }, invalid.query);
+  }
+});
+
 test("bank activity range loading requests only uncovered dates", () => {
   const requested = { fromDate: "2026-05-01", toDate: "2026-07-31" };
   const state = {

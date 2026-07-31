@@ -30,6 +30,7 @@ const maximumLeaseMs = 15 * 60_000;
 const maximumBackfillJobsPerRun = 4;
 const maximumBackfillAttempts = 8;
 const staleBackfillAttemptMs = 20 * 60_000;
+const checkpointContinuationDelayMs = 1_000;
 const backfillJobValue = v.object({
   key: v.string(),
   source: bankSource,
@@ -365,7 +366,7 @@ export const finishBackfillAttempt = mutation({
     );
     const retryDelayMs = args.error
       ? Math.min(6 * 60 * 60_000, 30_000 * 2 ** Math.max(0, consecutiveFailures - 1))
-      : 30_000;
+      : checkpointContinuationDelayMs;
     const next = args.complete
       ? {
           status: "complete" as const,

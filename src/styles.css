@@ -3172,19 +3172,35 @@ th.amount .sortable-table-heading {
 }
 
 .analytics-global-filters {
+  flex: 1 1 540px;
+  min-width: 0;
   row-gap: 6px;
 }
 
 .analytics-global-filters > label {
+  flex: 0 0 136px;
   min-width: 136px;
 }
 
 .analytics-global-filters > .searchable-select {
-  width: 92px;
+  flex: 0 0 108px;
+  min-width: 108px;
+  width: 108px;
 }
 
 .analytics-global-filters > .analytics-detail-filter {
+  flex-basis: 118px;
+  min-width: 118px;
   width: 118px;
+}
+
+.categorization-layout > .wide-panel:first-child > .panel-header {
+  flex-wrap: wrap;
+}
+
+.categorization-layout > .wide-panel:first-child > .panel-header > div:first-child {
+  flex: 1 1 330px;
+  min-width: min(100%, 280px);
 }
 
 .analytics-period-value {
@@ -3204,8 +3220,15 @@ th.amount .sortable-table-heading {
 
 .analytics-period-status {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
+}
+
+.analytics-period-value.loading {
+  color: var(--info-text);
+  border-color: var(--info-border);
+  background: var(--blue-soft);
 }
 
 .analytics-period-status > .note-popover {
@@ -3234,6 +3257,14 @@ th.amount .sortable-table-heading {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.category-chart-empty {
+  display: flex;
+  min-height: 176px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .category-chart-controls {
@@ -3274,15 +3305,15 @@ th.amount .sortable-table-heading {
 
 .category-pie-group {
   display: grid;
-  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
-  align-items: center;
+  align-items: start;
   min-width: 0;
 }
 
 .category-pie-visual {
   position: relative;
-  width: 184px;
+  width: 176px;
   max-width: 100%;
   aspect-ratio: 1;
   justify-self: center;
@@ -3372,7 +3403,7 @@ th.amount .sortable-table-heading {
 
 .category-legend-list {
   display: grid;
-  max-height: 312px;
+  max-height: 286px;
   overflow-y: auto;
   padding: 1px 4px 1px 1px;
   scrollbar-gutter: stable;
@@ -3381,7 +3412,7 @@ th.amount .sortable-table-heading {
 .category-legend-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto auto;
+  grid-template-columns: 12px minmax(0, 1fr) auto minmax(44px, auto) 16px;
   gap: 8px;
   align-items: center;
   min-height: 36px;
@@ -3395,6 +3426,10 @@ th.amount .sortable-table-heading {
   font: inherit;
   font-size: 0.8rem;
   text-align: left;
+}
+
+.category-legend-row > svg {
+  color: var(--app-muted);
 }
 
 .category-legend-row:hover,
@@ -3466,6 +3501,120 @@ th.amount .sortable-table-heading {
   font-weight: 650;
   line-height: 1.2;
   text-align: right;
+}
+
+.analytics-category-companies-header {
+  align-items: center;
+}
+
+.analytics-category-title,
+.analytics-category-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.analytics-category-title {
+  min-width: 0;
+}
+
+.analytics-category-title > div {
+  min-width: 0;
+}
+
+.analytics-category-title h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-category-summary {
+  flex: 0 0 auto;
+  color: var(--app-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.analytics-category-summary strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.analytics-category-state {
+  display: flex;
+  min-height: 148px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 20px;
+  color: var(--app-muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.analytics-company-list-head,
+.analytics-company-list li {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 110px 140px 80px;
+  gap: 14px;
+  align-items: center;
+}
+
+.analytics-company-list-head {
+  min-height: 34px;
+  padding: 0 14px;
+  color: var(--app-muted);
+  background: var(--control-bg);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.69rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.analytics-company-list-head span:not(:first-child),
+.analytics-company-list li > span:not(:first-child),
+.analytics-company-list li > strong {
+  text-align: right;
+}
+
+.analytics-company-list ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analytics-company-list li {
+  min-height: 56px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.82rem;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.analytics-company-list li:last-child {
+  border-bottom: 0;
+}
+
+.analytics-company-list li:hover {
+  background: var(--row-hover);
+}
+
+.analytics-company-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analytics-company-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-company-name small {
+  color: var(--app-muted);
+  font-size: 0.72rem;
 }
 
 @media (pointer: coarse) {
@@ -5866,6 +6015,8 @@ th.amount .sortable-table-heading {
   .analytics-global-filters > label,
   .analytics-global-filters > .searchable-select,
   .analytics-global-filters > .analytics-detail-filter {
+    flex: 1 1 100%;
+    min-width: 0;
     width: 100%;
   }
 
@@ -5876,6 +6027,44 @@ th.amount .sortable-table-heading {
   .analytics-period-value {
     flex: 1;
     justify-content: center;
+  }
+
+  .analytics-category-companies-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .analytics-category-summary {
+    justify-content: space-between;
+  }
+
+  .analytics-company-list-head {
+    display: none;
+  }
+
+  .analytics-company-list li {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 12px;
+    padding-block: 11px;
+  }
+
+  .analytics-company-name {
+    grid-column: 1 / -1;
+  }
+
+  .analytics-company-list li > [data-label] {
+    display: grid;
+    gap: 2px;
+    text-align: left;
+  }
+
+  .analytics-company-list li > [data-label]::before {
+    content: attr(data-label);
+    color: var(--app-muted);
+    font-size: 0.64rem;
+    font-weight: 740;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .bank-date-controls,
