@@ -96,7 +96,7 @@ test("transaction AI requires one category and normalized merchant for every row
     matches: [{
       transactionId: aiTransaction.id,
       providerId: null,
-      category: "Food and meals",
+      category: " food_and-meals ",
       merchantName: "Pizza Hut",
       confidence: 0.84,
       reason: "Restaurant merchant"

@@ -213,13 +213,15 @@ function validAiCategorization(
   const transactionId = typeof row.transactionId === "string" ? row.transactionId : undefined;
   const transaction = transactionId ? transactionsById.get(transactionId) : undefined;
   const providerId = typeof row.providerId === "string" && providerIds.has(row.providerId) ? row.providerId : undefined;
-  const categoryValue = typeof row.category === "string" ? transactionBusinessCategory(row.category) : undefined;
-  const category =
-    categoryValue &&
-    transaction &&
-    isRequiredTransactionCategory(categoryValue, transaction.direction, categories)
-      ? categoryValue
-      : undefined;
+  const categoryValue = typeof row.category === "string" ? transactionBusinessCategory(row.category) : "";
+  const categoryKey = categoryValue.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const category = transaction
+    ? categories.find((candidate) => (
+        (candidate.direction === transaction.direction || candidate.direction === "both")
+        && candidate.name.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ") === categoryKey
+        && isRequiredTransactionCategory(candidate.name, transaction.direction, categories)
+      ))?.name
+    : undefined;
   const merchantName = typeof row.merchantName === "string" ? row.merchantName.trim().replace(/\s+/g, " ") : "";
   const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : 0;
   const reason = typeof row.reason === "string" ? row.reason.trim() : "AI categorization";
