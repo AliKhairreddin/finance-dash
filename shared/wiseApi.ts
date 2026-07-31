@@ -62,11 +62,10 @@ interface WiseStatementActivity {
   amount: { value: number; currency: string };
 }
 
-interface WiseApiOptions {
+interface WiseBalanceApiOptions {
   baseUrl: string;
   token: string;
   profileIds: ReadonlySet<number>;
-  includeTransactions?: boolean;
   fetcher?: typeof fetch;
 }
 
@@ -751,67 +750,17 @@ export function summarizeWiseStatementIssues(issues: string[]): string | undefin
   return `${uniqueIssues[0]}${suffix}`;
 }
 
-export async function fetchWiseActivityForAccessibleBusinesses({
+export async function fetchWiseBalancesForAccessibleBusinesses({
   baseUrl,
   token,
   profileIds,
-  includeTransactions = true,
   fetcher = fetch
-}: WiseApiOptions): Promise<WiseActivityResult> {
-  const headers = { Authorization: `Bearer ${token}` };
+}: WiseBalanceApiOptions): Promise<WiseActivityResult> {
   const profileBalances = await fetchWiseProfileBalances(baseUrl, token, profileIds, fetcher);
-  const now = new Date();
-  const intervalEnd = now.toISOString();
-  const intervalStart = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 45).toISOString();
-
   const accounts = profileBalanceAccounts(profileBalances);
-
-  if (!includeTransactions) {
-    return { accounts, transactions: [], statementIssues: [] };
-  }
-
-  const statementResults = await Promise.all(
-    profileBalances.map(async (profileBalance) => {
-      const { profile, balance } = profileBalance;
-      const params = new URLSearchParams({
-        currency: balance.currency,
-        intervalStart,
-        intervalEnd,
-        type: "COMPACT",
-        statementLocale: "en"
-      });
-
-      try {
-        const activities = parseWiseStatementActivities(await fetchJson<unknown>(
-          fetcher,
-          `${baseUrl}/v1/profiles/${profile.id}/balance-statements/${balance.id}/statement.json?${params}`,
-          {
-            headers: {
-              ...headers,
-              "X-External-Correlation-Id": crypto.randomUUID()
-            }
-          }
-        ));
-        const transactions = normalizeWiseStatementTransactions(activities, profileBalance);
-        return { transactions };
-      } catch (error) {
-        if (error instanceof Error && /^Wise statement transaction\b/.test(error.message)) throw error;
-        console.warn(
-          JSON.stringify({
-            event: "wise_statement_fetch_failed",
-            profileId: profile.id,
-            balanceId: balance.id,
-            error: error instanceof Error ? error.message : "Unknown Wise statement error"
-          })
-        );
-        return { transactions: [] as Transaction[], issue: wiseSyncIssue(error) };
-      }
-    })
-  );
-
   return {
     accounts,
-    transactions: statementResults.flatMap((result) => result.transactions),
-    statementIssues: statementResults.flatMap((result) => (result.issue ? [result.issue] : []))
+    transactions: [],
+    statementIssues: []
   };
 }

@@ -125,10 +125,9 @@ import {
 } from "../shared/slashApi";
 import {
   emptyWiseActivity,
-  fetchWiseActivityBatch,
+  fetchWiseBalancesForAccessibleBusinesses,
   parseWiseProfileIds,
-  type WiseActivityResult,
-  type WiseTransactionDateRange
+  type WiseActivityResult
 } from "../shared/wiseApi";
 import {
   normalizeImportedWiseTransactions,
@@ -287,12 +286,17 @@ interface BankBackfillJob {
 }
 
 const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
+export const automaticTransactionBankSources: readonly BankTransactionSource[] = [
+  "revolut",
+  "slash",
+  "amex"
+];
 
 async function bankConnectionDirectory(env: Env): Promise<Array<{
   source: BankTransactionSource;
   connectionKey: string;
 }>> {
-  return Promise.all(bankSources.filter((source) => bankSourceConfigured(env, source)).map(async (source) => ({
+  return Promise.all(automaticTransactionBankSources.filter((source) => bankSourceConfigured(env, source)).map(async (source) => ({
     source,
     connectionKey: await requireBankConnectionKey(env, source)
   })));
@@ -2294,7 +2298,7 @@ function integrationStatus(
       message:
         wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Balances and transactions sync in bounded statement pages; CSV imports remain available for historical statements."
+          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
@@ -2823,75 +2827,20 @@ async function syncSlashActivity(
   });
 }
 
-async function syncWiseActivity(
-  env: Env,
-  requestedRange?: WiseTransactionDateRange,
-  laneKey = "live"
-): Promise<boolean> {
+async function syncWiseActivity(env: Env): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "wise");
   return withBankSyncLease(env, "wise", connectionKey, async (lease) => {
-    const storedCheckpoint = await bankSyncCheckpoint(env, "wise", connectionKey, laneKey);
-    if (
-      storedCheckpoint
-      && requestedRange
-      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
-    ) return false;
-    const range: WiseTransactionDateRange = storedCheckpoint
-      ?? requestedRange
-      ?? incrementalBankDateRange(await bankSyncState(env, "wise", connectionKey));
-    let activity: Awaited<ReturnType<typeof fetchWiseActivityBatch>>;
-    try {
-      activity = await fetchWiseActivityBatch({
-        baseUrl: wiseBaseUrl(env),
-        token: env.WISE_API_TOKEN,
-        profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS),
-        ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
-        pageBudget: 10,
-        collectTransactions: false,
-        onAccountsDiscovered: async (accounts) => {
-          await registerDiscoveredBankAccountSet(
-            env,
-            "wise",
-            laneKey,
-            storedCheckpoint,
-            accounts,
-            lease
-          );
-        },
-        onTransactionPage: async (transactions) => {
-          await upsertSyncedLedgerTransactions(env, "wise", transactions, lease);
-        }
-      });
-    } catch (error) {
-      if (storedCheckpoint && /balance is no longer accessible|balances that are no longer accessible/i.test(
-        error instanceof Error ? error.message : String(error)
-      )) {
-        await lease.renew();
-        await getConvexClient(env).mutation(api.bankSync.clearCheckpoint, {
-          serviceToken: getConvexServiceToken(env),
-          source: "wise",
-          connectionKey,
-          laneKey,
-          expectedCheckpoint: storedCheckpoint.checkpoint,
-          leaseToken: lease.token,
-          leaseFence: lease.fence
-        });
-      }
-      throw error;
-    }
-    await persistCheckpointedBankSync(
+    const activity = await fetchWiseBalancesForAccessibleBusinesses({
+      baseUrl: wiseBaseUrl(env),
+      token: env.WISE_API_TOKEN,
+      profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS)
+    });
+    await persistBankAccountSnapshot(
       env,
       "wise",
-      range,
-      laneKey,
-      storedCheckpoint?.checkpoint ?? null,
-      storedCheckpoint?.accountIds ?? null,
-      lease,
-      activity
+      activity.accounts,
+      lease
     );
-    if (!activity.complete && activity.statementIssues.length > 0) {
-      throw new Error(activity.statementIssues[0]);
-    }
   });
 }
 
@@ -2972,8 +2921,8 @@ async function syncLatestBankActivity(
   const laneKey = options.dateRange
     ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
     : "live";
-  if (includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
-    jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange, laneKey) });
+  if (!options.dateRange && includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
+    jobs.push({ source: "wise", run: syncWiseActivity(env) });
   }
   if (
     includes("revolut")
@@ -3031,7 +2980,7 @@ async function syncBankSourceRange(
   range: SlashTransactionDateRange,
   laneKey: string
 ): Promise<boolean> {
-  if (source === "wise") return syncWiseActivity(env, range, laneKey);
+  if (source === "wise") throw new Error("Wise transaction history is imported manually from CSV");
   if (source === "revolut") return syncRevolutActivity(env, range, laneKey);
   if (source === "slash") return syncSlashActivity(env, range, laneKey);
   return syncAmexActivity(env, range, laneKey);
@@ -3042,6 +2991,9 @@ async function enqueueBankBackfill(
   source: BankTransactionSource,
   range: SlashTransactionDateRange
 ): Promise<BankBackfillJob> {
+  if (source === "wise") {
+    throw new ApiError(409, "Wise transaction history is imported manually from CSV");
+  }
   if (!bankSourceConfigured(env, source)) {
     throw new ApiError(409, `${source} is not configured for transaction sync`);
   }
@@ -3069,6 +3021,15 @@ async function runBankBackfillJob(env: Env, key: string): Promise<BankBackfillJo
     attemptToken
   });
   if (!attempt.started) return attempt.job;
+  if (stored.source === "wise") {
+    return convex.mutation(api.bankSync.finishBackfillAttempt, {
+      serviceToken,
+      key,
+      connectionKey: stored.connectionKey,
+      attemptToken,
+      complete: true
+    });
+  }
   const currentConnectionKey = await bankConnectionKey(env, stored.source);
   if (!bankSourceConfigured(env, stored.source) || currentConnectionKey !== stored.connectionKey) {
     const message = `${stored.source} connection changed while its history job was queued`;

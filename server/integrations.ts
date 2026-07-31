@@ -38,7 +38,7 @@ import {
   type SlashTransactionDateRange
 } from "../shared/slashApi";
 import {
-  fetchWiseActivityForAccessibleBusinesses,
+  fetchWiseBalancesForAccessibleBusinesses,
   parseWiseProfileIds,
   type WiseActivityResult
 } from "../shared/wiseApi";
@@ -261,11 +261,10 @@ export async function fetchWiseActivity(): Promise<WiseActivityResult> {
   const token = process.env.WISE_API_TOKEN;
   const profileIds = parseWiseProfileIds(process.env.WISE_PROFILE_IDS);
   if (!token || profileIds.size === 0) return { accounts: [], transactions: [], statementIssues: [] };
-  return fetchWiseActivityForAccessibleBusinesses({
+  return fetchWiseBalancesForAccessibleBusinesses({
     baseUrl: wiseBaseUrl,
     token,
-    profileIds,
-    includeTransactions: false
+    profileIds
   });
 }
 

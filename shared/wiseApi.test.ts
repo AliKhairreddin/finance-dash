@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   emptyWiseActivity,
   fetchWiseActivityBatch,
-  fetchWiseActivityForAccessibleBusinesses,
+  fetchWiseBalancesForAccessibleBusinesses,
   parseWiseTransactionDateRange,
   wiseStatementTransactionReference
 } from "./wiseApi";
@@ -25,7 +25,7 @@ test("empty Wise activity records a balance failure separately from statement li
   });
 });
 
-test("discovers and labels balances across selected accessible Wise business profiles", async () => {
+test("discovers and labels balances without requesting Wise statements", async () => {
   const requestedUrls: string[] = [];
   const fetcher: typeof fetch = async (input) => {
     const url = String(input);
@@ -72,7 +72,7 @@ test("discovers and labels balances across selected accessible Wise business pro
     return new Response("not found", { status: 404, statusText: "Not Found" });
   };
 
-  const result = await fetchWiseActivityForAccessibleBusinesses({
+  const result = await fetchWiseBalancesForAccessibleBusinesses({
     baseUrl: "https://api.wise.test",
     token: "test-token",
     profileIds: new Set([11, 22]),
@@ -93,15 +93,12 @@ test("discovers and labels balances across selected accessible Wise business pro
       { id: "wise-22-2202", name: "Digital Nudge · Wise EUR", wiseEntity: "dn", balance: 50, currency: "EUR" }
     ]
   );
-  assert.equal(result.transactions.length, 1);
-  assert.equal(result.transactions[0].id, "wise-v2-2201-7265662d31");
-  assert.equal(result.transactions[0].accountName, "Digital Nudge · Wise USD");
-  assert.equal(result.transactions[0].wiseEntity, "dn");
-  assert.equal(result.statementIssues.length, 1);
-  assert.match(result.statementIssues[0], /denied live statement API access/);
+  assert.deepEqual(result.transactions, []);
+  assert.deepEqual(result.statementIssues, []);
   assert.equal(result.balanceIssue, undefined);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/33/balances")), false);
   assert.equal(requestedUrls.some((url) => url.includes("/profiles/44/balances")), false);
+  assert.equal(requestedUrls.some((url) => url.includes("balance-statements")), false);
 });
 
 test("balance-only Wise sync never requests or returns statement transactions", async () => {
@@ -125,11 +122,10 @@ test("balance-only Wise sync never requests or returns statement transactions", 
     throw new Error(`Unexpected Wise request: ${url}`);
   };
 
-  const result = await fetchWiseActivityForAccessibleBusinesses({
+  const result = await fetchWiseBalancesForAccessibleBusinesses({
     baseUrl: "https://api.wise.test",
     token: "test-token",
     profileIds: new Set([11]),
-    includeTransactions: false,
     fetcher
   });
 

@@ -93,6 +93,16 @@ const accounts: AccountBalance[] = [
     currency: "USD",
     updatedAt: "2026-07-30T00:00:00.000Z",
     status: "live"
+  },
+  {
+    id: "wise-31035977-37067485",
+    name: "LoveMeDo B.V. · Wise EUR",
+    source: "wise",
+    wiseEntity: "lmd",
+    balance: 50_396.06,
+    currency: "EUR",
+    updatedAt: "2026-07-30T11:56:58.257809Z",
+    status: "live"
   }
 ];
 
@@ -151,6 +161,17 @@ test("a Wise CSV selected in the wrong entity view is rejected before import", (
     () => verifyWiseStatementAccount(parsed.metadata, accounts, "dn"),
     /belongs to LMD, not DN/
   );
+});
+
+test("the original LMD EUR filename verifies against its live Wise balance", () => {
+  const fileName = "statement_37067485_EUR_2026-01-01_2026-06-30.csv";
+  const parsed = parseWiseStatementCsv(`${header}\n`, fileName)[0];
+
+  assert.deepEqual(verifyWiseStatementAccount(parsed.metadata, accounts, "lmd"), {
+    accountId: "wise-31035977-37067485",
+    accountName: "LoveMeDo B.V. · Wise EUR",
+    wiseEntity: "lmd"
+  });
 });
 
 test("empty Wise balance CSVs still retain verifiable filename metadata", () => {

@@ -4,6 +4,7 @@ import type { WorkerEnv } from "../worker-configuration";
 import type { Invoice, Transaction } from "../shared/types";
 import { createAuthSessionToken } from "./auth";
 import worker, {
+  automaticTransactionBankSources,
   createMeritInvoice,
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
@@ -15,6 +16,10 @@ import worker, {
   missingBankActivityRanges,
   mergeInvoices
 } from "./index";
+
+test("automatic bank transaction sync excludes manual Wise imports", () => {
+  assert.deepEqual(automaticTransactionBankSources, ["revolut", "slash", "amex"]);
+});
 
 const workerTestAuth = {
   AUTH_USERNAME: "finance-test",
