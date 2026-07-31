@@ -168,6 +168,36 @@ test("streaming bank Analytics excludes voided tombstones from every aggregate",
   assert.deepEqual(snapshot.reviewSamples, []);
 });
 
+test("streaming bank Analytics accepts bounded provider transaction IDs longer than dimension labels", () => {
+  const longTransactionId = `slash:${"provider-transaction-segment/".repeat(18)}`;
+  assert.ok(longTransactionId.length > bankAnalyticsLimits.dimensionTextLength);
+  assert.ok(longTransactionId.length < bankAnalyticsLimits.transactionIdTextLength);
+  const accumulator = createBankAnalyticsAccumulator({
+    fromDate: "2026-07-01",
+    toDate: "2026-07-31",
+    providers: [],
+    teams: []
+  });
+  accumulator.addPage([
+    transaction(longTransactionId, {
+      category: "Uncategorized",
+      merchantName: "Long ID merchant"
+    })
+  ]);
+  const state = accumulator.serialize();
+  const resumed = createBankAnalyticsAccumulator({
+    fromDate: "2026-07-01",
+    toDate: "2026-07-31",
+    providers: [],
+    teams: [],
+    state
+  });
+  const snapshot = resumed.finish("2026-07-31T23:15:00.000Z");
+
+  assert.equal(snapshot.summary.transactionCount, 1);
+  assert.equal(snapshot.reviewSamples[0]?.id, longTransactionId);
+});
+
 test("unmatched merchant cardinality and snapshot payload stay hard-bounded", () => {
   const accumulator = createBankAnalyticsAccumulator({
     fromDate: "2026-07-01",

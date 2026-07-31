@@ -26,6 +26,7 @@ export const bankAnalyticsLimits = Object.freeze({
   unmatchedMerchantRows: 40,
   reviewSamples: 8,
   dimensionTextLength: 160,
+  transactionIdTextLength: 4_096,
   reviewReasonLength: 240,
   serializedStateBytes: 750_000
 });
@@ -135,11 +136,15 @@ function boundedInteger(
   return resolved;
 }
 
-function dimensionText(value: string, label: string): string {
+function dimensionText(
+  value: string,
+  label: string,
+  maximumLength: number = bankAnalyticsLimits.dimensionTextLength
+): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) throw new Error(`${label} is required`);
-  if (normalized.length > bankAnalyticsLimits.dimensionTextLength) {
-    throw new Error(`${label} exceeds ${bankAnalyticsLimits.dimensionTextLength} characters`);
+  if (normalized.length > maximumLength) {
+    throw new Error(`${label} exceeds ${maximumLength} characters`);
   }
   return normalized;
 }
@@ -598,7 +603,11 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       ) {
         throw new Error("Analytics review sample state contains an invalid row");
       }
-      const id = dimensionText(sample.id, "Analytics review sample ID");
+      const id = dimensionText(
+        sample.id,
+        "Analytics review sample ID",
+        bankAnalyticsLimits.transactionIdTextLength
+      );
       const company = dimensionText(sample.company, "Analytics review sample company");
       const category = dimensionText(sample.category, "Analytics review sample category");
       const reason = sample.reason.trim().replace(/\s+/g, " ");
@@ -734,7 +743,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       if (!Number.isFinite(original.amount) || original.amount < 0) {
         throw new Error(`Transaction ${original.id} has an invalid Analytics amount`);
       }
-      dimensionText(original.id, "Transaction ID");
+      dimensionText(original.id, "Transaction ID", bankAnalyticsLimits.transactionIdTextLength);
       const source = original.source as BankTransactionSource;
       const currency = normalizedCurrency(original.currency);
       const transaction = currency === original.currency ? original : { ...original, currency };
