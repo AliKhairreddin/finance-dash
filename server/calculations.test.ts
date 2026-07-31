@@ -62,3 +62,10 @@ test("calculateMetrics never invents an aggregate when there are no rows", () =>
 test("calculateMetrics treats cash-only operations as net operating assets", () => {
   assert.deepEqual(calculateMetrics([account("cash", 125, "USD")], [], [], [], []).netOperatingAssets, { USD: 125 });
 });
+
+test("calculateMetrics excludes available Slash card credit from cash", () => {
+  const cash = { ...account("slash-cash", 50_000, "USD"), source: "slash" as const, slashAccountSubtype: "cash" as const };
+  const cardCredit = { ...account("slash-credit", 66_849.84, "USD"), source: "slash" as const, slashAccountSubtype: "credit" as const };
+
+  assert.deepEqual(calculateMetrics([cash, cardCredit], [], [], [], []).totalCash, { USD: 50_000 });
+});

@@ -1,4 +1,5 @@
 import {
+  ArrowDownUp,
   ArrowDownRight,
   ArrowUpRight,
   BadgeDollarSign,
@@ -38,6 +39,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
+import { Menu } from "@base-ui/react/menu";
 import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -152,6 +154,11 @@ import {
   slashDefaultActivityWindowDays,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
+import {
+  isInternalTransferTransaction,
+  transactionCounterpartyLabel,
+  transactionMovementLabel
+} from "../shared/transactionPresentation";
 import {
   parseWiseStatementCsv,
   prepareWiseStatementImport
@@ -2382,7 +2389,7 @@ function Overview({
               title: item.name,
               amount: item.balance,
               currency: item.currency,
-              source: sourceLabel(item.source)
+              source: item.slashAccountSubtype === "credit" ? "Available card credit" : sourceLabel(item.source)
             }))}
             emptyLabel="No connected account balances"
           />
@@ -2692,7 +2699,10 @@ function BanksView({
   }
   const activeSource = bankSources.find((source) => source.id === activeBank);
   const activeSourceAccounts = activeSource ? (accountsBySource.get(activeSource.id) ?? []) : [];
-  const activeSourceBalance = sumCurrencyTotals(activeSourceAccounts, (account) => account.balance);
+  const activeSourceDisplayAccounts = activeSource?.id === "slash"
+    ? activeSourceAccounts.filter((account) => account.slashAccountSubtype === "credit")
+    : activeSourceAccounts;
+  const activeSourceBalance = sumCurrencyTotals(activeSourceDisplayAccounts, (account) => account.balance);
   const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
 
   return (
@@ -2714,9 +2724,9 @@ function BanksView({
               {activeSource && (
                 <span
                   className={`bank-inline-balance ${activeSourceStatus?.mode === "live" ? "is-live" : ""}`}
-                  title={activeSourceAccounts.length > 0 ? nativeCurrencyBreakdown(activeSourceBalance) : "No live balance available"}
+                  title={activeSourceDisplayAccounts.length > 0 ? nativeCurrencyBreakdown(activeSourceBalance) : "No live balance available"}
                 >
-                  <span>Live balance</span>
+                  <span>{activeSource.id === "slash" ? "Available card credit" : "Live balance"}</span>
                   <strong>{formatUsdCurrencyTotal(activeSourceBalance, dashboard.fxRates)}</strong>
                 </span>
               )}
@@ -2795,15 +2805,18 @@ function BanksView({
           <div className="wise-summary-grid bank-source-summary">
             {bankSources.map((source) => {
               const accounts = accountsBySource.get(source.id) ?? [];
+              const summaryAccounts = source.id === "slash"
+                ? accounts.filter((account) => account.slashAccountSubtype === "cash")
+                : accounts;
               const rows = rowsBySource.get(source.id) ?? [];
               const status = statusBySource.get(source.id);
-              const accountTotals = sumCurrencyTotals(accounts, (account) => account.balance);
+              const accountTotals = sumCurrencyTotals(summaryAccounts, (account) => account.balance);
               return (
                 <SummaryTile
                   key={source.id}
                   label={`${source.label} ${status?.mode ?? "partial"}`}
-                  value={accounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
-                  detail={accounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
+                  value={summaryAccounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
+                  detail={summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
                 />
               );
             })}
@@ -2985,6 +2998,7 @@ function BankReconciliationView({
   tableFooter
 }: BankReconciliationViewProps) {
   const sourceLabel = bankSourceLabel(source);
+  const wiseFileInputRef = useRef<HTMLInputElement>(null);
   const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const summary = useMemo(() => {
@@ -3005,11 +3019,11 @@ function BankReconciliationView({
             <div className="segmented-control" aria-label={`${sourceLabel} transaction direction`}>
               <button className={bankDirection === "in" ? "active" : ""} onClick={() => setBankDirection("in")}>
                 <ArrowUpRight size={15} />
-                In
+                {source === "slash" ? "Added" : "In"}
               </button>
               <button className={bankDirection === "out" ? "active" : ""} onClick={() => setBankDirection("out")}>
                 <ArrowDownRight size={15} />
-                Out
+                {source === "slash" ? "Spent / sent" : "Out"}
               </button>
             </div>
             <ToolbarSearchField
@@ -3028,7 +3042,11 @@ function BankReconciliationView({
               <NativeSelectOption value="matched">Categorized</NativeSelectOption>
               <NativeSelectOption value="all">All rows</NativeSelectOption>
             </NativeSelect>
-            <FilterPopover activeCount={teamFilter === "all" ? 0 : 1} title="Transaction filters">
+            <FilterPopover
+              activeCount={teamFilter === "all" ? 0 : 1}
+              iconOnly
+              title="Transaction filters"
+            >
               <FilterFieldGroup title="Ownership">
                 <label>
                   Owner
@@ -3046,38 +3064,75 @@ function BankReconciliationView({
             </FilterPopover>
           </div>
           <div className="list-toolbar-actions">
-            <Button
-              className="icon-text-button"
-              type="button"
-              disabled={rows.length === 0}
-              title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
-              onClick={() => exportBankTransactionsCsv({
-                providersById,
-                rows,
-                scope: sourceLabel,
-                teamsById
-              })}
-            >
-              <Download size={15} />
-              Export CSV
-            </Button>
-            {onImportWiseStatements && (
-              <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
-                {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                {wiseEntityView && wiseEntityView !== "all"
-                  ? `Import ${wiseEntityShortLabel(wiseEntityView)} CSV`
-                  : "Import CSV"}
+            {onImportWiseStatements ? (
+              <>
+                <Menu.Root>
+                  <Menu.Trigger
+                    aria-label="Import or export CSV"
+                    className="icon-button reconciliation-transfer-trigger"
+                    title="Import or export CSV"
+                  >
+                    {isImportingWise
+                      ? <Loader2 className="spin" size={16} aria-hidden="true" />
+                      : <ArrowDownUp size={16} aria-hidden="true" />}
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Positioner className="reconciliation-transfer-positioner" sideOffset={6} align="end">
+                      <Menu.Popup className="reconciliation-transfer-menu">
+                        <Menu.Item
+                          className="reconciliation-transfer-item"
+                          disabled={isImportingWise}
+                          onClick={() => wiseFileInputRef.current?.click()}
+                        >
+                          <Download size={15} aria-hidden="true" />
+                          <span>Import CSV</span>
+                        </Menu.Item>
+                        <Menu.Item
+                          className="reconciliation-transfer-item"
+                          disabled={rows.length === 0}
+                          onClick={() => exportBankTransactionsCsv({
+                            providersById,
+                            rows,
+                            scope: sourceLabel,
+                            teamsById
+                          })}
+                        >
+                          <Upload size={15} aria-hidden="true" />
+                          <span>Export CSV</span>
+                        </Menu.Item>
+                      </Menu.Popup>
+                    </Menu.Positioner>
+                  </Menu.Portal>
+                </Menu.Root>
                 <input
+                  ref={wiseFileInputRef}
                   type="file"
                   accept=".csv,text/csv"
                   multiple
                   disabled={isImportingWise}
+                  hidden
                   onChange={(event) => {
                     void onImportWiseStatements(event.target.files);
                     event.target.value = "";
                   }}
                 />
-              </label>
+              </>
+            ) : (
+              <Button
+                aria-label={`Export ${sourceLabel} CSV`}
+                className="icon-button"
+                type="button"
+                disabled={rows.length === 0}
+                title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
+                onClick={() => exportBankTransactionsCsv({
+                  providersById,
+                  rows,
+                  scope: sourceLabel,
+                  teamsById
+                })}
+              >
+                <Upload size={15} aria-hidden="true" />
+              </Button>
             )}
           </div>
         </div>
@@ -3130,6 +3185,7 @@ function BankReconciliationView({
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
         showWiseEntity={source === "wise" && wiseEntityView === "all"}
+        source={source}
       />
       {tableFooter}
     </section>
@@ -3288,7 +3344,8 @@ function AnalyticsView({
   const [revenuePieTeamId, setRevenuePieTeamId] = useUrlState("analyticsRevenueTeam", "all");
   const [revenuePiePartnerId, setRevenuePiePartnerId] = useUrlState("analyticsRevenuePartner", "all");
   const [revenuePieCategory, setRevenuePieCategory] = useUrlState("analyticsRevenueCategory", "all");
-  const revenueRows = rows.filter((transaction) => transaction.direction === "in");
+  const externalRows = rows.filter((transaction) => !isInternalTransferTransaction(transaction));
+  const revenueRows = externalRows.filter((transaction) => transaction.direction === "in");
   const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
   const revenueTeamOptions = [
     ...dashboard.teams.map((team) => [team.id, team.name] as [string, string]),
@@ -3323,7 +3380,7 @@ function AnalyticsView({
     revenuePiePartnerId !== "all" ||
     revenuePieCategory !== "all";
 
-  const categoryRows = [...rows.reduce((map, transaction) => {
+  const categoryRows = [...externalRows.reduce((map, transaction) => {
     const category = effectiveCategory(transaction);
     map.set(category, [...(map.get(category) ?? []), transaction]);
     return map;
@@ -3434,14 +3491,14 @@ function AnalyticsView({
     </div>
   );
 
-  const relationshipRows = [...rows.reduce((map, transaction) => {
+  const relationshipRows = [...externalRows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     const label = provider ? providerTypeLabel(provider.type) : "Unknown";
     map.set(label, [...(map.get(label) ?? []), transaction]);
     return map;
   }, new Map<string, Transaction[]>())].sort(([left], [right]) => left.localeCompare(right));
 
-  const companyRows = [...rows.reduce((map, transaction) => {
+  const companyRows = [...externalRows.reduce((map, transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     const category = effectiveCategory(transaction);
     const fallbackName = expenseAnalyticsLabel(transaction);
@@ -3465,7 +3522,7 @@ function AnalyticsView({
 
   const teamRows = [
     ...dashboard.teams.map((team) => {
-      const transactions = rows.filter((transaction) => transaction.teamId === team.id);
+      const transactions = externalRows.filter((transaction) => transaction.teamId === team.id);
       const partners = dashboard.revenuePartners.filter((partner) => partner.teamId === team.id);
       return {
         id: team.id,
@@ -3475,12 +3532,12 @@ function AnalyticsView({
         enabledPartners: partners.filter((partner) => partner.enabled).length
       };
     }),
-    ...(rows.some((transaction) => !transaction.teamId) || dashboard.revenuePartners.some((partner) => !partner.teamId)
+    ...(externalRows.some((transaction) => !transaction.teamId) || dashboard.revenuePartners.some((partner) => !partner.teamId)
       ? [
           {
             id: "unassigned",
             name: "Unassigned",
-            transactions: rows.filter((transaction) => !transaction.teamId),
+            transactions: externalRows.filter((transaction) => !transaction.teamId),
             partners: dashboard.revenuePartners.filter((partner) => !partner.teamId),
             enabledPartners: dashboard.revenuePartners.filter((partner) => !partner.teamId && partner.enabled).length
           }
@@ -3500,19 +3557,21 @@ function AnalyticsView({
   }
   const sourceRows = [...sourceIds]
     .map((source) => {
-      const transactions = rows.filter((transaction) => transaction.source === source);
+      const transactions = externalRows.filter((transaction) => transaction.source === source);
       const accounts = dashboard.accounts.filter((account) =>
-        account.source === source && hasNonZeroAccountBalance(account)
+        account.source === source
+        && hasNonZeroAccountBalance(account)
+        && isLiquidAccountBalance(account)
       );
       const invoices = periodInvoices.filter((invoice) => invoice.source === source);
       const status = dashboard.integrationStatus.find((integration) => integration.id === source);
       return { source, transactions, accounts, invoices, status };
     })
     .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
-  const moneyInTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "in"), (row) => row.amount);
-  const moneyOutTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "out"), (row) => row.amount);
+  const moneyInTotals = sumCurrencyTotals(externalRows.filter((row) => row.direction === "in"), (row) => row.amount);
+  const moneyOutTotals = sumCurrencyTotals(externalRows.filter((row) => row.direction === "out"), (row) => row.amount);
   const activeTeamCount = new Set(
-    rows.flatMap((transaction) => transaction.teamId ? [transaction.teamId] : [])
+    externalRows.flatMap((transaction) => transaction.teamId ? [transaction.teamId] : [])
   ).size;
   const activeSourceCount = new Set(rows.map((transaction) => transaction.source)).size;
 
@@ -3987,18 +4046,20 @@ function SimpleMoneyTable({
   rows,
   dense,
   emptyLabel = "No live rows",
-  nameLabel = "Account"
+  nameLabel = "Account",
+  secondaryLabel = "Source"
 }: {
   rows: Array<{ id: string; name: string; title: string; amount: number; currency: string; source: string }>;
   dense?: boolean;
   emptyLabel?: string;
   nameLabel?: string;
+  secondaryLabel?: string;
 }) {
   return (
     <div className={`money-list ${dense ? "dense" : ""}`}>
       <div className="money-row money-head">
         <span>{nameLabel}</span>
-        <span>Source</span>
+        <span>{secondaryLabel}</span>
         <span>Balance</span>
       </div>
       {rows.length > 0 ? (
@@ -4345,7 +4406,8 @@ function TransactionTable({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
-  showWiseEntity = false
+  showWiseEntity = false,
+  source
 }: {
   rows: Transaction[];
   expenses: ExpenseRecord[];
@@ -4361,6 +4423,7 @@ function TransactionTable({
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
   showWiseEntity?: boolean;
+  source: Extract<BankSource, "wise" | "revolut" | "slash">;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
   const [pendingOverride, setPendingOverride] = useState<
@@ -4543,7 +4606,18 @@ function TransactionTable({
           <tr>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="date">Date</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="direction">Direction</SortableTableHead>
+            <SortableTableHead
+              activeSortKey={sortKey}
+              description={source === "slash"
+                ? "Slash records a daily card payment twice: Cash sent is the cash side and Card paid is the card-balance side. Card spend is the actual purchase."
+                : undefined}
+              direction={sortDirection}
+              label="Movement"
+              onSort={onSort}
+              sortKey="direction"
+            >
+              Movement
+            </SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="amount">Amount</SortableTableHead>
             <SortableTableHead
               activeSortKey={sortKey}
@@ -4588,10 +4662,14 @@ function TransactionTable({
               const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
               const categoryConfidence = transaction.categoryConfidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
+              const internalTransfer = isInternalTransferTransaction(transaction);
+              const counterpartyLabel = transactionCounterpartyLabel(transaction);
               const categoryDetail = `${(categoryConfidence * 100).toFixed(0)}% · ${transaction.categoryReason ?? "AI classification pending"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
-              const documentTitle = transaction.direction === "in"
+              const documentTitle = internalTransfer
+                ? "Internal transfers do not need an invoice or receipt"
+                : transaction.direction === "in"
                 ? "Create exceptional sales invoice draft"
                 : expense
                   ? `Expense documented as ${expense.recordNumber}`
@@ -4611,7 +4689,7 @@ function TransactionTable({
                           {wiseEntityShortLabel(transaction.wiseEntity)}
                         </span>
                       )}
-                      <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
+                      <strong>{counterpartyLabel}</strong>
                     </div>
                     <small className="transaction-detail-line">
                       <span className="transaction-detail-text">{transaction.counterparty} · {transaction.description}</span>
@@ -4632,9 +4710,9 @@ function TransactionTable({
                     )}
                   </td>
                   <td>
-                    <span className={`direction-label ${transaction.direction}`}>
+                    <span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>
                       {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                      {transaction.direction === "in" ? "In" : "Out"}
+                      {transactionMovementLabel(transaction)}
                     </span>
                   </td>
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
@@ -4677,6 +4755,9 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="company-match">
+                      {internalTransfer ? (
+                        <span className="status-pill">Not applicable</span>
+                      ) : (
                       <NativeSelect
                         className="company-select"
                         value={provider?.id ?? ""}
@@ -4697,11 +4778,14 @@ function TransactionTable({
                           </NativeSelectOption>
                         ))}
                       </NativeSelect>
-                      {provider && <small>{providerTagLabel(provider)}</small>}
+                      )}
+                      {!internalTransfer && provider && <small>{providerTagLabel(provider)}</small>}
                     </div>
                   </td>
                   <td>
-                    {transaction.matchedInvoiceId || expense ? (
+                    {internalTransfer ? (
+                      <span className="status-pill">Not required</span>
+                    ) : transaction.matchedInvoiceId || expense ? (
                       <span className="status-pill good">{expense ? "Expense linked" : "Invoice linked"}</span>
                     ) : (
                       <span className="status-pill">None</span>
@@ -4709,7 +4793,7 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="row-actions">
-                      <Button className="icon-button" title={documentTitle} disabled={Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
+                      <Button className="icon-button" title={documentTitle} disabled={internalTransfer || Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
                         {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
                     </div>
@@ -5635,9 +5719,7 @@ function SlashView({
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
 }) {
-  const slashAccounts = dashboard.accounts.filter((account) =>
-    account.source === "slash" && hasNonZeroAccountBalance(account)
-  );
+  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
   const allSlashRows = dashboard.transactions.filter((transaction) => transaction.source === "slash");
   const cashbackPurchaseRows = allSlashRows.filter((row) => row.cashback);
   const cashbackEarned = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.cashback?.amount ?? 0);
@@ -5652,7 +5734,14 @@ function SlashView({
   const effectiveCashbackRate = cashbackEligibleSpendUsd > 0
     ? (cashbackEarnedUsd / cashbackEligibleSpendUsd) * 100
     : undefined;
-  const balance = sumCurrencyTotals(slashAccounts, (account) => account.balance);
+  const cashBalance = sumCurrencyTotals(
+    slashAccounts.filter((account) => account.slashAccountSubtype === "cash"),
+    (account) => account.balance
+  );
+  const cardCredit = sumCurrencyTotals(
+    slashAccounts.filter((account) => account.slashAccountSubtype === "credit"),
+    (account) => account.balance
+  );
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -5673,17 +5762,29 @@ function SlashView({
     <div className="split-view">
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Slash balances</h2>
-          <span className="total-pill" title={nativeCurrencyBreakdown(balance)}>{formatUsdCurrencyTotal(balance, dashboard.fxRates)}</span>
+          <h2>Slash accounts</h2>
+          <div className="row-actions">
+            {Object.keys(cashBalance).length > 0 && (
+              <span className="total-pill" title={nativeCurrencyBreakdown(cashBalance)}>
+                Cash {formatUsdCurrencyTotal(cashBalance, dashboard.fxRates)}
+              </span>
+            )}
+            {Object.keys(cardCredit).length > 0 && (
+              <span className="total-pill" title={nativeCurrencyBreakdown(cardCredit)}>
+                Card credit {formatUsdCurrencyTotal(cardCredit, dashboard.fxRates)}
+              </span>
+            )}
+          </div>
         </div>
         <SimpleMoneyTable
+          secondaryLabel="Type"
           rows={slashAccounts.map((account) => ({
             id: account.id,
             name: account.name,
             title: account.name,
             amount: account.balance,
             currency: account.currency,
-            source: sourceLabel(account.source)
+            source: account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
           }))}
         />
       </section>

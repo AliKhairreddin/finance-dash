@@ -496,7 +496,7 @@ export function mergeFxRates(
 }
 
 export function isLiquidAccountBalance(account: AccountBalance): boolean {
-  return account.source !== "amex";
+  return account.source !== "amex" && account.slashAccountSubtype !== "credit";
 }
 
 export function hasNonZeroAccountBalance(account: AccountBalance): boolean {

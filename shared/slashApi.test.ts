@@ -58,6 +58,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             description: "CARD PURCHASE",
             amountCents: -12_345,
             accountId: "account-debit",
+            accountSubtype: "cash",
             status: "posted",
             cashbackInfo: {
               amountCents: 185,
@@ -74,6 +75,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             description: "FAILED PAYMENT",
             amountCents: -1_000,
             accountId: "account-debit",
+            accountSubtype: "cash",
             status: "failed"
           }
         ],
@@ -90,6 +92,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         description: "CASHBACK",
         amountCents: 250,
         accountId: "account-debit",
+        accountSubtype: "cash",
         status: "pending"
       }],
       metadata: { count: 1 }
@@ -105,9 +108,10 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   });
 
   assert.deepEqual(result.accounts, [{
-    id: "slash-account-debit",
-    name: "Operating",
+    id: "slash-account-debit-cash",
+    name: "Operating Cash",
     source: "slash",
+    slashAccountSubtype: "cash",
     balance: 1250,
     currency: "USD",
     updatedAt: "2026-07-28T12:00:00.000Z",
@@ -117,7 +121,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     {
       id: "slash-transaction-card",
       source: "slash",
-      accountName: "Operating",
+      slashAccountSubtype: "cash",
+      accountName: "Operating Cash",
       date: "2026-07-27",
       description: "CARD PURCHASE",
       rawName: "Example Merchant",
@@ -135,7 +140,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     {
       id: "slash-transaction-credit",
       source: "slash",
-      accountName: "Operating",
+      slashAccountSubtype: "cash",
+      accountName: "Operating Cash",
       date: "2026-07-28",
       description: "CASHBACK",
       rawName: "CASHBACK",
@@ -209,15 +215,28 @@ test("Slash charge-card accounts use the available credit balance", async () => 
     fetcher
   });
 
-  assert.deepEqual(result.accounts, [{
-    id: "slash-account-platinum",
-    name: "Business Platinum",
-    source: "slash",
-    balance: 66_551.98,
-    currency: "USD",
-    updatedAt: "2026-07-28T22:31:42.052Z",
-    status: "live"
-  }]);
+  assert.deepEqual(result.accounts, [
+    {
+      id: "slash-account-platinum-cash",
+      name: "Business Platinum Cash",
+      source: "slash",
+      slashAccountSubtype: "cash",
+      balance: 0,
+      currency: "USD",
+      updatedAt: "2026-07-28T22:31:42.058Z",
+      status: "live"
+    },
+    {
+      id: "slash-account-platinum-credit",
+      name: "Business Platinum Credit",
+      source: "slash",
+      slashAccountSubtype: "credit",
+      balance: 66_551.98,
+      currency: "USD",
+      updatedAt: "2026-07-28T22:31:42.052Z",
+      status: "live"
+    }
+  ]);
 });
 
 test("Slash can load one transaction by ID without scanning the activity window", async () => {
@@ -236,6 +255,7 @@ test("Slash can load one transaction by ID without scanning the activity window"
         description: "OLD CARD PURCHASE",
         amountCents: -12_345,
         accountId: "account-debit",
+        accountSubtype: "cash",
         status: "posted",
         merchantData: { description: "Old Merchant" }
       });
@@ -261,7 +281,8 @@ test("Slash can load one transaction by ID without scanning the activity window"
   assert.deepEqual(result, {
     id: "slash-transaction-old",
     source: "slash",
-    accountName: "Operating",
+    slashAccountSubtype: "cash",
+    accountName: "Operating Cash",
     date: "2025-01-15",
     description: "OLD CARD PURCHASE",
     rawName: "Old Merchant",
@@ -316,6 +337,7 @@ test("Slash activity loads every page inside an exact inclusive date range", asy
         description: "CARD PURCHASE",
         amountCents: -100,
         accountId: "account-debit",
+        accountSubtype: "cash",
         status: "posted"
       })),
       metadata: { nextCursor: page < 6 ? String(page + 1) : undefined }

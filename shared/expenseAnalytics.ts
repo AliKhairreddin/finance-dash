@@ -56,6 +56,7 @@ export function groupExpenseAnalytics(
     if (transaction.direction !== "out") continue;
 
     const category = transactionBusinessCategory(transaction.category);
+    if (category === "Internal transfer") continue;
     const matchedCompanyName = transaction.matchedProviderId
       ? companyNamesById.get(transaction.matchedProviderId)
       : undefined;

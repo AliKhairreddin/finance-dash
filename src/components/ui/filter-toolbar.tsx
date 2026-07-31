@@ -48,11 +48,13 @@ export function ToolbarSearchField({
 export function FilterPopover({
   activeCount = 0,
   children,
+  iconOnly = false,
   label = "Filters",
   title = label
 }: {
   activeCount?: number;
   children: ReactNode;
+  iconOnly?: boolean;
   label?: string;
   title?: string;
 }) {
@@ -73,9 +75,17 @@ export function FilterPopover({
         setOpen(nextOpen);
       }}
     >
-      <Popover.Trigger className={cn("toolbar-popover-trigger", activeCount > 0 && "is-active")}>
+      <Popover.Trigger
+        aria-label={label}
+        className={cn(
+          "toolbar-popover-trigger",
+          iconOnly && "is-icon-only",
+          activeCount > 0 && "is-active"
+        )}
+        title={title}
+      >
         <Filter size={15} aria-hidden="true" />
-        <span>{label}</span>
+        <span className={iconOnly ? "screen-reader-only" : undefined}>{label}</span>
         {activeCount > 0 && <span className="toolbar-filter-count" aria-label={`${activeCount} active`}>{activeCount}</span>}
       </Popover.Trigger>
       <Popover.Portal>

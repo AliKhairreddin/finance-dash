@@ -1,5 +1,6 @@
 import type { AccountBalance, Investment, LedgerItem, Metrics, Payable } from "../shared/types";
 import { combineCurrencyTotals, hasCurrencyTotals, subtractCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
+import { isLiquidAccountBalance } from "../shared/income";
 
 export function calculateMetrics(
   accounts: AccountBalance[],
@@ -8,7 +9,7 @@ export function calculateMetrics(
   payables: Payable[],
   investments: Investment[]
 ): Metrics {
-  const totalCash = sumCurrencyTotals(accounts, (account) => account.balance);
+  const totalCash = sumCurrencyTotals(accounts.filter(isLiquidAccountBalance), (account) => account.balance);
   const totalReceivables = sumCurrencyTotals(receivables, (item) => item.balance);
   const totalOpenBalance = sumCurrencyTotals(openBalances, (item) => item.balance);
   const totalPayables = sumCurrencyTotals(payables, (payable) => payable.balance);

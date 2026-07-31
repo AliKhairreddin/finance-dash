@@ -1910,6 +1910,7 @@ async function persistBankActivity(
     await convex.mutation(api.banking.upsertActivityBatch, {
       serviceToken,
       source,
+      replaceAccounts: batch === 0,
       accounts: batch === 0 ? accounts : [],
       transactions: transactions.slice(
         batch * bankMutationBatchSize,
@@ -1947,9 +1948,14 @@ async function syncSlashActivity(
 }
 
 async function syncLatestBankActivity(env: Env): Promise<void> {
+  const slashDefaultRange = defaultBankDateRange();
+  const storedSlash = await readBankActivity(env, "slash", slashDefaultRange);
+  const slashNeedsAccountSubtypeRefresh = storedSlash.transactions.some(
+    (transaction) => transaction.slashAccountSubtype === undefined
+  );
   const results = await Promise.allSettled([
     syncRevolutActivity(env),
-    syncSlashActivity(env)
+    syncSlashActivity(env, slashNeedsAccountSubtypeRefresh ? slashDefaultRange : undefined)
   ]);
   const failures = results.filter((result) => result.status === "rejected");
   const transactions = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
@@ -2025,7 +2031,11 @@ async function loadBankActivity(
 
   const missingBySource = sources.map((source, index) => ({
     source,
-    ranges: missingBankActivityRanges(initialActivity[index].syncState, dateRange)
+    ranges:
+      source === "slash"
+      && initialActivity[index].transactions.some((transaction) => transaction.slashAccountSubtype === undefined)
+        ? [{ ...dateRange }]
+        : missingBankActivityRanges(initialActivity[index].syncState, dateRange)
   }));
   const syncedTransactionIds = (await Promise.all(
     missingBySource.map(({ source, ranges }) => syncBankActivityRanges(env, source, ranges))

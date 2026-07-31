@@ -1,4 +1,4 @@
-import type { AccountBalance, Transaction } from "./types";
+import type { AccountBalance, SlashAccountSubtype, Transaction } from "./types";
 
 export const slashDefaultActivityWindowDays = 45;
 const slashActivityWindowMs = 1000 * 60 * 60 * 24 * slashDefaultActivityWindowDays;
@@ -33,6 +33,7 @@ interface SlashTransaction {
   description: string;
   amountCents: number;
   accountId: string;
+  accountSubtype: SlashAccountSubtype;
   status: SlashTransactionStatus;
   cashbackInfo?: {
     amountCents: number;
@@ -192,6 +193,10 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
   if (status !== "pending" && status !== "posted" && status !== "failed") {
     throw new Error("Slash API response has unsupported transaction.status");
   }
+  const accountSubtype = requiredString(payload.accountSubtype, "transaction.accountSubtype");
+  if (accountSubtype !== "cash" && accountSubtype !== "credit") {
+    throw new Error("Slash API response has unsupported transaction.accountSubtype");
+  }
   const merchantData = payload.merchantData === undefined
     ? undefined
     : requiredRecord(payload.merchantData, "transaction.merchantData");
@@ -204,6 +209,7 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
     description: requiredString(payload.description, "transaction.description"),
     amountCents: requiredNumber(payload.amountCents, "transaction.amountCents"),
     accountId: requiredString(payload.accountId, "transaction.accountId"),
+    accountSubtype,
     status,
     ...(cashbackInfo
       ? {
@@ -318,8 +324,11 @@ async function fetchAllSlashPages<T>(
   return items;
 }
 
-function accountBalance(account: SlashAccount, balances: SlashBalance[]): SlashBalance {
-  const expectedType: SlashBalanceType = account.type === "debit" ? "debit" : "credit";
+function requiredAccountBalance(
+  account: SlashAccount,
+  balances: SlashBalance[],
+  expectedType: SlashBalanceType
+): SlashBalance {
   const balance = balances.find((item) => item.type === expectedType);
   if (!balance) {
     throw new Error(`Slash account ${account.id} is missing its ${expectedType} balance`);
@@ -339,10 +348,12 @@ function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
 function normalizeSlashTransaction(transaction: SlashTransaction, accountName: string): Transaction {
   const signedAmount = transaction.amountCents / 100;
   const counterparty = transaction.merchantData?.description?.trim() || transaction.description;
+  const accountLabel = `${accountName} ${transaction.accountSubtype === "cash" ? "Cash" : "Credit"}`;
   return {
     id: `slash-${transaction.id}`,
     source: "slash",
-    accountName,
+    slashAccountSubtype: transaction.accountSubtype,
+    accountName: accountLabel,
     date: transaction.date.slice(0, 10),
     description: transaction.description,
     rawName: counterparty,
@@ -429,17 +440,28 @@ export async function fetchSlashActivityForLegalEntity({
 
   const accounts: AccountBalance[] = slashAccounts
     .filter((account) => account.status === "open")
-    .map((account) => {
-      const balance = accountBalance(account, balancesByAccountId.get(account.id) ?? []);
-      return {
-        id: `slash-${account.id}`,
-        name: account.name,
-        source: "slash",
-        balance: balance.available.amountCents / 100,
-        currency: "USD",
-        updatedAt: balance.timestamp,
-        status: "live"
-      };
+    .flatMap((account) => {
+      const balances = balancesByAccountId.get(account.id) ?? [];
+      const accountBalances: Array<{ apiType: SlashBalanceType; subtype: SlashAccountSubtype; label: string }> =
+        account.type === "debit"
+          ? [{ apiType: "debit", subtype: "cash", label: "Cash" }]
+          : [
+              { apiType: "cash", subtype: "cash", label: "Cash" },
+              { apiType: "credit", subtype: "credit", label: "Credit" }
+            ];
+      return accountBalances.map(({ apiType, subtype, label }) => {
+        const balance = requiredAccountBalance(account, balances, apiType);
+        return {
+          id: `slash-${account.id}-${subtype}`,
+          name: `${account.name} ${label}`,
+          source: "slash" as const,
+          slashAccountSubtype: subtype,
+          balance: balance.available.amountCents / 100,
+          currency: "USD",
+          updatedAt: balance.timestamp,
+          status: "live" as const
+        };
+      });
     });
 
   const transactions: Transaction[] = slashTransactions

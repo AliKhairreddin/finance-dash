@@ -44,7 +44,8 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   });
 
   assert.ok(csv.startsWith("\uFEFF"));
-  assert.match(csv, /^﻿"Date","Source","Wise entity","Account"/);
+  assert.match(csv, /^﻿"Date","Source","Wise entity","Account","Account side"/);
+  assert.match(csv, /"Movement"/);
   assert.match(csv, /"wise","DN","Operating USD"/);
   assert.match(csv, /"Subscription, ""annual"""/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.com""\)"/);

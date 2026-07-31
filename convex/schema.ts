@@ -210,11 +210,13 @@ const transactionCategoryRule = v.object({
 
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
+const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
   wiseEntity: v.optional(wiseEntity),
+  slashAccountSubtype: v.optional(slashAccountSubtype),
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
@@ -252,6 +254,7 @@ const accountBalance = v.object({
   id: v.string(),
   name: v.string(),
   source: syncedBankSource,
+  slashAccountSubtype: v.optional(slashAccountSubtype),
   balance: v.number(),
   currency: v.string(),
   updatedAt: v.string(),

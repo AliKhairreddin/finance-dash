@@ -55,7 +55,8 @@ test("expense analytics groups repeated unassigned transaction titles once and s
     {
       ...expense("income-1", "Revenue customer", 1_000),
       direction: "in" as const
-    }
+    },
+    expense("card-payment", "Daily Credit Card Payment", 34_740.24, "Internal transfer")
   ];
 
   assert.deepEqual(groupExpenseAnalytics(transactions, new Map([["provider-cursor", "Cursor"]])), [

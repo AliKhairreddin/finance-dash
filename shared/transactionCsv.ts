@@ -1,4 +1,5 @@
 import type { Provider, Team, Transaction } from "./types";
+import { transactionMovementLabel } from "./transactionPresentation";
 
 type NamedLookup = ReadonlyMap<string, Pick<Provider | Team, "name">>;
 
@@ -12,12 +13,13 @@ const transactionCsvHeaders = [
   "Source",
   "Wise entity",
   "Account",
+  "Account side",
   "AI merchant",
   "Merchant key",
   "Counterparty",
   "Description",
   "Raw name",
-  "Direction",
+  "Movement",
   "Amount",
   "Currency",
   "Cashback earned",
@@ -55,12 +57,13 @@ export function buildTransactionCsv(
     transaction.source,
     transaction.wiseEntity?.toUpperCase(),
     transaction.accountName,
+    transaction.slashAccountSubtype,
     transaction.merchantName,
     transaction.merchantKey,
     transaction.counterparty,
     transaction.description,
     transaction.rawName,
-    transaction.direction,
+    transactionMovementLabel(transaction),
     transaction.amount,
     transaction.currency,
     transaction.cashback?.amount,

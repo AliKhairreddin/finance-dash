@@ -3,10 +3,12 @@ import { ConvexError, v } from "convex/values";
 
 const syncedBankSource = v.union(v.literal("revolut"), v.literal("slash"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
+const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 
 const transaction = v.object({
   id: v.string(),
   source: syncedBankSource,
+  slashAccountSubtype: v.optional(slashAccountSubtype),
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
@@ -42,6 +44,7 @@ const account = v.object({
   id: v.string(),
   name: v.string(),
   source: syncedBankSource,
+  slashAccountSubtype: v.optional(slashAccountSubtype),
   balance: v.number(),
   currency: v.string(),
   updatedAt: v.string(),
@@ -176,6 +179,7 @@ export const upsertActivityBatch = mutation({
   args: {
     serviceToken: v.string(),
     source: syncedBankSource,
+    replaceAccounts: v.boolean(),
     accounts: v.array(account),
     transactions: v.array(transaction),
     syncedAt: v.string()
@@ -188,6 +192,17 @@ export const upsertActivityBatch = mutation({
       || args.transactions.some((item) => item.source !== args.source)
     ) {
       throw new ConvexError({ code: "SOURCE_MISMATCH" });
+    }
+
+    if (args.replaceAccounts) {
+      const freshAccountIds = new Set(args.accounts.map((item) => item.id));
+      const storedAccounts = await ctx.db
+        .query("bankAccounts")
+        .withIndex("by_source", (q) => q.eq("source", args.source))
+        .collect();
+      for (const stored of storedAccounts) {
+        if (!freshAccountIds.has(stored.id)) await ctx.db.delete(stored._id);
+      }
     }
 
     for (const fresh of args.accounts) {

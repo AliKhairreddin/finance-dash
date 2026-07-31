@@ -36,11 +36,14 @@ export type ExpenseVatTreatment = "standard" | "reduced" | "zero" | "exempt" | "
 
 export type CurrencyTotals = Record<string, number>;
 
+export type SlashAccountSubtype = "cash" | "credit";
+
 export interface AccountBalance {
   id: string;
   name: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  slashAccountSubtype?: SlashAccountSubtype;
   balance: number;
   currency: string;
   updatedAt: string;
@@ -429,6 +432,7 @@ export interface Transaction {
   id: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  slashAccountSubtype?: SlashAccountSubtype;
   accountName: string;
   date: string;
   description: string;
