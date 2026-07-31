@@ -65,16 +65,23 @@ test("discovers and labels balances across selected accessible Wise business pro
   });
 
   assert.deepEqual(
-    result.accounts.map(({ id, name, balance, currency }) => ({ id, name, balance, currency })),
+    result.accounts.map(({ id, name, wiseEntity, balance, currency }) => ({
+      id,
+      name,
+      wiseEntity,
+      balance,
+      currency
+    })),
     [
-      { id: "wise-11-1101", name: "Lovemedo · Wise USD", balance: 125, currency: "USD" },
-      { id: "wise-22-2201", name: "Digital Nudge · Wise USD", balance: 250, currency: "USD" },
-      { id: "wise-22-2202", name: "Digital Nudge · Wise EUR", balance: 50, currency: "EUR" }
+      { id: "wise-11-1101", name: "Lovemedo · Wise USD", wiseEntity: "lmd", balance: 125, currency: "USD" },
+      { id: "wise-22-2201", name: "Digital Nudge · Wise USD", wiseEntity: "dn", balance: 250, currency: "USD" },
+      { id: "wise-22-2202", name: "Digital Nudge · Wise EUR", wiseEntity: "dn", balance: 50, currency: "EUR" }
     ]
   );
   assert.equal(result.transactions.length, 1);
   assert.equal(result.transactions[0].id, "wise-22-2201-ref-1");
   assert.equal(result.transactions[0].accountName, "Digital Nudge · Wise USD");
+  assert.equal(result.transactions[0].wiseEntity, "dn");
   assert.equal(result.statementIssues.length, 1);
   assert.match(result.statementIssues[0], /denied live statement API access/);
   assert.equal(result.balanceIssue, undefined);

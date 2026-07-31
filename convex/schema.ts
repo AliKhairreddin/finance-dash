@@ -15,6 +15,7 @@ const providerType = v.union(v.literal("client"), v.literal("supplier"));
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"));
 const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
 const billingCadence = v.union(v.literal("weekly"), v.literal("monthly"));
+const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 
 const ledgerItem = v.object({
   id: v.string(),
@@ -213,6 +214,7 @@ const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
+  wiseEntity: v.optional(wiseEntity),
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
@@ -259,6 +261,8 @@ const accountBalance = v.object({
 const wiseStatementImport = v.object({
   id: v.string(),
   balanceId: v.string(),
+  wiseEntity: v.optional(wiseEntity),
+  accountName: v.optional(v.string()),
   currency: v.string(),
   periodStart: v.string(),
   periodEnd: v.string(),

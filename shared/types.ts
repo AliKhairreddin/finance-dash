@@ -2,6 +2,8 @@ export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manu
 
 export type Direction = "in" | "out";
 
+export type WiseEntity = "dn" | "lmd";
+
 export type ProviderType = "client" | "supplier";
 
 export type InvoiceStatus = "draft" | "open" | "paid";
@@ -38,6 +40,7 @@ export interface AccountBalance {
   id: string;
   name: string;
   source: DataSource;
+  wiseEntity?: WiseEntity;
   balance: number;
   currency: string;
   updatedAt: string;
@@ -425,6 +428,7 @@ export interface MeritTax {
 export interface Transaction {
   id: string;
   source: DataSource;
+  wiseEntity?: WiseEntity;
   accountName: string;
   date: string;
   description: string;
@@ -459,6 +463,8 @@ export interface Transaction {
 export interface WiseStatementImport {
   id: string;
   balanceId: string;
+  wiseEntity?: WiseEntity;
+  accountName?: string;
   currency: string;
   periodStart: string;
   periodEnd: string;
@@ -597,6 +603,8 @@ export interface DashboardSnapshot {
 
 export interface ImportWiseStatementPayload {
   balanceId: string;
+  wiseEntity: WiseEntity;
+  accountName: string;
   currency: string;
   periodStart: string;
   periodEnd: string;

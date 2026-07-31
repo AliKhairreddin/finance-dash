@@ -147,6 +147,14 @@ import {
   wiseSyncIssue as describeWiseSyncIssue
 } from "./integrations";
 import {
+  normalizeImportedWiseTransactions,
+  validateWiseStatementImportPayload
+} from "../shared/wiseStatements";
+import {
+  migrateLegacyWiseStatementImports,
+  migrateLegacyWiseTransactions
+} from "../shared/wiseEntities";
+import {
   aiProviderDirectoryForTransactions,
   enrichTransactions,
   learnAliases,
@@ -221,7 +229,7 @@ function normalizedTransactionText(value: string): string {
 
 function wiseStatementTransactionKey(transaction: Transaction): string {
   const sourceId = transaction.id.match(/^wise-(?:csv|pdf)-[^-]+-(.+)$/)?.[1];
-  if (sourceId) return `${transaction.currency}:${sourceId}`;
+  if (sourceId) return `${transaction.wiseEntity ?? "dn"}:${transaction.currency}:${sourceId}`;
 
   return [
     transaction.date,
@@ -304,9 +312,17 @@ export async function initializeStore(): Promise<void> {
   transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
   wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
   transactions = persisted.transactions ?? [];
-  wiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
-  wiseStatementImports = persisted.wiseStatementImports ?? [];
+  const storedWiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
+  const storedWiseStatementImports = persisted.wiseStatementImports ?? [];
+  wiseStatementTransactions = migrateLegacyWiseTransactions(storedWiseStatementTransactions);
+  wiseStatementImports = migrateLegacyWiseStatementImports(storedWiseStatementImports);
   profitDistributionAdjustments = persisted.profitDistributionAdjustments ?? [];
+  if (
+    JSON.stringify(wiseStatementTransactions) !== JSON.stringify(storedWiseStatementTransactions)
+    || JSON.stringify(wiseStatementImports) !== JSON.stringify(storedWiseStatementImports)
+  ) {
+    await persist();
+  }
 }
 
 async function persist(): Promise<void> {
@@ -662,37 +678,16 @@ function wiseImportId(payload: ImportWiseStatementPayload): string {
   return `wise-import-${payload.balanceId}-${payload.currency}-${payload.periodStart}-${payload.periodEnd}`;
 }
 
-function normalizeImportedWiseTransactions(payload: ImportWiseStatementPayload): Transaction[] {
-  return payload.transactions
-    .filter((transaction) => transaction.id && transaction.date && Number.isFinite(transaction.amount))
-    .map((transaction) => ({
-      id: transaction.id,
-      source: "wise" as const,
-      accountName: transaction.accountName || `Wise ${payload.currency}`,
-      date: transaction.date,
-      description: transaction.description || transaction.counterparty || "Wise statement transaction",
-      rawName: transaction.rawName || transaction.counterparty || transaction.description || "Wise statement transaction",
-      counterparty: transaction.counterparty || transaction.rawName || transaction.description || "Wise statement transaction",
-      amount: Math.abs(transaction.amount),
-      currency: payload.currency,
-      direction: transaction.direction,
-      status: "posted" as const,
-      category: transactionBusinessCategory(transaction.category || "Wise"),
-      ...(transaction.cardHolderName ? { cardHolderName: transaction.cardHolderName.trim() } : {})
-    }));
-}
-
 export async function importWiseStatement(payload: ImportWiseStatementPayload): Promise<ImportWiseStatementResult> {
-  if (!payload.balanceId || !payload.currency || !payload.periodStart || !payload.periodEnd || !payload.fileName) {
-    throw new Error("balanceId, currency, periodStart, periodEnd, and fileName are required");
-  }
-
+  validateWiseStatementImportPayload(payload, wiseStatementImports);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
   const summary = summarizeWiseStatementImport(wiseStatementTransactions, importedTransactions);
   const importedAt = new Date().toISOString();
   const importRecord: WiseStatementImport = {
     id: wiseImportId(payload),
     balanceId: payload.balanceId,
+    wiseEntity: payload.wiseEntity,
+    accountName: payload.accountName,
     currency: payload.currency,
     periodStart: payload.periodStart,
     periodEnd: payload.periodEnd,

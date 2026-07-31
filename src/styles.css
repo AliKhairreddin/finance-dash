@@ -1391,6 +1391,48 @@ th.amount .sortable-table-heading {
   display: block;
 }
 
+.transaction-counterparty-heading,
+.bank-source-labels {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.transaction-counterparty-heading strong {
+  flex: 1 1 auto;
+}
+
+.wise-entity-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  min-height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--label-text);
+  background: var(--subtle-bg);
+  font-size: 0.65rem;
+  font-weight: 780;
+  letter-spacing: 0.025em;
+  line-height: 1;
+}
+
+.wise-entity-badge.entity-dn {
+  color: var(--source-wise-foreground);
+  border-color: var(--source-wise-border);
+  background: var(--source-wise-background);
+}
+
+.wise-entity-badge.entity-lmd {
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
 .transaction-detail-line {
   display: inline-flex !important;
   align-items: center;
@@ -2562,6 +2604,18 @@ th.amount .sortable-table-heading {
 .reconciliation-toolbar .segmented-control button {
   gap: 4px;
   padding-inline: 7px;
+}
+
+.wise-entity-nav {
+  display: flex;
+  justify-content: flex-start;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--subtle-bg);
+}
+
+.wise-entity-tabs button {
+  min-width: 34px;
 }
 
 .reconciliation-toolbar .toolbar-search-field {
@@ -8038,6 +8092,14 @@ body {
 
   .reconciliation-toolbar .segmented-control button {
     flex: 1 1 50%;
+  }
+
+  .wise-entity-nav .wise-entity-tabs {
+    width: 100%;
+  }
+
+  .wise-entity-nav .wise-entity-tabs button {
+    flex: 1 1 33.333%;
   }
 
   .active-filter-bar {

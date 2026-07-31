@@ -109,7 +109,8 @@ import type {
   UpdateInvoicePayload,
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload,
-  UpdateTransactionCategoryDefinitionPayload
+  UpdateTransactionCategoryDefinitionPayload,
+  WiseEntity
 } from "../shared/types";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
@@ -151,7 +152,18 @@ import {
   slashDefaultActivityWindowDays,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
-import { parseWiseStatementCsv } from "../shared/wiseStatements";
+import {
+  parseWiseStatementCsv,
+  prepareWiseStatementImport
+} from "../shared/wiseStatements";
+import {
+  verifyWiseStatementAccount,
+  wiseEntities,
+  wiseEntityLabel,
+  wiseEntityShortLabel,
+  wiseEntityViews,
+  type WiseEntityView
+} from "../shared/wiseEntities";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
@@ -811,6 +823,11 @@ function App() {
     allowedValues: bankTabs,
     history: "push"
   });
+  const [wiseEntityView, setWiseEntityView] = useUrlState<WiseEntityView>(
+    "wiseEntity",
+    "all",
+    { allowedValues: wiseEntityViews }
+  );
   const [bankDirection, setBankDirection] = useUrlState<"in" | "out">("bankDirection", "in", {
     allowedValues: ["in", "out"]
   });
@@ -952,6 +969,7 @@ function App() {
           transaction.counterparty,
           transaction.description,
           transaction.rawName,
+          transaction.wiseEntity ? wiseEntityShortLabel(transaction.wiseEntity) : "",
           provider?.name ?? "",
           team?.name ?? ""
         ]
@@ -990,13 +1008,15 @@ function App() {
           transaction.source === "wise"
           && transaction.direction === bankDirection
           && transactionIsInDateRange(transaction, wiseDateRange);
+        const matchesWiseEntity =
+          wiseEntityView === "all" || transaction.wiseEntity === wiseEntityView;
         const matchesTeam =
           teamFilter === "all" ||
           (teamFilter === "unassigned" && !transaction.teamId) ||
           transaction.teamId === teamFilter;
-        return matchesDirection && matchesTeam;
+        return matchesDirection && matchesWiseEntity && matchesTeam;
       }),
-    [bankDirection, filteredTransactions, teamFilter, wiseDateRange]
+    [bankDirection, filteredTransactions, teamFilter, wiseDateRange, wiseEntityView]
   );
 
   const slashTransactions = useMemo(
@@ -1143,42 +1163,60 @@ function App() {
 
   async function importWiseStatements(files: FileList | null) {
     if (!files?.length) return;
+    if (!dashboard) return;
     setIsImportingWise(true);
     setNotice(null);
     setError(null);
     try {
-      let nextDashboard: DashboardSnapshot | null = dashboard;
-      let importedFiles = 0;
-      let processedTransactions = 0;
-      let newTransactions = 0;
-      let duplicateTransactions = 0;
+      const filePayloads: Array<{
+        fileName: string;
+        payload: ImportWiseStatementPayload;
+      }> = [];
       for (const file of Array.from(files)) {
         const text = await file.text();
         const parsedStatements = parseWiseStatementCsv(text, file.name);
         for (const parsed of parsedStatements) {
-          const payload: ImportWiseStatementPayload = {
-            ...parsed.metadata,
-            transactions: parsed.transactions
-          };
-          const response = await fetch(`${apiBase}/wise/import-statement`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
+          const verifiedAccount = verifyWiseStatementAccount(
+            parsed.metadata,
+            dashboard.accounts,
+            wiseEntityView
+          );
+          filePayloads.push({
+            fileName: file.name,
+            payload: prepareWiseStatementImport(parsed, verifiedAccount)
           });
-          if (!response.ok) {
-            throw new Error(await apiErrorMessage(response, `${file.name} could not be imported`));
-          }
-          const result = (await response.json()) as ImportWiseStatementResult;
-          nextDashboard = result.dashboard;
-          processedTransactions += result.summary.processedTransactions;
-          newTransactions += result.summary.newTransactions;
-          duplicateTransactions += result.summary.duplicateTransactions;
         }
-        importedFiles += 1;
+      }
+
+      let nextDashboard: DashboardSnapshot | null = dashboard;
+      let processedTransactions = 0;
+      let newTransactions = 0;
+      let duplicateTransactions = 0;
+      const importedEntities = new Set<WiseEntity>();
+      for (const { fileName, payload } of filePayloads) {
+        const response = await fetch(`${apiBase}/wise/import-statement`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          throw new Error(await apiErrorMessage(response, `${fileName} could not be imported`));
+        }
+        const result = (await response.json()) as ImportWiseStatementResult;
+        nextDashboard = result.dashboard;
+        processedTransactions += result.summary.processedTransactions;
+        newTransactions += result.summary.newTransactions;
+        duplicateTransactions += result.summary.duplicateTransactions;
+        importedEntities.add(payload.wiseEntity);
       }
       if (nextDashboard) setDashboard(nextDashboard);
+      const importedFiles = files.length;
+      const entityLabel = [...importedEntities]
+        .map(wiseEntityShortLabel)
+        .sort()
+        .join(" + ");
       setNotice(
-        `Processed ${importedFiles} Wise statement CSV${importedFiles === 1 ? "" : "s"}: ${processedTransactions} transaction${
+        `Processed ${importedFiles} verified ${entityLabel} Wise CSV${importedFiles === 1 ? "" : "s"}: ${processedTransactions} transaction${
           processedTransactions === 1 ? "" : "s"
         }, ${newTransactions} new, ${duplicateTransactions} duplicate${duplicateTransactions === 1 ? "" : "s"}.`
       );
@@ -1859,6 +1897,8 @@ function App() {
           dashboard={dashboard}
           activeBank={bankTab}
           setActiveBank={setBankTab}
+          wiseEntityView={wiseEntityView}
+          setWiseEntityView={setWiseEntityView}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
           teamFilter={teamFilter}
@@ -2534,6 +2574,8 @@ function BanksView({
   dashboard,
   activeBank,
   setActiveBank,
+  wiseEntityView,
+  setWiseEntityView,
   bankDirection,
   setBankDirection,
   teamFilter,
@@ -2577,6 +2619,8 @@ function BanksView({
   dashboard: DashboardSnapshot;
   activeBank: BankTab;
   setActiveBank: (source: BankTab) => void;
+  wiseEntityView: WiseEntityView;
+  setWiseEntityView: (entity: WiseEntityView) => void;
   bankDirection: "in" | "out";
   setBankDirection: (direction: "in" | "out") => void;
   teamFilter: string;
@@ -2636,7 +2680,13 @@ function BanksView({
     accountsBySource.set(
       source.id,
       dashboard.accounts.filter((account) =>
-        account.source === source.id && hasNonZeroAccountBalance(account)
+        account.source === source.id
+        && hasNonZeroAccountBalance(account)
+        && (
+          source.id !== "wise"
+          || wiseEntityView === "all"
+          || account.wiseEntity === wiseEntityView
+        )
       )
     );
   }
@@ -2652,7 +2702,15 @@ function BanksView({
           <div>
             <p className="eyebrow">Banks</p>
             <div className="bank-heading-line">
-              <h2>{activeSource ? `${activeSource.label} account activity` : "Connected bank, card, and reconciliation activity"}</h2>
+              <h2>
+                {activeSource
+                  ? `${
+                    activeSource.id === "wise" && wiseEntityView !== "all"
+                      ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
+                      : activeSource.label
+                  } account activity`
+                  : "Connected bank, card, and reconciliation activity"}
+              </h2>
               {activeSource && (
                 <span
                   className={`bank-inline-balance ${activeSourceStatus?.mode === "live" ? "is-live" : ""}`}
@@ -2709,6 +2767,30 @@ function BanksView({
             </NativeSelect>
           </div>
         </div>
+        {activeBank === "wise" && (
+          <div className="wise-entity-nav">
+            <div className="segmented-control wise-entity-tabs" aria-label="Wise entity">
+              <button
+                className={wiseEntityView === "all" ? "active" : ""}
+                onClick={() => setWiseEntityView("all")}
+                type="button"
+              >
+                All
+              </button>
+              {wiseEntities.map((entity) => (
+                <button
+                  className={wiseEntityView === entity.id ? "active" : ""}
+                  key={entity.id}
+                  onClick={() => setWiseEntityView(entity.id)}
+                  title={entity.label}
+                  type="button"
+                >
+                  {entity.shortLabel}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {activeBank === "all" && (
           <div className="wise-summary-grid bank-source-summary">
             {bankSources.map((source) => {
@@ -2764,6 +2846,7 @@ function BanksView({
           setTransactionSortDirection={setTransactionSortDirection}
           isImportingWise={isImportingWise}
           onImportWiseStatements={onImportWiseStatements}
+          wiseEntityView={wiseEntityView}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -2863,6 +2946,7 @@ type BankReconciliationViewProps = {
   setTransactionSortDirection: (value: SortDirection) => void;
   isImportingWise?: boolean;
   onImportWiseStatements?: (files: FileList | null) => Promise<void>;
+  wiseEntityView?: WiseEntityView;
   onMatch: (transaction: Transaction, providerId: string | undefined, scope: TransactionOverrideScope) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
@@ -2891,6 +2975,7 @@ function BankReconciliationView({
   setTransactionSortDirection,
   isImportingWise,
   onImportWiseStatements,
+  wiseEntityView,
   onMatch,
   onAssignTeam,
   onUpdateCategory,
@@ -2979,7 +3064,9 @@ function BankReconciliationView({
             {onImportWiseStatements && (
               <label className={`secondary-button file-button ${isImportingWise ? "busy" : ""}`}>
                 {isImportingWise ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                Import CSV
+                {wiseEntityView && wiseEntityView !== "all"
+                  ? `Import ${wiseEntityShortLabel(wiseEntityView)} CSV`
+                  : "Import CSV"}
                 <input
                   type="file"
                   accept=".csv,text/csv"
@@ -3042,6 +3129,7 @@ function BankReconciliationView({
         onAssignTeam={onAssignTeam}
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
+        showWiseEntity={source === "wise" && wiseEntityView === "all"}
       />
       {tableFooter}
     </section>
@@ -4256,7 +4344,8 @@ function TransactionTable({
   onMatch,
   onAssignTeam,
   onUpdateCategory,
-  onOpenInvoice
+  onOpenInvoice,
+  showWiseEntity = false
 }: {
   rows: Transaction[];
   expenses: ExpenseRecord[];
@@ -4271,6 +4360,7 @@ function TransactionTable({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  showWiseEntity?: boolean;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
   const [pendingOverride, setPendingOverride] = useState<
@@ -4512,7 +4602,17 @@ function TransactionTable({
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
                   <td className="counterparty-cell">
-                    <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
+                    <div className="transaction-counterparty-heading">
+                      {showWiseEntity && transaction.wiseEntity && (
+                        <span
+                          className={`wise-entity-badge entity-${transaction.wiseEntity}`}
+                          title={wiseEntityLabel(transaction.wiseEntity)}
+                        >
+                          {wiseEntityShortLabel(transaction.wiseEntity)}
+                        </span>
+                      )}
+                      <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
+                    </div>
                     <small className="transaction-detail-line">
                       <span className="transaction-detail-text">{transaction.counterparty} · {transaction.description}</span>
                       {detailInfoButton(

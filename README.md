@@ -187,8 +187,10 @@ A local `.xlsx` path is also accepted. Imports are idempotent by workbook conten
 Wise balances are discovered automatically across the configured business profiles. When a profile does not expose its live statement feed, CSV import remains the supported reconciliation path:
 
 - export one statement per currency balance;
+- keep Wise's original `statement_<balanceId>_<currency>_...csv` filename so the dashboard can verify the balance against the live Digital Nudge or Love Me Do profile;
+- use **All** to auto-route verified files from both entities, or open **DN**/**LMD** to reject files from the other profile before upload;
 - upload monthly, weekly, or daily depending on the desired cadence;
-- overlapping date ranges are safe because transaction IDs are deduplicated;
+- overlapping date ranges are safe because transaction IDs are deduplicated within each Wise entity;
 - review unmatched companies/categories and save aliases for future imports.
 
 ## Slash Transaction Loading

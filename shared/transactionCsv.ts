@@ -10,6 +10,7 @@ export interface TransactionCsvLookups {
 const transactionCsvHeaders = [
   "Date",
   "Source",
+  "Wise entity",
   "Account",
   "AI merchant",
   "Merchant key",
@@ -52,6 +53,7 @@ export function buildTransactionCsv(
   const rows = transactions.map((transaction) => [
     transaction.date,
     transaction.source,
+    transaction.wiseEntity?.toUpperCase(),
     transaction.accountName,
     transaction.merchantName,
     transaction.merchantKey,

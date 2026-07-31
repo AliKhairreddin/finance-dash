@@ -1,4 +1,14 @@
-import type { Transaction } from "./types";
+import { transactionBusinessCategory } from "./categories";
+import type {
+  ImportWiseStatementPayload,
+  Transaction,
+  WiseEntity,
+  WiseStatementImport
+} from "./types";
+import {
+  requireWiseEntityFromAccountName,
+  type VerifiedWiseStatementAccount
+} from "./wiseEntities";
 
 export interface WiseStatementMetadata {
   balanceId: string;
@@ -365,4 +375,97 @@ export function parseWiseStatementCsv(text: string, fileName: string): ParsedWis
     metadata: metadataForTransactions(currencyTransactions, fileName),
     transactions: currencyTransactions
   }));
+}
+
+function scopedWiseTransactionId(transactionId: string, wiseEntity: WiseEntity): string {
+  if (wiseEntity === "dn" || transactionId.startsWith("wise-csv-lmd-")) return transactionId;
+  if (transactionId.startsWith("wise-csv-")) {
+    return transactionId.replace(/^wise-csv-/, "wise-csv-lmd-");
+  }
+  return `wise-lmd-${transactionId}`;
+}
+
+export function prepareWiseStatementImport(
+  parsed: ParsedWiseStatement,
+  verifiedAccount: VerifiedWiseStatementAccount
+): ImportWiseStatementPayload {
+  return {
+    ...parsed.metadata,
+    ...verifiedAccount,
+    transactions: parsed.transactions.map((transaction) => ({
+      ...transaction,
+      id: scopedWiseTransactionId(transaction.id, verifiedAccount.wiseEntity),
+      accountName: verifiedAccount.accountName,
+      wiseEntity: verifiedAccount.wiseEntity
+    }))
+  };
+}
+
+export function validateWiseStatementImportPayload(
+  payload: ImportWiseStatementPayload,
+  existingImports: readonly WiseStatementImport[]
+): void {
+  if (
+    !payload.balanceId
+    || !payload.currency
+    || !payload.periodStart
+    || !payload.periodEnd
+    || !payload.fileName
+    || !payload.accountName
+  ) {
+    throw new Error(
+      "balanceId, wiseEntity, accountName, currency, periodStart, periodEnd, and fileName are required"
+    );
+  }
+  if (payload.wiseEntity !== "dn" && payload.wiseEntity !== "lmd") {
+    throw new Error("wiseEntity must be dn or lmd");
+  }
+  if (requireWiseEntityFromAccountName(payload.accountName) !== payload.wiseEntity) {
+    throw new Error(`${payload.accountName} does not match the selected Wise entity`);
+  }
+
+  const existingEntity = existingImports.find(
+    (statementImport) => statementImport.balanceId === payload.balanceId && statementImport.wiseEntity
+  )?.wiseEntity;
+  if (existingEntity && existingEntity !== payload.wiseEntity) {
+    throw new Error(
+      `Wise balance ${payload.balanceId} was already assigned to ${existingEntity.toUpperCase()}`
+    );
+  }
+}
+
+export function normalizeImportedWiseTransactions(
+  payload: ImportWiseStatementPayload
+): Transaction[] {
+  return payload.transactions
+    .filter((transaction) => transaction.id && transaction.date && Number.isFinite(transaction.amount))
+    .map((transaction) => ({
+      id: scopedWiseTransactionId(transaction.id, payload.wiseEntity),
+      source: "wise" as const,
+      wiseEntity: payload.wiseEntity,
+      accountName: payload.accountName,
+      date: transaction.date,
+      description:
+        transaction.description
+        || transaction.counterparty
+        || "Wise statement transaction",
+      rawName:
+        transaction.rawName
+        || transaction.counterparty
+        || transaction.description
+        || "Wise statement transaction",
+      counterparty:
+        transaction.counterparty
+        || transaction.rawName
+        || transaction.description
+        || "Wise statement transaction",
+      amount: Math.abs(transaction.amount),
+      currency: payload.currency,
+      direction: transaction.direction,
+      status: "posted" as const,
+      category: transactionBusinessCategory(transaction.category || "Wise"),
+      ...(transaction.cardHolderName
+        ? { cardHolderName: transaction.cardHolderName.trim() }
+        : {})
+    }));
 }

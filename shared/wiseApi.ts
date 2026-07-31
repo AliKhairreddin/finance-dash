@@ -1,4 +1,5 @@
-import type { AccountBalance, Transaction } from "./types";
+import type { AccountBalance, Transaction, WiseEntity } from "./types";
+import { requireWiseEntityFromAccountName } from "./wiseEntities";
 
 export interface WiseActivityResult {
   accounts: AccountBalance[];
@@ -51,6 +52,7 @@ interface WiseApiOptions {
 interface ProfileBalance {
   profile: WiseBusinessProfile;
   profileName: string;
+  wiseEntity: WiseEntity;
   balance: WiseBalance;
 }
 
@@ -124,6 +126,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
   const balancesByProfile = await Promise.all(
     businessProfiles.map(async (profile) => {
       const profileName = businessProfileName(profile);
+      const wiseEntity = requireWiseEntityFromAccountName(profileName);
       const balances = await fetchJson<WiseBalance[]>(
         fetcher,
         `${baseUrl}/v4/profiles/${profile.id}/balances?types=STANDARD,SAVINGS`,
@@ -131,7 +134,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
       );
       return balances
         .filter((balance) => balance.visible !== false)
-        .map((balance) => ({ profile, profileName, balance }));
+        .map((balance) => ({ profile, profileName, wiseEntity, balance }));
     })
   );
   const profileBalances = balancesByProfile.flat();
@@ -139,10 +142,11 @@ export async function fetchWiseActivityForAccessibleBusinesses({
   const intervalEnd = now.toISOString();
   const intervalStart = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 45).toISOString();
 
-  const accounts = profileBalances.map(({ profile, profileName, balance }) => ({
+  const accounts = profileBalances.map(({ profile, profileName, wiseEntity, balance }) => ({
     id: `wise-${profile.id}-${balance.id}`,
     name: accountName(profileName, balance.currency),
     source: "wise" as const,
+    wiseEntity,
     balance: balance.amount?.value ?? 0,
     currency: balance.amount?.currency ?? balance.currency,
     updatedAt: balance.modificationTime ?? intervalEnd,
@@ -154,7 +158,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
   }
 
   const statementResults = await Promise.all(
-    profileBalances.map(async ({ profile, profileName, balance }) => {
+    profileBalances.map(async ({ profile, profileName, wiseEntity, balance }) => {
       const params = new URLSearchParams({
         currency: balance.currency,
         intervalStart,
@@ -184,6 +188,7 @@ export async function fetchWiseActivityForAccessibleBusinesses({
           return {
             id: `wise-${profile.id}-${balance.id}-${activity.details?.referenceNumber ?? index}`,
             source: "wise",
+            wiseEntity,
             accountName: accountName(profileName, balance.currency),
             date: (activity.date ?? intervalEnd).slice(0, 10),
             description: activity.details?.description ?? activity.type ?? "Wise transaction",

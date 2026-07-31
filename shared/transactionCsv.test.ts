@@ -6,6 +6,7 @@ import type { Transaction } from "./types";
 const transaction: Transaction = {
   id: "wise-transaction-1",
   source: "wise",
+  wiseEntity: "dn",
   accountName: "Operating USD",
   date: "2026-07-30",
   description: 'Subscription, "annual"',
@@ -43,7 +44,8 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   });
 
   assert.ok(csv.startsWith("\uFEFF"));
-  assert.match(csv, /^﻿"Date","Source","Account"/);
+  assert.match(csv, /^﻿"Date","Source","Wise entity","Account"/);
+  assert.match(csv, /"wise","DN","Operating USD"/);
   assert.match(csv, /"Subscription, ""annual"""/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.com""\)"/);
   assert.match(csv, /,1234\.56,/);

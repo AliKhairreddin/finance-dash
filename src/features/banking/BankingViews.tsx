@@ -21,6 +21,10 @@ import type {
   UpdateHoldingPayload
 } from "../../../shared/types";
 import { isRequiredTransactionCategory } from "../../../shared/categories";
+import {
+  wiseEntityLabel,
+  wiseEntityShortLabel
+} from "../../../shared/wiseEntities";
 import { exportBankTransactionsCsv } from "./exportTransactions";
 
 const transactionSources: Array<{ value: DataSource; label: string }> = [
@@ -239,7 +243,7 @@ export function AllBankTransactionsView({
             {rows.length > 0 ? visibleRows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const expense = expenseByTransactionId.get(transaction.id);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.merchantName ?? transaction.counterparty}</strong><small>{transaction.counterparty} · {transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transaction.merchantName ?? transaction.counterparty}</strong><small>{transaction.counterparty} · {transaction.description}</small></td><td><span className={`direction-label ${transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transaction.direction === "in" ? "In" : "Out"}</span></td><td><span>{transaction.category}</span><small>{provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
             }) : <tr><td colSpan={7}>No transactions match these filters</td></tr>}
           </tbody>
         </table>
