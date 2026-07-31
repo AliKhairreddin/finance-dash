@@ -1902,7 +1902,7 @@ async function persistBankActivity(
   source: SyncedBankSource,
   activity: { accounts: AccountBalance[]; transactions: Transaction[] },
   dateRange: SlashTransactionDateRange
-): Promise<string[]> {
+): Promise<Transaction[]> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const syncedAt = new Date().toISOString();
@@ -1928,13 +1928,13 @@ async function persistBankActivity(
     toDate: dateRange.toDate,
     syncedAt
   });
-  return transactions.map((transaction) => transaction.id);
+  return transactions;
 }
 
 async function syncRevolutActivity(
   env: Env,
   dateRange?: RevolutTransactionDateRange
-): Promise<string[]> {
+): Promise<Transaction[]> {
   const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "revolut"));
   const activity = await fetchRevolutActivity(env, range);
   return persistBankActivity(env, "revolut", activity, range);
@@ -1943,7 +1943,7 @@ async function syncRevolutActivity(
 async function syncSlashActivity(
   env: Env,
   dateRange?: SlashTransactionDateRange
-): Promise<string[]> {
+): Promise<Transaction[]> {
   const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "slash"));
   const activity = await fetchSlashActivity(env, range);
   return persistBankActivity(env, "slash", activity, range);
@@ -1955,9 +1955,9 @@ async function syncLatestBankActivity(env: Env): Promise<void> {
     syncSlashActivity(env)
   ]);
   const failures = results.filter((result) => result.status === "rejected");
-  const transactionIds = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-  if (transactionIds.length > 0) {
-    await autoCategorizeStoredTransactions(env, { transactionIds, useAi: true }, 240);
+  const transactions = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (transactions.length > 0) {
+    await autoCategorizeBankTransactions(env, transactions);
   }
   for (const result of failures) {
     console.error(JSON.stringify({
@@ -2005,11 +2005,10 @@ async function syncBankActivityRanges(
 ): Promise<string[]> {
   const transactionIds: string[] = [];
   for (const range of ranges) {
-    transactionIds.push(
-      ...(source === "revolut"
+    const transactions = source === "revolut"
         ? await syncRevolutActivity(env, range)
-        : await syncSlashActivity(env, range))
-    );
+        : await syncSlashActivity(env, range);
+    transactionIds.push(...transactions.map((transaction) => transaction.id));
   }
   return transactionIds;
 }
