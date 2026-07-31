@@ -292,6 +292,10 @@ export const automaticTransactionBankSources: readonly BankTransactionSource[] =
   "amex"
 ];
 
+export function hasSavedWiseBalanceAccounts(accounts: readonly AccountBalance[]): boolean {
+  return accounts.some((account) => account.source === "wise");
+}
+
 async function bankConnectionDirectory(env: Env): Promise<Array<{
   source: BankTransactionSource;
   connectionKey: string;
@@ -3201,7 +3205,7 @@ async function getSnapshot(
   if (
     env.WISE_API_TOKEN
     && env.WISE_PROFILE_IDS
-    && !state.bankSyncStates.wise
+    && !hasSavedWiseBalanceAccounts(state.bankAccounts)
   ) {
     bankIssues.wise ??= "No saved Wise balances yet. The next automatic refresh will populate them.";
   }

@@ -12,6 +12,7 @@ import worker, {
   fetchMeritInvoiceCopyDetails,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
+  hasSavedWiseBalanceAccounts,
   incrementalBankDateRange,
   missingBankActivityRanges,
   mergeInvoices
@@ -19,6 +20,29 @@ import worker, {
 
 test("automatic bank transaction sync excludes manual Wise imports", () => {
   assert.deepEqual(automaticTransactionBankSources, ["revolut", "slash", "amex"]);
+});
+
+test("saved Wise balance accounts do not depend on a transaction sync record", () => {
+  assert.equal(hasSavedWiseBalanceAccounts([]), false);
+  assert.equal(hasSavedWiseBalanceAccounts([{
+    id: "revolut-account",
+    name: "Revolut USD",
+    source: "revolut",
+    balance: 10,
+    currency: "USD",
+    updatedAt: "2026-07-31T00:00:00.000Z",
+    status: "live"
+  }]), false);
+  assert.equal(hasSavedWiseBalanceAccounts([{
+    id: "wise-31035977-37067485",
+    name: "LoveMeDo B.V. · Wise EUR",
+    source: "wise",
+    wiseEntity: "lmd",
+    balance: 50_396.06,
+    currency: "EUR",
+    updatedAt: "2026-07-31T00:00:00.000Z",
+    status: "live"
+  }]), true);
 });
 
 const workerTestAuth = {

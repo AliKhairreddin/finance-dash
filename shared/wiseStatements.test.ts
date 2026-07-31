@@ -8,6 +8,7 @@ import {
   validateWiseStatementImportPayload
 } from "./wiseStatements";
 import { verifyWiseStatementAccount } from "./wiseEntities";
+import { wiseTransactionId } from "./wiseTransactionIdentity";
 
 const header = [
   "TransferWise ID",
@@ -38,18 +39,20 @@ const header = [
 function statementRow({
   amount,
   description,
+  dateTime = "27-07-2026 11:42:43.898",
   payer = "",
   payee = ""
 }: {
   amount: string;
   description: string;
+  dateTime?: string;
   payer?: string;
   payee?: string;
 }): string {
   return [
     "TRANSFER-2273583228",
     "27-07-2026",
-    "27-07-2026 11:42:43.898",
+    dateTime,
     amount,
     "USD",
     description,
@@ -142,7 +145,49 @@ test("Wise CSV ownership is verified by balance ID instead of counterparty names
   assert.notEqual(dnPayload.transactions[0].id, lmdPayload.transactions[0].id);
   assert.equal(
     lmdPayload.transactions[0].id,
-    "wise-v2-37067652-5452414e534645522d32323733353833323238"
+    wiseTransactionId(
+      "37067652",
+      JSON.stringify([
+        "TRANSFER-2273583228",
+        "27-07-2026 11:42:43.898",
+        "99000",
+        "USD",
+        "CREDIT",
+        "TRANSFER"
+      ])
+    )
+  );
+});
+
+test("official Wise ledger rows may share a TransferWise ID without sharing an identity", () => {
+  const fileName = "statement_37067485_EUR_2026-01-01_2026-06-30.csv";
+  const debit = statementRow({
+    amount: "-20.00",
+    description: "Card transaction of 20.00 EUR issued by EV Charge Session",
+    dateTime: "26-06-2026 09:01:27.479"
+  }).replace('"USD"', '"EUR"');
+  const credit = statementRow({
+    amount: "20.00",
+    description: "Card transaction of 20.00 EUR issued by EV Charge Session",
+    dateTime: "26-06-2026 09:06:01.662"
+  }).replace('"USD"', '"EUR"');
+  const parsed = parseWiseStatementCsv(`${header}\n${debit}\n${credit}`, fileName)[0];
+  const payload = prepareWiseStatementImport(
+    parsed,
+    verifyWiseStatementAccount(parsed.metadata, accounts, "lmd")
+  );
+
+  assert.equal(payload.transactions.length, 2);
+  assert.equal(new Set(payload.transactions.map((transaction) => transaction.id)).size, 2);
+  assert.doesNotThrow(() => validateWiseStatementImportPayload(payload, []));
+
+  const reparsed = prepareWiseStatementImport(
+    parseWiseStatementCsv(`${header}\n${debit}\n${credit}`, fileName)[0],
+    verifyWiseStatementAccount(parsed.metadata, accounts, "lmd")
+  );
+  assert.deepEqual(
+    reparsed.transactions.map((transaction) => transaction.id),
+    payload.transactions.map((transaction) => transaction.id)
   );
 });
 

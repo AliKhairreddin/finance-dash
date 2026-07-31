@@ -111,6 +111,8 @@ const columnAliases = {
   description: ["description", "details", "transactiondetails", "paymentdescription"],
   reference: ["reference", "paymentreference", "transactionreference", "transferreference"],
   transactionId: ["transactionid", "wiseid", "transferwiseid", "transferid", "referenceid", "id"],
+  dateTime: ["datetime", "transactiondatetime", "createddatetime", "completeddatetime", "timestamp"],
+  transactionDetailsType: ["transactiondetailstype", "detailstype"],
   counterparty: [
     "counterparty",
     "counterpartyname",
@@ -150,11 +152,6 @@ function normalizeHeader(value: string): string {
 function canonicalHeader(value: string): string {
   const normalized = normalizeHeader(value);
   return /^amount[a-z]{3}$/.test(normalized) ? "amount" : normalized;
-}
-
-function legacyWiseCsvTransactionId(currency: string, providerIdentifier: string): string {
-  const identity = normalizeHeader(providerIdentifier) || stableHash(providerIdentifier);
-  return `wise-csv-${currency}-${identity}`;
 }
 
 function parseCsvRows(text: string, delimiter: string): string[][] {
@@ -366,7 +363,30 @@ function categoryFromRow(row: CsvRow, reference?: string, description = ""): str
   return "Wise";
 }
 
-function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: string): Transaction {
+function wiseLedgerEntryIdentifier(
+  row: CsvRow,
+  providerIdentifier: string,
+  signedAmount: number,
+  currency: string
+): string {
+  const dateTime = cell(row, columnAliases.dateTime) ?? cell(row, columnAliases.date) ?? "";
+  const transactionType = cell(row, columnAliases.category) ?? "";
+  const transactionDetailsType = cell(row, columnAliases.transactionDetailsType) ?? "";
+  return requiredBoundedText(
+    JSON.stringify([
+      providerIdentifier,
+      dateTime,
+      String(signedAmount),
+      currency,
+      transactionType,
+      transactionDetailsType
+    ]),
+    "Wise CSV ledger entry identity",
+    maximumWiseProviderIdLength
+  );
+}
+
+function transactionFromRow(row: CsvRow, fallbackCurrency?: string): Transaction {
   const date = parseDate(cell(row, columnAliases.date) ?? "");
   const signedAmount = signedAmountFromRow(row);
   const currencyValue = cell(row, columnAliases.currency) ?? fallbackCurrency;
@@ -394,6 +414,12 @@ function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: st
     "Wise CSV provider transaction ID",
     maximumWiseProviderIdLength
   );
+  const ledgerEntryIdentifier = wiseLedgerEntryIdentifier(
+    row,
+    stableSourceId,
+    signedAmount,
+    currency
+  );
   const category = requiredBoundedText(
     categoryFromRow(row, reference, description),
     "Wise CSV category",
@@ -407,8 +433,7 @@ function transactionFromRow(row: CsvRow, fileName: string, fallbackCurrency?: st
   );
 
   return {
-    id: wiseUnscopedTransactionId(stableSourceId),
-    providerLegacyId: legacyWiseCsvTransactionId(currency, stableSourceId),
+    id: wiseUnscopedTransactionId(ledgerEntryIdentifier),
     source: "wise",
     accountName,
     date,
@@ -456,7 +481,7 @@ export function parseWiseStatementCsv(text: string, fileName: string): ParsedWis
   const fileMetadata = metadataFromFileName(fileName);
   const fallbackCurrency = currencyFromFileName(fileName);
   const transactions = csvObjects(text)
-    .map((row) => transactionFromRow(row, fileName, fallbackCurrency));
+    .map((row) => transactionFromRow(row, fallbackCurrency));
 
   if (transactions.length === 0) {
     if (fileMetadata) return [{ metadata: fileMetadata, transactions: [] }];
