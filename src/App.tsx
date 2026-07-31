@@ -2425,7 +2425,7 @@ function Overview({
               title: item.name,
               amount: item.balance,
               currency: item.currency,
-              source: item.slashAccountSubtype === "credit" ? "Available card credit" : sourceLabel(item.source)
+              source: sourceLabel(item.source)
             }))}
             emptyLabel="No connected account balances"
           />

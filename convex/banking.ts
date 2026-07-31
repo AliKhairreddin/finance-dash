@@ -152,6 +152,7 @@ const account = v.object({
   id: v.string(),
   name: v.string(),
   source: bankSource,
+  wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   balance: v.number(),
   currency: v.string(),

@@ -25,6 +25,24 @@ function handlerOf<TArgs, TResult>(registered: object): AsyncHandler<TArgs, TRes
   return async (ctx, args) => candidate(ctx, args);
 }
 
+test("bank activity account contract accepts Wise entity labels", () => {
+  const exportArgs: unknown = Reflect.get(upsertActivityBatch, "exportArgs");
+  if (typeof exportArgs !== "function") throw new Error("Convex argument validator is not registered");
+  const validator = JSON.parse(exportArgs()) as {
+    value: {
+      accounts: {
+        fieldType: {
+          value: {
+            value: Record<string, { optional: boolean }>;
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(validator.value.accounts.fieldType.value.value.wiseEntity?.optional, true);
+});
+
 function convexErrorCode(error: unknown): string | undefined {
   return error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data
     ? String(error.data.code)

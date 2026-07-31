@@ -590,28 +590,33 @@ async function fetchSlashAccountSnapshot(
       `Slash account snapshot exceeded ${maximumSlashAccountBalanceRows} balance rows`
     );
   }
-  const balancesByAccountId = new Map<string, SlashBalance[]>();
+  const balancesByGroupId = new Map<string, SlashBalance[]>();
   for (let index = 0; index < openAccounts.length; index += slashBalanceFetchConcurrency) {
     const batch = openAccounts.slice(index, index + slashBalanceFetchConcurrency);
     const balances = await Promise.all(batch.map(async (account) => {
       const balanceUrl = new URL(`/account/${encodeURIComponent(account.id)}/balance`, baseUrl);
       const accountBalances = await fetchSlashBalances(fetcher, balanceUrl, headers);
-      const mismatchedBalance = accountBalances.find((balance) => balance.accountId !== account.id);
-      if (mismatchedBalance) {
-        throw new Error(
-          `Slash account ${account.id} received balance data for account ${mismatchedBalance.accountId}`
-        );
-      }
       return [account.id, accountBalances] as const;
     }));
-    for (const [accountId, accountBalances] of balances) {
-      balancesByAccountId.set(accountId, accountBalances);
+    for (const [groupId, accountBalances] of balances) {
+      balancesByGroupId.set(groupId, accountBalances);
     }
   }
-  const accountNameById = new Map(slashAccounts.map((account) => [account.id, account.name]));
+  const accountNameById = new Map<string, string>();
+  const groupIdByAccountId = new Map<string, string>();
   const accounts: AccountBalance[] = openAccounts
     .flatMap((account) => {
-      const balances = balancesByAccountId.get(account.id) ?? [];
+      const balances = balancesByGroupId.get(account.id) ?? [];
+      for (const balance of balances) {
+        const existingGroupId = groupIdByAccountId.get(balance.accountId);
+        if (existingGroupId && existingGroupId !== account.id) {
+          throw new Error(
+            `Slash account ${balance.accountId} belongs to multiple account groups`
+          );
+        }
+        groupIdByAccountId.set(balance.accountId, account.id);
+        accountNameById.set(balance.accountId, account.name);
+      }
       const accountBalances: Array<{ apiType: SlashBalanceType; subtype: SlashAccountSubtype; label: string }> =
         account.type === "debit"
           ? [{ apiType: "debit", subtype: "cash", label: "Cash" }]
@@ -622,7 +627,7 @@ async function fetchSlashAccountSnapshot(
       return accountBalances.map(({ apiType, subtype, label }) => {
         const balance = requiredAccountBalance(account, balances, apiType);
         return {
-          id: `slash-${account.id}-${subtype}`,
+          id: `slash-${balance.accountId}-${subtype}`,
           name: `${account.name} ${label}`,
           source: "slash" as const,
           slashAccountSubtype: subtype,

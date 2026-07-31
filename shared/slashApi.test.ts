@@ -43,7 +43,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
         balances: [{
-          accountId: "account-debit",
+          accountId: "underlying-debit",
           type: "debit",
           available: { amountCents: 125_000 },
           posted: { amountCents: 120_000 },
@@ -59,7 +59,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             date: "2026-07-27T17:00:00.000Z",
             description: "CARD PURCHASE",
             amountCents: -12_345,
-            accountId: "account-debit",
+            accountId: "underlying-debit",
             accountSubtype: "cash",
             status: "posted",
             cashbackInfo: {
@@ -76,7 +76,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             date: "2026-07-27T18:00:00.000Z",
             description: "FAILED PAYMENT",
             amountCents: -1_000,
-            accountId: "account-debit",
+            accountId: "underlying-debit",
             accountSubtype: "cash",
             status: "failed"
           }
@@ -93,7 +93,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         date: "2026-07-28T09:30:00.000Z",
         description: "CASHBACK",
         amountCents: 250,
-        accountId: "account-debit",
+        accountId: "underlying-debit",
         accountSubtype: "cash",
         status: "pending"
       }],
@@ -110,7 +110,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   });
 
   assert.deepEqual(result.accounts, [{
-    id: "slash-account-debit-cash",
+    id: "slash-underlying-debit-cash",
     name: "Operating Cash",
     source: "slash",
     slashAccountSubtype: "cash",
@@ -121,11 +121,11 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   }]);
   assert.deepEqual(result.transactions, [
     {
-      id: bankProviderTransactionId("slash", ["account-debit", "transaction-card"]),
+      id: bankProviderTransactionId("slash", ["underlying-debit", "transaction-card"]),
       providerLegacyId: "slash-transaction-card",
       source: "slash",
       slashAccountSubtype: "cash",
-      accountId: "slash-account-debit-cash",
+      accountId: "slash-underlying-debit-cash",
       accountName: "Operating Cash",
       date: "2026-07-27",
       description: "CARD PURCHASE",
@@ -142,11 +142,11 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       category: "Slash"
     },
     {
-      id: bankProviderTransactionId("slash", ["account-debit", "transaction-failed"]),
+      id: bankProviderTransactionId("slash", ["underlying-debit", "transaction-failed"]),
       providerLegacyId: "slash-transaction-failed",
       source: "slash",
       slashAccountSubtype: "cash",
-      accountId: "slash-account-debit-cash",
+      accountId: "slash-underlying-debit-cash",
       accountName: "Operating Cash",
       date: "2026-07-27",
       description: "FAILED PAYMENT",
@@ -160,11 +160,11 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       classificationComplete: true
     },
     {
-      id: bankProviderTransactionId("slash", ["account-debit", "transaction-credit"]),
+      id: bankProviderTransactionId("slash", ["underlying-debit", "transaction-credit"]),
       providerLegacyId: "slash-transaction-credit",
       source: "slash",
       slashAccountSubtype: "cash",
-      accountId: "slash-account-debit-cash",
+      accountId: "slash-underlying-debit-cash",
       accountName: "Operating Cash",
       date: "2026-07-28",
       description: "CASHBACK",
@@ -211,14 +211,14 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       return Response.json({
         balances: [
           {
-            accountId: "account-platinum",
+            accountId: "underlying-platinum",
             type: "credit",
             available: { amountCents: 6_655_198 },
             posted: { amountCents: 7_066_898 },
             timestamp: "2026-07-28T22:31:42.052Z"
           },
           {
-            accountId: "account-platinum",
+            accountId: "underlying-platinum",
             type: "cash",
             available: { amountCents: 0 },
             posted: { amountCents: 0 },
@@ -241,7 +241,7 @@ test("Slash charge-card accounts use the available credit balance", async () => 
 
   assert.deepEqual(result.accounts, [
     {
-      id: "slash-account-platinum-cash",
+      id: "slash-underlying-platinum-cash",
       name: "Business Platinum Cash",
       source: "slash",
       slashAccountSubtype: "cash",
@@ -251,7 +251,7 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       status: "live"
     },
     {
-      id: "slash-account-platinum-credit",
+      id: "slash-underlying-platinum-credit",
       name: "Business Platinum Credit",
       source: "slash",
       slashAccountSubtype: "credit",
