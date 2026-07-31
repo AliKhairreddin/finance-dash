@@ -2695,7 +2695,7 @@ async function autoCategorizeBankTransactions(
 
 async function categorizeHistoricalBankBacklog(
   env: Env,
-  limit = 480
+  limit = 240
 ): Promise<{ processed: number; hasMore: boolean }> {
   const backlog = await getConvexClient(env).query(api.banking.getClassificationBacklog, {
     serviceToken: getConvexServiceToken(env),
@@ -2714,7 +2714,7 @@ async function categorizeHistoricalBankBacklog(
 
 async function categorizeHistoricalWiseBacklog(
   env: Env,
-  limit = 480
+  limit = 240
 ): Promise<{ processed: number; hasMore: boolean }> {
   const state = await loadPersisted(env);
   const candidates = state.wiseStatementTransactions
@@ -2742,7 +2742,7 @@ async function runHistoricalClassificationBackfill(env: Env): Promise<void> {
   const claimed = await convex.mutation(api.banking.claimClassificationBackfill, {
     serviceToken,
     token,
-    leaseMs: 15 * 60_000
+    leaseMs: 10 * 60_000
   });
   if (!claimed) {
     console.log(JSON.stringify({ event: "transaction_classification_backlog_skipped", reason: "active_lease" }));
