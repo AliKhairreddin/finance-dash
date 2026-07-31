@@ -4559,24 +4559,22 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
-    if (controller.cron === "*/1 * * * *") {
-      try {
-        await runHistoricalClassificationBackfill(env);
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "transaction_classification_backlog_failed",
-          scheduledTime: controller.scheduledTime,
-          error: error instanceof Error ? error.message : String(error)
-        }));
-        failures.push(error);
-      }
-    }
     if (controller.cron === "*/15 * * * *") {
       try {
         await syncLatestBankActivity(env);
       } catch (error) {
         console.error(JSON.stringify({
           event: "bank_activity_sync_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+      try {
+        await runHistoricalClassificationBackfill(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "transaction_classification_backlog_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
