@@ -76,6 +76,7 @@ import {
 } from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
 import {
+  initialTransactionCategories,
   isRequiredTransactionCategory,
   isReviewOnlyTransactionCategory,
   isTransactionCategoryForDirection,
@@ -1462,6 +1463,19 @@ async function loadPersisted(
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   });
 
+  let storedTransactionCategories = stored?.transactionCategories ?? [];
+  if (
+    initialTransactionCategories.some(
+      (category) => !storedTransactionCategories.some((storedCategory) => storedCategory.id === category.id)
+    )
+  ) {
+    storedTransactionCategories = await convex
+      .mutation(api.dashboard.seedTransactionCategories, { serviceToken })
+      .catch((error: unknown) => {
+        throw new ApiError(503, "Transaction categories could not be initialized", { cause: error });
+      });
+  }
+
   const storedCategoryRules = stored?.transactionCategoryRules ?? [];
   const storedTransactions = stored?.wiseStatementTransactions ?? [];
   const sanitizedStoredTransactions = sanitizeStoredTransactionCategories(storedTransactions);
@@ -1477,7 +1491,7 @@ async function loadPersisted(
     expenses: stored ? stored.expenses : [],
     manualReceivables: stored?.manualReceivables ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
-    transactionCategories: stored?.transactionCategories ?? [],
+    transactionCategories: storedTransactionCategories,
     transactionCategoryRules: sanitizeStoredTransactionCategoryRules(storedCategoryRules),
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
     transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
@@ -1762,9 +1776,9 @@ function integrationStatus(
       mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
         enabledRevenuePartnerCount === 0
-          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          ? "Enable at least one owner revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
-            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
+            ? "Ready to pull owner-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     },
@@ -2368,7 +2382,7 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
     throw new Error("Revenue rules require a customer imported from Merit");
   }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
-    throw new Error("Revenue partner team not found");
+    throw new Error("Revenue partner owner not found");
   }
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
   if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
@@ -2435,7 +2449,7 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     payload.invoiceDueDays < 0 ||
     (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
   ) {
-    throw new ApiError(400, "name, Merit customer, revenue category, API environment names, cadence, and billing timezone are required; team rules also require an affiliate ID");
+    throw new ApiError(400, "name, Merit customer, revenue category, API environment names, cadence, and billing timezone are required; owner-specific rules also require an affiliate ID");
   }
   const state = await loadPersisted(env);
   const provider = state.providers.find((item) => item.id === payload.providerId);
@@ -2443,7 +2457,7 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     throw new ApiError(400, "Revenue rules require a customer imported from Merit");
   }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
-    throw new ApiError(400, "Revenue rule team not found");
+    throw new ApiError(400, "Revenue rule owner not found");
   }
   const revenueCategory = transactionBusinessCategory(payload.revenueCategory);
   if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
@@ -2475,7 +2489,7 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
     createdAt: new Date().toISOString()
   };
   if (state.revenuePartners.some((item) => item.id === partner.id)) {
-    throw new ApiError(409, "A revenue rule already exists for this company and team");
+    throw new ApiError(409, "A revenue rule already exists for this company and owner");
   }
   state.revenuePartners = mergeRevenuePartnerDirectory([...state.revenuePartners, partner]);
   const rebound = bindRevenuePartnerCompany(partner, provider, state.revenueRuns, state.invoices);
@@ -2927,7 +2941,7 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
     throw new Error("Transaction not found");
   }
   if (teamId && !state.teams.some((team) => team.id === teamId)) {
-    throw new Error("Team not found");
+    throw new Error("Owner not found");
   }
 
   state.transactionTeamAssignments = state.transactionTeamAssignments.filter(
@@ -2950,12 +2964,12 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
   const name = canonicalTeamName(payload.name.trim());
   if (!name) {
-    throw new Error("Team name is required");
+    throw new Error("Owner name is required");
   }
 
   const state = await loadPersisted(env);
   if (state.teams.some((team) => normalizeName(team.name) === normalizeName(name))) {
-    throw new Error("Team already exists");
+    throw new Error("Owner already exists");
   }
 
   const team: Team = {
@@ -3038,7 +3052,7 @@ async function validateExpensePayload(
     throw new ApiError(400, "Expense records require a supplier company");
   }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
-    throw new ApiError(400, "Expense team not found");
+    throw new ApiError(400, "Expense owner not found");
   }
   const transaction = payload.transactionId
     ? await fetchTransactionForUpdate(env, payload.transactionId, state)

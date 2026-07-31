@@ -247,7 +247,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, teamId: "team-1", affiliateId: "   " }),
-      /Team revenue rules require an affiliate ID/
+      /Owner-specific revenue rules require an affiliate ID/
     );
 
     await store.recordInvoicePayment("invoice-open-1", {

@@ -458,7 +458,7 @@ export function RevenueView({
               <NativeSelectOption value="all">All revenue rules</NativeSelectOption>
               {dashboard.revenuePartners.map((partner) => (
                 <NativeSelectOption key={partner.id} value={partner.id}>
-                  {partner.name} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown team" : "Company-level"} · {cadenceLabel(partner.billingCadence)}
+                  {partner.name} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {cadenceLabel(partner.billingCadence)}
                 </NativeSelectOption>
               ))}
             </NativeSelect>

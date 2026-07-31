@@ -473,7 +473,9 @@ export function mergeTeamDirectory(teams: Team[]): Team[] {
       normalizedTeam.id === "team-distribution" ||
       normalizedName === "distribution" ||
       normalizedTeam.id === "team-amin-sanjin" ||
-      normalizedName === "amin sanjin"
+      normalizedName === "amin sanjin" ||
+      normalizedTeam.id === "team-acp" ||
+      normalizedName === "acp"
     ) continue;
     if (!byId.has(normalizedTeam.id)) {
       byId.set(normalizedTeam.id, normalizedTeam);

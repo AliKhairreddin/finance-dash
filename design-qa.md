@@ -339,3 +339,28 @@ No actionable P0, P1, or P2 issues remain.
 No P3 follow-up is required for this pass.
 
 final result: passed
+
+---
+
+# Owner and income-offer taxonomy QA
+
+## Scope
+
+This pass verifies the responsibility rename from Team to Owner and the addition of ACP plus offer verticals as income-only categories.
+
+## Findings
+
+- Bank reconciliation shows `Owner · Optional`, `No owner`, and an Owner help control without adding row-height text.
+- Analytics uses Owner consistently in filters, summaries, revenue breakdowns, and the ownership table.
+- Settings exposes eight valid owners; ACP is no longer listed because it is an offer rather than a responsible person or group.
+- The income category selector includes ACP, insurance verticals, Roofing, Window replacement, HVAC, Solar, Home improvement, Mortgage, Real estate, Debt relief, Personal injury, Legal services, Education, VSL, Auto warranty, and Pest control.
+- Offer categories do not appear in the expense category list.
+- Existing Convex databases idempotently receive any missing built-in categories when dashboard state loads.
+
+## Verification
+
+- Rendered browser QA passed on Banks, Analytics, and Settings.
+- `npm run check`: passed (155 tests passed, 1 intentionally skipped, production build passed).
+- `git diff --check`: passed.
+
+final result: passed

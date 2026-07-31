@@ -287,7 +287,15 @@ export async function initializeStore(): Promise<void> {
   fxTrackedAssets = persisted.fxTrackedAssets ?? [];
   automationRuns = persisted.automationRuns ?? [];
   teams = mergeTeamDirectory(persisted.teams ?? []);
-  transactionCategories = persisted.transactionCategories ?? transactionCategories;
+  const storedTransactionCategories = persisted.transactionCategories ?? [];
+  const storedCategoryIds = new Set(storedTransactionCategories.map((category) => category.id));
+  const now = new Date().toISOString();
+  transactionCategories = [
+    ...storedTransactionCategories,
+    ...initialTransactionCategories
+      .filter((category) => !storedCategoryIds.has(category.id))
+      .map((category) => ({ ...category, createdAt: now, updatedAt: now }))
+  ];
   transactionCategoryRules = persisted.transactionCategoryRules ?? [];
   revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
   revenueRuns = persisted.revenueRuns ?? [];
@@ -718,7 +726,7 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
     throw new Error("Transaction not found");
   }
   if (teamId && !teams.some((team) => team.id === teamId)) {
-    throw new Error("Team not found");
+    throw new Error("Owner not found");
   }
 
   transactionTeamAssignments = transactionTeamAssignments.filter((assignment) => assignment.transactionId !== payload.transactionId);
@@ -736,10 +744,10 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {
   const name = canonicalTeamName(payload.name.trim());
   if (!name) {
-    throw new Error("Team name is required");
+    throw new Error("Owner name is required");
   }
   if (teams.some((team) => normalizeName(team.name) === normalizeName(name))) {
-    throw new Error("Team already exists");
+    throw new Error("Owner already exists");
   }
 
   const team: Team = {
@@ -936,13 +944,13 @@ function revenuePartnerFields(
   const name = payload.name?.trim();
   if (!name) throw new Error("Revenue rule name is required");
   const affiliateId = payload.affiliateId?.trim() ?? "";
-  if (payload.teamId && !affiliateId) throw new Error("Team revenue rules require an affiliate ID");
+  if (payload.teamId && !affiliateId) throw new Error("Owner-specific revenue rules require an affiliate ID");
   const company = providers.find((provider) => provider.id === payload.providerId);
   if (!company || company.type !== "client" || !company.meritCustomerId) {
     throw new Error("Revenue rules require a customer imported from Merit");
   }
   if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
-    throw new Error("Revenue rule team not found");
+    throw new Error("Revenue rule owner not found");
   }
   if (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly") {
     throw new Error("Billing cadence must be weekly or monthly");
@@ -992,7 +1000,7 @@ export async function createRevenuePartner(payload: CreateRevenuePartnerPayload)
     createdAt: new Date().toISOString()
   };
   if (revenuePartners.some((item) => item.id === partner.id)) {
-    throw new Error("A revenue rule already exists for this company and team");
+    throw new Error("A revenue rule already exists for this company and owner");
   }
   revenuePartners = [partner, ...revenuePartners];
   const provider = providers.find((item) => item.id === partner.providerId)!;
@@ -1220,7 +1228,7 @@ function validateExpensePayload(payload: CreateExpensePayload): {
     throw new Error("Expense records require a supplier company");
   }
   if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
-    throw new Error("Expense team not found");
+    throw new Error("Expense owner not found");
   }
   const transaction = payload.transactionId ? findKnownTransaction(payload.transactionId) : undefined;
   if (payload.transactionId && (!transaction || transaction.direction !== "out")) {

@@ -591,7 +591,7 @@ function revenuePartnerAttributionLabel(transaction: Transaction, providersById:
 
 function revenueTeamAttributionLabel(transaction: Transaction, teamsById: Map<string, Team>): string {
   const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
-  return team?.name ?? "Unassigned team";
+  return team?.name ?? "Unassigned owner";
 }
 
 function revenueAttributionLabel(
@@ -1304,11 +1304,11 @@ function App() {
       body: JSON.stringify({ teamId: teamId || null })
     });
     if (!response.ok) {
-      setError(await apiErrorMessage(response, "Team assignment failed"));
+      setError(await apiErrorMessage(response, "Owner assignment failed"));
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
-    setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
+    setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "owner"}.` : "Transaction owner cleared.");
   }
 
   async function createTeam(payload: CreateTeamPayload) {
@@ -1318,10 +1318,10 @@ function App() {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      throw new Error(await apiErrorMessage(response, "Team could not be created"));
+      throw new Error(await apiErrorMessage(response, "Owner could not be created"));
     }
     await loadDashboard();
-    setNotice(`${payload.name.trim()} team added.`);
+    setNotice(`${payload.name.trim()} owner added.`);
   }
 
   function applyTransactionCategories(
@@ -2946,9 +2946,9 @@ function BankReconciliationView({
             <FilterPopover activeCount={teamFilter === "all" ? 0 : 1} title="Transaction filters">
               <FilterFieldGroup title="Ownership">
                 <label>
-                  Team
-                  <NativeSelect aria-label="Filter transactions by team" value={teamFilter} onValueChange={setTeamFilter}>
-                    <NativeSelectOption value="all">All teams</NativeSelectOption>
+                  Owner
+                  <NativeSelect aria-label="Filter transactions by owner" value={teamFilter} onValueChange={setTeamFilter}>
+                    <NativeSelectOption value="all">All owners</NativeSelectOption>
                     <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
                     {dashboard.teams.map((team) => (
                       <NativeSelectOption key={team.id} value={team.id}>
@@ -2998,7 +2998,7 @@ function BankReconciliationView({
       <ActiveFilterBar
         filters={teamFilter === "all" ? [] : [{
           key: "team",
-          label: `Team: ${teamFilter === "unassigned" ? "Unassigned" : teamsById.get(teamFilter)?.name ?? teamFilter}`,
+          label: `Owner: ${teamFilter === "unassigned" ? "Unassigned" : teamsById.get(teamFilter)?.name ?? teamFilter}`,
           onRemove: () => setTeamFilter("all")
         }]}
         resultLabel={`${rows.length} transactions shown`}
@@ -3013,7 +3013,7 @@ function BankReconciliationView({
         />
         <SummaryTile label="Transactions" value={String(summary.count)} />
         <SummaryTile label="Categorized" value={String(rows.length - rows.filter(categoryNeedsReview).length)} />
-        <SummaryTile label="No team" value={String(summary.unassigned)} />
+        <SummaryTile label="No owner" value={String(summary.unassigned)} />
       </div>
       {integrationStatus?.issue && (
         <div className="integration-alert">
@@ -3204,7 +3204,7 @@ function AnalyticsView({
   const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
   const revenueTeamOptions = [
     ...dashboard.teams.map((team) => [team.id, team.name] as [string, string]),
-    ...(revenueRows.some((transaction) => !transaction.teamId) ? [["unassigned", "Unassigned team"] as [string, string]] : [])
+    ...(revenueRows.some((transaction) => !transaction.teamId) ? [["unassigned", "Unassigned owner"] as [string, string]] : [])
   ].sort(([, left], [, right]) => left.localeCompare(right));
   const revenuePartnerOptions = [
     ...revenueRows.reduce((map, transaction) => {
@@ -3274,8 +3274,8 @@ function AnalyticsView({
         <SlidersHorizontal size={15} />
         <span>Show</span>
         <NativeSelect value={revenuePieBreakdown} onValueChange={(value) => setRevenuePieBreakdown(value as RevenuePieBreakdown)}>
-          <NativeSelectOption value="team-partner">Team and partner</NativeSelectOption>
-          <NativeSelectOption value="team">Team only</NativeSelectOption>
+          <NativeSelectOption value="team-partner">Owner and partner</NativeSelectOption>
+          <NativeSelectOption value="team">Owner only</NativeSelectOption>
           <NativeSelectOption value="partner">Partner only</NativeSelectOption>
           <NativeSelectOption value="category">Category only</NativeSelectOption>
         </NativeSelect>
@@ -3294,9 +3294,9 @@ function AnalyticsView({
       </label>
       <label>
         <Building2 size={15} />
-        <span>Team</span>
+        <span>Owner</span>
         <NativeSelect value={revenuePieTeamId} onValueChange={setRevenuePieTeamId}>
-          <NativeSelectOption value="all">All teams</NativeSelectOption>
+          <NativeSelectOption value="all">All owners</NativeSelectOption>
           {revenueTeamOptions.map(([teamId, label]) => (
             <NativeSelectOption key={teamId} value={teamId}>
               {label}
@@ -3434,7 +3434,7 @@ function AnalyticsView({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Analytics</p>
-            <h2>Money flow, teams, sources, companies, and review load</h2>
+            <h2>Money flow, owners, sources, companies, and review load</h2>
           </div>
           <div className="filters analytics-global-filters">
             <label>
@@ -3529,7 +3529,7 @@ function AnalyticsView({
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={formatUsdCurrencyTotal(moneyInTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyInTotals)} />
           <SummaryTile label="Money out" value={formatUsdCurrencyTotal(moneyOutTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyOutTotals)} />
-          <SummaryTile label="Teams" value={String(activeTeamCount)} />
+          <SummaryTile label="Owners" value={String(activeTeamCount)} />
           <SummaryTile label="Sources" value={String(activeSourceCount)} />
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
@@ -3537,7 +3537,7 @@ function AnalyticsView({
 
       <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} rates={dashboard.fxRates} emptyLabel="No spend transactions yet" />
       <CategoryPiePanel
-        title="Revenue by team and partner"
+        title="Revenue by owner and partner"
         tone="good"
         groups={revenuePieGroups}
         rates={dashboard.fxRates}
@@ -3547,14 +3547,14 @@ function AnalyticsView({
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
-          <h2>By team</h2>
-          <span className="total-pill">{teamRows.length} teams</span>
+          <h2>By owner</h2>
+          <span className="total-pill">{teamRows.length} owners</span>
         </div>
         <div className="table-wrap">
           <table className="data-table analytics-table">
             <thead>
               <tr>
-                <th>Team</th>
+                <th>Owner</th>
                 <th>Transactions</th>
                 <th>Revenue streams</th>
                 <th>Money in</th>
@@ -3577,7 +3577,7 @@ function AnalyticsView({
               ))}
               {teamRows.length === 0 && (
                 <tr>
-                  <td colSpan={6}>No teams yet</td>
+                  <td colSpan={6}>No owners yet</td>
                 </tr>
               )}
             </tbody>
@@ -4457,13 +4457,13 @@ function TransactionTable({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="amount">Amount</SortableTableHead>
             <SortableTableHead
               activeSortKey={sortKey}
-              description="Optional responsibility attribution. Choose the team or person responsible for this transaction."
+              description="Optional responsibility attribution. Choose the person or group responsible for this transaction."
               direction={sortDirection}
-              label="Team"
+              label="Owner"
               onSort={onSort}
               sortKey="team"
             >
-              <>Team <span className="column-note">Optional</span></>
+              <>Owner <span className="column-note">Optional</span></>
             </SortableTableHead>
             <SortableTableHead
               activeSortKey={sortKey}
@@ -4541,11 +4541,11 @@ function TransactionTable({
                   <td>
                     <div className="team-select">
                       <NativeSelect
-                        aria-label={`Responsible team or person for ${transaction.merchantName ?? transaction.counterparty}`}
+                        aria-label={`Owner for ${transaction.merchantName ?? transaction.counterparty}`}
                         value={transaction.teamId ?? ""}
                         onValueChange={(value) => onAssignTeam(transaction, value || undefined)}
                       >
-                        <NativeSelectOption value="">No team</NativeSelectOption>
+                        <NativeSelectOption value="">No owner</NativeSelectOption>
                         {teams.map((team) => (
                           <NativeSelectOption key={team.id} value={team.id}>
                             {team.name}
@@ -5922,7 +5922,7 @@ function ProvidersView({
                       <button type="button" className="company-rule-row" onClick={() => onEditRevenuePartner(partner)}>
                         <span>
                           <strong>{partner.name}</strong>
-                          <small>{partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown team" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
+                          <small>{partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
                         </span>
                         <span className={`status-pill ${partner.autoDraft ? "good" : ""}`}>{partner.autoDraft ? "Auto-draft" : "Manual draft"}</span>
                       </button>
@@ -6100,7 +6100,7 @@ function SettingsView({
       await onCreateTeam({ name: teamName });
       setTeamName("");
     } catch (err) {
-      setTeamError(err instanceof Error ? err.message : "Team could not be created");
+      setTeamError(err instanceof Error ? err.message : "Owner could not be created");
     } finally {
       setBusy(null);
     }
@@ -6208,14 +6208,14 @@ function SettingsView({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Operating setup</p>
-            <h2>Teams</h2>
+            <h2>Owners</h2>
           </div>
-          <span className="total-pill">{dashboard.teams.length} teams</span>
+          <span className="total-pill">{dashboard.teams.length} owners</span>
         </div>
         <form className="settings-form" onSubmit={addTeam}>
           <div className="form-grid">
             <label>
-              Team name
+              Owner name
               <Input value={teamName} onChange={(event) => setTeamName(event.target.value)} />
             </label>
           </div>
@@ -6223,7 +6223,7 @@ function SettingsView({
           <div className="modal-actions">
             <Button className="primary-button" type="submit" disabled={busy === "team" || !teamName.trim()}>
               {busy === "team" ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
-              Add team
+              Add owner
             </Button>
           </div>
         </form>
@@ -6949,7 +6949,7 @@ function RevenuePartnerModal({
           </label>
           <label>
             Affiliate ID {teamId ? "" : "(optional)"}
-            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} placeholder={teamId ? "Required for a team-specific stream" : "Blank pulls the full company network"} />
+            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} placeholder={teamId ? "Required for an owner-specific stream" : "Blank pulls the full company network"} />
           </label>
         </div>
         <div className="form-grid">
@@ -6980,9 +6980,9 @@ function RevenuePartnerModal({
             </NativeSelect>
           </label>
           <label>
-            Team
+            Owner
             <NativeSelect value={teamId} onValueChange={setTeamId}>
-              <NativeSelectOption value="">No single team</NativeSelectOption>
+              <NativeSelectOption value="">No owner</NativeSelectOption>
               {teams.map((team) => (
                 <NativeSelectOption key={team.id} value={team.id}>
                   {team.name}

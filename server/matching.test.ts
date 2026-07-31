@@ -5,6 +5,7 @@ import {
   aiProviderDirectoryForTransactions,
   canonicalProviders,
   mergeProviderDirectory,
+  mergeTeamDirectory,
   mergeWiseCardHolderTeamAssignments,
   transactionAiGroupKey,
   transactionMerchantKey,
@@ -22,6 +23,14 @@ test("mergeProviderDirectory keeps and normalizes companies that are actually st
 
 test("card-holder metadata does not create a responsibility assignment", () => {
   assert.deepEqual(mergeWiseCardHolderTeamAssignments([]), []);
+});
+
+test("ACP remains an offer category and is not exposed as an owner", () => {
+  const owners = mergeTeamDirectory([
+    { id: "team-acp", name: "ACP", createdAt: "2026-07-01T00:00:00.000Z" }
+  ]);
+
+  assert.ok(!owners.some((owner) => owner.id === "team-acp" || owner.name === "ACP"));
 });
 
 test("merchant equivalence uses the AI-normalized name and transaction direction", () => {

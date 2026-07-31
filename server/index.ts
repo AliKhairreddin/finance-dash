@@ -378,7 +378,7 @@ app.post("/api/teams", async (request, response, next) => {
   try {
     const payload = request.body as CreateTeamPayload;
     if (!payload.name?.trim()) {
-      response.status(400).json({ message: "Team name is required" });
+      response.status(400).json({ message: "Owner name is required" });
       return;
     }
     response.status(201).json(await createTeam(payload));

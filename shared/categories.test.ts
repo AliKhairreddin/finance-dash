@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  initialTransactionCategories,
   isReviewOnlyTransactionCategory,
   sanitizeStoredTransactionCategories,
   sanitizeStoredTransactionCategoryRules,
-  transactionBusinessCategory
+  transactionBusinessCategory,
+  transactionCategoryOptionsForDirection
 } from "./categories";
 import type { Transaction, TransactionCategoryRule } from "./types";
 
@@ -47,4 +49,26 @@ test("stored merchant category codes are removed from transactions and category 
     { ...transaction, category: "Uncategorized" }
   ]);
   assert.deepEqual(sanitizeStoredTransactionCategoryRules([invalidRule, validRule]), [validRule]);
+});
+
+test("income categories include ACP and offer verticals without exposing them to expenses", () => {
+  const incomeOptions = transactionCategoryOptionsForDirection("in");
+  const expenseOptions = transactionCategoryOptionsForDirection("out");
+  const offerNames = [
+    "ACP",
+    "Auto insurance",
+    "Home insurance",
+    "Roofing",
+    "Window replacement",
+    "HVAC",
+    "Solar",
+    "VSL",
+    "Debt relief"
+  ];
+
+  for (const name of offerNames) {
+    assert.ok(incomeOptions.includes(name), `${name} should be available for income`);
+    assert.ok(!expenseOptions.includes(name), `${name} should not be available for expenses`);
+    assert.equal(initialTransactionCategories.find((category) => category.name === name)?.direction, "in");
+  }
 });

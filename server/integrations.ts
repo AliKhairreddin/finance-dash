@@ -201,9 +201,9 @@ export function getIntegrationStatus(
       mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
         enabledRevenuePartnerCount === 0
-          ? "Enable at least one team revenue stream before pulling TUNE/HasOffers revenue."
+          ? "Enable at least one owner revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
-            ? "Ready to pull team-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
+            ? "Ready to pull owner-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
     },

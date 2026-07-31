@@ -49,6 +49,7 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   assert.match(csv, /,1234\.56,/);
   assert.match(csv, /,18\.52,1\.5,/);
   assert.match(csv, /"Operations","Example, Inc\."/);
+  assert.match(csv, /"Category reason","Owner","Company"/);
   assert.doesNotMatch(csv, /"Card holder"/);
   assert.match(csv, /"Software","Yes","ai",0\.91,"Known SaaS merchant"/);
   assert.match(csv, /"Example, Inc\.","ai",0\.94,"Known supplier","invoice-1","wise-transaction-1"$/);

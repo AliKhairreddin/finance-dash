@@ -27,7 +27,7 @@ const transactionCsvHeaders = [
   "Category source",
   "Category confidence",
   "Category reason",
-  "Team",
+  "Owner",
   "Company",
   "Company match source",
   "Company match confidence",
