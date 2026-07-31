@@ -2996,7 +2996,6 @@ function BankReconciliationView({
         categories={dashboard.transactionCategories}
         teams={dashboard.teams}
         providers={dashboard.providers}
-        teamsById={teamsById}
         providersById={providersById}
         sortKey={transactionSortKey}
         sortDirection={transactionSortDirection}
@@ -3950,7 +3949,7 @@ function CategorySearchSelect({
         ref={triggerRef}
       >
         <span title={value}>{value}</span>
-        <Search size={14} />
+        <ChevronDown aria-hidden="true" size={14} />
       </button>
       {isOpen && menuPosition && createPortal(
         <div
@@ -4016,7 +4015,6 @@ function TransactionTable({
   categories,
   teams,
   providers,
-  teamsById,
   providersById,
   sortKey,
   sortDirection,
@@ -4031,7 +4029,6 @@ function TransactionTable({
   categories: TransactionCategory[];
   teams: Team[];
   providers: Provider[];
-  teamsById: Map<string, Team>;
   providersById: Map<string, Provider>;
   sortKey: TransactionSortKey;
   sortDirection: SortDirection;
@@ -4224,11 +4221,36 @@ function TransactionTable({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="direction">Direction</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="amount">Amount</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} label="Team" onSort={onSort} sortKey="team">
+            <SortableTableHead
+              activeSortKey={sortKey}
+              description="Optional responsibility attribution. Choose the team or person responsible for this transaction."
+              direction={sortDirection}
+              label="Team"
+              onSort={onSort}
+              sortKey="team"
+            >
               <>Team <span className="column-note">Optional</span></>
             </SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="category">Category</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="company">Company</SortableTableHead>
+            <SortableTableHead
+              activeSortKey={sortKey}
+              description="Required. AI categorization keeps analytics current. A manual change can apply to one transaction or all equivalent merchant transactions."
+              direction={sortDirection}
+              label="Category"
+              onSort={onSort}
+              sortKey="category"
+            >
+              <>Category <span className="required-mark" aria-hidden="true">*</span></>
+            </SortableTableHead>
+            <SortableTableHead
+              activeSortKey={sortKey}
+              description="Optional directory match. Unmatched transactions still group in analytics by their AI merchant name."
+              direction={sortDirection}
+              label="Company"
+              onSort={onSort}
+              sortKey="company"
+            >
+              <>Company <span className="column-note">Optional</span></>
+            </SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="document">Document</SortableTableHead>
             <th scope="col">Actions</th>
           </tr>
@@ -4284,7 +4306,11 @@ function TransactionTable({
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
                   <td>
                     <div className="team-select">
-                      <NativeSelect value={transaction.teamId ?? ""} onValueChange={(value) => onAssignTeam(transaction, value || undefined)}>
+                      <NativeSelect
+                        aria-label={`Responsible team or person for ${transaction.merchantName ?? transaction.counterparty}`}
+                        value={transaction.teamId ?? ""}
+                        onValueChange={(value) => onAssignTeam(transaction, value || undefined)}
+                      >
                         <NativeSelectOption value="">No team</NativeSelectOption>
                         {teams.map((team) => (
                           <NativeSelectOption key={team.id} value={team.id}>
@@ -4292,7 +4318,6 @@ function TransactionTable({
                           </NativeSelectOption>
                         ))}
                       </NativeSelect>
-                      <small>{transaction.teamId ? teamsById.get(transaction.teamId)?.name ?? "Unknown team" : "Optional"}</small>
                     </div>
                   </td>
                   <td>
@@ -4320,7 +4345,6 @@ function TransactionTable({
                     <div className="company-match">
                       <NativeSelect
                         className="company-select"
-                        size="sm"
                         value={provider?.id ?? ""}
                         onValueChange={(value) => {
                           if (!value) return;

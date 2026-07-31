@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import type { ReactNode } from "react";
+import { InfoPopover } from "@/components/ui/finance-visuals";
 
 export type TableSortDirection = "asc" | "desc";
 
@@ -7,6 +8,7 @@ export function SortableTableHead<SortKey extends string>({
   activeSortKey,
   children,
   className,
+  description,
   direction,
   label,
   onSort,
@@ -15,6 +17,7 @@ export function SortableTableHead<SortKey extends string>({
   activeSortKey: SortKey;
   children: ReactNode;
   className?: string;
+  description?: string;
   direction: TableSortDirection;
   label?: string;
   onSort: (sortKey: SortKey) => void;
@@ -29,19 +32,22 @@ export function SortableTableHead<SortKey extends string>({
       className={className}
       scope="col"
     >
-      <button
-        type="button"
-        className={`sortable-table-heading ${isActive ? "active" : ""}`}
-        onClick={() => onSort(sortKey)}
-        title={`Sort by ${label ?? String(children)} ${nextDirection}`}
-      >
-        <span>{children}</span>
-        {isActive
-          ? direction === "asc"
-            ? <ArrowUp aria-hidden="true" size={13} strokeWidth={2.5} />
-            : <ArrowDown aria-hidden="true" size={13} strokeWidth={2.5} />
-          : <ChevronsUpDown aria-hidden="true" className="sortable-table-heading-idle" size={13} strokeWidth={2.25} />}
-      </button>
+      <div className="sortable-table-head-row">
+        <button
+          type="button"
+          className={`sortable-table-heading ${isActive ? "active" : ""}`}
+          onClick={() => onSort(sortKey)}
+          title={`Sort by ${label ?? String(children)} ${nextDirection}`}
+        >
+          <span className="sortable-table-label">{children}</span>
+          {isActive
+            ? direction === "asc"
+              ? <ArrowUp aria-hidden="true" size={13} strokeWidth={2.5} />
+              : <ArrowDown aria-hidden="true" size={13} strokeWidth={2.5} />
+            : <ChevronsUpDown aria-hidden="true" className="sortable-table-heading-idle" size={13} strokeWidth={2.25} />}
+        </button>
+        {description && <InfoPopover label={`${label ?? String(children)} column`}>{description}</InfoPopover>}
+      </div>
     </th>
   );
 }

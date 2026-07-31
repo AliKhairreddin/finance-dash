@@ -105,6 +105,69 @@ final result: passed
 
 ---
 
+# Transaction assignment controls design QA
+
+## Scope and evidence
+
+- Reference problem-state crop: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-b9ec45c2-235a-4860-a320-53c88daaf411.png`.
+- Local implementation capture: `/tmp/finance-dash-table-implementation-final.png`.
+- Same-input reference/implementation comparison: `/tmp/finance-dash-table-comparison-final.png`.
+- Desktop viewport: 1265 × 711 CSS px with realistic local Wise income and expense rows.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+### Control readability and alignment
+
+- Team, Category, and Company controls now share the same 36 px height and align to the top of each row.
+- Search glyphs no longer consume closed-control width. Team and Company remain searchable by typing; Category retains its search field inside the opened menu.
+- The Category trigger now uses a conventional, visible chevron instead of a search glyph.
+- The stale 30 px Category save-action track was removed, giving the category label the full control width.
+- Team no longer repeats `Optional` beneath every transaction.
+
+### Column hierarchy and density
+
+- The removed Card holder column remains absent.
+- Narrow utility columns were tightened while Team, Category, and Company retain enough width for their common labels.
+- The 1265 px pass shows Date through Actions together, with no page-level horizontal overflow.
+- Measured row controls were 124.9 px for Team and 152.2 px for both Category and Company, with matching client and scroll widths.
+
+### Required and optional context
+
+- Category is marked with a visible required asterisk.
+- Team and Company carry readable `Optional` labels in their headers only.
+- Team, Category, and Company each expose a keyboard-focusable information control with concise responsibility, requirement, and analytics behavior.
+- The Category help text explains that a manual change can apply to one transaction or every equivalent merchant transaction.
+
+## Interaction checks
+
+- Typed `Atlantic` into the icon-free Team control and confirmed the `Atlantic Ocean` result remained available.
+- Typed `Cloud` into the icon-free Company control and confirmed `Cloudflare` remained available.
+- Opened Category, searched `Food`, and confirmed `Food and meals` remained available with the search icon scoped to the open menu.
+- Focused the Category information control and confirmed its explanatory tooltip appeared.
+- Confirmed there are zero row-level Team helper labels and zero leading search icons in Team or Company row controls.
+
+## Comparison history
+
+1. The first implementation retained the old Category grid track even though the per-row save button had already been removed.
+   - Removed the empty track and assigned the full cell width to Category.
+2. The first visual comparison exposed `Optional` and the Category chevron using the near-white `--muted` background token as text color.
+   - Switched both to the readable `--app-muted` foreground token.
+3. The first header-help pass placed the information glyph inside the sort button.
+   - Separated sorting from the keyboard-focusable information control so requesting help cannot change the sort.
+4. The final density pass reduced the table minimum from 1112 px to 1008 px and reallocated width from compact utility columns to the three assignment controls.
+
+## Verification
+
+- `npm run check`: passed (144 tests passed, 1 intentionally skipped, production build passed).
+- `npm run lint`: passed as part of the combined check.
+- `git diff --check`: passed.
+
+final result: passed
+
+---
+
 # Automatic transaction categorization design QA
 
 ## Scope and evidence

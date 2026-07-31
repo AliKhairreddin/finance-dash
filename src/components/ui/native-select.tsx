@@ -61,6 +61,7 @@ function NativeSelect({
       clearable={false}
       disabled={disabled}
       searchable={options.length > 8}
+      showLeadingIcon={false}
     />
   );
 }

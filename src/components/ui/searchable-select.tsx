@@ -21,6 +21,7 @@ type SearchableSelectProps = {
   clearable?: boolean;
   disabled?: boolean;
   searchable?: boolean;
+  showLeadingIcon?: boolean;
   size?: "sm" | "default";
 };
 
@@ -36,6 +37,7 @@ export function SearchableSelect({
   clearable = true,
   disabled = false,
   searchable = true,
+  showLeadingIcon = true,
   size = "default"
 }: SearchableSelectProps) {
   const selectedOption = options.find((option) => option.value === value) ?? null;
@@ -98,8 +100,13 @@ export function SearchableSelect({
         autoComplete="off"
         disabled={disabled}
       >
-        <Combobox.InputGroup className="searchable-select-control">
-          <Search className="searchable-select-leading-icon" size={15} aria-hidden="true" />
+        <Combobox.InputGroup
+          className={cn(
+            "searchable-select-control",
+            !showLeadingIcon && "searchable-select-control-no-leading-icon"
+          )}
+        >
+          {showLeadingIcon && <Search className="searchable-select-leading-icon" size={15} aria-hidden="true" />}
           <Combobox.Input
             id={id}
             className="searchable-select-input"
