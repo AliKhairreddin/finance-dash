@@ -2702,7 +2702,7 @@ async function categorizeHistoricalBankBacklog(
     limit
   });
   if (backlog.transactions.length > 0) {
-    await autoCategorizeBankTransactions(env, backlog.transactions);
+    await autoCategorizeBankTransactions(env, backlog.transactions, limit);
   }
   console.log(JSON.stringify({
     event: "transaction_classification_backlog",
