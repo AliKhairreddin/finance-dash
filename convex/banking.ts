@@ -421,18 +421,58 @@ async function applyProfitFactDeltas(
   }
 }
 
-async function bumpLedgerRevision(ctx: MutationCtx): Promise<void> {
+function analyticsMonthRevisionKey(month: string): string {
+  return `month:${month}`;
+}
+
+function analyticsMonths(fromDate: string, toDate: string): string[] {
+  const months: string[] = [];
+  let cursor = new Date(`${fromDate.slice(0, 7)}-01T00:00:00.000Z`);
+  const finalMonth = toDate.slice(0, 7);
+  while (true) {
+    const month = cursor.toISOString().slice(0, 7);
+    months.push(month);
+    if (month === finalMonth) return months;
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+    if (months.length > 24) throw new ConvexError({ code: "ANALYTICS_PERIOD_TOO_LONG" });
+  }
+}
+
+async function bumpLedgerRevision(ctx: MutationCtx, dates: Iterable<string>): Promise<void> {
   const existing = await ctx.db
     .query("bankLedgerRevision")
     .withIndex("by_key", (q) => q.eq("key", bankLedgerRevisionKey))
     .unique();
+  const updatedAt = new Date().toISOString();
   const next = {
     key: bankLedgerRevisionKey,
     revision: (existing?.revision ?? 0) + 1,
-    updatedAt: new Date().toISOString()
+    updatedAt
   };
   if (existing) await ctx.db.patch(existing._id, next);
   else await ctx.db.insert("bankLedgerRevision", next);
+
+  const months = new Set<string>();
+  for (const date of dates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new ConvexError({ code: "INVALID_TRANSACTION_DATE" });
+    }
+    months.add(date.slice(0, 7));
+  }
+  for (const month of [...months].sort()) {
+    const key = analyticsMonthRevisionKey(month);
+    const stored = await ctx.db
+      .query("bankLedgerRevision")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    const revision = {
+      key,
+      revision: (stored?.revision ?? 0) + 1,
+      updatedAt
+    };
+    if (stored) await ctx.db.patch(stored._id, revision);
+    else await ctx.db.insert("bankLedgerRevision", revision);
+  }
 }
 
 function assertDateRange(fromDate: string, toDate: string): void {
@@ -519,6 +559,29 @@ export const getLedgerRevision = query({
     return revision
       ? { revision: revision.revision, updatedAt: revision.updatedAt }
       : { revision: 0, updatedAt: null };
+  }
+});
+
+export const getAnalyticsPeriodRevision = query({
+  args: {
+    serviceToken: v.string(),
+    fromDate: v.string(),
+    toDate: v.string()
+  },
+  returns: v.array(v.object({
+    month: v.string(),
+    revision: v.number()
+  })),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    assertDateRange(args.fromDate, args.toDate);
+    return Promise.all(analyticsMonths(args.fromDate, args.toDate).map(async (month) => {
+      const stored = await ctx.db
+        .query("bankLedgerRevision")
+        .withIndex("by_key", (q) => q.eq("key", analyticsMonthRevisionKey(month)))
+        .unique();
+      return { month, revision: stored?.revision ?? 0 };
+    }));
   }
 });
 
@@ -1165,7 +1228,7 @@ async function applyActivityBatch(
 
   let insertedTransactions = 0;
   let updatedTransactions = 0;
-  let visibleTransactionsChanged = false;
+  const analyticsChangedDates = new Set<string>();
   const identityChanges = new Map<string, string>();
   const factDeltas = new Map<string, ProfitFactDelta>();
   for (const ingest of args.transactions) {
@@ -1303,7 +1366,11 @@ async function applyActivityBatch(
         addVersionedProfitFactDeletion(factDeltas, coalescedLegacy);
         identityChanges.set(coalescedLegacy.id, fresh.id);
       }
-      visibleTransactionsChanged ||= transactionVisibleChanged(existing, next);
+      if (transactionVisibleChanged(existing, next)) {
+        analyticsChangedDates.add(existing.date);
+        analyticsChangedDates.add(next.date);
+      }
+      if (coalescedLegacy) analyticsChangedDates.add(coalescedLegacy.date);
       await ctx.db.patch(existing._id, update);
       const aliasSourceIds = new Set<string>();
       if (existing.id !== fresh.id) aliasSourceIds.add(existing.id);
@@ -1334,13 +1401,13 @@ async function applyActivityBatch(
         profitContributionVersion: profitDistributionContributionVersion,
         identityVersion: 2
       });
-      visibleTransactionsChanged = true;
+      analyticsChangedDates.add(insert.date);
       insertedTransactions += 1;
     }
   }
   await applyProfitFactDeltas(ctx, factDeltas);
   await remapDashboardTransactionReferences(ctx, identityChanges);
-  if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+  if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
   return {
     accounts: args.accounts.length,
     transactions: args.transactions.length,
@@ -1403,7 +1470,7 @@ export const saveTransactionUpdates = mutation({
       throw new ConvexError({ code: "DUPLICATE_TRANSACTION_ID" });
     }
     let updated = 0;
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     const factDeltas = new Map<string, ProfitFactDelta>();
     for (const item of args.transactions) {
       const existing = await ctx.db
@@ -1428,12 +1495,12 @@ export const saveTransactionUpdates = mutation({
       };
       const next = { ...existing, ...update };
       addVersionedProfitFactChange(factDeltas, existing, next);
-      visibleTransactionsChanged ||= transactionVisibleChanged(existing, next);
+      if (transactionVisibleChanged(existing, next)) analyticsChangedDates.add(existing.date);
       await ctx.db.patch(existing._id, update);
       updated += 1;
     }
     await applyProfitFactDeltas(ctx, factDeltas);
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return { updated };
   }
 });
@@ -1456,7 +1523,7 @@ export const applyTeamAssignmentsBatch = mutation({
       throw new ConvexError({ code: "DUPLICATE_TRANSACTION_ID" });
     }
     let updated = 0;
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const assignment of args.assignments) {
       const existing = await ctx.db
         .query("bankTransactions")
@@ -1464,11 +1531,11 @@ export const applyTeamAssignmentsBatch = mutation({
         .unique();
       if (!existing) continue;
       const teamId = assignment.teamId ?? undefined;
-      visibleTransactionsChanged ||= existing.teamId !== teamId;
+      if (existing.teamId !== teamId) analyticsChangedDates.add(existing.date);
       await ctx.db.patch(existing._id, { teamId });
       updated += 1;
     }
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return { updated };
   }
 });
@@ -1491,7 +1558,7 @@ export const applyMatchedInvoiceAssignmentsBatch = mutation({
       throw new ConvexError({ code: "DUPLICATE_TRANSACTION_ID" });
     }
     let updated = 0;
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const assignment of args.assignments) {
       const existing = await ctx.db
         .query("bankTransactions")
@@ -1499,13 +1566,13 @@ export const applyMatchedInvoiceAssignmentsBatch = mutation({
         .unique();
       if (!existing) continue;
       const matchedInvoiceId = assignment.matchedInvoiceId ?? undefined;
-      visibleTransactionsChanged ||= existing.matchedInvoiceId !== matchedInvoiceId;
+      if (existing.matchedInvoiceId !== matchedInvoiceId) analyticsChangedDates.add(existing.date);
       await ctx.db.patch(existing._id, {
         matchedInvoiceId
       });
       updated += 1;
     }
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return { updated };
   }
 });
@@ -1875,7 +1942,9 @@ export const markLegacyBankIdentityBatch = mutation({
     }
     await applyProfitFactDeltas(ctx, factDeltas);
     await remapDashboardTransactionReferences(ctx, identityChanges);
-    if (identityChanges.size > 0) await bumpLedgerRevision(ctx);
+    if (identityChanges.size > 0) {
+      await bumpLedgerRevision(ctx, result.page.map((row) => row.date));
+    }
     if (result.isDone) {
       for (const accountRow of sourceAccounts) {
         if (accountRow.connectionKey && accountRow.connectionKey !== args.connectionKey) {
@@ -2000,7 +2069,7 @@ export const acceptLegacyBankIdentityBatch = mutation({
     }
     await applyProfitFactDeltas(ctx, factDeltas);
     if (page.length > 0) {
-      await bumpLedgerRevision(ctx);
+      await bumpLedgerRevision(ctx, page.map((row) => row.date));
       const dates = page.map((row) => row.date).sort();
       const key = `${args.source}:${args.connectionKey}`;
       const existingDisposition = await ctx.db
@@ -2369,7 +2438,7 @@ export const applyMerchantCategory = mutation({
         maximumBytesRead: maximumActivityBytesRead
       });
     const factDeltas = new Map<string, ProfitFactDelta>();
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const row of result.page) {
       const update = {
         category: args.category,
@@ -2379,11 +2448,11 @@ export const applyMerchantCategory = mutation({
       };
       const next = { ...row, ...update };
       addVersionedProfitFactChange(factDeltas, row, next);
-      visibleTransactionsChanged ||= transactionVisibleChanged(row, next);
+      if (transactionVisibleChanged(row, next)) analyticsChangedDates.add(row.date);
       await ctx.db.patch(row._id, update);
     }
     await applyProfitFactDeltas(ctx, factDeltas);
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return {
       updated: result.page.length,
       hasMore: !result.isDone,
@@ -2424,7 +2493,7 @@ export const applyMerchantCompany = mutation({
         maximumRowsRead: limit,
         maximumBytesRead: maximumActivityBytesRead
       });
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const row of result.page) {
       const update = {
         matchedProviderId: args.providerId,
@@ -2434,10 +2503,10 @@ export const applyMerchantCompany = mutation({
         confidence: 1,
         matchReason: `Manual rule for ${args.merchantName}`
       };
-      visibleTransactionsChanged ||= transactionVisibleChanged(row, { ...row, ...update });
+      if (transactionVisibleChanged(row, { ...row, ...update })) analyticsChangedDates.add(row.date);
       await ctx.db.patch(row._id, update);
     }
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return {
       updated: result.page.length,
       hasMore: !result.isDone,
@@ -2464,7 +2533,7 @@ export const clearProviderReferencesBatch = mutation({
       .withIndex("by_matched_provider", (q) => q.eq("matchedProviderId", args.providerId))
       .take(limit + 1);
     const page = rows.slice(0, limit);
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const row of page) {
       const update = {
         matchedProviderId: undefined,
@@ -2474,10 +2543,10 @@ export const clearProviderReferencesBatch = mutation({
         confidence: undefined,
         matchReason: undefined
       };
-      visibleTransactionsChanged ||= transactionVisibleChanged(row, { ...row, ...update });
+      if (transactionVisibleChanged(row, { ...row, ...update })) analyticsChangedDates.add(row.date);
       await ctx.db.patch(row._id, update);
     }
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return { updated: page.length, hasMore: rows.length > limit };
   }
 });
@@ -2502,15 +2571,15 @@ export const renameCategoryBatch = mutation({
       .take(limit + 1);
     const page = rows.slice(0, limit);
     const factDeltas = new Map<string, ProfitFactDelta>();
-    let visibleTransactionsChanged = false;
+    const analyticsChangedDates = new Set<string>();
     for (const row of page) {
       const next = { ...row, category: args.toCategory };
       addVersionedProfitFactChange(factDeltas, row, next);
-      visibleTransactionsChanged ||= transactionVisibleChanged(row, next);
+      if (transactionVisibleChanged(row, next)) analyticsChangedDates.add(row.date);
       await ctx.db.patch(row._id, { category: args.toCategory });
     }
     await applyProfitFactDeltas(ctx, factDeltas);
-    if (visibleTransactionsChanged) await bumpLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return { updated: page.length, hasMore: rows.length > limit };
   }
 });
@@ -2560,7 +2629,7 @@ export const deleteSourceBatch = mutation({
       for (const alias of aliases) await ctx.db.delete(alias._id);
       await ctx.db.delete(row._id);
     }
-    if (page.length > 0) await bumpLedgerRevision(ctx);
+    if (page.length > 0) await bumpLedgerRevision(ctx, page.map((row) => row.date));
     return { deleted: page.length, hasMore: rows.length > limit };
   }
 });

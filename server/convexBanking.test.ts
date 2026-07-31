@@ -9,6 +9,7 @@ import {
   backfillProfitFactsBatch,
   deleteSourceBatch,
   getActivityPage,
+  getAnalyticsPeriodRevision,
   getInvoicePaymentCandidates,
   getLedgerRevision,
   getProfitFactsBackfillStatus,
@@ -573,7 +574,10 @@ test("merchant category maintenance clamps each cursor page to 200 writes", asyn
               paginate: async (options: Record<string, unknown>) => {
                 paginationOpts = options;
                 return {
-                  page: Array.from({ length: 200 }, (_, index) => ({ _id: `row-${index}` })),
+                  page: Array.from({ length: 200 }, (_, index) => ({
+                    _id: `row-${index}`,
+                    date: "2026-07-01"
+                  })),
                   isDone: false,
                   continueCursor: "next-cursor"
                 };
@@ -636,6 +640,7 @@ test("source deletion maintenance reads one lookahead row and deletes at most 20
                 return Array.from({ length: limit }, (_, index) => ({
                   _id: `row-${index}`,
                   id: `transaction-${index}`,
+                  date: "2026-07-01",
                   identityVersion: 2
                 }));
               }
@@ -927,6 +932,10 @@ test("versioned transaction edits update compact facts and bump one ledger revis
     const revision = handlerOf<Record<string, unknown>, { revision: number; updatedAt: string | null }>(
       getLedgerRevision
     );
+    const periodRevision = handlerOf<
+      { serviceToken: string; fromDate: string; toDate: string },
+      Array<{ month: string; revision: number }>
+    >(getAnalyticsPeriodRevision);
     const replacement = bankTransactionValue("revenue", 100_000, "USD", "in", "Internal transfer");
 
     assert.deepEqual(await save(ctx, {
@@ -937,6 +946,14 @@ test("versioned transaction edits update compact facts and bump one ledger revis
     assert.equal(ctx.tables.profitDistributionFacts[0].transactionCount, 1);
     assert.equal(ctx.tables.bankTransactions[0].profitContributionVersion, 1);
     assert.equal((await revision(ctx, { serviceToken: "expected-token" })).revision, 1);
+    assert.deepEqual(await periodRevision(ctx, {
+      serviceToken: "expected-token",
+      fromDate: "2026-06-01",
+      toDate: "2026-07-31"
+    }), [
+      { month: "2026-06", revision: 1 },
+      { month: "2026-07", revision: 0 }
+    ]);
 
     await save(ctx, { serviceToken: "expected-token", transactions: [replacement] });
     assert.equal((await revision(ctx, { serviceToken: "expected-token" })).revision, 1);

@@ -135,7 +135,10 @@ function legacyMigrationContext(
 ) {
   const bankRows = new Map(initialBankRows.map((row) => [row.id, { ...row }]));
   const referenceDispositions = new Map<string, Record<string, unknown>>();
-  let ledgerRevision: { _id: string; key: string; revision: number; updatedAt: string } | null = null;
+  const ledgerRevisions = new Map<
+    string,
+    { _id: string; key: string; revision: number; updatedAt: string }
+  >();
   let inserted = 0;
   let dashboardPatches = 0;
   const applyPatch = (target: Record<string, unknown>, patch: Record<string, unknown>) => {
@@ -173,9 +176,15 @@ function legacyMigrationContext(
       if (table === "bankLedgerRevision") {
         return {
           withIndex: (_index: string, applyRange: (range: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
-            const range = { eq: () => range };
+            let key = "";
+            const range = {
+              eq: (_field: string, value: unknown) => {
+                key = String(value);
+                return range;
+              }
+            };
             applyRange(range);
-            return { unique: async () => ledgerRevision };
+            return { unique: async () => ledgerRevisions.get(key) ?? null };
           }
         };
       }
@@ -198,8 +207,13 @@ function legacyMigrationContext(
     },
     async insert(table: string, value: Record<string, unknown>) {
       if (table === "bankLedgerRevision") {
-        ledgerRevision = { ...(value as Omit<NonNullable<typeof ledgerRevision>, "_id">), _id: "ledger-revision" };
-        return "ledger-revision";
+        const key = String(value.key);
+        const id = `ledger-revision-${key}`;
+        ledgerRevisions.set(key, {
+          ...(value as { key: string; revision: number; updatedAt: string }),
+          _id: id
+        });
+        return id;
       }
       if (table === "bankLegacyReferenceDispositions") {
         referenceDispositions.set(String(value.key), { ...value, _id: `reference-${referenceDispositions.size + 1}` });
@@ -221,7 +235,8 @@ function legacyMigrationContext(
         applyPatch(state, patch);
         return;
       }
-      if (ledgerRevision?._id === id) {
+      const ledgerRevision = [...ledgerRevisions.values()].find((candidate) => candidate._id === id);
+      if (ledgerRevision) {
         applyPatch(ledgerRevision, patch);
         return;
       }

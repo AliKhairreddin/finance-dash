@@ -255,8 +255,6 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
 ];
 const transactionTablePageSize = 200;
 const bankHistoryLoadIncrementDays = 30;
-const analyticsBuildPollLimit = 120;
-const analyticsBuildMaxWaitMs = 120_000;
 const analyticsBuildDefaultRetryMs = 1_000;
 const analyticsMonthOptions = [
   "January",
@@ -3343,8 +3341,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
     setLoadedAnalyticsPeriod(null);
 
     async function loadAnalyticsSnapshot(): Promise<void> {
-      const startedAt = Date.now();
-      for (let poll = 0; poll < analyticsBuildPollLimit; poll += 1) {
+      while (!controller.signal.aborted) {
         const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal: controller.signal });
         if (response.status === 202) {
           const body = (await response.json().catch(() => null)) as { status?: string; reason?: string } | null;
@@ -3353,10 +3350,6 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
           }
           setAnalyticsBuildReason(body.reason === "historical-coverage" ? "historical-coverage" : "snapshot");
           const delayMs = analyticsRetryAfterMs(response.headers.get("Retry-After"));
-          const remainingMs = analyticsBuildMaxWaitMs - (Date.now() - startedAt);
-          if (poll + 1 >= analyticsBuildPollLimit || remainingMs <= 0 || delayMs > remainingMs) {
-            throw new Error("Analytics is still building. Retry in a moment.");
-          }
           await waitForAnalyticsRetry(delayMs, controller.signal);
           continue;
         }
@@ -3375,7 +3368,6 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
         setAnalyticsBuildReason(null);
         return;
       }
-      throw new Error("Analytics is still building. Retry in a moment.");
     }
 
     void loadAnalyticsSnapshot()

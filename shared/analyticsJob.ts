@@ -14,6 +14,11 @@ export interface BankAnalyticsJobIdentity {
   initialState: BankAnalyticsAccumulatorState;
 }
 
+export interface BankAnalyticsMonthRevision {
+  month: string;
+  revision: number;
+}
+
 export interface BankAnalyticsBuildPage {
   transactions: Transaction[];
   continueCursor: string | null;
@@ -42,6 +47,35 @@ function assertLedgerRevision(value: number): number {
   return value;
 }
 
+function analyticsMonths(fromDate: string, toDate: string): string[] {
+  const months: string[] = [];
+  let cursor = new Date(`${fromDate.slice(0, 7)}-01T00:00:00.000Z`);
+  const finalMonth = toDate.slice(0, 7);
+  while (true) {
+    const month = cursor.toISOString().slice(0, 7);
+    months.push(month);
+    if (month === finalMonth) return months;
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+    if (months.length > 24) throw new Error("Analytics period exceeds 24 months");
+  }
+}
+
+function monthRevisionFingerprint(
+  revisions: readonly BankAnalyticsMonthRevision[],
+  options: BankAnalyticsDirectoryOptions
+): string {
+  const expectedMonths = analyticsMonths(options.fromDate, options.toDate);
+  if (
+    revisions.length !== expectedMonths.length
+    || revisions.some(({ month }, index) => month !== expectedMonths[index])
+  ) {
+    throw new Error("Analytics month revisions do not match the requested period");
+  }
+  return revisions
+    .map(({ month, revision }) => `${month}:${assertLedgerRevision(revision)}`)
+    .join(",");
+}
+
 export function assertBankAnalyticsSnapshotSize(value: unknown): void {
   let bytes: number;
   try {
@@ -55,12 +89,12 @@ export function assertBankAnalyticsSnapshotSize(value: unknown): void {
 }
 
 export function createBankAnalyticsJobIdentity(
-  ledgerRevision: number,
+  monthRevisions: readonly BankAnalyticsMonthRevision[],
   options: BankAnalyticsDirectoryOptions
 ): BankAnalyticsJobIdentity {
   const initialState = createBankAnalyticsAccumulator(options).serialize();
   return {
-    version: `bank-analytics-v1:${assertLedgerRevision(ledgerRevision)}:${initialState.configurationFingerprint}`,
+    version: `bank-analytics-v2:${monthRevisionFingerprint(monthRevisions, options)}:${initialState.configurationFingerprint}`,
     initialState
   };
 }

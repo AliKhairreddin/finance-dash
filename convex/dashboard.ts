@@ -465,18 +465,41 @@ function nextUpdatedAt(previous?: string): string {
   return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
 }
 
-async function bumpBankLedgerRevision(ctx: MutationCtx): Promise<void> {
+async function bumpBankLedgerRevision(ctx: MutationCtx, dates: Iterable<string>): Promise<void> {
   const existing = await ctx.db
     .query("bankLedgerRevision")
     .withIndex("by_key", (q) => q.eq("key", "default"))
     .unique();
+  const updatedAt = new Date().toISOString();
   const next = {
     key: "default",
     revision: (existing?.revision ?? 0) + 1,
-    updatedAt: new Date().toISOString()
+    updatedAt
   };
   if (existing) await ctx.db.patch(existing._id, next);
   else await ctx.db.insert("bankLedgerRevision", next);
+
+  const months = new Set<string>();
+  for (const date of dates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new ConvexError({ code: "INVALID_TRANSACTION_DATE" });
+    }
+    months.add(date.slice(0, 7));
+  }
+  for (const month of [...months].sort()) {
+    const key = `month:${month}`;
+    const stored = await ctx.db
+      .query("bankLedgerRevision")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    const revision = {
+      key,
+      revision: (stored?.revision ?? 0) + 1,
+      updatedAt
+    };
+    if (stored) await ctx.db.patch(stored._id, revision);
+    else await ctx.db.insert("bankLedgerRevision", revision);
+  }
 }
 
 const maximumLegacyLedgerMigrationBatchSize = 100;
@@ -648,9 +671,11 @@ export const migrateLegacyLedgerBatch = mutation({
     let updatedTransactions = 0;
     let appliedTeamAssignments = 0;
     let orphanedTeamAssignments = 0;
+    const analyticsChangedDates = new Set<string>();
     const syncedAt = nextUpdatedAt(state.updatedAt);
 
     for (const legacyTransaction of transactionBatch) {
+      analyticsChangedDates.add(legacyTransaction.date);
       if (!isBankTransactionSource(legacyTransaction.source)) {
         throw new ConvexError({
           code: "INVALID_LEGACY_BANK_SOURCE",
@@ -734,6 +759,7 @@ export const migrateLegacyLedgerBatch = mutation({
           });
         }
         await ctx.db.patch(existing._id, { teamId: canonicalTeamId(assignment.teamId) });
+        analyticsChangedDates.add(existing.date);
         appliedTeamAssignments += 1;
       }
     }
@@ -745,8 +771,8 @@ export const migrateLegacyLedgerBatch = mutation({
       profitDistributionCache: undefined,
       updatedAt: syncedAt
     });
-    if (transactionBatch.length > 0 || appliedTeamAssignments > 0) {
-      await bumpBankLedgerRevision(ctx);
+    if (analyticsChangedDates.size > 0) {
+      await bumpBankLedgerRevision(ctx, analyticsChangedDates);
     }
     return {
       processedTransactions: transactionBatch.length,

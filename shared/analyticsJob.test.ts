@@ -41,15 +41,16 @@ function transaction(id: string): Transaction {
   };
 }
 
-test("Analytics job identity includes the ledger revision and stable directory fingerprint", () => {
-  const identity = createBankAnalyticsJobIdentity(17, directory);
-  const reordered = createBankAnalyticsJobIdentity(17, {
+test("Analytics job identity includes only requested month revisions and the stable directory fingerprint", () => {
+  const revisions = [{ month: "2026-07", revision: 17 }];
+  const identity = createBankAnalyticsJobIdentity(revisions, directory);
+  const reordered = createBankAnalyticsJobIdentity(revisions, {
     ...directory,
     providers: [...directory.providers].reverse(),
     teams: [...directory.teams].reverse()
   });
-  const changedRevision = createBankAnalyticsJobIdentity(18, directory);
-  const changedDirectory = createBankAnalyticsJobIdentity(17, {
+  const changedRevision = createBankAnalyticsJobIdentity([{ month: "2026-07", revision: 18 }], directory);
+  const changedDirectory = createBankAnalyticsJobIdentity(revisions, {
     ...directory,
     teams: [{ id: "ops", name: "Finance Operations" }, directory.teams[1]!]
   });
@@ -57,12 +58,19 @@ test("Analytics job identity includes the ledger revision and stable directory f
   assert.equal(identity.version, reordered.version);
   assert.notEqual(identity.version, changedRevision.version);
   assert.notEqual(identity.version, changedDirectory.version);
-  assert.match(identity.version, /^bank-analytics-v1:17:fnv1a32-[a-f0-9]{8}$/);
-  assert.throws(() => createBankAnalyticsJobIdentity(-1, directory), /non-negative integer/);
+  assert.match(identity.version, /^bank-analytics-v2:2026-07:17:fnv1a32-[a-f0-9]{8}$/);
+  assert.throws(
+    () => createBankAnalyticsJobIdentity([{ month: "2026-07", revision: -1 }], directory),
+    /non-negative integer/
+  );
+  assert.throws(
+    () => createBankAnalyticsJobIdentity([{ month: "2026-06", revision: 17 }], directory),
+    /do not match the requested period/
+  );
 });
 
 test("Analytics build processes at most ten pages and resumes from its opaque cursor", async () => {
-  const identity = createBankAnalyticsJobIdentity(1, directory);
+  const identity = createBankAnalyticsJobIdentity([{ month: "2026-07", revision: 1 }], directory);
   const requestedCursors: Array<string | null> = [];
   const first = await buildBankAnalyticsPageBudget({
     ...directory,
@@ -122,7 +130,7 @@ test("Analytics build processes at most ten pages and resumes from its opaque cu
 });
 
 test("Analytics build rejects a non-terminal page that cannot advance", async () => {
-  const identity = createBankAnalyticsJobIdentity(1, directory);
+  const identity = createBankAnalyticsJobIdentity([{ month: "2026-07", revision: 1 }], directory);
   await assert.rejects(
     buildBankAnalyticsPageBudget({
       ...directory,
@@ -137,7 +145,7 @@ test("Analytics build rejects a non-terminal page that cannot advance", async ()
 });
 
 test("Analytics build rejects a repeated opaque cursor", async () => {
-  const identity = createBankAnalyticsJobIdentity(1, directory);
+  const identity = createBankAnalyticsJobIdentity([{ month: "2026-07", revision: 1 }], directory);
   await assert.rejects(
     buildBankAnalyticsPageBudget({
       ...directory,

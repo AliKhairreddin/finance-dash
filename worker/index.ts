@@ -1744,9 +1744,13 @@ async function bankAnalyticsBuildContext(
 ) {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const [directory, ledger] = await Promise.all([
+  const [directory, monthRevisions] = await Promise.all([
     convex.query(api.dashboard.getAnalyticsDirectory, { serviceToken }),
-    convex.query(api.banking.getLedgerRevision, { serviceToken })
+    convex.query(api.banking.getAnalyticsPeriodRevision, {
+      serviceToken,
+      fromDate: range.fromDate,
+      toDate: range.toDate
+    })
   ]);
   const options = {
     ...range,
@@ -1755,7 +1759,7 @@ async function bankAnalyticsBuildContext(
   };
   return {
     options,
-    identity: createBankAnalyticsJobIdentity(ledger.revision, options)
+    identity: createBankAnalyticsJobIdentity(monthRevisions, options)
   };
 }
 
