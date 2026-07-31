@@ -93,7 +93,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         date: "2026-07-28T09:30:00.000Z",
         description: "CASHBACK",
         amountCents: 250,
-        accountId: "underlying-debit",
+        accountId: "account-debit",
         accountSubtype: "cash",
         status: "pending"
       }],

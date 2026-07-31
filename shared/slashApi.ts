@@ -65,6 +65,11 @@ interface SlashTransaction {
   };
 }
 
+interface SlashAccountIdentity {
+  accountId: string;
+  accountName: string;
+}
+
 interface SlashPage<T> {
   items: T[];
   metadata: {
@@ -465,14 +470,14 @@ async function fetchSlashTransactionPages({
   fetcher,
   initialUrl,
   headers,
-  accountNameById,
+  accountIdentityByKey,
   onTransactionPage,
   collectTransactions
 }: {
   fetcher: typeof fetch;
   initialUrl: URL;
   headers: HeadersInit;
-  accountNameById: ReadonlyMap<string, string>;
+  accountIdentityByKey: ReadonlyMap<string, SlashAccountIdentity>;
   onTransactionPage?: (transactions: Transaction[]) => void | Promise<void>;
   collectTransactions: boolean;
 }): Promise<Transaction[]> {
@@ -488,11 +493,11 @@ async function fetchSlashTransactionPages({
     const normalizedPage = page.items.flatMap((item) => {
       if (seenTransactionIds.has(item.id)) return [];
       seenTransactionIds.add(item.id);
-      const accountName = accountNameById.get(item.accountId);
-      if (!accountName) {
+      const accountIdentity = accountIdentityByKey.get(`${item.accountSubtype}:${item.accountId}`);
+      if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountName)];
+      return [normalizeSlashTransaction(item, accountIdentity)];
     });
 
     if (collectTransactions) transactions.push(...normalizedPage);
@@ -530,21 +535,24 @@ function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
   };
 }
 
-function normalizeSlashTransaction(transaction: SlashTransaction, accountName: string): Transaction {
+function normalizeSlashTransaction(
+  transaction: SlashTransaction,
+  accountIdentity: SlashAccountIdentity
+): Transaction {
   const signedAmount = transaction.amountCents / 100;
   const counterparty = transaction.merchantData?.description?.trim() || transaction.description;
-  const accountLabel = `${accountName} ${transaction.accountSubtype === "cash" ? "Cash" : "Credit"}`;
+  const accountLabel = `${accountIdentity.accountName} ${transaction.accountSubtype === "cash" ? "Cash" : "Credit"}`;
   const status: Transaction["status"] = transaction.status === "pending"
     ? "pending"
     : transaction.status === "failed"
       ? "voided"
       : "posted";
   return {
-    id: bankProviderTransactionId("slash", [transaction.accountId, transaction.id]),
+    id: bankProviderTransactionId("slash", [accountIdentity.accountId, transaction.id]),
     providerLegacyId: `slash-${transaction.id}`,
     source: "slash",
     slashAccountSubtype: transaction.accountSubtype,
-    accountId: `slash-${transaction.accountId}-${transaction.accountSubtype}`,
+    accountId: `slash-${accountIdentity.accountId}-${transaction.accountSubtype}`,
     accountName: accountLabel,
     date: transaction.date.slice(0, 10),
     description: transaction.description,
@@ -571,7 +579,7 @@ async function fetchSlashAccountSnapshot(
   fetcher: typeof fetch,
   baseUrl: string,
   headers: HeadersInit
-): Promise<{ accounts: AccountBalance[]; accountNameById: Map<string, string> }> {
+): Promise<{ accounts: AccountBalance[]; accountIdentityByKey: Map<string, SlashAccountIdentity> }> {
   const slashAccounts = await fetchAllSlashPages(
     fetcher,
     new URL("/account", baseUrl),
@@ -602,7 +610,7 @@ async function fetchSlashAccountSnapshot(
       balancesByGroupId.set(groupId, accountBalances);
     }
   }
-  const accountNameById = new Map<string, string>();
+  const accountIdentityByKey = new Map<string, SlashAccountIdentity>();
   const groupIdByAccountId = new Map<string, string>();
   const accounts: AccountBalance[] = openAccounts
     .flatMap((account) => {
@@ -615,7 +623,6 @@ async function fetchSlashAccountSnapshot(
           );
         }
         groupIdByAccountId.set(balance.accountId, account.id);
-        accountNameById.set(balance.accountId, account.name);
       }
       const accountBalances: Array<{ apiType: SlashBalanceType; subtype: SlashAccountSubtype; label: string }> =
         account.type === "debit"
@@ -626,6 +633,9 @@ async function fetchSlashAccountSnapshot(
             ];
       return accountBalances.map(({ apiType, subtype, label }) => {
         const balance = requiredAccountBalance(account, balances, apiType);
+        const identity = { accountId: balance.accountId, accountName: account.name };
+        accountIdentityByKey.set(`${subtype}:${account.id}`, identity);
+        accountIdentityByKey.set(`${subtype}:${balance.accountId}`, identity);
         return {
           id: `slash-${balance.accountId}-${subtype}`,
           name: `${account.name} ${label}`,
@@ -638,7 +648,7 @@ async function fetchSlashAccountSnapshot(
         };
       });
     });
-  return { accounts, accountNameById };
+  return { accounts, accountIdentityByKey };
 }
 
 export async function fetchSlashActivityBatch({
@@ -668,7 +678,7 @@ export async function fetchSlashActivityBatch({
       }
     : slashTransactionWindow(dateRange, now);
   const headers = slashHeaders(apiKey, legalEntityId);
-  const { accounts, accountNameById } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
   if (onAccountsDiscovered) await onAccountsDiscovered(accounts);
   const initialUrl = new URL("/transaction", baseUrl);
   initialUrl.searchParams.set("filter:from_date", String(Date.parse(window.windowStart)));
@@ -690,11 +700,11 @@ export async function fetchSlashActivityBatch({
     const normalizedPage = page.items.flatMap((item) => {
       if (seenTransactionIds.has(item.id)) return [];
       seenTransactionIds.add(item.id);
-      const accountName = accountNameById.get(item.accountId);
-      if (!accountName) {
+      const accountIdentity = accountIdentityByKey.get(`${item.accountSubtype}:${item.accountId}`);
+      if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountName)];
+      return [normalizeSlashTransaction(item, accountIdentity)];
     });
     if (collectTransactions) transactions.push(...normalizedPage);
     if (normalizedPage.length > 0 && onTransactionPage) {
@@ -756,7 +766,10 @@ export async function fetchSlashTransactionForLegalEntity({
     "account",
     parseSlashAccount
   );
-  return normalizeSlashTransaction(transaction, account.name);
+  return normalizeSlashTransaction(transaction, {
+    accountId: transaction.accountId,
+    accountName: account.name
+  });
 }
 
 export async function fetchSlashActivityForLegalEntity({
@@ -785,13 +798,13 @@ export async function fetchSlashActivityForLegalEntity({
     );
   }
 
-  const { accounts, accountNameById } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
 
   const transactions = await fetchSlashTransactionPages({
     fetcher,
     initialUrl: transactionsUrl,
     headers,
-    accountNameById,
+    accountIdentityByKey,
     onTransactionPage,
     collectTransactions
   });
