@@ -456,6 +456,53 @@ test("Slash activity rejects repeated pagination cursors", async () => {
   );
 });
 
+test("Slash activity accepts bounded opaque provider cursors larger than 512 characters", async () => {
+  const longCursor = "x".repeat(2_048);
+  const transactionRequests: URL[] = [];
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({ items: [], metadata: {} });
+    }
+    transactionRequests.push(url);
+    return Response.json({
+      items: [],
+      metadata: url.searchParams.has("cursor") ? {} : { nextCursor: longCursor }
+    });
+  };
+
+  const result = await fetchSlashActivityForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher
+  });
+
+  assert.deepEqual(result.transactions, []);
+  assert.equal(transactionRequests.length, 2);
+  assert.equal(transactionRequests[1].searchParams.get("cursor"), longCursor);
+});
+
+test("Slash activity rejects provider cursors larger than its bounded checkpoint budget", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({ items: [], metadata: {} });
+    }
+    return Response.json({ items: [], metadata: { nextCursor: "x".repeat(8 * 1024 + 1) } });
+  };
+
+  await assert.rejects(
+    fetchSlashActivityForLegalEntity({
+      baseUrl: "https://api.slash.test",
+      apiKey: "slash-key",
+      legalEntityId: "legal-entity-1",
+      fetcher
+    }),
+    /nextCursor exceeds 8192 characters/
+  );
+});
+
 test("Slash activity streams bounded deduplicated pages without collecting transaction objects", async () => {
   const transactionRequests: URL[] = [];
   const transaction = (id: string) => ({
