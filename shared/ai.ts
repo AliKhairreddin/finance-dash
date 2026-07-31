@@ -326,6 +326,14 @@ export async function runOpenRouterTransactionCategorization(
         lastError = error;
       }
     }
+    if (transactionBatch.length > 1) {
+      const midpoint = Math.ceil(transactionBatch.length / 2);
+      const results = await Promise.all([
+        categorizeBatch(transactionBatch.slice(0, midpoint)),
+        categorizeBatch(transactionBatch.slice(midpoint))
+      ]);
+      return results.flat();
+    }
     throw lastError instanceof Error ? lastError : new Error("AI categorization failed");
   };
 

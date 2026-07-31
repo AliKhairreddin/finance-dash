@@ -144,3 +144,60 @@ test("transaction AI requires one category and normalized merchant for every row
     globalThis.fetch = originalFetch;
   }
 });
+
+test("transaction AI isolates an invalid multi-row response and retries smaller batches", async () => {
+  const originalFetch = globalThis.fetch;
+  const secondTransaction: Transaction = {
+    ...aiTransaction,
+    id: "slash-cursor-1",
+    description: "CURSOR AI SUBSCRIPTION 8842",
+    rawName: "CURSOR AI SUBSCRIPTION 8842",
+    counterparty: "CURSOR AI"
+  };
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = JSON.parse(body.messages.at(-1)?.content ?? "{}") as {
+      transactions?: Array<{ id: string }>;
+    };
+    const transactions = prompt.transactions ?? [];
+    return Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            matches: transactions.length > 1
+              ? []
+              : transactions.map((transaction) => ({
+                  transactionId: transaction.id,
+                  providerId: null,
+                  category: transaction.id === aiTransaction.id ? "Food and meals" : "Software subscription",
+                  merchantName: transaction.id === aiTransaction.id ? "Pizza Hut" : "Cursor",
+                  confidence: 0.8,
+                  reason: "Merchant evidence"
+                }))
+          })
+        }
+      }],
+      model: "openai/gpt-5.6-sol"
+    });
+  };
+
+  try {
+    const results = await runOpenRouterTransactionCategorization(
+      {
+        provider: "openrouter",
+        model: "openai/gpt-5.6-sol",
+        openRouterApiKey: "test-key"
+      },
+      [aiTransaction, secondTransaction],
+      []
+    );
+    assert.deepEqual(results.map((result) => result.transactionId).sort(), [
+      aiTransaction.id,
+      secondTransaction.id
+    ].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
