@@ -66,7 +66,6 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   BankAnalyticsAggregate,
-  BankAnalyticsCategoryBreakdown,
   BankAnalyticsRelationship,
   BankAnalyticsSnapshot,
   CreateExpensePayload,
@@ -124,6 +123,11 @@ import {
   transactionCategoryOptionsForDirection
 } from "../shared/categories";
 import { convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
+import {
+  analyticsCategoryPieGroups,
+  categoryDonutSegmentPath,
+  type CategoryPieGroup
+} from "../shared/categoryPie";
 import {
   analyticsDateRange,
   analyticsPeriodLabel,
@@ -521,82 +525,6 @@ function groupedHoldingMoney(rows: DashboardSnapshot["holdings"]): string {
       : `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(total.balance)} ${asset}`
     ).join(" · ")
     : "—";
-}
-
-const categoryChartPalette = [
-  "#18181b",
-  "#52525b",
-  "#71717a",
-  "#137333",
-  "#b42318",
-  "#8a5a00",
-  "#0f766e",
-  "#a16207",
-  "#3f3f46",
-  "#a1a1aa",
-  "#7c3aed",
-  "#64748b",
-  "#be185d",
-  "#2f855a",
-  "#0369a1",
-  "#a16207",
-  "#4338ca",
-  "#15803d",
-  "#a21caf",
-  "#0e7490",
-  "#dc2626",
-  "#4d7c0f",
-  "#2563eb",
-  "#b45309",
-  "#6d28d9",
-  "#047857"
-];
-
-type CategoryPieSegment = {
-  category: string;
-  amount: number;
-  count: number;
-  color: string;
-  breakdowns?: CategoryPieBreakdown[];
-};
-
-type CategoryPieBreakdown = {
-  label: string;
-  amount: number;
-  count: number;
-};
-
-type CategoryPieGroup = {
-  currency: string;
-  total: number;
-  segments: CategoryPieSegment[];
-};
-
-function categoryChartHash(category: string): number {
-  let hash = 0;
-  for (let index = 0; index < category.length; index += 1) {
-    hash = (hash * 31 + category.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
-function categoryChartColor(category: string, usedColors: Set<string>, index: number): string {
-  const hash = categoryChartHash(category);
-
-  for (let offset = 0; offset < categoryChartPalette.length; offset += 1) {
-    const color = categoryChartPalette[(hash + offset) % categoryChartPalette.length];
-    if (!usedColors.has(color)) return color;
-  }
-
-  let attempt = 0;
-  while (true) {
-    const hue = Math.round((hash + (index + attempt) * 137.508) % 360);
-    const saturation = 58 + ((hash + attempt) % 16);
-    const lightness = 36 + ((index + attempt) % 12);
-    const color = `hsl(${hue} ${saturation}% ${lightness}%)`;
-    if (!usedColors.has(color)) return color;
-    attempt += 1;
-  }
 }
 
 function formatShare(amount: number, total: number): string {
@@ -3293,50 +3221,6 @@ function analyticsAggregateMoney(
   return formatCurrencyTotals(direction === "in" ? aggregate.moneyIn : aggregate.moneyOut);
 }
 
-function analyticsCategoryPieGroups(
-  rows: readonly BankAnalyticsCategoryBreakdown[],
-  direction: Transaction["direction"]
-): CategoryPieGroup[] {
-  const groups = new Map<string, CategoryPieSegment[]>();
-  const assignedColors = new Map<string, string>();
-  const usedColors = new Set<string>();
-  let colorIndex = 0;
-
-  for (const row of rows) {
-    const totals = direction === "in" ? row.moneyIn : row.moneyOut;
-    const counts = direction === "in" ? row.moneyInTransactionCounts : row.moneyOutTransactionCounts;
-    let color = assignedColors.get(row.category);
-    if (!color) {
-      color = categoryChartColor(row.category, usedColors, colorIndex);
-      assignedColors.set(row.category, color);
-      usedColors.add(color);
-      colorIndex += 1;
-    }
-    for (const [currency, amount] of Object.entries(totals)) {
-      if (amount <= 0) continue;
-      const segments = groups.get(currency) ?? [];
-      segments.push({
-        category: row.category,
-        amount,
-        count: counts[currency] ?? 0,
-        color
-      });
-      groups.set(currency, segments);
-    }
-  }
-
-  return [...groups].map(([currency, segments]) => {
-    const sortedSegments = segments.sort(
-      (left, right) => right.amount - left.amount || left.category.localeCompare(right.category)
-    );
-    return {
-      currency,
-      total: sortedSegments.reduce((sum, segment) => sum + segment.amount, 0),
-      segments: sortedSegments
-    };
-  }).sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
-}
-
 function analyticsRelationshipLabel(relationship: BankAnalyticsRelationship): string {
   if (relationship === "client") return "Client";
   if (relationship === "supplier") return "Supplier";
@@ -3935,8 +3819,15 @@ function CategoryPiePanel({
 }
 
 function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const activeSegment = group.segments.find((segment) => segment.category === activeCategory && segment.breakdowns?.length);
+  const detailId = useId();
+  const [activeCategory, setActiveCategory] = useState<string | null>(group.segments[0]?.category ?? null);
+  const activeSegment = group.segments.find((segment) => segment.category === activeCategory) ?? group.segments[0];
+
+  useEffect(() => {
+    if (!group.segments.some((segment) => segment.category === activeCategory)) {
+      setActiveCategory(group.segments[0]?.category ?? null);
+    }
+  }, [activeCategory, group.segments]);
 
   return (
     <div className="category-pie-group">
@@ -3947,42 +3838,36 @@ function CategoryPieGroupView({ group }: { group: CategoryPieGroup }) {
           <strong>{compactMoney(group.total, group.currency)}</strong>
         </div>
       </div>
-      <div className="category-legend" aria-label={`${group.currency} category share`}>
-        {group.segments.map((segment) => {
-          const canInspect = Boolean(segment.breakdowns?.length);
-          return (
-            <div
-              aria-label={canInspect ? `Show ${segment.category} company breakdown` : undefined}
-              className={`category-legend-row ${canInspect ? "inspectable" : ""} ${activeCategory === segment.category ? "active" : ""}`}
+      <div className="category-legend">
+        {activeSegment && (
+          <div className="category-slice-detail" id={detailId} role="status" aria-live="polite" aria-atomic="true">
+            <span className="category-slice-name">
+              <span className="legend-swatch" style={{ backgroundColor: activeSegment.color }} />
+              <strong title={activeSegment.category}>{activeSegment.category}</strong>
+            </span>
+            <strong>{money(activeSegment.amount, group.currency)}</strong>
+            <span>{formatShare(activeSegment.amount, group.total)} · {activeSegment.count.toLocaleString()} {activeSegment.count === 1 ? "transaction" : "transactions"}</span>
+          </div>
+        )}
+        <div className="category-legend-list" aria-label={`${group.currency} category share`}>
+          {group.segments.map((segment) => (
+            <button
+              aria-label={`Inspect ${segment.category}: ${money(segment.amount, group.currency)}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
+              aria-pressed={activeCategory === segment.category}
+              className={`category-legend-row ${activeCategory === segment.category ? "active" : ""}`}
               key={segment.category}
-              onClick={canInspect ? () => setActiveCategory(segment.category) : undefined}
-              onFocus={canInspect ? () => setActiveCategory(segment.category) : undefined}
-              onMouseEnter={canInspect ? () => setActiveCategory(segment.category) : undefined}
-              role={canInspect ? "button" : undefined}
-              tabIndex={canInspect ? 0 : undefined}
+              onClick={() => setActiveCategory(segment.category)}
+              onFocus={() => setActiveCategory(segment.category)}
+              onMouseEnter={() => setActiveCategory(segment.category)}
+              type="button"
             >
               <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
               <span className="legend-name" title={segment.category}>{segment.category}</span>
               <strong>{money(segment.amount, group.currency)}</strong>
               <small>{formatShare(segment.amount, group.total)}</small>
-            </div>
-          );
-        })}
-        {activeSegment?.breakdowns && (
-          <div className="category-attribution-breakdown" aria-live="polite">
-            <div className="category-attribution-heading">
-              <strong>{activeSegment.category}</strong>
-              <span>Company or transaction title</span>
-            </div>
-            {activeSegment.breakdowns.map((breakdown) => (
-              <div className="category-attribution-row" key={breakdown.label}>
-                <span title={breakdown.label}>{breakdown.label}</span>
-                <strong>{money(breakdown.amount, group.currency)}</strong>
-                <small>{formatShare(breakdown.amount, activeSegment.amount)}</small>
-              </div>
-            ))}
-          </div>
-        )}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -3997,38 +3882,35 @@ function CategoryPieSvg({
   activeCategory: string | null;
   onActivateCategory: (category: string) => void;
 }) {
-  const radius = 42;
-  const circumference = 2 * Math.PI * radius;
-  let offset = 0;
+  let angle = -90;
 
   return (
-    <svg className="category-pie-svg" viewBox="0 0 120 120" role="img" aria-label={`${group.currency} categories`}>
-      <circle className="pie-track" cx="60" cy="60" r={radius} />
-      {group.segments.map((segment) => {
-        const dash = group.total > 0 ? (segment.amount / group.total) * circumference : 0;
-        const strokeDasharray = group.segments.length === 1 ? `${circumference} 0` : `${dash} ${circumference - dash}`;
-        const strokeDashoffset = -offset;
-        offset += dash;
+    <svg
+      aria-hidden="true"
+      className={`category-pie-svg ${activeCategory ? "has-active" : ""}`}
+      focusable="false"
+      viewBox="0 0 120 120"
+    >
+      <circle className="pie-track" cx="60" cy="60" r="42" />
+      {group.segments.map((segment, index) => {
+        const startAngle = angle;
+        angle = index === group.segments.length - 1
+          ? 270
+          : Math.min(270, angle + (segment.amount / group.total) * 360);
         return (
-          <circle
-            aria-label={`${segment.category}: ${money(segment.amount, group.currency)} (${formatShare(segment.amount, group.total)})`}
+          <path
             className={`pie-segment ${activeCategory === segment.category ? "active" : ""}`}
-            cx="60"
-            cy="60"
-            r={radius}
+            data-category={segment.category}
+            d={categoryDonutSegmentPath(startAngle, angle)}
+            fill={segment.color}
             key={segment.category}
             onClick={() => onActivateCategory(segment.category)}
-            onFocus={() => onActivateCategory(segment.category)}
             onMouseEnter={() => onActivateCategory(segment.category)}
-            stroke={segment.color}
-            strokeDasharray={strokeDasharray}
-            strokeDashoffset={strokeDashoffset}
-            tabIndex={segment.breakdowns?.length ? 0 : undefined}
           >
             <title>
               {segment.category}: {money(segment.amount, group.currency)} ({formatShare(segment.amount, group.total)})
             </title>
-          </circle>
+          </path>
         );
       })}
     </svg>

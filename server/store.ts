@@ -6,6 +6,7 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
+  BankAnalyticsSnapshot,
   BankTransactionSource,
   CreateHoldingPayload,
   CreateExpensePayload,
@@ -59,6 +60,7 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import { createBankAnalyticsAccumulator } from "../shared/analytics";
 import {
   defaultAiSettings,
   listOpenRouterZdrModels,
@@ -2376,6 +2378,28 @@ export function getTransactionPage(options: LocalTransactionPageOptions): Transa
     ),
     options
   );
+}
+
+export function getAnalyticsSnapshot(fromDate: string, toDate: string): BankAnalyticsSnapshot {
+  const accumulator = createBankAnalyticsAccumulator({
+    fromDate,
+    toDate,
+    providers,
+    teams
+  });
+  accumulator.addPage(
+    getMatchedTransactions()
+      .filter((transaction) =>
+        (transaction.source === "wise"
+          || transaction.source === "revolut"
+          || transaction.source === "slash"
+          || transaction.source === "amex")
+        && transaction.date >= fromDate
+        && transaction.date <= toDate
+      )
+      .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
+  );
+  return accumulator.finish();
 }
 
 export function getInvoicePaymentCandidates(

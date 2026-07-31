@@ -53,6 +53,7 @@ import {
   getInvoicePaymentCandidates,
   getOpenRouterZdrModels,
   expenseDocumentById,
+  getAnalyticsSnapshot,
   initializeStore,
   importWiseStatement,
   matchTransaction,
@@ -108,6 +109,26 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/dashboard", (_request, response) => {
   response.json(getSnapshot());
+});
+
+app.get("/api/analytics", (request, response, next) => {
+  try {
+    const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
+    const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
+    const today = new Date().toISOString().slice(0, 10);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
+      || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
+      || fromDate > toDate
+      || toDate > today
+    ) {
+      response.status(400).json({ message: "Analytics date range is invalid" });
+      return;
+    }
+    response.json(getAnalyticsSnapshot(fromDate, toDate));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/management-report", async (_request, response, next) => {
