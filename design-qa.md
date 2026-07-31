@@ -105,6 +105,70 @@ final result: passed
 
 ---
 
+# Analytics periods and compact bank date controls design QA
+
+## Scope and evidence
+
+- Added global Analytics periods for monthly, quarterly, year to date, and full year views.
+- Replaced the Banks two-input date form and persistent helper copy with one range-calendar trigger, one preset control, and an information control.
+- Replaced the connected-bank history sentence and `Show 45 earlier days` action with a compact `More` action that loads 30 earlier days per request.
+- Reference problem state:
+  - `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-31118787-2514-49b4-a80e-48d0094c8f1e.png`
+- Local implementation captures:
+  - `/tmp/finance-bank-period-final.png`
+  - `/tmp/finance-bank-calendar-mobile.png`
+  - `/tmp/finance-dash-analytics-periods.png`
+- Same-input reference/implementation comparison:
+  - `/tmp/finance-bank-period-comparison.png`
+- Desktop viewport: 1280 × 720 CSS px.
+- Mobile viewport: 400 × 935 CSS px.
+
+## Visual findings
+
+No actionable P0, P1, or P2 issues remain.
+
+- The period strip is 53 px tall on mobile and has no persistent explanatory copy.
+- The compact date label keeps the selected period readable (`Jul 1–30, 2026`) without repeating the year.
+- The preset control exposes Today, This week, Last week, This month, Last month, Recent 45 days, and This year.
+- The calendar fits inside the mobile viewport at 340 × 377 px and keeps both Cancel and Apply visible.
+- The Analytics period/status information control shares the status row instead of consuming a separate line.
+- The 400 px Banks and Analytics pages have matching client and scroll widths (385 px), confirming no page-level horizontal overflow.
+- Existing Geist typography, controls, Lucide icons, colors, borders, radii, and elevation tokens remain unchanged.
+
+## Interaction checks
+
+- A first calendar click creates a valid one-day period.
+- A second click creates an ordered range, including cross-month ranges.
+- Apply lives inside the calendar; Cancel and Escape close it without changing the current period.
+- Future dates and future current-year months/quarters are unavailable.
+- The This month preset changed the URL-backed period to Jul 1–30, 2026.
+- `More` remains bounded at 30 earlier days and keeps the current end date.
+- Analytics checks with realistic local rows:
+  - 2026 YTD money out: $806.42.
+  - July 2026 money out: $506.42.
+  - Q2 2026 money out: $200.00.
+  - Full year 2025 money out: $400.00.
+
+## Comparison history
+
+1. The reference used two date inputs, an outside Apply action, a dedicated recent-period button, and two persistent helper lines.
+   - Consolidated them into one date-range trigger, one preset menu, and an information control.
+2. The first mobile calendar pass inherited the app-wide full-width mobile button rule and pushed Cancel outside the popup.
+   - Scoped the calendar actions to compact 78 px controls; both actions now fit.
+3. The first mobile Analytics status placed its information icon on a separate row.
+   - Grouped the period value, information control, and error state into one 28 px status row.
+
+## Verification
+
+- `npm run check`: passed (153 tests passed, 1 intentionally skipped, production build passed).
+- `npm run lint`: passed as part of the combined check.
+- `git diff --check`: passed.
+- Production build emitted only the existing chunk-size warning.
+
+final result: passed
+
+---
+
 # Transaction assignment controls design QA
 
 ## Scope and evidence

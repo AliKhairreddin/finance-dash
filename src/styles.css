@@ -3053,6 +3053,65 @@ th.amount .sortable-table-heading {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.analytics-global-filters {
+  row-gap: 6px;
+}
+
+.analytics-global-filters > label {
+  min-width: 136px;
+}
+
+.analytics-global-filters > .searchable-select {
+  width: 92px;
+}
+
+.analytics-global-filters > .analytics-detail-filter {
+  width: 118px;
+}
+
+.analytics-period-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--label-text);
+  background: var(--subtle-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.analytics-period-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.analytics-period-status > .note-popover {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 12;
+}
+
+.analytics-period-status > .note-popover .note-popover-panel {
+  width: min(300px, calc(100vw - 48px));
+}
+
+.analytics-period-error {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--red);
+  background: var(--red-soft);
+  border: 1px solid var(--red-border);
+  border-radius: 999px;
+}
+
 .category-chart-body {
   display: grid;
   gap: 14px;
@@ -4651,66 +4710,167 @@ th.amount .sortable-table-heading {
 
 .bank-date-controls {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 7px 14px;
   border-top: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
   background: var(--subtle-bg);
 }
 
-.bank-date-controls > div {
-  display: grid;
-  gap: 3px;
-  min-width: 190px;
+.bank-date-range-trigger {
+  max-width: min(420px, 48vw);
+  min-height: 34px;
 }
 
-.bank-date-controls > div strong {
+.bank-date-range-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bank-period-presets {
+  width: 144px;
+}
+
+.bank-date-controls > .note-popover,
+.bank-load-more > .note-popover {
+  position: relative;
+  top: auto;
+  right: auto;
+  flex: 0 0 auto;
+  z-index: 14;
+}
+
+.bank-date-controls > .note-popover .note-popover-trigger,
+.bank-load-more > .note-popover .note-popover-trigger {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.bank-date-range-popover {
+  position: fixed;
+  z-index: 120;
+  width: min(340px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
   color: var(--ink);
-  font-size: 0.78rem;
+  background: var(--panel);
+  box-shadow: var(--modal-shadow);
 }
 
-.bank-date-controls > div span,
-.bank-load-more span {
-  color: var(--app-muted);
-  font-size: 0.76rem;
-}
-
-.bank-date-controls > div small {
-  max-width: 320px;
-  color: var(--app-muted);
-  font-size: 0.7rem;
-  line-height: 1.35;
-}
-
-.bank-date-controls form {
+.bank-calendar-header {
   display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.bank-date-controls label {
-  display: grid;
-  gap: 4px;
-  color: var(--label-text);
-  font-size: 0.72rem;
-  font-weight: 680;
+.bank-calendar-header strong {
+  font-size: 0.86rem;
 }
 
-.bank-date-controls input {
-  width: 150px;
-  min-height: 34px;
+.bank-calendar-weekdays,
+.bank-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.bank-calendar-weekdays {
+  margin: 10px 0 4px;
+}
+
+.bank-calendar-weekdays span {
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 720;
+  text-align: center;
+}
+
+.bank-calendar-grid button,
+.bank-calendar-empty {
+  min-width: 0;
+  height: 34px;
+}
+
+.bank-calendar-grid button {
+  display: grid;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 620;
+}
+
+.bank-calendar-grid button:hover:not(:disabled),
+.bank-calendar-grid button:focus-visible {
+  border-color: var(--card-hover-border);
+  background: var(--violet-soft);
+}
+
+.bank-calendar-grid button.in-range {
+  border-radius: 5px;
+  color: var(--violet);
+  background: var(--violet-soft);
+}
+
+.bank-calendar-grid button.selected {
+  color: white;
+  background: var(--violet);
+}
+
+.bank-calendar-grid button:disabled {
+  color: var(--app-muted);
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.bank-calendar-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--subtle-bg);
+}
+
+.bank-calendar-selection span:first-child {
+  color: var(--ink);
+  font-size: 0.73rem;
+  font-weight: 650;
+}
+
+.bank-calendar-selection span:last-child {
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  text-align: right;
+}
+
+.bank-calendar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 10px;
 }
 
 .bank-load-more {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 7px;
+  padding: 9px 14px;
   border-top: 1px solid var(--line-soft);
   background: var(--subtle-bg);
 }
@@ -5567,28 +5727,67 @@ th.amount .sortable-table-heading {
     grid-template-columns: 1fr;
   }
 
-  .bank-date-controls,
-  .bank-load-more {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .bank-date-controls form {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .bank-date-controls input {
+  .analytics-global-filters > label,
+  .analytics-global-filters > .searchable-select,
+  .analytics-global-filters > .analytics-detail-filter {
     width: 100%;
   }
 
-  .bank-date-controls .primary-button,
-  .bank-date-controls .secondary-button {
+  .analytics-period-status {
+    width: 100%;
+  }
+
+  .analytics-period-value {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .bank-date-controls,
+  .bank-load-more {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .bank-date-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px auto;
+  }
+
+  .bank-date-range-trigger {
+    max-width: none;
+    min-width: 0;
+  }
+
+  .bank-period-presets {
     width: 100%;
   }
 }
 
 @media (max-width: 620px) {
+  .bank-date-range-popover {
+    padding: 10px;
+  }
+
+  .bank-calendar-grid button,
+  .bank-calendar-empty {
+    height: 32px;
+  }
+
+  .bank-calendar-selection {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .bank-calendar-selection span:last-child {
+    text-align: left;
+  }
+
+  .bank-calendar-actions .primary-button,
+  .bank-calendar-actions .secondary-button {
+    width: auto;
+    min-width: 78px;
+  }
+
   .category-management-panel .panel-header,
   .category-management-panel .panel-header .row-actions {
     align-items: stretch;

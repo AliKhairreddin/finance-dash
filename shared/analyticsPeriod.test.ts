@@ -1,0 +1,75 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  analyticsDateRange,
+  analyticsPeriodLabel,
+  type AnalyticsPeriodSelection
+} from "./analyticsPeriod";
+
+const today = "2026-07-30";
+
+function selection(
+  mode: AnalyticsPeriodSelection["mode"],
+  overrides: Partial<AnalyticsPeriodSelection> = {}
+): AnalyticsPeriodSelection {
+  return {
+    mode,
+    year: 2026,
+    month: 7,
+    quarter: 3,
+    ...overrides
+  };
+}
+
+test("analytics month periods include the complete selected month", () => {
+  assert.deepEqual(
+    analyticsDateRange(selection("month", { year: 2024, month: 2 }), today),
+    { fromDate: "2024-02-01", toDate: "2024-02-29" }
+  );
+  assert.equal(
+    analyticsPeriodLabel(selection("month", { year: 2024, month: 2 }), today),
+    "February 2024"
+  );
+});
+
+test("analytics quarter periods align to calendar quarters", () => {
+  assert.deepEqual(
+    analyticsDateRange(selection("quarter", { year: 2025, quarter: 4 }), today),
+    { fromDate: "2025-10-01", toDate: "2025-12-31" }
+  );
+  assert.equal(
+    analyticsPeriodLabel(selection("quarter", { year: 2025, quarter: 4 }), today),
+    "Q4 2025"
+  );
+});
+
+test("analytics year to date always follows the current calendar year", () => {
+  assert.deepEqual(
+    analyticsDateRange(selection("ytd", { year: 2022 }), today),
+    { fromDate: "2026-01-01", toDate: "2026-07-30" }
+  );
+  assert.equal(analyticsPeriodLabel(selection("ytd"), today), "2026 YTD");
+});
+
+test("analytics full-year periods include January through December", () => {
+  assert.deepEqual(
+    analyticsDateRange(selection("year", { year: 2023 }), today),
+    { fromDate: "2023-01-01", toDate: "2023-12-31" }
+  );
+  assert.equal(analyticsPeriodLabel(selection("year", { year: 2023 }), today), "2023");
+});
+
+test("current month, quarter, and year periods stop at today", () => {
+  assert.deepEqual(
+    analyticsDateRange(selection("month", { year: 2026, month: 7 }), today),
+    { fromDate: "2026-07-01", toDate: "2026-07-30" }
+  );
+  assert.deepEqual(
+    analyticsDateRange(selection("quarter", { year: 2026, quarter: 3 }), today),
+    { fromDate: "2026-07-01", toDate: "2026-07-30" }
+  );
+  assert.deepEqual(
+    analyticsDateRange(selection("year", { year: 2026 }), today),
+    { fromDate: "2026-01-01", toDate: "2026-07-30" }
+  );
+});

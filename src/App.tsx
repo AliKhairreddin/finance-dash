@@ -6,8 +6,11 @@ import {
   BarChart3,
   BookOpen,
   Building2,
+  CalendarRange,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   CircleDollarSign,
   CreditCard,
@@ -116,6 +119,19 @@ import {
 } from "../shared/categories";
 import { convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
 import {
+  analyticsDateRange,
+  analyticsPeriodLabel,
+  analyticsPeriodModes,
+  type AnalyticsPeriodMode,
+  type AnalyticsPeriodSelection
+} from "../shared/analyticsPeriod";
+import {
+  bankPeriodPresetLabel,
+  bankPeriodPresetRange,
+  bankPeriodPresets,
+  type BankPeriodPreset
+} from "../shared/bankPeriods";
+import {
   profitDistributionAdjustmentId,
   profitDistributionBucketLabels,
   profitDistributionPartners
@@ -197,6 +213,21 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
   "team"
 ];
 const transactionTablePageSize = 200;
+const bankHistoryLoadIncrementDays = 30;
+const analyticsMonthOptions = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+] as const;
 
 function localIsoDate(daysFromToday = 0): string {
   const date = new Date();
@@ -3026,8 +3057,116 @@ function AnalyticsView({
   providersById: Map<string, Provider>;
   teamsById: Map<string, Team>;
 }) {
+  const analyticsToday = localIsoDate();
+  const currentAnalyticsYear = Number(analyticsToday.slice(0, 4));
+  const currentAnalyticsMonth = Number(analyticsToday.slice(5, 7));
+  const currentAnalyticsQuarter = Math.floor((currentAnalyticsMonth - 1) / 3) + 1;
+  const [periodMode, setPeriodMode] = useUrlState<AnalyticsPeriodMode>(
+    "analyticsPeriod",
+    "ytd",
+    { allowedValues: analyticsPeriodModes }
+  );
+  const [periodYear, setPeriodYear] = useUrlState("analyticsYear", String(currentAnalyticsYear));
+  const [periodMonth, setPeriodMonth] = useUrlState("analyticsMonth", String(currentAnalyticsMonth), {
+    allowedValues: analyticsMonthOptions.map((_, index) => String(index + 1))
+  });
+  const [periodQuarter, setPeriodQuarter] = useUrlState<string>("analyticsQuarter", String(currentAnalyticsQuarter), {
+    allowedValues: ["1", "2", "3", "4"]
+  });
+  const analyticsYearOptions = useMemo(() => {
+    const knownAnalyticsYears = dashboard.transactions
+      .map((transaction) => Number(transaction.date.slice(0, 4)))
+      .filter((year) => Number.isInteger(year) && year >= 2000 && year <= currentAnalyticsYear);
+    const earliestAnalyticsYear = Math.min(currentAnalyticsYear - 9, ...knownAnalyticsYears);
+    return Array.from(
+      { length: currentAnalyticsYear - earliestAnalyticsYear + 1 },
+      (_, index) => String(currentAnalyticsYear - index)
+    );
+  }, [currentAnalyticsYear, dashboard.transactions]);
+  const selectedAnalyticsYear = analyticsYearOptions.includes(periodYear)
+    ? Number(periodYear)
+    : currentAnalyticsYear;
+  const selectedAnalyticsMonth = selectedAnalyticsYear === currentAnalyticsYear
+    ? Math.min(Number(periodMonth), currentAnalyticsMonth)
+    : Number(periodMonth);
+  const selectedAnalyticsQuarter = selectedAnalyticsYear === currentAnalyticsYear
+    ? Math.min(Number(periodQuarter), currentAnalyticsQuarter)
+    : Number(periodQuarter);
+  const periodSelection: AnalyticsPeriodSelection = {
+    mode: periodMode,
+    year: selectedAnalyticsYear,
+    month: selectedAnalyticsMonth,
+    quarter: selectedAnalyticsQuarter
+  };
+  const selectedAnalyticsRange = analyticsDateRange(periodSelection, analyticsToday);
+  const selectedAnalyticsRangeKey = `${selectedAnalyticsRange.fromDate}:${selectedAnalyticsRange.toDate}`;
+  const [loadedBankPeriod, setLoadedBankPeriod] = useState<{
+    key: string;
+    transactions: Transaction[];
+  } | null>(null);
+  const [isLoadingBankPeriod, setIsLoadingBankPeriod] = useState(false);
+  const [bankPeriodError, setBankPeriodError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useUrlState("analyticsTag", "all");
   const tagOptions = useMemo(() => companyTagOptions(dashboard.providers), [dashboard.providers]);
+
+  useEffect(() => {
+    if (!analyticsYearOptions.includes(periodYear)) {
+      setPeriodYear(String(currentAnalyticsYear));
+    }
+  }, [analyticsYearOptions, currentAnalyticsYear, periodYear, setPeriodYear]);
+
+  useEffect(() => {
+    if (periodMode === "month" && periodMonth !== String(selectedAnalyticsMonth)) {
+      setPeriodMonth(String(selectedAnalyticsMonth));
+    }
+    if (periodMode === "quarter" && periodQuarter !== String(selectedAnalyticsQuarter)) {
+      setPeriodQuarter(String(selectedAnalyticsQuarter));
+    }
+  }, [
+    periodMode,
+    periodMonth,
+    periodQuarter,
+    selectedAnalyticsMonth,
+    selectedAnalyticsQuarter,
+    setPeriodMonth,
+    setPeriodQuarter
+  ]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setIsLoadingBankPeriod(true);
+    setBankPeriodError(null);
+    fetch(`${apiBase}/banks/activity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fromDate: selectedAnalyticsRange.fromDate,
+        toDate: selectedAnalyticsRange.toDate,
+        sources: ["revolut", "slash"]
+      }),
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(await apiErrorMessage(response, "Analytics bank activity could not be loaded"));
+        }
+        return response.json() as Promise<BankActivityLoadResult>;
+      })
+      .then((result) => {
+        setLoadedBankPeriod({
+          key: `${result.fromDate}:${result.toDate}`,
+          transactions: result.transactions
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setBankPeriodError(error instanceof Error ? error.message : "Analytics bank activity could not be loaded");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoadingBankPeriod(false);
+      });
+    return () => controller.abort();
+  }, [selectedAnalyticsRange.fromDate, selectedAnalyticsRange.toDate]);
 
   useEffect(() => {
     if (tagFilter !== "all" && !tagOptions.includes(tagFilter)) {
@@ -3035,7 +3174,19 @@ function AnalyticsView({
     }
   }, [tagFilter, tagOptions]);
 
-  const rows = dashboard.transactions.filter((transaction) => {
+  const currentConnectedTransactions = dashboard.transactions.filter(
+    (transaction) => transaction.source === "revolut" || transaction.source === "slash"
+  );
+  const connectedTransactions = loadedBankPeriod?.key === selectedAnalyticsRangeKey
+    ? loadedBankPeriod.transactions
+    : currentConnectedTransactions;
+  const periodTransactions = [
+    ...dashboard.transactions.filter(
+      (transaction) => transaction.source !== "revolut" && transaction.source !== "slash"
+    ),
+    ...connectedTransactions
+  ].filter((transaction) => transactionIsInDateRange(transaction, selectedAnalyticsRange));
+  const rows = periodTransactions.filter((transaction) => {
     const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
     return providerHasTag(provider, tagFilter);
   });
@@ -3249,10 +3400,13 @@ function AnalyticsView({
       : [])
   ];
 
+  const periodInvoices = dashboard.invoices.filter(
+    (invoice) => invoice.issueDate >= selectedAnalyticsRange.fromDate && invoice.issueDate <= selectedAnalyticsRange.toDate
+  );
   const sourceIds = new Set<DataSource>();
   for (const transaction of rows) sourceIds.add(transaction.source);
   for (const account of dashboard.accounts) sourceIds.add(account.source);
-  for (const invoice of dashboard.invoices) sourceIds.add(invoice.source);
+  for (const invoice of periodInvoices) sourceIds.add(invoice.source);
   for (const status of dashboard.integrationStatus) {
     if (status.id !== "openrouter" && status.id !== "coinbase") sourceIds.add(status.id);
   }
@@ -3262,13 +3416,17 @@ function AnalyticsView({
       const accounts = dashboard.accounts.filter((account) =>
         account.source === source && hasNonZeroAccountBalance(account)
       );
-      const invoices = dashboard.invoices.filter((invoice) => invoice.source === source);
+      const invoices = periodInvoices.filter((invoice) => invoice.source === source);
       const status = dashboard.integrationStatus.find((integration) => integration.id === source);
       return { source, transactions, accounts, invoices, status };
     })
     .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
   const moneyInTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "in"), (row) => row.amount);
   const moneyOutTotals = sumCurrencyTotals(rows.filter((row) => row.direction === "out"), (row) => row.amount);
+  const activeTeamCount = new Set(
+    rows.flatMap((transaction) => transaction.teamId ? [transaction.teamId] : [])
+  ).size;
+  const activeSourceCount = new Set(rows.map((transaction) => transaction.source)).size;
 
   return (
     <div className="categorization-layout">
@@ -3278,7 +3436,68 @@ function AnalyticsView({
             <p className="eyebrow">Analytics</p>
             <h2>Money flow, teams, sources, companies, and review load</h2>
           </div>
-          <div className="filters">
+          <div className="filters analytics-global-filters">
+            <label>
+              <CalendarRange size={15} />
+              <NativeSelect
+                aria-label="Analytics period"
+                value={periodMode}
+                onValueChange={(value) => setPeriodMode(value as AnalyticsPeriodMode)}
+              >
+                <NativeSelectOption value="month">Monthly</NativeSelectOption>
+                <NativeSelectOption value="quarter">Quarterly</NativeSelectOption>
+                <NativeSelectOption value="ytd">Year to date</NativeSelectOption>
+                <NativeSelectOption value="year">Full year</NativeSelectOption>
+              </NativeSelect>
+            </label>
+            {periodMode !== "ytd" && (
+              <NativeSelect
+                aria-label="Analytics year"
+                className="analytics-year-filter"
+                value={String(selectedAnalyticsYear)}
+                onValueChange={setPeriodYear}
+              >
+                {analyticsYearOptions.map((year) => (
+                  <NativeSelectOption key={year} value={year}>{year}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+            {periodMode === "month" && (
+              <NativeSelect
+                aria-label="Analytics month"
+                className="analytics-detail-filter"
+                value={String(selectedAnalyticsMonth)}
+                onValueChange={setPeriodMonth}
+              >
+                {analyticsMonthOptions.map((month, index) => (
+                  <NativeSelectOption
+                    key={month}
+                    value={String(index + 1)}
+                    disabled={selectedAnalyticsYear === currentAnalyticsYear && index + 1 > currentAnalyticsMonth}
+                  >
+                    {month}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+            {periodMode === "quarter" && (
+              <NativeSelect
+                aria-label="Analytics quarter"
+                className="analytics-detail-filter"
+                value={String(selectedAnalyticsQuarter)}
+                onValueChange={setPeriodQuarter}
+              >
+                {[1, 2, 3, 4].map((quarter) => (
+                  <NativeSelectOption
+                    key={quarter}
+                    value={String(quarter)}
+                    disabled={selectedAnalyticsYear === currentAnalyticsYear && quarter > currentAnalyticsQuarter}
+                  >
+                    Q{quarter}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
             <label>
               <Tags size={15} />
               <NativeSelect value={tagFilter} onValueChange={setTagFilter}>
@@ -3290,13 +3509,28 @@ function AnalyticsView({
                 ))}
               </NativeSelect>
             </label>
+            <span className="analytics-period-status">
+              <span className="analytics-period-value">
+                {isLoadingBankPeriod && <Loader2 className="spin" aria-hidden="true" size={13} />}
+                {analyticsPeriodLabel(periodSelection, analyticsToday)}
+              </span>
+              <InfoPopover label="analytics period data">
+                <span>Every Analytics card, chart, and transaction rollup uses this calendar period.</span>
+                <span>Revolut and Slash rows are read from Convex and missing dates are backfilled before the period settles. Wise uses imported statement history.</span>
+              </InfoPopover>
+              {bankPeriodError && (
+                <span className="analytics-period-error" aria-label={bankPeriodError} title={bankPeriodError}>
+                  <CircleAlert aria-hidden="true" size={15} />
+                </span>
+              )}
+            </span>
           </div>
         </div>
         <div className="wise-summary-grid categorization-summary">
           <SummaryTile label="Money in" value={formatUsdCurrencyTotal(moneyInTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyInTotals)} />
           <SummaryTile label="Money out" value={formatUsdCurrencyTotal(moneyOutTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyOutTotals)} />
-          <SummaryTile label="Teams" value={String(dashboard.teams.length)} />
-          <SummaryTile label="Sources" value={String(sourceRows.length)} />
+          <SummaryTile label="Teams" value={String(activeTeamCount)} />
+          <SummaryTile label="Sources" value={String(activeSourceCount)} />
           <SummaryTile label="Needs review" value={String(needsReview.length)} />
         </div>
       </section>
@@ -4902,6 +5136,239 @@ type ConnectedBankViewProps = Omit<
   "isImportingWise" | "onImportWiseStatements" | "rangeControls" | "source" | "tableFooter" | "wide"
 >;
 
+function bankCalendarMonth(value: string): string {
+  return value.slice(0, 7);
+}
+
+function shiftBankCalendarMonth(value: string, months: number): string {
+  const date = new Date(`${value}-01T00:00:00.000Z`);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  return date.toISOString().slice(0, 7);
+}
+
+function bankCalendarMonthLabel(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(`${value}-01T00:00:00.000Z`));
+}
+
+function bankDateRangeLabel(dateRange: BankTransactionDateRange): string {
+  if (dateRange.fromDate === dateRange.toDate) return dateLabel(dateRange.fromDate);
+  if (dateRange.fromDate.slice(0, 4) !== dateRange.toDate.slice(0, 4)) {
+    return `${dateLabel(dateRange.fromDate)} – ${dateLabel(dateRange.toDate)}`;
+  }
+  const fromDate = new Date(`${dateRange.fromDate}T00:00:00`);
+  const toDate = new Date(`${dateRange.toDate}T00:00:00`);
+  if (dateRange.fromDate.slice(0, 7) === dateRange.toDate.slice(0, 7)) {
+    const month = new Intl.DateTimeFormat("en-US", { month: "short" }).format(fromDate);
+    return `${month} ${fromDate.getDate()}–${toDate.getDate()}, ${dateRange.toDate.slice(0, 4)}`;
+  }
+  const compactFrom = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric"
+  }).format(fromDate);
+  return `${compactFrom}–${dateLabel(dateRange.toDate)}`;
+}
+
+function bankCalendarDays(value: string): Array<string | null> {
+  const [year, month] = value.split("-").map(Number);
+  const firstDate = new Date(Date.UTC(year, month - 1, 1));
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const mondayOffset = (firstDate.getUTCDay() + 6) % 7;
+  return [
+    ...Array.from<null>({ length: mondayOffset }).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, index) =>
+      `${value}-${String(index + 1).padStart(2, "0")}`
+    )
+  ];
+}
+
+function BankDateRangePicker({
+  dateRange,
+  isLoading,
+  onLoad
+}: {
+  dateRange: BankTransactionDateRange;
+  isLoading: boolean;
+  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
+}) {
+  const today = localIsoDate();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftFromDate, setDraftFromDate] = useState(dateRange.fromDate);
+  const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
+  const [visibleMonth, setVisibleMonth] = useState(bankCalendarMonth(dateRange.toDate));
+  const [selectingEnd, setSelectingEnd] = useState(false);
+  const [panelPosition, setPanelPosition] = useState({ top: 0, left: 0 });
+  const calendarDays = useMemo(() => bankCalendarDays(visibleMonth), [visibleMonth]);
+
+  function positionPanel() {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const panelWidth = Math.min(340, window.innerWidth - 24);
+    const estimatedHeight = 390;
+    const left = Math.min(
+      Math.max(12, rect.left),
+      Math.max(12, window.innerWidth - panelWidth - 12)
+    );
+    const top = rect.bottom + 8 + estimatedHeight <= window.innerHeight
+      ? rect.bottom + 8
+      : Math.max(12, rect.top - estimatedHeight - 8);
+    setPanelPosition({ top, left });
+  }
+
+  function openPicker() {
+    setDraftFromDate(dateRange.fromDate);
+    setDraftToDate(dateRange.toDate);
+    setVisibleMonth(bankCalendarMonth(dateRange.toDate));
+    setSelectingEnd(false);
+    setIsOpen(true);
+  }
+
+  function selectDate(value: string) {
+    if (value > today) return;
+    if (!selectingEnd) {
+      setDraftFromDate(value);
+      setDraftToDate(value);
+      setSelectingEnd(true);
+      return;
+    }
+    setDraftFromDate(value < draftFromDate ? value : draftFromDate);
+    setDraftToDate(value < draftFromDate ? draftFromDate : value);
+    setSelectingEnd(false);
+  }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    positionPanel();
+
+    function closeOnOutsidePointer(event: PointerEvent) {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      setIsOpen(false);
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    }
+
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isOpen]);
+
+  const visibleMonthIsCurrentOrFuture = visibleMonth >= bankCalendarMonth(today);
+  const triggerLabel = bankDateRangeLabel(dateRange);
+
+  return (
+    <>
+      <Button
+        ref={triggerRef}
+        className="secondary-button bank-date-range-trigger"
+        type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        disabled={isLoading}
+        onClick={() => (isOpen ? setIsOpen(false) : openPicker())}
+      >
+        {isLoading ? <Loader2 className="spin" size={16} /> : <CalendarRange size={16} />}
+        <span>{triggerLabel}</span>
+      </Button>
+      {isOpen && createPortal(
+        <div
+          ref={panelRef}
+          className="bank-date-range-popover"
+          role="dialog"
+          aria-label="Choose transaction period"
+          style={{ top: panelPosition.top, left: panelPosition.left }}
+        >
+          <div className="bank-calendar-header">
+            <Button
+              className="icon-button"
+              type="button"
+              aria-label="Previous month"
+              onClick={() => setVisibleMonth((current) => shiftBankCalendarMonth(current, -1))}
+            >
+              <ChevronLeft size={16} />
+            </Button>
+            <strong>{bankCalendarMonthLabel(visibleMonth)}</strong>
+            <Button
+              className="icon-button"
+              type="button"
+              aria-label="Next month"
+              disabled={visibleMonthIsCurrentOrFuture}
+              onClick={() => setVisibleMonth((current) => shiftBankCalendarMonth(current, 1))}
+            >
+              <ChevronRight size={16} />
+            </Button>
+          </div>
+          <div className="bank-calendar-weekdays" aria-hidden="true">
+            {["M", "T", "W", "T", "F", "S", "S"].map((weekday, index) => (
+              <span key={`${weekday}-${index}`}>{weekday}</span>
+            ))}
+          </div>
+          <div className="bank-calendar-grid" role="grid">
+            {calendarDays.map((value, index) => {
+              if (!value) return <span className="bank-calendar-empty" key={`empty-${index}`} />;
+              const isSelected = value === draftFromDate || value === draftToDate;
+              const isInRange = value > draftFromDate && value < draftToDate;
+              const isFuture = value > today;
+              return (
+                <button
+                  key={value}
+                  className={`${isSelected ? "selected" : ""} ${isInRange ? "in-range" : ""}`.trim()}
+                  type="button"
+                  role="gridcell"
+                  aria-label={dateLabel(value)}
+                  aria-selected={isSelected || isInRange}
+                  disabled={isFuture}
+                  onClick={() => selectDate(value)}
+                >
+                  {Number(value.slice(-2))}
+                </button>
+              );
+            })}
+          </div>
+          <div className="bank-calendar-selection">
+            <span>{bankDateRangeLabel({ fromDate: draftFromDate, toDate: draftToDate })}</span>
+            <span>{selectingEnd ? "Choose an end date or apply one day" : "Range ready"}</span>
+          </div>
+          <div className="bank-calendar-actions">
+            <Button className="secondary-button" type="button" onClick={() => setIsOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="primary-button"
+              type="button"
+              disabled={isLoading || !draftFromDate || !draftToDate || draftToDate > today}
+              onClick={() => {
+                setIsOpen(false);
+                void onLoad({ fromDate: draftFromDate, toDate: draftToDate });
+              }}
+            >
+              Apply
+            </Button>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
 function BankDateRangeControls({
   dateRange,
   isLoading,
@@ -4913,74 +5380,34 @@ function BankDateRangeControls({
   onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
   windowDays: number;
 }) {
-  const [draftFromDate, setDraftFromDate] = useState(dateRange.fromDate);
-  const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
-  const today = localIsoDate();
-  const dateRangeIsValid = Boolean(
-    draftFromDate &&
-    draftToDate &&
-    draftFromDate <= draftToDate &&
-    draftToDate <= today
-  );
-
-  useEffect(() => {
-    setDraftFromDate(dateRange.fromDate);
-    setDraftToDate(dateRange.toDate);
-  }, [dateRange.fromDate, dateRange.toDate]);
+  const [preset, setPreset] = useState("");
 
   return (
     <div className="bank-date-controls">
-      <div>
-        <strong>Selected period</strong>
-        <span>{dateLabel(dateRange.fromDate)} – {dateLabel(dateRange.toDate)}</span>
-        <small>New Revolut and Slash activity refreshes every 15 minutes and is categorized automatically.</small>
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!dateRangeIsValid) return;
-          void onLoad({ fromDate: draftFromDate, toDate: draftToDate });
+      <BankDateRangePicker dateRange={dateRange} isLoading={isLoading} onLoad={onLoad} />
+      <NativeSelect
+        className="bank-period-presets"
+        aria-label="Transaction period presets"
+        value={preset}
+        disabled={isLoading}
+        onValueChange={(value) => {
+          if (!value) return;
+          const nextPreset = value as BankPeriodPreset;
+          setPreset(nextPreset);
+          void onLoad(bankPeriodPresetRange(nextPreset, localIsoDate(), windowDays))
+            .finally(() => setPreset(""));
         }}
       >
-        <label>
-          From
-          <Input
-            type="date"
-            max={draftToDate || today}
-            required
-            value={draftFromDate}
-            onChange={(event) => setDraftFromDate(event.target.value)}
-          />
-        </label>
-        <label>
-          To
-          <Input
-            type="date"
-            min={draftFromDate || undefined}
-            max={today}
-            required
-            value={draftToDate}
-            onChange={(event) => setDraftToDate(event.target.value)}
-          />
-        </label>
-        <Button className="primary-button" type="submit" disabled={isLoading || !dateRangeIsValid}>
-          {isLoading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          Apply period
-        </Button>
-        <Button
-          className="secondary-button"
-          type="button"
-          disabled={isLoading}
-          onClick={() => {
-            const recentRange = defaultBankTransactionDateRange(windowDays);
-            setDraftFromDate(recentRange.fromDate);
-            setDraftToDate(recentRange.toDate);
-            void onLoad(recentRange);
-          }}
-        >
-          Recent {windowDays} days
-        </Button>
-      </form>
+        <NativeSelectOption value="" disabled>Presets</NativeSelectOption>
+        {bankPeriodPresets.map((option) => (
+          <NativeSelectOption key={option} value={option}>
+            {bankPeriodPresetLabel(option, windowDays)}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <InfoPopover label="automatic bank updates">
+        Revolut and Slash refresh every 15 minutes. New activity is saved in Convex and categorized automatically.
+      </InfoPopover>
     </div>
   );
 }
@@ -4988,31 +5415,29 @@ function BankDateRangeControls({
 function BankDateRangeFooter({
   dateRange,
   isLoading,
-  onLoad,
-  sourceLabel,
-  windowDays
+  onLoad
 }: {
   dateRange: BankTransactionDateRange;
   isLoading: boolean;
   onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
-  sourceLabel: string;
-  windowDays: number;
 }) {
   return (
     <div className="bank-load-more">
-      <span>Showing {sourceLabel} activity back to {dateLabel(dateRange.fromDate)}.</span>
       <Button
         className="secondary-button"
         type="button"
         disabled={isLoading}
         onClick={() => void onLoad({
-          fromDate: shiftIsoDate(dateRange.fromDate, -windowDays),
+          fromDate: shiftIsoDate(dateRange.fromDate, -bankHistoryLoadIncrementDays),
           toDate: dateRange.toDate
         })}
       >
         {isLoading ? <Loader2 className="spin" size={16} /> : <ChevronDown size={16} />}
-        Show {windowDays} earlier days
+        More
       </Button>
+      <InfoPopover label="more bank history">
+        Loads {bankHistoryLoadIncrementDays} earlier days while keeping the current end date.
+      </InfoPopover>
     </div>
   );
 }
@@ -5046,8 +5471,6 @@ function RevolutView({
       dateRange={dateRange}
       isLoading={isLoadingDateRange}
       onLoad={onLoadDateRange}
-      sourceLabel="Revolut"
-      windowDays={revolutDefaultActivityWindowDays}
     />
   );
 
@@ -5143,8 +5566,6 @@ function SlashView({
       dateRange={dateRange}
       isLoading={isLoadingDateRange}
       onLoad={onLoadDateRange}
-      sourceLabel="Slash"
-      windowDays={slashDefaultActivityWindowDays}
     />
   );
 
