@@ -224,10 +224,12 @@ The gate runs TypeScript validation, regression tests, and the production fronte
 ## Deployment
 
 ```bash
-npm run deploy
+CONVEX_SERVICE_TOKEN="$(npx convex env get CONVEX_SERVICE_TOKEN)" npm run deploy
 ```
 
-This command builds the app, deploys Convex functions using `.env.local`, and publishes the Cloudflare Worker. The current showcase route is `finance.thatcanadian.dev`.
+This command builds the app, deploys Convex functions using `.env.local`, verifies that the normalized bank ledger has completed its guarded cutover, and only then publishes the Cloudflare Worker. It fails closed before the Worker deployment when the ledger is not ready. The current showcase route is `finance.thatcanadian.dev`.
+
+The first normalized-ledger rollout requires this order: verified Convex backup, `npm run deploy:convex`, `npm run ledger:cutover` with the configured stable connection IDs and any explicit audited legacy dispositions, `npm run ledger:verify`, then `npm run deploy:cloudflare`.
 
 Before moving from showcase to production:
 

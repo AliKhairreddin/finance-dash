@@ -16,7 +16,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,6 +43,7 @@ import type {
   Invoice,
   MeritDeliveryStatus,
   MeritSendMode,
+  PaymentAllocation,
   PaymentSource,
   Provider,
   RecordInvoicePaymentPayload,
@@ -50,6 +51,8 @@ import type {
   RevenuePeriodPreset,
   RevenueRun,
   SyncRevenuePayload,
+  Transaction,
+  TransactionPage,
   UpdateInvoicePayload
 } from "../../../shared/types";
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
@@ -71,6 +74,8 @@ type InvoiceEditorRequest =
   | { mode: "new" }
   | { mode: "edit"; invoice: Invoice }
   | { mode: "duplicate"; sourceInvoiceNumber: string; payload: CreateInvoicePayload };
+
+const apiBase = import.meta.env.VITE_API_BASE || "/api";
 
 const paymentSourceOptions: Array<{ value: PaymentSource; label: string }> = [
   { value: "wise", label: "Wise" },
@@ -1283,7 +1288,7 @@ export function InvoicesView({
           setSelectedIds([]);
         }}
       />}
-      {paymentInvoice && <MarkPaidDialog dashboard={dashboard} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
+      {paymentInvoice && <MarkPaidDialog paymentAllocations={dashboard.paymentAllocations} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
       {deleteInvoices && <DeleteInvoiceDialog
         invoices={deleteInvoices}
         onClose={() => setDeleteInvoices(null)}
@@ -1605,10 +1610,107 @@ function DeleteInvoiceDialog({
   );
 }
 
-function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: DashboardSnapshot; invoice: Invoice; onClose: () => void; onSubmit: (payload: RecordInvoicePaymentPayload) => Promise<void> }) {
-  const allocated = dashboard.paymentAllocations.filter((item) => item.invoiceId === invoice.id).reduce((total, item) => total + item.amount, 0);
+function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit }: { paymentAllocations: PaymentAllocation[]; invoice: Invoice; onClose: () => void; onSubmit: (payload: RecordInvoicePaymentPayload) => Promise<void> }) {
+  const allocated = paymentAllocations.filter((item) => item.invoiceId === invoice.id).reduce((total, item) => total + item.amount, 0);
   const remaining = Math.max(0, invoice.amount - allocated);
-  const eligibleTransactions = dashboard.transactions
+  const [candidateTransactions, setCandidateTransactions] = useState<Transaction[]>([]);
+  const [candidatesLoading, setCandidatesLoading] = useState(true);
+  const [candidatesError, setCandidatesError] = useState<string | null>(null);
+  const [candidateLoadAttempt, setCandidateLoadAttempt] = useState(0);
+  const [candidateContinueCursor, setCandidateContinueCursor] = useState<string | null>(null);
+  const [candidateIsDone, setCandidateIsDone] = useState(false);
+  const candidateAbortRef = useRef<AbortController | null>(null);
+  const [amount, setAmount] = useState(String(remaining));
+  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [source, setSource] = useState<PaymentSource>("wise");
+  const [transactionId, setTransactionId] = useState("");
+  const [accountName, setAccountName] = useState("");
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    candidateAbortRef.current?.abort();
+    candidateAbortRef.current = controller;
+    setCandidatesLoading(true);
+    setCandidatesError(null);
+    setCandidateTransactions([]);
+    setCandidateContinueCursor(null);
+    setCandidateIsDone(false);
+    setTransactionId("");
+
+    async function loadCandidates() {
+      const query = new URLSearchParams({ currency: invoice.currency, limit: "200" });
+      const response = await fetch(`${apiBase}/invoice-payment-candidates?${query.toString()}`, {
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message || "Matching transactions could not be loaded");
+      }
+      const page = (await response.json()) as TransactionPage;
+      if (!controller.signal.aborted) {
+        setCandidateTransactions(page.transactions);
+        setCandidateContinueCursor(page.continueCursor);
+        setCandidateIsDone(page.isDone);
+      }
+    }
+
+    void loadCandidates()
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        setCandidatesError(caught instanceof Error ? caught.message : "Matching transactions could not be loaded");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCandidatesLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+      if (candidateAbortRef.current === controller) candidateAbortRef.current = null;
+    };
+  }, [candidateLoadAttempt, invoice.currency]);
+
+  async function loadMoreCandidates() {
+    if (candidatesLoading || candidateIsDone || !candidateContinueCursor) return;
+    const controller = new AbortController();
+    candidateAbortRef.current?.abort();
+    candidateAbortRef.current = controller;
+    setCandidatesLoading(true);
+    setCandidatesError(null);
+    try {
+      const query = new URLSearchParams({
+        currency: invoice.currency,
+        limit: "200",
+        cursor: candidateContinueCursor
+      });
+      const response = await fetch(`${apiBase}/invoice-payment-candidates?${query.toString()}`, {
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(body?.message || "More matching transactions could not be loaded");
+      }
+      const page = (await response.json()) as TransactionPage;
+      const incomingIds = new Set(page.transactions.map((transaction) => transaction.id));
+      setCandidateTransactions((current) => [
+        ...current.filter((transaction) => !incomingIds.has(transaction.id)),
+        ...page.transactions
+      ]);
+      setCandidateContinueCursor(page.continueCursor);
+      setCandidateIsDone(page.isDone);
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      setCandidatesError(caught instanceof Error ? caught.message : "More matching transactions could not be loaded");
+    } finally {
+      if (!controller.signal.aborted) setCandidatesLoading(false);
+      if (candidateAbortRef.current === controller) candidateAbortRef.current = null;
+    }
+  }
+
+  const eligibleTransactions = candidateTransactions
     .filter(
       (transaction) =>
         transaction.direction === "in" &&
@@ -1616,7 +1718,7 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
         (transaction.status === "posted" || transaction.status === "settled")
     )
     .map((transaction) => {
-      const transactionAllocated = dashboard.paymentAllocations
+      const transactionAllocated = paymentAllocations
         .filter((allocation) => allocation.transactionId === transaction.id)
         .reduce((total, allocation) => total + allocation.amount, 0);
       return { transaction, allocated: transactionAllocated, available: Math.max(0, Math.abs(transaction.amount) - transactionAllocated) };
@@ -1627,15 +1729,6 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
         (!row.transaction.matchedInvoiceId || row.transaction.matchedInvoiceId === invoice.id || row.allocated > 0)
     )
     .sort((left, right) => right.transaction.date.localeCompare(left.transaction.date));
-  const [amount, setAmount] = useState(String(remaining));
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
-  const [source, setSource] = useState<PaymentSource>("wise");
-  const [transactionId, setTransactionId] = useState("");
-  const [accountName, setAccountName] = useState("");
-  const [reference, setReference] = useState("");
-  const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const selectedTransaction = eligibleTransactions.find((row) => row.transaction.id === transactionId);
   const maximumPayment = selectedTransaction ? Math.min(remaining, selectedTransaction.available) : remaining;
 
@@ -1669,6 +1762,7 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
           Matched bank transaction (optional)
           <NativeSelect
             value={transactionId}
+            disabled={candidatesLoading}
             onValueChange={(value) => {
               const nextId = value;
               setTransactionId(nextId);
@@ -1682,13 +1776,40 @@ function MarkPaidDialog({ dashboard, invoice, onClose, onSubmit }: { dashboard: 
               setAmount(String(Math.min(remaining, row.available)));
             }}
           >
-            <NativeSelectOption value="">No transaction · manual payment only</NativeSelectOption>
+            <NativeSelectOption value="">
+              {candidatesLoading
+                ? "Loading matching transactions…"
+                : candidatesError
+                  ? "Transactions unavailable · manual payment only"
+                  : eligibleTransactions.length === 0
+                    ? "No matches · manual payment only"
+                    : "No transaction · manual payment only"}
+            </NativeSelectOption>
             {eligibleTransactions.map(({ transaction, available }) => (
               <NativeSelectOption key={transaction.id} value={transaction.id}>
                 {dateLabel(transaction.date)} · {transaction.accountName} · {transaction.counterparty} · {money(available, transaction.currency)} remaining
               </NativeSelectOption>
             ))}
           </NativeSelect>
+          {candidatesError && (
+            <span className="field-help">
+              {candidatesError}{" "}
+              <Button type="button" className="icon-text-button" onClick={() => setCandidateLoadAttempt((attempt) => attempt + 1)}>
+                <RefreshCw size={13} /> Retry
+              </Button>
+            </span>
+          )}
+          {!candidateIsDone && candidateContinueCursor && (
+            <Button
+              type="button"
+              className="icon-text-button"
+              onClick={() => void loadMoreCandidates()}
+              disabled={candidatesLoading}
+            >
+              {candidatesLoading ? <Loader2 className="spin" size={13} /> : <ChevronRight size={13} />}
+              Load older matching transactions
+            </Button>
+          )}
           <small className="field-help">Confirming a real match makes this payment eligible for the five-payment forecast history.</small>
         </label>
         <div className="form-grid"><label>Amount<Input type="number" min="0.01" max={maximumPayment || undefined} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label></div>

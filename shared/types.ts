@@ -1,5 +1,7 @@
 export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "tune";
 
+export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex">;
+
 export type Direction = "in" | "out";
 
 export type WiseEntity = "dn" | "lmd";
@@ -430,9 +432,13 @@ export interface MeritTax {
 
 export interface Transaction {
   id: string;
+  /** Ingestion-only alias used to atomically rekey a pre-v2 provider row. */
+  providerLegacyId?: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
   slashAccountSubtype?: SlashAccountSubtype;
+  /** Immutable provider account identity used for coverage and connection isolation. */
+  accountId?: string;
   accountName: string;
   date: string;
   description: string;
@@ -446,7 +452,7 @@ export interface Transaction {
     rate: number;
   };
   direction: Direction;
-  status: "posted" | "pending" | "settled";
+  status: "posted" | "pending" | "settled" | "voided";
   category: string;
   merchantName?: string;
   merchantKey?: string;
@@ -586,7 +592,7 @@ export interface DashboardSnapshot {
   revenueAccruals: RevenueAccrual[];
   revenueMetrics: RevenueMetrics;
   aiSettings: AiSettings;
-  transactions: Transaction[];
+  transactionReviewPreview: Transaction[];
   invoices: Invoice[];
   expenses: ExpenseRecord[];
   paymentAllocations: PaymentAllocation[];
@@ -607,6 +613,7 @@ export interface DashboardSnapshot {
 
 export interface ImportWiseStatementPayload {
   balanceId: string;
+  accountId: string;
   wiseEntity: WiseEntity;
   accountName: string;
   currency: string;
@@ -624,11 +631,117 @@ export interface ImportWiseStatementSummary {
 
 export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash">;
 
-export interface BankActivityLoadResult {
+export interface TransactionPage {
   fromDate: string;
   toDate: string;
-  sources: ConnectedBankSource[];
+  source?: BankTransactionSource;
+  direction?: Direction;
   transactions: Transaction[];
+  continueCursor: string | null;
+  isDone: boolean;
+  coverage?: Array<{
+    source: BankTransactionSource;
+    missingRanges: Array<{ fromDate: string; toDate: string }>;
+  }>;
+}
+
+/** Exact money and review totals for one bounded Analytics dimension. */
+export interface BankAnalyticsAggregate {
+  transactionCount: number;
+  moneyInTransactionCount: number;
+  moneyOutTransactionCount: number;
+  matchedTransactionCount: number;
+  needsReviewCount: number;
+  moneyIn: CurrencyTotals;
+  moneyOut: CurrencyTotals;
+  moneyInTransactionCounts: Record<string, number>;
+  moneyOutTransactionCounts: Record<string, number>;
+}
+
+export interface BankAnalyticsCategoryBreakdown extends BankAnalyticsAggregate {
+  category: string;
+}
+
+export interface BankAnalyticsTeamBreakdown extends BankAnalyticsAggregate {
+  teamId: string | null;
+  teamName: string;
+}
+
+export interface BankAnalyticsSourceBreakdown extends BankAnalyticsAggregate {
+  source: BankTransactionSource;
+}
+
+export type BankAnalyticsRelationship = ProviderType | "unknown";
+
+export interface BankAnalyticsProviderBreakdown extends BankAnalyticsAggregate {
+  providerId: string;
+  providerName: string;
+  relationship: BankAnalyticsRelationship;
+  directoryMatch: boolean;
+}
+
+export interface BankAnalyticsRelationshipBreakdown extends BankAnalyticsAggregate {
+  relationship: BankAnalyticsRelationship;
+}
+
+export interface BankAnalyticsReviewSample {
+  id: string;
+  date: string;
+  direction: Direction;
+  amount: number;
+  currency: string;
+  company: string;
+  category: string;
+  reason: string;
+}
+
+/**
+ * A bounded Space-Saving candidate. Its aggregate contains the exact retained
+ * contribution; the estimate is used only to rank candidates after evictions.
+ */
+export interface BankAnalyticsMerchantBreakdown extends BankAnalyticsAggregate {
+  merchantKey: string;
+  merchantName: string;
+  estimatedTransactionCount: number;
+  estimateError: number;
+}
+
+export interface BankAnalyticsMerchantRollup {
+  algorithm: "space-saving";
+  rowLimit: number;
+  truncated: boolean;
+  evictedCandidateCount: number;
+  rows: BankAnalyticsMerchantBreakdown[];
+  /** Exact aggregate of contributions evicted from the bounded candidate set. */
+  other: BankAnalyticsAggregate | null;
+}
+
+export interface BankAnalyticsSummary {
+  transactionCount: number;
+  externalTransactionCount: number;
+  internalTransferCount: number;
+  matchedTransactionCount: number;
+  needsReviewCount: number;
+  activeTeamCount: number;
+  activeSourceCount: number;
+  moneyIn: CurrencyTotals;
+  moneyOut: CurrencyTotals;
+}
+
+/** Compact response returned by GET /analytics?fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD. */
+export interface BankAnalyticsSnapshot {
+  version: 1;
+  fromDate: string;
+  toDate: string;
+  generatedAt: string;
+  summary: BankAnalyticsSummary;
+  categories: BankAnalyticsCategoryBreakdown[];
+  teams: BankAnalyticsTeamBreakdown[];
+  sources: BankAnalyticsSourceBreakdown[];
+  providers: BankAnalyticsProviderBreakdown[];
+  relationships: BankAnalyticsRelationshipBreakdown[];
+  reviewSamples: BankAnalyticsReviewSample[];
+  unmatchedMerchants: BankAnalyticsMerchantRollup;
 }
 
 export interface ImportWiseStatementResult {

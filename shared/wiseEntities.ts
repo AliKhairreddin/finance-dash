@@ -8,6 +8,7 @@ import type {
 export type WiseEntityView = "all" | WiseEntity;
 
 export const wiseEntityViews: WiseEntityView[] = ["all", "dn", "lmd"];
+export const maximumWiseStatementImportHistory = 200;
 
 export const wiseEntities: Array<{
   id: WiseEntity;
@@ -65,6 +66,7 @@ function accountBalanceId(accountId: string): string | undefined {
 }
 
 export interface VerifiedWiseStatementAccount {
+  accountId: string;
   accountName: string;
   wiseEntity: WiseEntity;
 }
@@ -106,7 +108,7 @@ export function verifyWiseStatementAccount(
     );
   }
 
-  return { accountName: account.name, wiseEntity };
+  return { accountId: account.id, accountName: account.name, wiseEntity };
 }
 
 export function migrateLegacyWiseTransactions(transactions: readonly Transaction[]): Transaction[] {
@@ -122,13 +124,16 @@ export function migrateLegacyWiseTransactions(transactions: readonly Transaction
 export function migrateLegacyWiseStatementImports(
   imports: readonly WiseStatementImport[]
 ): WiseStatementImport[] {
-  return imports.map((statementImport) => {
-    if (statementImport.wiseEntity) return statementImport;
-    return {
-      ...statementImport,
-      wiseEntity: statementImport.accountName
-        ? wiseEntityFromAccountName(statementImport.accountName) ?? "dn"
-        : "dn"
-    };
-  });
+  return imports
+    .map((statementImport) => {
+      if (statementImport.wiseEntity) return statementImport;
+      return {
+        ...statementImport,
+        wiseEntity: statementImport.accountName
+          ? wiseEntityFromAccountName(statementImport.accountName) ?? "dn"
+          : "dn"
+      };
+    })
+    .sort((left, right) => right.importedAt.localeCompare(left.importedAt))
+    .slice(0, maximumWiseStatementImportHistory);
 }

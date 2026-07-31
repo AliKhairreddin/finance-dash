@@ -20,10 +20,13 @@
     // Current showcase/development data store. Switch to famous-oyster-878 only when the app is production-ready.
     "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",
+    "WISE_CONNECTION_ID": "primary",
     "WISE_PROFILE_IDS": "31035977,65909506",
     "REVOLUT_ENVIRONMENT": "production",
+    "REVOLUT_CONNECTION_ID": "primary",
     "REVOLUT_ISSUER": "finance.thatcanadian.dev",
     "SLASH_BASE_URL": "https://api.slash.com",
+    "SLASH_CONNECTION_ID": "primary",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
     "MERIT_CREATE_INVOICE_PATH": "/v2/sendinvoice",
@@ -39,7 +42,9 @@
     "crons": [
       "0 6,7 * * 1",
       "17 * * * *",
-      "*/15 * * * *"
+      "23 3 * * *",
+      "*/15 * * * *",
+      "*/5 * * * *"
     ]
   },
   "observability": {

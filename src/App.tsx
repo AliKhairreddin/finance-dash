@@ -65,8 +65,10 @@ import { useUrlDateRangeState, useUrlState } from "@/lib/url-state";
 import type {
   AiPromptPayload,
   AiPromptResult,
-  BankActivityLoadResult,
-  ConnectedBankSource,
+  BankAnalyticsAggregate,
+  BankAnalyticsCategoryBreakdown,
+  BankAnalyticsRelationship,
+  BankAnalyticsSnapshot,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -106,6 +108,7 @@ import type {
   Team,
   Transaction,
   TransactionCategory,
+  TransactionPage,
   TransactionOverrideScope,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
@@ -139,7 +142,6 @@ import {
   profitDistributionBucketLabels,
   profitDistributionPartners
 } from "../shared/distribution";
-import { expenseAnalyticsLabel, groupExpenseAnalytics } from "../shared/expenseAnalytics";
 import {
   hasNonZeroAccountBalance,
   isLiquidAccountBalance,
@@ -187,6 +189,21 @@ type BankTransactionDateRange = {
   fromDate: string;
   toDate: string;
 };
+type TransactionPageRequest = {
+  key: string;
+  dateRange: BankTransactionDateRange;
+  source?: BankSource;
+  direction?: "in" | "out";
+  order: SortDirection;
+};
+type TransactionPageState = {
+  requestKey: string;
+  transactions: Transaction[];
+  continueCursor: string | null;
+  isDone: boolean;
+  isLoading: boolean;
+  error: string | null;
+};
 type TransactionSortKey =
   | "amount"
   | "category"
@@ -198,7 +215,6 @@ type TransactionSortKey =
   | "match"
   | "period"
   | "team";
-type RevenuePieBreakdown = "team-partner" | "team" | "partner" | "category";
 type TransactionDetailPopover = {
   id: string;
   title: string;
@@ -233,6 +249,9 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
 ];
 const transactionTablePageSize = 200;
 const bankHistoryLoadIncrementDays = 30;
+const analyticsBuildPollLimit = 30;
+const analyticsBuildMaxWaitMs = 120_000;
+const analyticsBuildDefaultRetryMs = 1_000;
 const analyticsMonthOptions = [
   "January",
   "February",
@@ -271,15 +290,10 @@ function transactionIsInDateRange(
   return transaction.date >= dateRange.fromDate && transaction.date <= dateRange.toDate;
 }
 
-function replaceConnectedBankTransactions(
-  transactions: Transaction[],
-  result: BankActivityLoadResult
-): Transaction[] {
-  const replacedSources = new Set<DataSource>(result.sources);
-  return [
-    ...transactions.filter((transaction) => !replacedSources.has(transaction.source)),
-    ...result.transactions
-  ].sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id));
+function appendTransactionPage(current: Transaction[], incoming: Transaction[]): Transaction[] {
+  const byId = new Map(current.map((transaction) => [transaction.id, transaction]));
+  for (const transaction of incoming) byId.set(transaction.id, transaction);
+  return [...byId.values()];
 }
 
 function defaultBankTransactionDateRange(windowDays: number): BankTransactionDateRange {
@@ -297,23 +311,32 @@ function defaultSlashTransactionDateRange(): SlashTransactionDateRange {
   return defaultBankTransactionDateRange(slashDefaultActivityWindowDays);
 }
 
-function apiUrlWithBankDateRanges(
-  path: string,
-  revolutDateRange: RevolutTransactionDateRange,
-  slashDateRange: SlashTransactionDateRange
-): string {
-  const query = new URLSearchParams({
-    revolutFromDate: revolutDateRange.fromDate,
-    revolutToDate: revolutDateRange.toDate,
-    slashFromDate: slashDateRange.fromDate,
-    slashToDate: slashDateRange.toDate
-  });
-  return `${apiBase}${path}?${query.toString()}`;
-}
-
 async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
   return body?.message || fallback;
+}
+
+function analyticsRetryAfterMs(value: string | null, now = Date.now()): number {
+  if (!value) return analyticsBuildDefaultRetryMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  const retryAt = Date.parse(value);
+  return Number.isNaN(retryAt) ? analyticsBuildDefaultRetryMs : Math.max(0, retryAt - now);
+}
+
+function waitForAnalyticsRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 const timezoneOptions = [
@@ -431,14 +454,6 @@ function providerDueDate(provider?: Provider, issueDate = new Date().toISOString
   return date.toISOString().slice(0, 10);
 }
 
-function companyTagOptions(providers: Provider[]): string[] {
-  return [...new Set(providers.flatMap((provider) => provider.tags))].sort((left, right) => left.localeCompare(right));
-}
-
-function providerHasTag(provider: Provider | undefined, tag: string): boolean {
-  return tag === "all" || Boolean(provider?.tags.some((item) => item === tag));
-}
-
 function effectiveCategory(transaction: Transaction): string {
   return transactionBusinessCategory(transaction.category);
 }
@@ -449,25 +464,6 @@ function categoryNeedsReview(transaction: Transaction): boolean {
 
 function transactionNeedsReview(transaction: Transaction): boolean {
   return categoryNeedsReview(transaction);
-}
-
-function transactionCompanyStatus(transaction: Transaction): "Company matched" | "Merchant only" {
-  return transaction.matchedProviderId ? "Company matched" : "Merchant only";
-}
-
-function companyRollupStatus(transactions: Transaction[]): string {
-  const needsCategory = transactions.some(categoryNeedsReview);
-
-  if (needsCategory) return "Needs category review";
-  return transactions.some((transaction) => transactionCompanyStatus(transaction) === "Company matched")
-    ? "Company matched"
-    : "Merchant only";
-}
-
-function companyRollupStatusClass(status: string): "good" | "warning" | "" {
-  if (status === "Company matched") return "good";
-  if (status.startsWith("Needs") || status.includes("needs")) return "warning";
-  return "";
 }
 
 function transactionCategoryChoices(
@@ -601,134 +597,6 @@ function categoryChartColor(category: string, usedColors: Set<string>, index: nu
     if (!usedColors.has(color)) return color;
     attempt += 1;
   }
-}
-
-function revenuePartnerAttributionLabel(transaction: Transaction, providersById: Map<string, Provider>): string {
-  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-  return provider?.name ?? expenseAnalyticsLabel(transaction);
-}
-
-function revenueTeamAttributionLabel(transaction: Transaction, teamsById: Map<string, Team>): string {
-  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
-  return team?.name ?? "Unassigned owner";
-}
-
-function revenueAttributionLabel(
-  transaction: Transaction,
-  providersById: Map<string, Provider>,
-  teamsById: Map<string, Team>
-): string {
-  const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-  const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
-  const category = effectiveCategory(transaction);
-  const source = provider?.name ?? transaction.merchantName ?? (category === "Media buying direct" ? "Direct revenue" : category);
-
-  if (team && provider) return `${team.name} / ${provider.name}`;
-  if (team) return `${team.name} / ${source}`;
-  if (provider) return `Unassigned / ${provider.name}`;
-  return source;
-}
-
-function revenuePieLabelForBreakdown(
-  transaction: Transaction,
-  breakdown: RevenuePieBreakdown,
-  providersById: Map<string, Provider>,
-  teamsById: Map<string, Team>
-): string {
-  if (breakdown === "team") return revenueTeamAttributionLabel(transaction, teamsById);
-  if (breakdown === "partner") return revenuePartnerAttributionLabel(transaction, providersById);
-  if (breakdown === "category") return effectiveCategory(transaction);
-  return revenueAttributionLabel(transaction, providersById, teamsById);
-}
-
-function categoryPieGroups(
-  rows: Transaction[],
-  direction: Transaction["direction"],
-  categoryForTransaction: (transaction: Transaction) => string = effectiveCategory
-): CategoryPieGroup[] {
-  const totals = new Map<string, Map<string, { amount: number; count: number }>>();
-  const assignedColors = new Map<string, string>();
-  const usedColors = new Set<string>();
-  let colorIndex = 0;
-
-  for (const transaction of rows) {
-    if (transaction.direction !== direction) continue;
-    const category = categoryForTransaction(transaction);
-    const currencyTotals = totals.get(transaction.currency) ?? new Map<string, { amount: number; count: number }>();
-    const current = currencyTotals.get(category) ?? { amount: 0, count: 0 };
-    currencyTotals.set(category, {
-      amount: current.amount + transaction.amount,
-      count: current.count + 1
-    });
-    totals.set(transaction.currency, currencyTotals);
-  }
-
-  return [...totals.entries()]
-    .map(([currency, categoryTotals]) => {
-      const sortedTotals = [...categoryTotals.entries()].sort(
-        ([leftCategory, left], [rightCategory, right]) => right.amount - left.amount || leftCategory.localeCompare(rightCategory)
-      );
-      const segments = sortedTotals.map(([category, value]) => {
-        const assignedColor = assignedColors.get(category);
-        const color = assignedColor ?? categoryChartColor(category, usedColors, colorIndex);
-        if (!assignedColor) {
-          assignedColors.set(category, color);
-          usedColors.add(color);
-          colorIndex += 1;
-        }
-        return {
-          category,
-          amount: value.amount,
-          count: value.count,
-          color
-        };
-      });
-      return {
-        currency,
-        total: segments.reduce((sum, segment) => sum + segment.amount, 0),
-        segments
-      };
-    })
-    .filter((group) => group.total > 0)
-    .sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
-}
-
-function expenseCategoryPieGroups(
-  rows: Transaction[],
-  providersById: Map<string, Provider>
-): CategoryPieGroup[] {
-  const companyNamesById = new Map(
-    [...providersById.entries()].map(([providerId, provider]) => [providerId, provider.name])
-  );
-  const assignedColors = new Map<string, string>();
-  const usedColors = new Set<string>();
-  let colorIndex = 0;
-
-  return groupExpenseAnalytics(rows, companyNamesById).map((group) => ({
-    currency: group.currency,
-    total: group.total,
-    segments: group.categories.map((category) => {
-      const assignedColor = assignedColors.get(category.category);
-      const color = assignedColor ?? categoryChartColor(category.category, usedColors, colorIndex);
-      if (!assignedColor) {
-        assignedColors.set(category.category, color);
-        usedColors.add(color);
-        colorIndex += 1;
-      }
-
-      return {
-        category: category.category,
-        amount: category.amount,
-        count: category.transactionCount,
-        color,
-        breakdowns: category.attributions.map((attribution) => ({
-          label: attribution.label,
-          amount: attribution.amount,
-          count: attribution.transactionCount
-        }))
-      };
-    })
-  }));
 }
 
 function formatShare(amount: number, total: number): string {
@@ -871,10 +739,18 @@ function App() {
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isLoadingAllBanks, setIsLoadingAllBanks] = useState(false);
-  const [isLoadingRevolut, setIsLoadingRevolut] = useState(false);
-  const [isLoadingSlash, setIsLoadingSlash] = useState(false);
-  const [allBankConnectedTransactions, setAllBankConnectedTransactions] = useState<Transaction[] | null>(null);
+  const [transactionPageState, setTransactionPageState] = useState<TransactionPageState>({
+    requestKey: "",
+    transactions: [],
+    continueCursor: null,
+    isDone: true,
+    isLoading: false,
+    error: null
+  });
+  const transactionPageAbortRef = useRef<AbortController | null>(null);
+  const transactionPageRequestVersionRef = useRef(0);
+  const transactionPageRequestRef = useRef<TransactionPageRequest | null>(null);
+  const historicalSyncRequestKeysRef = useRef(new Set<string>());
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -888,6 +764,37 @@ function App() {
   const [transactionSortDirection, setTransactionSortDirection] = useUrlState<SortDirection>("bankOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
+  const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
+    if (activeTab !== "banks" || bankTab === "holdings") return null;
+    const source = bankTab === "all" ? undefined : bankTab;
+    const direction = source && source !== "amex" ? bankDirection : undefined;
+    const dateRange = source === "wise"
+      ? wiseDateRange
+      : source === "revolut"
+        ? revolutDateRange
+        : source === "slash"
+          ? slashDateRange
+          : allBankDateRange;
+    const order = source && transactionSortKey === "date" ? transactionSortDirection : "desc";
+    return {
+      key: [source ?? "all", direction ?? "all", dateRange.fromDate, dateRange.toDate, order].join(":"),
+      dateRange,
+      ...(source ? { source } : {}),
+      ...(direction ? { direction } : {}),
+      order
+    };
+  }, [
+    activeTab,
+    allBankDateRange,
+    bankDirection,
+    bankTab,
+    revolutDateRange,
+    slashDateRange,
+    transactionSortDirection,
+    transactionSortKey,
+    wiseDateRange
+  ]);
+  transactionPageRequestRef.current = transactionPageRequest;
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
   const [expenseTransaction, setExpenseTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
@@ -907,7 +814,7 @@ function App() {
 
   async function loadDashboard() {
     setError(null);
-    const response = await fetch(apiUrlWithBankDateRanges("/dashboard", revolutDateRange, slashDateRange));
+    const response = await fetch(`${apiBase}/dashboard`);
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message || "Could not load dashboard data");
@@ -931,6 +838,186 @@ function App() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load dashboard"))
       .finally(() => setIsLoading(false));
   }, []);
+
+  async function requestTransactionPage(
+    request: TransactionPageRequest,
+    cursor: string | null,
+    signal: AbortSignal
+  ): Promise<TransactionPage> {
+    const query = new URLSearchParams({
+      fromDate: request.dateRange.fromDate,
+      toDate: request.dateRange.toDate,
+      order: request.order,
+      limit: String(transactionTablePageSize)
+    });
+    if (request.source) query.set("source", request.source);
+    if (request.direction) query.set("direction", request.direction);
+    if (cursor) query.set("cursor", cursor);
+    const response = await fetch(`${apiBase}/transactions?${query.toString()}`, { signal });
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Transactions could not be loaded"));
+    }
+    return (await response.json()) as TransactionPage;
+  }
+
+  async function waitForHistoricalTransactionSync(jobKey: string, requestKey: string): Promise<void> {
+    while (transactionPageRequestRef.current?.key === requestKey) {
+      await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+      const query = new URLSearchParams({ key: jobKey });
+      const response = await fetch(`${apiBase}/transactions/sync?${query.toString()}`);
+      if (response.status === 202) continue;
+      if (!response.ok) {
+        throw new Error(await apiErrorMessage(response, "Historical transaction sync failed"));
+      }
+      return;
+    }
+  }
+
+  async function loadTransactionPage(
+    request: TransactionPageRequest,
+    cursor: string | null,
+    append: boolean
+  ): Promise<void> {
+    if (transactionPageRequestRef.current?.key !== request.key) return;
+    transactionPageAbortRef.current?.abort();
+    const controller = new AbortController();
+    transactionPageAbortRef.current = controller;
+    const version = transactionPageRequestVersionRef.current + 1;
+    transactionPageRequestVersionRef.current = version;
+    setTransactionPageState((current) => ({
+      requestKey: request.key,
+      transactions: append && current.requestKey === request.key ? current.transactions : [],
+      continueCursor: append && current.requestKey === request.key ? current.continueCursor : null,
+      isDone: false,
+      isLoading: true,
+      error: null
+    }));
+
+    try {
+      const page = await requestTransactionPage(request, cursor, controller.signal);
+      if (
+        version !== transactionPageRequestVersionRef.current
+        || controller.signal.aborted
+        || transactionPageRequestRef.current?.key !== request.key
+      ) return;
+      setTransactionPageState((current) => ({
+        requestKey: request.key,
+        transactions:
+          append && current.requestKey === request.key
+            ? appendTransactionPage(current.transactions, page.transactions)
+            : page.transactions,
+        continueCursor: page.continueCursor,
+        isDone: page.isDone,
+        isLoading: false,
+        error: null
+      }));
+      if (!append && page.coverage?.some((item) => item.missingRanges.length > 0)) {
+        const requests = page.coverage.flatMap((item) => {
+          if (item.missingRanges.length === 0) return [];
+          const fromDate = item.missingRanges.reduce(
+            (earliest, range) => range.fromDate < earliest ? range.fromDate : earliest,
+            item.missingRanges[0].fromDate
+          );
+          const toDate = item.missingRanges.reduce(
+            (latest, range) => range.toDate > latest ? range.toDate : latest,
+            item.missingRanges[0].toDate
+          );
+          const key = `${item.source}:${fromDate}:${toDate}`;
+          if (historicalSyncRequestKeysRef.current.has(key)) return [];
+          historicalSyncRequestKeysRef.current.add(key);
+          return [{ key, source: item.source, fromDate, toDate }];
+        });
+        if (requests.length > 0) {
+          setNotice("Historical bank activity is syncing in the background.");
+          void Promise.all(requests.map(async ({ key, ...payload }) => {
+            const response = await fetch(`${apiBase}/transactions/sync`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+              throw new Error(await apiErrorMessage(response, "Historical transaction sync could not be queued"));
+            }
+            const queued = (await response.json()) as { key?: string };
+            if (!queued.key) throw new Error("Historical transaction sync returned no job key");
+            await waitForHistoricalTransactionSync(queued.key, request.key);
+          })).then(() => {
+            for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
+            const latestRequest = transactionPageRequestRef.current;
+            if (latestRequest?.key === request.key) {
+              setNotice("Historical bank activity is up to date.");
+              void loadTransactionPage(latestRequest, null, false);
+            }
+          }).catch((syncError: unknown) => {
+            for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
+            if (transactionPageRequestRef.current?.key === request.key) {
+              setNotice(syncError instanceof Error ? syncError.message : "Historical transaction sync failed");
+            }
+          });
+        }
+      }
+    } catch (caught) {
+      if (
+        controller.signal.aborted
+        || version !== transactionPageRequestVersionRef.current
+        || transactionPageRequestRef.current?.key !== request.key
+      ) return;
+      setTransactionPageState((current) => ({
+        ...current,
+        requestKey: request.key,
+        isDone: false,
+        isLoading: false,
+        error: caught instanceof Error ? caught.message : "Transactions could not be loaded"
+      }));
+    }
+  }
+
+  useEffect(() => {
+    if (!transactionPageRequest) {
+      transactionPageAbortRef.current?.abort();
+      transactionPageRequestVersionRef.current += 1;
+      setTransactionPageState({
+        requestKey: "",
+        transactions: [],
+        continueCursor: null,
+        isDone: true,
+        isLoading: false,
+        error: null
+      });
+      return;
+    }
+    void loadTransactionPage(transactionPageRequest, null, false);
+    return () => transactionPageAbortRef.current?.abort();
+  }, [transactionPageRequest?.key]);
+
+  async function loadMoreTransactions(): Promise<void> {
+    const latestRequest = transactionPageRequestRef.current;
+    if (!latestRequest || transactionPageState.isLoading) return;
+    const currentRequest = transactionPageState.requestKey === latestRequest.key;
+    if (currentRequest && transactionPageState.isDone && !transactionPageState.error) return;
+    await loadTransactionPage(
+      latestRequest,
+      currentRequest ? transactionPageState.continueCursor : null,
+      currentRequest && transactionPageState.transactions.length > 0
+    );
+  }
+
+  async function refreshCurrentTransactionPage(): Promise<void> {
+    const latestRequest = transactionPageRequestRef.current;
+    if (!latestRequest) return;
+    await loadTransactionPage(latestRequest, null, false);
+  }
+
+  const transactionPageIsCurrent = transactionPageState.requestKey === transactionPageRequest?.key;
+  const loadedBankTransactions = transactionPageIsCurrent ? transactionPageState.transactions : [];
+  const isLoadingTransactionPage = transactionPageIsCurrent
+    ? transactionPageState.isLoading
+    : transactionPageRequest !== null;
+  const transactionPageError = transactionPageIsCurrent ? transactionPageState.error : null;
+  const hasMoreTransactions = Boolean(
+    transactionPageRequest
+    && (!transactionPageIsCurrent || !transactionPageState.isDone || transactionPageState.error)
+  );
 
   const latestIncomeAutomation = useMemo(
     () => latestIncomeAutomationTimestamp(dashboard?.automationRuns ?? []),
@@ -963,7 +1050,7 @@ function App() {
     const activeSource: BankSource | undefined =
       bankTab === "all" || bankTab === "holdings" ? undefined : bankTab;
     const rows = activeTab === "banks" && activeSource
-      ? (dashboard?.transactions ?? []).filter((transaction) => transaction.source === activeSource)
+      ? loadedBankTransactions.filter((transaction) => transaction.source === activeSource)
       : [];
     const query = searchTerm.trim().toLowerCase();
     const matchingRows = rows.filter((transaction) => {
@@ -991,22 +1078,12 @@ function App() {
     });
     const expenseTransactionIds = new Set((dashboard?.expenses ?? []).flatMap((expense) => expense.transactionId ? [expense.transactionId] : []));
     return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById, expenseTransactionIds);
-  }, [activeTab, bankTab, dashboard?.expenses, dashboard?.transactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
+  }, [activeTab, bankTab, dashboard?.expenses, loadedBankTransactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
 
   const allBankTransactions = useMemo(() => {
     if (activeTab !== "banks" || bankTab !== "all") return [];
-    const dashboardTransactions = dashboard?.transactions ?? [];
-    const connectedTransactions = allBankConnectedTransactions
-      ?? dashboardTransactions.filter(
-        (transaction) => transaction.source === "revolut" || transaction.source === "slash"
-      );
-    return [
-      ...dashboardTransactions.filter(
-        (transaction) => transaction.source !== "revolut" && transaction.source !== "slash"
-      ),
-      ...connectedTransactions
-    ].filter((transaction) => transactionIsInDateRange(transaction, allBankDateRange));
-  }, [activeTab, allBankConnectedTransactions, allBankDateRange, bankTab, dashboard?.transactions]);
+    return loadedBankTransactions;
+  }, [activeTab, bankTab, loadedBankTransactions]);
 
   const wiseTransactions = useMemo(
     () =>
@@ -1053,46 +1130,22 @@ function App() {
     [filteredTransactions]
   );
 
-  async function requestBankActivity(
-    dateRange: BankTransactionDateRange,
-    sources: ConnectedBankSource[]
-  ): Promise<BankActivityLoadResult> {
-    const response = await fetch(`${apiBase}/banks/activity`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fromDate: dateRange.fromDate,
-        toDate: dateRange.toDate,
-        sources
-      })
-    });
-    if (!response.ok) {
-      throw new Error(await apiErrorMessage(response, "Bank activity could not be loaded"));
-    }
-    return (await response.json()) as BankActivityLoadResult;
-  }
-
-  function applyConnectedBankActivity(result: BankActivityLoadResult) {
-    setDashboard((current) =>
-      current
-        ? { ...current, transactions: replaceConnectedBankTransactions(current.transactions, result) }
-        : current
-    );
-  }
-
   function applyTransactionUpdate(updated: Transaction) {
     setDashboard((current) => {
       if (!current) return current;
       return {
         ...current,
-        transactions: current.transactions.map((transaction) =>
+        transactionReviewPreview: current.transactionReviewPreview.map((transaction) =>
           transaction.id === updated.id ? updated : transaction
         )
       };
     });
-    setAllBankConnectedTransactions((current) =>
-      current?.map((transaction) => transaction.id === updated.id ? updated : transaction) ?? current
-    );
+    setTransactionPageState((current) => ({
+      ...current,
+      transactions: current.transactions.map((transaction) =>
+        transaction.id === updated.id ? updated : transaction
+      )
+    }));
   }
 
   async function syncNow() {
@@ -1100,14 +1153,12 @@ function App() {
     setNotice(null);
     setError(null);
     try {
-      const response = await fetch(
-        apiUrlWithBankDateRanges("/sync", revolutDateRange, slashDateRange),
-        { method: "POST" }
-      );
+      const response = await fetch(`${apiBase}/sync`, { method: "POST" });
       if (!response.ok) {
         throw new Error(await apiErrorMessage(response, "Refresh failed"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
+      await refreshCurrentTransactionPage();
       setNotice("Refresh complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh failed");
@@ -1117,55 +1168,26 @@ function App() {
   }
 
   async function loadAllBankTransactions(dateRange: BankTransactionDateRange) {
-    setIsLoadingAllBanks(true);
     setNotice(null);
     setError(null);
-    try {
-      const result = await requestBankActivity(dateRange, ["revolut", "slash"]);
-      setAllBankConnectedTransactions(result.transactions);
-      setAllBankDateRange(dateRange);
-      setNotice(`Loaded bank activity from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Bank activity could not be loaded");
-    } finally {
-      setIsLoadingAllBanks(false);
-    }
+    setAllBankDateRange(dateRange);
   }
 
   async function filterWiseTransactions(dateRange: BankTransactionDateRange) {
+    setNotice(null);
     setWiseDateRange(dateRange);
   }
 
   async function loadRevolutTransactions(dateRange: RevolutTransactionDateRange) {
-    setIsLoadingRevolut(true);
     setNotice(null);
     setError(null);
-    try {
-      const result = await requestBankActivity(dateRange, ["revolut"]);
-      applyConnectedBankActivity(result);
-      setRevolutDateRange(dateRange);
-      setNotice(`Loaded saved Revolut transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Revolut transactions could not be loaded");
-    } finally {
-      setIsLoadingRevolut(false);
-    }
+    setRevolutDateRange(dateRange);
   }
 
   async function loadSlashTransactions(dateRange: SlashTransactionDateRange) {
-    setIsLoadingSlash(true);
     setNotice(null);
     setError(null);
-    try {
-      const result = await requestBankActivity(dateRange, ["slash"]);
-      applyConnectedBankActivity(result);
-      setSlashDateRange(dateRange);
-      setNotice(`Loaded saved Slash transactions from ${dateLabel(dateRange.fromDate)} through ${dateLabel(dateRange.toDate)}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Slash transactions could not be loaded");
-    } finally {
-      setIsLoadingSlash(false);
-    }
+    setSlashDateRange(dateRange);
   }
 
   async function importWiseStatements(files: FileList | null) {
@@ -1217,6 +1239,7 @@ function App() {
         importedEntities.add(payload.wiseEntity);
       }
       if (nextDashboard) setDashboard(nextDashboard);
+      await refreshCurrentTransactionPage();
       const importedFiles = files.length;
       const entityLabel = [...importedEntities]
         .map(wiseEntityShortLabel)
@@ -1297,6 +1320,7 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
+    if (scope === "merchant") await refreshCurrentTransactionPage();
     setNotice(
       scope === "merchant"
         ? `Matched all ${transaction.merchantName ?? transaction.counterparty} transactions to this company.`
@@ -1320,6 +1344,7 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
+    if (scope === "merchant") await refreshCurrentTransactionPage();
     setNotice(
       scope === "merchant"
         ? `Applied ${category} to all ${transaction.merchantName ?? transaction.counterparty} transactions.`
@@ -1374,6 +1399,14 @@ function App() {
     renamedFrom?: string,
     renamedTo?: string
   ) {
+    if (renamedFrom && renamedTo && renamedFrom !== renamedTo) {
+      setTransactionPageState((current) => ({
+        ...current,
+        transactions: current.transactions.map((transaction) =>
+          transaction.category === renamedFrom ? { ...transaction, category: renamedTo } : transaction
+        )
+      }));
+    }
     setDashboard((current) => {
       if (!current) return current;
       if (!renamedFrom || !renamedTo || renamedFrom === renamedTo) {
@@ -1382,7 +1415,7 @@ function App() {
       return {
         ...current,
         transactionCategories: categories,
-        transactions: current.transactions.map((transaction) =>
+        transactionReviewPreview: current.transactionReviewPreview.map((transaction) =>
           transaction.category === renamedFrom ? { ...transaction, category: renamedTo } : transaction
         ),
         transactionCategoryRules: current.transactionCategoryRules.map((rule) =>
@@ -1469,6 +1502,7 @@ function App() {
       throw new Error(await apiErrorMessage(response, "Company could not be deleted"));
     }
     await loadDashboard();
+    await refreshCurrentTransactionPage();
     setNotice(`${provider.name} deleted. Existing financial records were kept and company matches were cleared.`);
   }
 
@@ -1540,6 +1574,7 @@ function App() {
     }
     const invoice = (await response.json()) as Invoice;
     await loadDashboard();
+    if (payload.transactionId) await refreshCurrentTransactionPage();
     setNotice(
       payload.documentType === "sales_invoice"
         ? "Sales invoice draft saved. Choose whether to send it to Merit."
@@ -1557,6 +1592,7 @@ function App() {
     if (!response.ok) throw new Error(await apiErrorMessage(response, "Expense record could not be created"));
     const expense = (await response.json()) as ExpenseRecord;
     await loadDashboard();
+    if (payload.transactionId) await refreshCurrentTransactionPage();
     setNotice(
       expense.paymentStatus === "paid"
         ? "Paid expense saved with its accounting source document."
@@ -1573,6 +1609,7 @@ function App() {
     });
     if (!response.ok) throw new Error(await apiErrorMessage(response, "Supplier bill could not be matched to the payment"));
     await loadDashboard();
+    await refreshCurrentTransactionPage();
     setNotice("Outgoing bank payment matched to the supplier bill.");
   }
 
@@ -1630,6 +1667,7 @@ function App() {
     }
     const deletedInvoices = (await response.json()) as Invoice[];
     await loadDashboard();
+    await refreshCurrentTransactionPage();
     setNotice(
       `${deletedInvoices.length} dashboard draft${deletedInvoices.length === 1 ? "" : "s"} deleted. Merit was not changed.`
     );
@@ -1672,6 +1710,7 @@ function App() {
       throw new Error(body?.message || "Payment could not be recorded");
     }
     await loadDashboard();
+    if (payload.transactionId) await refreshCurrentTransactionPage();
     setNotice("Payment recorded in this dashboard only. Merit was not changed.");
   }
 
@@ -1929,10 +1968,11 @@ function App() {
           amexTransactions={amexTransactions}
           providersById={providersById}
           isImportingWise={isImportingWise}
-          isLoadingAllBanks={isLoadingAllBanks}
-          isLoadingRevolut={isLoadingRevolut}
-          isLoadingSlash={isLoadingSlash}
+          isLoadingTransactions={isLoadingTransactionPage}
+          transactionLoadError={transactionPageError}
+          hasMoreTransactions={hasMoreTransactions}
           onImportWiseStatements={importWiseStatements}
+          onLoadMoreTransactions={loadMoreTransactions}
           onLoadAllBankTransactions={loadAllBankTransactions}
           onFilterWiseTransactions={filterWiseTransactions}
           onLoadRevolutTransactions={loadRevolutTransactions}
@@ -1949,11 +1989,7 @@ function App() {
       )}
 
       {activeTab === "analytics" && (
-        <AnalyticsView
-          dashboard={dashboard}
-          providersById={providersById}
-          teamsById={teamsById}
-        />
+        <AnalyticsView dashboard={dashboard} />
       )}
 
       {activeTab === "distribution" && (
@@ -2367,7 +2403,7 @@ function Overview({
   onCreateManualReceivable: (payload: CreateManualReceivablePayload) => Promise<void>;
 }) {
   const [manualReceivableOpen, setManualReceivableOpen] = useState(false);
-  const reviewRows = dashboard.transactions.filter(categoryNeedsReview).slice(0, 5);
+  const reviewRows = dashboard.transactionReviewPreview.filter(categoryNeedsReview).slice(0, 5);
   const payableMonths = Array.from(new Set(dashboard.payables.flatMap((payable) => Object.keys(payable.monthBuckets))));
   const hasPayables = dashboard.payables.length > 0;
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
@@ -2606,10 +2642,11 @@ function BanksView({
   amexTransactions,
   providersById,
   isImportingWise,
-  isLoadingAllBanks,
-  isLoadingRevolut,
-  isLoadingSlash,
+  isLoadingTransactions,
+  transactionLoadError,
+  hasMoreTransactions,
   onImportWiseStatements,
+  onLoadMoreTransactions,
   onLoadAllBankTransactions,
   onFilterWiseTransactions,
   onLoadRevolutTransactions,
@@ -2651,10 +2688,11 @@ function BanksView({
   amexTransactions: Transaction[];
   providersById: Map<string, Provider>;
   isImportingWise: boolean;
-  isLoadingAllBanks: boolean;
-  isLoadingRevolut: boolean;
-  isLoadingSlash: boolean;
+  isLoadingTransactions: boolean;
+  transactionLoadError: string | null;
+  hasMoreTransactions: boolean;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onLoadMoreTransactions: () => Promise<void>;
   onLoadAllBankTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onFilterWiseTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onLoadRevolutTransactions: (dateRange: RevolutTransactionDateRange) => Promise<void>;
@@ -2671,7 +2709,7 @@ function BanksView({
   const rowsBySource = new Map<BankSource, Transaction[]>();
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
-  const displayedBankTransactions = activeBank === "all" ? allBankTransactions : dashboard.transactions;
+  const displayedBankTransactions = activeBank === "all" ? allBankTransactions : [];
   for (const source of bankSources) rowsBySource.set(source.id, []);
   for (const transaction of displayedBankTransactions) {
     if (!isBankSource(transaction.source)) continue;
@@ -2815,7 +2853,7 @@ function BanksView({
                 <SummaryTile
                   key={source.id}
                   label={`${source.label} ${status?.mode ?? "partial"}`}
-                  value={summaryAccounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} rows`}
+                  value={summaryAccounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} loaded`}
                   detail={summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
                 />
               );
@@ -2829,10 +2867,14 @@ function BanksView({
           dashboard={dashboard}
           providersById={providersById}
           transactions={allBankTransactions}
+          hasMore={hasMoreTransactions}
+          isLoading={isLoadingTransactions}
+          loadError={transactionLoadError}
+          onLoadMore={onLoadMoreTransactions}
           rangeControls={(
             <BankDateRangeControls
               dateRange={allBankDateRange}
-              isLoading={isLoadingAllBanks}
+              isLoading={isLoadingTransactions}
               onLoad={onLoadAllBankTransactions}
               windowDays={revolutDefaultActivityWindowDays}
             />
@@ -2857,8 +2899,12 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          hasMoreTransactions={hasMoreTransactions}
+          isLoadingTransactions={isLoadingTransactions}
+          transactionLoadError={transactionLoadError}
           isImportingWise={isImportingWise}
           onImportWiseStatements={onImportWiseStatements}
+          onLoadMoreTransactions={onLoadMoreTransactions}
           wiseEntityView={wiseEntityView}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
@@ -2867,7 +2913,7 @@ function BanksView({
           rangeControls={(
             <BankDateRangeControls
               dateRange={wiseDateRange}
-              isLoading={false}
+              isLoading={isLoadingTransactions}
               onLoad={onFilterWiseTransactions}
               windowDays={revolutDefaultActivityWindowDays}
             />
@@ -2879,7 +2925,7 @@ function BanksView({
           dashboard={dashboard}
           rows={revolutTransactions}
           dateRange={revolutDateRange}
-          isLoadingDateRange={isLoadingRevolut}
+          isLoadingDateRange={isLoadingTransactions}
           onLoadDateRange={onLoadRevolutTransactions}
           providersById={providersById}
           bankDirection={bankDirection}
@@ -2894,6 +2940,10 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          hasMoreTransactions={hasMoreTransactions}
+          isLoadingTransactions={isLoadingTransactions}
+          transactionLoadError={transactionLoadError}
+          onLoadMoreTransactions={onLoadMoreTransactions}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -2905,7 +2955,7 @@ function BanksView({
           dashboard={dashboard}
           rows={slashTransactions}
           dateRange={slashDateRange}
-          isLoadingDateRange={isLoadingSlash}
+          isLoadingDateRange={isLoadingTransactions}
           onLoadDateRange={onLoadSlashTransactions}
           providersById={providersById}
           bankDirection={bankDirection}
@@ -2920,13 +2970,28 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          hasMoreTransactions={hasMoreTransactions}
+          isLoadingTransactions={isLoadingTransactions}
+          transactionLoadError={transactionLoadError}
+          onLoadMoreTransactions={onLoadMoreTransactions}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
         />
       )}
-      {activeBank === "amex" && <AmexView dashboard={dashboard} rows={amexTransactions} />}
+      {activeBank === "amex" && (
+        <AmexView
+          dashboard={dashboard}
+          rows={amexTransactions}
+          dateRange={allBankDateRange}
+          hasMoreTransactions={hasMoreTransactions}
+          isLoadingTransactions={isLoadingTransactions}
+          transactionLoadError={transactionLoadError}
+          onLoadDateRange={onLoadAllBankTransactions}
+          onLoadMoreTransactions={onLoadMoreTransactions}
+        />
+      )}
       {activeBank === "holdings" && (
         <HoldingsView
           dashboard={dashboard}
@@ -2957,6 +3022,10 @@ type BankReconciliationViewProps = {
   setTransactionSortKey: (value: TransactionSortKey) => void;
   transactionSortDirection: SortDirection;
   setTransactionSortDirection: (value: SortDirection) => void;
+  hasMoreTransactions: boolean;
+  isLoadingTransactions: boolean;
+  transactionLoadError: string | null;
+  onLoadMoreTransactions: () => Promise<void>;
   isImportingWise?: boolean;
   onImportWiseStatements?: (files: FileList | null) => Promise<void>;
   wiseEntityView?: WiseEntityView;
@@ -2986,6 +3055,10 @@ function BankReconciliationView({
   setTransactionSortKey,
   transactionSortDirection,
   setTransactionSortDirection,
+  hasMoreTransactions,
+  isLoadingTransactions,
+  transactionLoadError,
+  onLoadMoreTransactions,
   isImportingWise,
   onImportWiseStatements,
   wiseEntityView,
@@ -3002,9 +3075,12 @@ function BankReconciliationView({
   const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const summary = useMemo(() => {
-    const volume = sumCurrencyTotals(rows, (transaction) => transaction.amount);
-    const unassigned = rows.filter((transaction) => !transaction.teamId).length;
-    return { volume, count: rows.length, unassigned };
+    const settledRows = rows.filter(
+      (transaction) => transaction.status === "posted" || transaction.status === "settled"
+    );
+    const volume = sumCurrencyTotals(settledRows, (transaction) => transaction.amount);
+    const unassigned = settledRows.filter((transaction) => !transaction.teamId).length;
+    return { volume, count: settledRows.length, unassigned };
   }, [rows]);
 
   return (
@@ -3098,7 +3174,7 @@ function BankReconciliationView({
                           })}
                         >
                           <Upload size={15} aria-hidden="true" />
-                          <span>Export CSV</span>
+                          <span>Export loaded CSV</span>
                         </Menu.Item>
                       </Menu.Popup>
                     </Menu.Positioner>
@@ -3123,7 +3199,7 @@ function BankReconciliationView({
                 className="icon-button"
                 type="button"
                 disabled={rows.length === 0}
-                title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
+                title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
                 onClick={() => exportBankTransactionsCsv({
                   providersById,
                   rows,
@@ -3143,19 +3219,19 @@ function BankReconciliationView({
           label: `Owner: ${teamFilter === "unassigned" ? "Unassigned" : teamsById.get(teamFilter)?.name ?? teamFilter}`,
           onRemove: () => setTeamFilter("all")
         }]}
-        resultLabel={`${rows.length} transactions shown`}
+        resultLabel={`${rows.length} loaded transactions shown`}
         onClearAll={() => setTeamFilter("all")}
       />
       {rangeControls}
       <div className="wise-summary-grid">
         <SummaryTile
-          label="Visible volume"
+          label="Loaded volume"
           value={formatUsdCurrencyTotal(summary.volume, dashboard.fxRates)}
           detail={nativeCurrencyBreakdown(summary.volume)}
         />
-        <SummaryTile label="Transactions" value={String(summary.count)} />
-        <SummaryTile label="Categorized" value={String(rows.length - rows.filter(categoryNeedsReview).length)} />
-        <SummaryTile label="No owner" value={String(summary.unassigned)} />
+        <SummaryTile label="Loaded transactions" value={String(summary.count)} />
+        <SummaryTile label="Loaded categorized" value={String(rows.length - rows.filter(categoryNeedsReview).length)} />
+        <SummaryTile label="Loaded without owner" value={String(summary.unassigned)} />
       </div>
       {integrationStatus?.issue && (
         <div className="integration-alert">
@@ -3184,6 +3260,10 @@ function BankReconciliationView({
         onAssignTeam={onAssignTeam}
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
+        hasMore={hasMoreTransactions}
+        isLoading={isLoadingTransactions}
+        loadError={transactionLoadError}
+        onLoadMore={onLoadMoreTransactions}
         showWiseEntity={source === "wise" && wiseEntityView === "all"}
         source={source}
       />
@@ -3192,15 +3272,78 @@ function BankReconciliationView({
   );
 }
 
-function AnalyticsView({
-  dashboard,
-  providersById,
-  teamsById
-}: {
-  dashboard: DashboardSnapshot;
-  providersById: Map<string, Provider>;
-  teamsById: Map<string, Team>;
-}) {
+function emptyBankAnalyticsAggregate(): BankAnalyticsAggregate {
+  return {
+    transactionCount: 0,
+    moneyInTransactionCount: 0,
+    moneyOutTransactionCount: 0,
+    matchedTransactionCount: 0,
+    needsReviewCount: 0,
+    moneyIn: {},
+    moneyOut: {},
+    moneyInTransactionCounts: {},
+    moneyOutTransactionCounts: {}
+  };
+}
+
+function analyticsAggregateMoney(
+  aggregate: BankAnalyticsAggregate,
+  direction: Transaction["direction"]
+): string {
+  return formatCurrencyTotals(direction === "in" ? aggregate.moneyIn : aggregate.moneyOut);
+}
+
+function analyticsCategoryPieGroups(
+  rows: readonly BankAnalyticsCategoryBreakdown[],
+  direction: Transaction["direction"]
+): CategoryPieGroup[] {
+  const groups = new Map<string, CategoryPieSegment[]>();
+  const assignedColors = new Map<string, string>();
+  const usedColors = new Set<string>();
+  let colorIndex = 0;
+
+  for (const row of rows) {
+    const totals = direction === "in" ? row.moneyIn : row.moneyOut;
+    const counts = direction === "in" ? row.moneyInTransactionCounts : row.moneyOutTransactionCounts;
+    let color = assignedColors.get(row.category);
+    if (!color) {
+      color = categoryChartColor(row.category, usedColors, colorIndex);
+      assignedColors.set(row.category, color);
+      usedColors.add(color);
+      colorIndex += 1;
+    }
+    for (const [currency, amount] of Object.entries(totals)) {
+      if (amount <= 0) continue;
+      const segments = groups.get(currency) ?? [];
+      segments.push({
+        category: row.category,
+        amount,
+        count: counts[currency] ?? 0,
+        color
+      });
+      groups.set(currency, segments);
+    }
+  }
+
+  return [...groups].map(([currency, segments]) => {
+    const sortedSegments = segments.sort(
+      (left, right) => right.amount - left.amount || left.category.localeCompare(right.category)
+    );
+    return {
+      currency,
+      total: sortedSegments.reduce((sum, segment) => sum + segment.amount, 0),
+      segments: sortedSegments
+    };
+  }).sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
+}
+
+function analyticsRelationshipLabel(relationship: BankAnalyticsRelationship): string {
+  if (relationship === "client") return "Client";
+  if (relationship === "supplier") return "Supplier";
+  return "Unknown";
+}
+
+function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
   const analyticsToday = localIsoDate();
   const currentAnalyticsYear = Number(analyticsToday.slice(0, 4));
   const currentAnalyticsMonth = Number(analyticsToday.slice(5, 7));
@@ -3217,16 +3360,10 @@ function AnalyticsView({
   const [periodQuarter, setPeriodQuarter] = useUrlState<string>("analyticsQuarter", String(currentAnalyticsQuarter), {
     allowedValues: ["1", "2", "3", "4"]
   });
-  const analyticsYearOptions = useMemo(() => {
-    const knownAnalyticsYears = dashboard.transactions
-      .map((transaction) => Number(transaction.date.slice(0, 4)))
-      .filter((year) => Number.isInteger(year) && year >= 2000 && year <= currentAnalyticsYear);
-    const earliestAnalyticsYear = Math.min(currentAnalyticsYear - 9, ...knownAnalyticsYears);
-    return Array.from(
-      { length: currentAnalyticsYear - earliestAnalyticsYear + 1 },
-      (_, index) => String(currentAnalyticsYear - index)
-    );
-  }, [currentAnalyticsYear, dashboard.transactions]);
+  const analyticsYearOptions = useMemo(
+    () => Array.from({ length: currentAnalyticsYear - 2000 + 1 }, (_, index) => String(currentAnalyticsYear - index)),
+    [currentAnalyticsYear]
+  );
   const selectedAnalyticsYear = analyticsYearOptions.includes(periodYear)
     ? Number(periodYear)
     : currentAnalyticsYear;
@@ -3244,14 +3381,13 @@ function AnalyticsView({
   };
   const selectedAnalyticsRange = analyticsDateRange(periodSelection, analyticsToday);
   const selectedAnalyticsRangeKey = `${selectedAnalyticsRange.fromDate}:${selectedAnalyticsRange.toDate}`;
-  const [loadedBankPeriod, setLoadedBankPeriod] = useState<{
+  const [loadedAnalyticsPeriod, setLoadedAnalyticsPeriod] = useState<{
     key: string;
-    transactions: Transaction[];
+    snapshot: BankAnalyticsSnapshot;
   } | null>(null);
-  const [isLoadingBankPeriod, setIsLoadingBankPeriod] = useState(false);
-  const [bankPeriodError, setBankPeriodError] = useState<string | null>(null);
-  const [tagFilter, setTagFilter] = useUrlState("analyticsTag", "all");
-  const tagOptions = useMemo(() => companyTagOptions(dashboard.providers), [dashboard.providers]);
+  const [isLoadingAnalyticsPeriod, setIsLoadingAnalyticsPeriod] = useState(false);
+  const [analyticsPeriodError, setAnalyticsPeriodError] = useState<string | null>(null);
+  const [analyticsLoadAttempt, setAnalyticsLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!analyticsYearOptions.includes(periodYear)) {
@@ -3278,302 +3414,163 @@ function AnalyticsView({
 
   useEffect(() => {
     const controller = new AbortController();
-    setIsLoadingBankPeriod(true);
-    setBankPeriodError(null);
-    fetch(`${apiBase}/banks/activity`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fromDate: selectedAnalyticsRange.fromDate,
-        toDate: selectedAnalyticsRange.toDate,
-        sources: ["revolut", "slash"]
-      }),
-      signal: controller.signal
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(await apiErrorMessage(response, "Analytics bank activity could not be loaded"));
+    const query = new URLSearchParams({
+      fromDate: selectedAnalyticsRange.fromDate,
+      toDate: selectedAnalyticsRange.toDate
+    });
+    setIsLoadingAnalyticsPeriod(true);
+    setAnalyticsPeriodError(null);
+    setLoadedAnalyticsPeriod(null);
+
+    async function loadAnalyticsSnapshot(): Promise<void> {
+      const startedAt = Date.now();
+      for (let poll = 0; poll < analyticsBuildPollLimit; poll += 1) {
+        const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal: controller.signal });
+        if (response.status === 202) {
+          const body = (await response.json().catch(() => null)) as { status?: string } | null;
+          if (body?.status !== "building") {
+            throw new Error("Analytics returned an invalid build status");
+          }
+          const delayMs = analyticsRetryAfterMs(response.headers.get("Retry-After"));
+          const remainingMs = analyticsBuildMaxWaitMs - (Date.now() - startedAt);
+          if (poll + 1 >= analyticsBuildPollLimit || remainingMs <= 0 || delayMs > remainingMs) {
+            throw new Error("Analytics is still building. Retry in a moment.");
+          }
+          await waitForAnalyticsRetry(delayMs, controller.signal);
+          continue;
         }
-        return response.json() as Promise<BankActivityLoadResult>;
-      })
-      .then((result) => {
-        setLoadedBankPeriod({
-          key: `${result.fromDate}:${result.toDate}`,
-          transactions: result.transactions
-        });
-      })
+        if (!response.ok) {
+          throw new Error(await apiErrorMessage(response, "Analytics snapshot could not be loaded"));
+        }
+        const snapshot = (await response.json()) as BankAnalyticsSnapshot;
+        if (
+          snapshot.version !== 1
+          || snapshot.fromDate !== selectedAnalyticsRange.fromDate
+          || snapshot.toDate !== selectedAnalyticsRange.toDate
+        ) {
+          throw new Error("Analytics returned a snapshot for the wrong period");
+        }
+        setLoadedAnalyticsPeriod({ key: selectedAnalyticsRangeKey, snapshot });
+        return;
+      }
+      throw new Error("Analytics is still building. Retry in a moment.");
+    }
+
+    void loadAnalyticsSnapshot()
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setBankPeriodError(error instanceof Error ? error.message : "Analytics bank activity could not be loaded");
+        if (controller.signal.aborted) return;
+        setLoadedAnalyticsPeriod(null);
+        setAnalyticsPeriodError(error instanceof Error ? error.message : "Analytics snapshot could not be loaded");
       })
       .finally(() => {
-        if (!controller.signal.aborted) setIsLoadingBankPeriod(false);
+        if (!controller.signal.aborted) setIsLoadingAnalyticsPeriod(false);
       });
+
     return () => controller.abort();
-  }, [selectedAnalyticsRange.fromDate, selectedAnalyticsRange.toDate]);
+  }, [analyticsLoadAttempt, selectedAnalyticsRange.fromDate, selectedAnalyticsRange.toDate, selectedAnalyticsRangeKey]);
 
-  useEffect(() => {
-    if (tagFilter !== "all" && !tagOptions.includes(tagFilter)) {
-      setTagFilter("all");
-    }
-  }, [tagFilter, tagOptions]);
-
-  const currentConnectedTransactions = dashboard.transactions.filter(
-    (transaction) => transaction.source === "revolut" || transaction.source === "slash"
+  const analytics = loadedAnalyticsPeriod?.key === selectedAnalyticsRangeKey
+    ? loadedAnalyticsPeriod.snapshot
+    : null;
+  const summary = analytics?.summary;
+  const categoryRows = analytics?.categories ?? [];
+  const spendPieGroups = analyticsCategoryPieGroups(categoryRows, "out");
+  const revenuePieGroups = analyticsCategoryPieGroups(categoryRows, "in");
+  const analyticsTeamsById = new Map(
+    (analytics?.teams ?? []).map((team) => [team.teamId ?? "", team] as const)
   );
-  const connectedTransactions = loadedBankPeriod?.key === selectedAnalyticsRangeKey
-    ? loadedBankPeriod.transactions
-    : currentConnectedTransactions;
-  const periodTransactions = [
-    ...dashboard.transactions.filter(
-      (transaction) => transaction.source !== "revolut" && transaction.source !== "slash"
-    ),
-    ...connectedTransactions
-  ].filter((transaction) => transactionIsInDateRange(transaction, selectedAnalyticsRange));
-  const rows = periodTransactions.filter((transaction) => {
-    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-    return providerHasTag(provider, tagFilter);
-  });
-  const needsReview = rows.filter(transactionNeedsReview);
-  const [revenuePieBreakdown, setRevenuePieBreakdown] = useUrlState<RevenuePieBreakdown>(
-    "analyticsRevenueBreakdown",
-    "team-partner",
-    { allowedValues: ["team-partner", "team", "partner", "category"] }
-  );
-  const [revenuePieCurrency, setRevenuePieCurrency] = useUrlState("analyticsRevenueCurrency", "all");
-  const [revenuePieTeamId, setRevenuePieTeamId] = useUrlState("analyticsRevenueTeam", "all");
-  const [revenuePiePartnerId, setRevenuePiePartnerId] = useUrlState("analyticsRevenuePartner", "all");
-  const [revenuePieCategory, setRevenuePieCategory] = useUrlState("analyticsRevenueCategory", "all");
-  const externalRows = rows.filter((transaction) => !isInternalTransferTransaction(transaction));
-  const revenueRows = externalRows.filter((transaction) => transaction.direction === "in");
-  const revenueCurrencies = [...new Set(revenueRows.map((transaction) => transaction.currency))].sort((left, right) => left.localeCompare(right));
-  const revenueTeamOptions = [
-    ...dashboard.teams.map((team) => [team.id, team.name] as [string, string]),
-    ...(revenueRows.some((transaction) => !transaction.teamId) ? [["unassigned", "Unassigned owner"] as [string, string]] : [])
-  ].sort(([, left], [, right]) => left.localeCompare(right));
-  const revenuePartnerOptions = [
-    ...revenueRows.reduce((map, transaction) => {
-      const label = transaction.matchedProviderId
-        ? providersById.get(transaction.matchedProviderId)?.name ?? transaction.matchedProviderId
-        : expenseAnalyticsLabel(transaction);
-      const key = transaction.matchedProviderId ?? `merchant-${normalizeLookupName(label)}`;
-      map.set(key, label);
-      return map;
-    }, new Map<string, string>())
-  ].sort(([, left], [, right]) => left.localeCompare(right));
-  const revenueCategoryOptions = [...new Set(revenueRows.map(effectiveCategory))].sort((left, right) => left.localeCompare(right));
-  const filteredRevenueRows = revenueRows.filter((transaction) => {
-    const teamKey = transaction.teamId ?? "unassigned";
-    const partnerKey = transaction.matchedProviderId
-      ?? `merchant-${normalizeLookupName(expenseAnalyticsLabel(transaction))}`;
-    return (
-      (revenuePieCurrency === "all" || transaction.currency === revenuePieCurrency) &&
-      (revenuePieTeamId === "all" || teamKey === revenuePieTeamId) &&
-      (revenuePiePartnerId === "all" || partnerKey === revenuePiePartnerId) &&
-      (revenuePieCategory === "all" || effectiveCategory(transaction) === revenuePieCategory)
-    );
-  });
-  const revenuePieFilterActive =
-    revenuePieBreakdown !== "team-partner" ||
-    revenuePieCurrency !== "all" ||
-    revenuePieTeamId !== "all" ||
-    revenuePiePartnerId !== "all" ||
-    revenuePieCategory !== "all";
-
-  const categoryRows = [...externalRows.reduce((map, transaction) => {
-    const category = effectiveCategory(transaction);
-    map.set(category, [...(map.get(category) ?? []), transaction]);
-    return map;
-  }, new Map<string, Transaction[]>())]
-    .map(([category, transactions]) => {
-      const companiesByName = new Map<string, string>();
-      for (const transaction of transactions) {
-        const providerName = transaction.matchedProviderId
-          ? providersById.get(transaction.matchedProviderId)?.name
-          : undefined;
-        const name = providerName || (
-          transaction.direction === "out" ? expenseAnalyticsLabel(transaction) : undefined
-        );
-        if (name) {
-          const key = normalizeLookupName(name);
-          if (!companiesByName.has(key)) companiesByName.set(key, name);
-        }
-      }
-
-      return {
-        category,
-        transactions,
-        matched: transactions.filter((transaction) => transaction.matchedProviderId).length,
-        companies: [...companiesByName.values()]
-      };
-    })
-    .sort((left, right) => right.transactions.length - left.transactions.length || left.category.localeCompare(right.category));
-
-  const spendPieGroups = expenseCategoryPieGroups(rows, providersById);
-  const revenuePieGroups = categoryPieGroups(filteredRevenueRows, "in", (transaction) =>
-    revenuePieLabelForBreakdown(transaction, revenuePieBreakdown, providersById, teamsById)
-  );
-  const revenuePieControls = (
-    <div className="category-chart-controls" aria-label="Revenue pie filters">
-      <label>
-        <SlidersHorizontal size={15} />
-        <span>Show</span>
-        <NativeSelect value={revenuePieBreakdown} onValueChange={(value) => setRevenuePieBreakdown(value as RevenuePieBreakdown)}>
-          <NativeSelectOption value="team-partner">Owner and partner</NativeSelectOption>
-          <NativeSelectOption value="team">Owner only</NativeSelectOption>
-          <NativeSelectOption value="partner">Partner only</NativeSelectOption>
-          <NativeSelectOption value="category">Category only</NativeSelectOption>
-        </NativeSelect>
-      </label>
-      <label>
-        <CircleDollarSign size={15} />
-        <span>Currency</span>
-        <NativeSelect value={revenuePieCurrency} onValueChange={setRevenuePieCurrency}>
-          <NativeSelectOption value="all">All currencies</NativeSelectOption>
-          {revenueCurrencies.map((currency) => (
-            <NativeSelectOption key={currency} value={currency}>
-              {currency}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label>
-        <Building2 size={15} />
-        <span>Owner</span>
-        <NativeSelect value={revenuePieTeamId} onValueChange={setRevenuePieTeamId}>
-          <NativeSelectOption value="all">All owners</NativeSelectOption>
-          {revenueTeamOptions.map(([teamId, label]) => (
-            <NativeSelectOption key={teamId} value={teamId}>
-              {label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label>
-        <BadgeDollarSign size={15} />
-        <span>Partner</span>
-        <NativeSelect value={revenuePiePartnerId} onValueChange={setRevenuePiePartnerId}>
-          <NativeSelectOption value="all">All partners</NativeSelectOption>
-          {revenuePartnerOptions.map(([partnerId, label]) => (
-            <NativeSelectOption key={partnerId} value={partnerId}>
-              {label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <label>
-        <Tags size={15} />
-        <span>Category</span>
-        <NativeSelect value={revenuePieCategory} onValueChange={setRevenuePieCategory}>
-          <NativeSelectOption value="all">All categories</NativeSelectOption>
-          {revenueCategoryOptions.map((category) => (
-            <NativeSelectOption key={category} value={category}>
-              {category}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </label>
-      <button
-        className="secondary-button"
-        type="button"
-        onClick={() => {
-          setRevenuePieBreakdown("team-partner");
-          setRevenuePieCurrency("all");
-          setRevenuePieTeamId("all");
-          setRevenuePiePartnerId("all");
-          setRevenuePieCategory("all");
-        }}
-        disabled={!revenuePieFilterActive}
-      >
-        <RefreshCw size={15} />
-        Reset
-      </button>
-    </div>
-  );
-
-  const relationshipRows = [...externalRows.reduce((map, transaction) => {
-    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-    const label = provider ? providerTypeLabel(provider.type) : "Unknown";
-    map.set(label, [...(map.get(label) ?? []), transaction]);
-    return map;
-  }, new Map<string, Transaction[]>())].sort(([left], [right]) => left.localeCompare(right));
-
-  const companyRows = [...externalRows.reduce((map, transaction) => {
-    const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-    const category = effectiveCategory(transaction);
-    const fallbackName = expenseAnalyticsLabel(transaction);
-    const key = provider?.id ?? `unmatched-${category}-${normalizeLookupName(fallbackName)}`;
-    const existing = map.get(key) ?? {
-      id: key,
-      name: provider?.name ?? fallbackName,
-      relationship: provider ? providerTypeLabel(provider.type) : "Unknown",
-      category,
-      transactions: [] as Transaction[]
-    };
-    existing.transactions.push(transaction);
-    map.set(key, existing);
-    return map;
-  }, new Map<string, { id: string; name: string; relationship: string; category: string; transactions: Transaction[] }>())]
-    .map(([, value]) => ({
-      ...value,
-      status: companyRollupStatus(value.transactions)
-    }))
-    .sort((left, right) => right.transactions.length - left.transactions.length || left.name.localeCompare(right.name));
-
+  const teamIds = new Set(dashboard.teams.map((team) => team.id));
+  for (const team of analytics?.teams ?? []) {
+    if (team.teamId) teamIds.add(team.teamId);
+  }
+  const includeUnassignedTeam = analyticsTeamsById.has("")
+    || dashboard.revenuePartners.some((partner) => !partner.teamId);
   const teamRows = [
-    ...dashboard.teams.map((team) => {
-      const transactions = externalRows.filter((transaction) => transaction.teamId === team.id);
-      const partners = dashboard.revenuePartners.filter((partner) => partner.teamId === team.id);
+    ...[...teamIds].map((teamId) => {
+      const team = dashboard.teams.find((candidate) => candidate.id === teamId);
+      const analyticsTeam = analyticsTeamsById.get(teamId);
+      const aggregate = analyticsTeam ?? emptyBankAnalyticsAggregate();
+      const partners = dashboard.revenuePartners.filter((partner) => partner.teamId === teamId);
       return {
-        id: team.id,
-        name: team.name,
-        transactions,
+        id: teamId,
+        name: team?.name ?? analyticsTeam?.teamName ?? teamId,
+        aggregate,
         partners,
         enabledPartners: partners.filter((partner) => partner.enabled).length
       };
     }),
-    ...(externalRows.some((transaction) => !transaction.teamId) || dashboard.revenuePartners.some((partner) => !partner.teamId)
-      ? [
-          {
-            id: "unassigned",
-            name: "Unassigned",
-            transactions: externalRows.filter((transaction) => !transaction.teamId),
-            partners: dashboard.revenuePartners.filter((partner) => !partner.teamId),
-            enabledPartners: dashboard.revenuePartners.filter((partner) => !partner.teamId && partner.enabled).length
-          }
-        ]
+    ...(includeUnassignedTeam
+      ? [{
+          id: "unassigned",
+          name: "Unassigned",
+          aggregate: analyticsTeamsById.get("") ?? emptyBankAnalyticsAggregate(),
+          partners: dashboard.revenuePartners.filter((partner) => !partner.teamId),
+          enabledPartners: dashboard.revenuePartners.filter((partner) => !partner.teamId && partner.enabled).length
+        }]
       : [])
-  ];
+  ].sort((left, right) => left.name.localeCompare(right.name));
 
   const periodInvoices = dashboard.invoices.filter(
     (invoice) => invoice.issueDate >= selectedAnalyticsRange.fromDate && invoice.issueDate <= selectedAnalyticsRange.toDate
   );
+  const analyticsSourcesById = new Map(
+    (analytics?.sources ?? []).map((source) => [source.source as DataSource, source] as const)
+  );
   const sourceIds = new Set<DataSource>();
-  for (const transaction of rows) sourceIds.add(transaction.source);
+  for (const source of analytics?.sources ?? []) sourceIds.add(source.source);
   for (const account of dashboard.accounts) sourceIds.add(account.source);
   for (const invoice of periodInvoices) sourceIds.add(invoice.source);
   for (const status of dashboard.integrationStatus) {
     if (status.id !== "openrouter" && status.id !== "coinbase") sourceIds.add(status.id);
   }
-  const sourceRows = [...sourceIds]
-    .map((source) => {
-      const transactions = externalRows.filter((transaction) => transaction.source === source);
-      const accounts = dashboard.accounts.filter((account) =>
-        account.source === source
-        && hasNonZeroAccountBalance(account)
-        && isLiquidAccountBalance(account)
-      );
-      const invoices = periodInvoices.filter((invoice) => invoice.source === source);
-      const status = dashboard.integrationStatus.find((integration) => integration.id === source);
-      return { source, transactions, accounts, invoices, status };
-    })
-    .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
-  const moneyInTotals = sumCurrencyTotals(externalRows.filter((row) => row.direction === "in"), (row) => row.amount);
-  const moneyOutTotals = sumCurrencyTotals(externalRows.filter((row) => row.direction === "out"), (row) => row.amount);
-  const activeTeamCount = new Set(
-    externalRows.flatMap((transaction) => transaction.teamId ? [transaction.teamId] : [])
-  ).size;
-  const activeSourceCount = new Set(rows.map((transaction) => transaction.source)).size;
+  const sourceRows = [...sourceIds].map((source) => {
+    const accounts = dashboard.accounts.filter((account) =>
+      account.source === source
+      && hasNonZeroAccountBalance(account)
+      && isLiquidAccountBalance(account)
+    );
+    const invoices = periodInvoices.filter((invoice) => invoice.source === source);
+    const status = dashboard.integrationStatus.find((integration) => integration.id === source);
+    return {
+      source,
+      aggregate: analyticsSourcesById.get(source) ?? emptyBankAnalyticsAggregate(),
+      accounts,
+      invoices,
+      status
+    };
+  }).sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)));
+
+  const relationshipRows = analytics?.relationships ?? [];
+  const companyRows = [
+    ...(analytics?.providers ?? []).map((provider) => ({
+      id: `provider-${provider.providerId}`,
+      name: provider.providerName,
+      relationship: analyticsRelationshipLabel(provider.relationship),
+      coverage: provider.directoryMatch ? "Company matched" : "Missing directory entry",
+      statusClass: provider.directoryMatch ? "good" as const : "warning" as const,
+      aggregate: provider
+    })),
+    ...(analytics?.unmatchedMerchants.rows ?? []).map((merchant) => ({
+      id: `merchant-${merchant.merchantKey}`,
+      name: merchant.merchantName,
+      relationship: "Unknown",
+      coverage: merchant.estimateError > 0
+        ? `${merchant.estimatedTransactionCount.toLocaleString()} estimated rank count`
+        : "Merchant only",
+      statusClass: "warning" as const,
+      aggregate: merchant
+    })),
+    ...(analytics?.unmatchedMerchants.other
+      ? [{
+          id: "merchant-other",
+          name: "Other unmatched activity",
+          relationship: "Unknown",
+          coverage: `${analytics.unmatchedMerchants.evictedCandidateCount.toLocaleString()} candidate evictions`,
+          statusClass: "warning" as const,
+          aggregate: analytics.unmatchedMerchants.other
+        }]
+      : [])
+  ];
 
   return (
     <div className="categorization-layout">
@@ -3645,51 +3642,63 @@ function AnalyticsView({
                 ))}
               </NativeSelect>
             )}
-            <label>
-              <Tags size={15} />
-              <NativeSelect value={tagFilter} onValueChange={setTagFilter}>
-                <NativeSelectOption value="all">All tags</NativeSelectOption>
-                {tagOptions.map((tag) => (
-                  <NativeSelectOption key={tag} value={tag}>
-                    {tag}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </label>
             <span className="analytics-period-status">
               <span className="analytics-period-value">
-                {isLoadingBankPeriod && <Loader2 className="spin" aria-hidden="true" size={13} />}
+                {isLoadingAnalyticsPeriod && <Loader2 className="spin" aria-hidden="true" size={13} />}
                 {analyticsPeriodLabel(periodSelection, analyticsToday)}
+                {analytics && <> · {analytics.summary.transactionCount.toLocaleString()} transactions</>}
               </span>
               <InfoPopover label="analytics period data">
-                <span>Every Analytics card, chart, and transaction rollup uses this calendar period.</span>
-                <span>Revolut and Slash rows are read from Convex and missing dates are backfilled before the period settles. Wise uses imported statement history.</span>
+                <span>Every Analytics card and rollup uses this calendar period.</span>
+                <span>The server streams indexed transaction pages into a compact snapshot; transaction rows are never downloaded for Analytics.</span>
               </InfoPopover>
-              {bankPeriodError && (
-                <span className="analytics-period-error" aria-label={bankPeriodError} title={bankPeriodError}>
-                  <CircleAlert aria-hidden="true" size={15} />
-                </span>
+              {analyticsPeriodError && (
+                <>
+                  <span className="danger-text" role="alert">{analyticsPeriodError}</span>
+                  <Button
+                    type="button"
+                    className="icon-button analytics-period-error"
+                    aria-label="Retry analytics snapshot"
+                    title="Retry analytics snapshot"
+                    onClick={() => setAnalyticsLoadAttempt((attempt) => attempt + 1)}
+                  >
+                    <RefreshCw aria-hidden="true" size={15} />
+                  </Button>
+                </>
               )}
             </span>
           </div>
         </div>
         <div className="wise-summary-grid categorization-summary">
-          <SummaryTile label="Money in" value={formatUsdCurrencyTotal(moneyInTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyInTotals)} />
-          <SummaryTile label="Money out" value={formatUsdCurrencyTotal(moneyOutTotals, dashboard.fxRates)} detail={nativeCurrencyBreakdown(moneyOutTotals)} />
-          <SummaryTile label="Owners" value={String(activeTeamCount)} />
-          <SummaryTile label="Sources" value={String(activeSourceCount)} />
-          <SummaryTile label="Needs review" value={String(needsReview.length)} />
+          <SummaryTile
+            label="Money in"
+            value={formatUsdCurrencyTotal(summary?.moneyIn ?? {}, dashboard.fxRates)}
+            detail={nativeCurrencyBreakdown(summary?.moneyIn ?? {})}
+          />
+          <SummaryTile
+            label="Money out"
+            value={formatUsdCurrencyTotal(summary?.moneyOut ?? {}, dashboard.fxRates)}
+            detail={nativeCurrencyBreakdown(summary?.moneyOut ?? {})}
+          />
+          <SummaryTile label="Owners" value={String(summary?.activeTeamCount ?? 0)} />
+          <SummaryTile label="Sources" value={String(summary?.activeSourceCount ?? 0)} />
+          <SummaryTile label="Needs review" value={String(summary?.needsReviewCount ?? 0)} />
         </div>
       </section>
 
-      <CategoryPiePanel title="Spend pie" tone="danger" groups={spendPieGroups} rates={dashboard.fxRates} emptyLabel="No spend transactions yet" />
       <CategoryPiePanel
-        title="Revenue by owner and partner"
+        title="Spend by category"
+        tone="danger"
+        groups={spendPieGroups}
+        rates={dashboard.fxRates}
+        emptyLabel="No spend transactions yet"
+      />
+      <CategoryPiePanel
+        title="Revenue by category"
         tone="good"
         groups={revenuePieGroups}
         rates={dashboard.fxRates}
-        emptyLabel={revenuePieFilterActive ? "No revenue rows match these filters" : "No revenue transactions yet"}
-        controls={revenuePieControls}
+        emptyLabel="No revenue transactions yet"
       />
 
       <section className="panel wide-panel">
@@ -3712,20 +3721,16 @@ function AnalyticsView({
             <tbody>
               {teamRows.map((row) => (
                 <tr key={row.id}>
-                  <td>
-                    <strong>{row.name}</strong>
-                  </td>
-                  <td>{row.transactions.length}</td>
+                  <td><strong>{row.name}</strong></td>
+                  <td>{row.aggregate.transactionCount}</td>
                   <td>{row.partners.length > 0 ? `${row.enabledPartners}/${row.partners.length} enabled` : "—"}</td>
-                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
-                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
-                  <td>{row.transactions.filter(transactionNeedsReview).length}</td>
+                  <td className="amount good-text">{analyticsAggregateMoney(row.aggregate, "in")}</td>
+                  <td className="amount danger-text">{analyticsAggregateMoney(row.aggregate, "out")}</td>
+                  <td>{row.aggregate.needsReviewCount}</td>
                 </tr>
               ))}
               {teamRows.length === 0 && (
-                <tr>
-                  <td colSpan={6}>No owners yet</td>
-                </tr>
+                <tr><td colSpan={6}>No owners yet</td></tr>
               )}
             </tbody>
           </table>
@@ -3753,25 +3758,21 @@ function AnalyticsView({
             <tbody>
               {sourceRows.map((row) => (
                 <tr key={row.source}>
-                  <td>
-                    <span className={`source-pill ${row.source}`}>{sourceLabel(row.source)}</span>
-                  </td>
+                  <td><span className={`source-pill ${row.source}`}>{sourceLabel(row.source)}</span></td>
                   <td>
                     <span className={`status-pill ${row.status?.mode === "live" ? "good" : row.status?.mode === "partial" ? "warning" : ""}`}>
                       {row.status?.mode ?? "saved"}
                     </span>
                   </td>
                   <td>{row.accounts.length > 0 ? groupedAccountMoney(row.accounts) : "—"}</td>
-                  <td>{row.transactions.length}</td>
+                  <td>{row.aggregate.transactionCount}</td>
                   <td>{row.invoices.length}</td>
-                  <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
-                  <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
+                  <td className="amount good-text">{analyticsAggregateMoney(row.aggregate, "in")}</td>
+                  <td className="amount danger-text">{analyticsAggregateMoney(row.aggregate, "out")}</td>
                 </tr>
               ))}
               {sourceRows.length === 0 && (
-                <tr>
-                  <td colSpan={7}>No sources yet</td>
-                </tr>
+                <tr><td colSpan={7}>No sources yet</td></tr>
               )}
             </tbody>
           </table>
@@ -3792,27 +3793,21 @@ function AnalyticsView({
                 <th>Matched</th>
                 <th>Money in</th>
                 <th>Money out</th>
-                <th>Companies</th>
+                <th>Needs review</th>
               </tr>
             </thead>
             <tbody>
-              {categoryRows.length > 0 ? (
-                categoryRows.map((row) => (
-                  <tr key={row.category}>
-                    <td>
-                      <strong>{row.category}</strong>
-                    </td>
-                    <td>{row.transactions.length}</td>
-                    <td>{row.matched}</td>
-                    <td className="amount good-text">{formatTransactionGroups(row.transactions.filter((transaction) => transaction.direction === "in"))}</td>
-                    <td className="amount danger-text">{formatTransactionGroups(row.transactions.filter((transaction) => transaction.direction === "out"))}</td>
-                    <td className="company-list-cell">{row.companies.slice(0, 5).join(" · ") || "Unmatched"}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6}>No categorized transactions yet</td>
+              {categoryRows.length > 0 ? categoryRows.map((row) => (
+                <tr key={row.category}>
+                  <td><strong>{row.category}</strong></td>
+                  <td>{row.transactionCount}</td>
+                  <td>{row.matchedTransactionCount}</td>
+                  <td className="amount good-text">{analyticsAggregateMoney(row, "in")}</td>
+                  <td className="amount danger-text">{analyticsAggregateMoney(row, "out")}</td>
+                  <td>{row.needsReviewCount}</td>
                 </tr>
+              )) : (
+                <tr><td colSpan={6}>No categorized transactions yet</td></tr>
               )}
             </tbody>
           </table>
@@ -3825,11 +3820,11 @@ function AnalyticsView({
           <span className="total-pill">{relationshipRows.length} relationships</span>
         </div>
         <div className="bridge categorization-bridge">
-          {relationshipRows.map(([relationship, transactions]) => (
-            <div className="bridge-row" key={relationship}>
-              <span>{relationship}</span>
-              <strong>{transactions.length}</strong>
-              <small>In {groupedTransactionMoney(transactions, "in")} · Out {groupedTransactionMoney(transactions, "out")}</small>
+          {relationshipRows.map((row) => (
+            <div className="bridge-row" key={row.relationship}>
+              <span>{analyticsRelationshipLabel(row.relationship)}</span>
+              <strong>{row.transactionCount}</strong>
+              <small>In {analyticsAggregateMoney(row, "in")} · Out {analyticsAggregateMoney(row, "out")}</small>
             </div>
           ))}
           {relationshipRows.length === 0 && <div className="money-empty">No company relationships yet</div>}
@@ -3839,29 +3834,35 @@ function AnalyticsView({
       <section className="panel">
         <div className="panel-header compact">
           <h2>Needs review</h2>
-          <span className="total-pill warning">{needsReview.length} rows</span>
+          <span className="total-pill warning">{summary?.needsReviewCount ?? 0} rows</span>
         </div>
         <div className="review-list compact-review-list">
-          {needsReview.slice(0, 8).map((transaction) => (
+          {(analytics?.reviewSamples ?? []).map((transaction) => (
             <article className="review-row" key={transaction.id}>
               <div className={`direction-badge ${transaction.direction}`}>
                 {transaction.direction === "in" ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
               </div>
               <div>
-                <strong>{transaction.merchantName ?? transaction.counterparty}</strong>
-                <span>{effectiveCategory(transaction)} · {transaction.categoryReason ?? "AI classification pending"}</span>
+                <strong>{transaction.company}</strong>
+                <span>{transaction.category} · {transaction.reason}</span>
               </div>
               <div className="review-amount">{money(transaction.amount, transaction.currency)}</div>
             </article>
           ))}
-          {needsReview.length === 0 && <div className="empty-state">No transaction rows need review</div>}
+          {(summary?.needsReviewCount ?? 0) === 0 && <div className="empty-state">No transaction rows need review</div>}
         </div>
       </section>
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
           <h2>Company rollup</h2>
-          <span className="total-pill">{companyRows.length} rows</span>
+          <div className="row-actions">
+            <span className="total-pill">{companyRows.length} rows</span>
+            <InfoPopover label="company rollup limits">
+              <span>Matched companies are exact.</span>
+              <span>Unmatched merchants use a bounded 40-row heavy-hitter set; evicted activity is preserved exactly in Other.</span>
+            </InfoPopover>
+          </div>
         </div>
         <div className="table-wrap">
           <table className="data-table rollup-table">
@@ -3869,34 +3870,26 @@ function AnalyticsView({
               <tr>
                 <th>Company</th>
                 <th title="Business relationship to your company">Relationship</th>
-                <th>Transaction category</th>
-                <th>Match status</th>
+                <th>Coverage</th>
                 <th>Transactions</th>
                 <th>Money in</th>
                 <th>Money out</th>
+                <th>Needs review</th>
               </tr>
             </thead>
             <tbody>
-              {companyRows.length > 0 ? (
-                companyRows.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <strong>{row.name}</strong>
-                    </td>
-                    <td>{row.relationship}</td>
-                    <td>{row.category}</td>
-                    <td>
-                      <span className={`status-pill ${companyRollupStatusClass(row.status)}`}>{row.status}</span>
-                    </td>
-                    <td>{row.transactions.length}</td>
-                    <td className="amount good-text">{groupedTransactionMoney(row.transactions, "in")}</td>
-                    <td className="amount danger-text">{groupedTransactionMoney(row.transactions, "out")}</td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={7}>No company rollup yet</td>
+              {companyRows.length > 0 ? companyRows.map((row) => (
+                <tr key={row.id}>
+                  <td><strong>{row.name}</strong></td>
+                  <td>{row.relationship}</td>
+                  <td><span className={`status-pill ${row.statusClass}`}>{row.coverage}</span></td>
+                  <td>{row.aggregate.transactionCount}</td>
+                  <td className="amount good-text">{analyticsAggregateMoney(row.aggregate, "in")}</td>
+                  <td className="amount danger-text">{analyticsAggregateMoney(row.aggregate, "out")}</td>
+                  <td>{row.aggregate.needsReviewCount}</td>
                 </tr>
+              )) : (
+                <tr><td colSpan={7}>No company rollup yet</td></tr>
               )}
             </tbody>
           </table>
@@ -4406,6 +4399,10 @@ function TransactionTable({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
+  hasMore,
+  isLoading,
+  loadError,
+  onLoadMore,
   showWiseEntity = false,
   source
 }: {
@@ -4422,6 +4419,10 @@ function TransactionTable({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  hasMore: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  onLoadMore: () => Promise<void>;
   showWiseEntity?: boolean;
   source: Extract<BankSource, "wise" | "revolut" | "slash">;
 }) {
@@ -4431,7 +4432,6 @@ function TransactionTable({
     | { kind: "company"; transaction: Transaction; value: string }
     | null
   >(null);
-  const [visibleRowCount, setVisibleRowCount] = useState(transactionTablePageSize);
   const expenseByTransactionId = useMemo(
     () => new Map(expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
     [expenses]
@@ -4444,11 +4444,6 @@ function TransactionTable({
     () => providers.filter((provider) => provider.type === "supplier"),
     [providers]
   );
-  const visibleRows = rows.slice(0, visibleRowCount);
-
-  useEffect(() => {
-    setVisibleRowCount(transactionTablePageSize);
-  }, [rows]);
 
   useEffect(() => {
     if (!detailPopover) return;
@@ -4655,7 +4650,7 @@ function TransactionTable({
         </thead>
         <tbody>
           {rows.length > 0 ? (
-            visibleRows.map((transaction) => {
+            rows.map((transaction) => {
               const expense = expenseByTransactionId.get(transaction.id);
               const expectedProviderType = providerTypeForTransaction(transaction);
               const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
@@ -4803,20 +4798,24 @@ function TransactionTable({
             })
           ) : (
             <tr>
-              <td colSpan={10}>No live transactions</td>
+              <td colSpan={10}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td>
             </tr>
           )}
         </tbody>
       </table>
-      {visibleRows.length < rows.length && (
+      {(hasMore || isLoading || loadError) && (
         <div className="bank-table-pagination">
-          <span>Showing {visibleRows.length} of {rows.length} transactions</span>
+          <span className={loadError ? "danger-text" : undefined}>
+            {loadError ?? `${rows.length} loaded transactions shown`}
+          </span>
           <Button
             className="secondary-button"
             type="button"
-            onClick={() => setVisibleRowCount((current) => current + transactionTablePageSize)}
+            disabled={isLoading}
+            onClick={() => void onLoadMore()}
           >
-            Show {Math.min(transactionTablePageSize, rows.length - visibleRows.length)} more
+            {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <ChevronDown size={15} />}
+            {isLoading ? "Loading" : loadError ? "Retry" : `Show ${transactionTablePageSize} more`}
           </Button>
         </div>
       )}
@@ -5641,7 +5640,7 @@ function RevolutView({
   const revolutAccounts = dashboard.accounts.filter((account) =>
     account.source === "revolut" && hasNonZeroAccountBalance(account)
   );
-  const allRevolutRows = dashboard.transactions.filter((transaction) => transaction.source === "revolut");
+  const allRevolutRows = rows;
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -5679,8 +5678,8 @@ function RevolutView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Revolut movement</h2>
-          <span className="total-pill">{allRevolutRows.length} rows</span>
+          <h2>Loaded Revolut movement</h2>
+          <span className="total-pill">{allRevolutRows.length} loaded</span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
@@ -5720,7 +5719,7 @@ function SlashView({
   onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
 }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
-  const allSlashRows = dashboard.transactions.filter((transaction) => transaction.source === "slash");
+  const allSlashRows = rows;
   const cashbackPurchaseRows = allSlashRows.filter((row) => row.cashback);
   const cashbackEarned = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.cashback?.amount ?? 0);
   const cashbackEligibleSpend = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.amount);
@@ -5791,7 +5790,7 @@ function SlashView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Slash cashback earned</h2>
+          <h2>Loaded Slash cashback</h2>
           <span className="total-pill good" title={nativeCurrencyBreakdown(cashbackEarned)}>
             {formatUsdCurrencyTotal(cashbackEarned, dashboard.fxRates)}
           </span>
@@ -5829,7 +5828,25 @@ function SlashView({
   );
 }
 
-function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Transaction[] }) {
+function AmexView({
+  dashboard,
+  rows,
+  dateRange,
+  hasMoreTransactions,
+  isLoadingTransactions,
+  transactionLoadError,
+  onLoadDateRange,
+  onLoadMoreTransactions
+}: {
+  dashboard: DashboardSnapshot;
+  rows: Transaction[];
+  dateRange: BankTransactionDateRange;
+  hasMoreTransactions: boolean;
+  isLoadingTransactions: boolean;
+  transactionLoadError: string | null;
+  onLoadDateRange: (dateRange: BankTransactionDateRange) => Promise<void>;
+  onLoadMoreTransactions: () => Promise<void>;
+}) {
   const amexAccounts = dashboard.accounts.filter((account) =>
     account.source === "amex" && hasNonZeroAccountBalance(account)
   );
@@ -5885,12 +5902,12 @@ function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tra
         <div className="panel-header compact">
           <h2>Amex activity</h2>
           <div className="row-actions">
-            <span className="total-pill">{rows.length} rows</span>
+            <span className="total-pill">{rows.length} loaded</span>
             <Button
               className="icon-text-button"
               type="button"
               disabled={rows.length === 0}
-              title={`Export ${rows.length} Amex transaction${rows.length === 1 ? "" : "s"}`}
+              title={`Export ${rows.length} loaded Amex transaction${rows.length === 1 ? "" : "s"}`}
               onClick={() => exportBankTransactionsCsv({
                 providersById: new Map(dashboard.providers.map((provider) => [provider.id, provider])),
                 rows,
@@ -5899,17 +5916,43 @@ function AmexView({ dashboard, rows }: { dashboard: DashboardSnapshot; rows: Tra
               })}
             >
               <Download size={15} />
-              Export CSV
+              Export loaded CSV
             </Button>
           </div>
         </div>
-        <BasicTransactionsTable rows={rows} />
+        <BankDateRangeControls
+          dateRange={dateRange}
+          isLoading={isLoadingTransactions}
+          onLoad={onLoadDateRange}
+          windowDays={revolutDefaultActivityWindowDays}
+        />
+        <BasicTransactionsTable rows={rows} isLoading={isLoadingTransactions} />
+        {(hasMoreTransactions || isLoadingTransactions || transactionLoadError) && (
+          <div className="bank-table-pagination">
+            <span className={transactionLoadError ? "danger-text" : undefined}>
+              {transactionLoadError ?? `${rows.length} loaded transactions shown`}
+            </span>
+            <Button
+              className="secondary-button"
+              type="button"
+              disabled={isLoadingTransactions}
+              onClick={() => void onLoadMoreTransactions()}
+            >
+              {isLoadingTransactions
+                ? <Loader2 className="spin" size={15} />
+                : transactionLoadError
+                  ? <RefreshCw size={15} />
+                  : <ChevronDown size={15} />}
+              {isLoadingTransactions ? "Loading" : transactionLoadError ? "Retry" : `Show ${transactionTablePageSize} more`}
+            </Button>
+          </div>
+        )}
       </section>
     </div>
   );
 }
 
-function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
+function BasicTransactionsTable({ rows, isLoading = false }: { rows: Transaction[]; isLoading?: boolean }) {
   return (
     <div className="table-wrap">
       <table className="data-table activity-table">
@@ -5943,7 +5986,7 @@ function BasicTransactionsTable({ rows }: { rows: Transaction[] }) {
             ))
           ) : (
             <tr>
-              <td colSpan={5}>No live transactions</td>
+              <td colSpan={5}>{isLoading ? "Loading transactions…" : "No loaded transactions"}</td>
             </tr>
           )}
         </tbody>
@@ -6279,13 +6322,12 @@ function SettingsView({
   const categoryUsage = useMemo(() => {
     const usage = new Map<string, number>();
     const add = (name: string) => usage.set(name, (usage.get(name) ?? 0) + 1);
-    for (const transaction of dashboard.transactions) add(transaction.category);
     for (const rule of dashboard.transactionCategoryRules) add(rule.category);
     for (const partner of dashboard.revenuePartners) {
       if (partner.revenueCategory) add(partner.revenueCategory);
     }
     return usage;
-  }, [dashboard.revenuePartners, dashboard.transactionCategoryRules, dashboard.transactions]);
+  }, [dashboard.revenuePartners, dashboard.transactionCategoryRules]);
 
   const modelOptions = useMemo(
     () => zdrModels.map((model) => ({ label: `${model.name} · ${model.id}`, value: model.id })),

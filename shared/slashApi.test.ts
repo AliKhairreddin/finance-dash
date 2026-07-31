@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  fetchSlashActivityBatch,
   fetchSlashActivityForLegalEntity,
   fetchSlashTransactionForLegalEntity,
   parseSlashTransactionDateRange
 } from "./slashApi";
+import { bankProviderTransactionId } from "./providerIdentity";
 
 test("Slash activity uses the user-scoped entity header, paginates, and maps current response fields", async () => {
   const requests: Array<{ url: URL; headers: Headers }> = [];
@@ -119,9 +121,11 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   }]);
   assert.deepEqual(result.transactions, [
     {
-      id: "slash-transaction-card",
+      id: bankProviderTransactionId("slash", ["account-debit", "transaction-card"]),
+      providerLegacyId: "slash-transaction-card",
       source: "slash",
       slashAccountSubtype: "cash",
+      accountId: "slash-account-debit-cash",
       accountName: "Operating Cash",
       date: "2026-07-27",
       description: "CARD PURCHASE",
@@ -138,9 +142,29 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       category: "Slash"
     },
     {
-      id: "slash-transaction-credit",
+      id: bankProviderTransactionId("slash", ["account-debit", "transaction-failed"]),
+      providerLegacyId: "slash-transaction-failed",
       source: "slash",
       slashAccountSubtype: "cash",
+      accountId: "slash-account-debit-cash",
+      accountName: "Operating Cash",
+      date: "2026-07-27",
+      description: "FAILED PAYMENT",
+      rawName: "FAILED PAYMENT",
+      counterparty: "FAILED PAYMENT",
+      amount: 10,
+      currency: "USD",
+      direction: "out",
+      status: "voided",
+      category: "Slash",
+      classificationComplete: true
+    },
+    {
+      id: bankProviderTransactionId("slash", ["account-debit", "transaction-credit"]),
+      providerLegacyId: "slash-transaction-credit",
+      source: "slash",
+      slashAccountSubtype: "cash",
+      accountId: "slash-account-debit-cash",
       accountName: "Operating Cash",
       date: "2026-07-28",
       description: "CASHBACK",
@@ -279,9 +303,11 @@ test("Slash can load one transaction by ID without scanning the activity window"
   });
 
   assert.deepEqual(result, {
-    id: "slash-transaction-old",
+    id: bankProviderTransactionId("slash", ["account-debit", "transaction-old"]),
+    providerLegacyId: "slash-transaction-old",
     source: "slash",
     slashAccountSubtype: "cash",
+    accountId: "slash-account-debit-cash",
     accountName: "Operating Cash",
     date: "2025-01-15",
     description: "OLD CARD PURCHASE",
@@ -297,6 +323,46 @@ test("Slash can load one transaction by ID without scanning the activity window"
     "/transaction/transaction-old",
     "/account/account-debit"
   ]);
+});
+
+test("Slash single-transaction reads retain failed records as voided tombstones", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/transaction/transaction-failed") {
+      return Response.json({
+        id: "transaction-failed",
+        date: "2026-07-28T09:30:00.000Z",
+        description: "FAILED PAYMENT",
+        amountCents: -1_000,
+        accountId: "account-debit",
+        accountSubtype: "cash",
+        status: "failed"
+      });
+    }
+    assert.equal(url.pathname, "/account/account-debit");
+    return Response.json({
+      id: "account-debit",
+      name: "Operating",
+      status: "open",
+      type: "debit",
+      balances: ["debit"]
+    });
+  };
+
+  const result = await fetchSlashTransactionForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    transactionId: "transaction-failed",
+    fetcher
+  });
+
+  assert.equal(result.status, "voided");
+  assert.equal(result.classificationComplete, true);
+  assert.equal(
+    result.id,
+    bankProviderTransactionId("slash", ["account-debit", "transaction-failed"])
+  );
 });
 
 test("Slash activity loads every page inside an exact inclusive date range", async () => {
@@ -388,4 +454,300 @@ test("Slash activity rejects repeated pagination cursors", async () => {
     }),
     /repeated pagination cursor/
   );
+});
+
+test("Slash activity streams bounded deduplicated pages without collecting transaction objects", async () => {
+  const transactionRequests: URL[] = [];
+  const transaction = (id: string) => ({
+    id,
+    date: "2026-07-27T17:00:00.000Z",
+    description: `CARD PURCHASE ${id}`,
+    amountCents: -100,
+    accountId: "account-debit",
+    accountSubtype: "cash",
+    status: "posted"
+  });
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({
+        items: [{
+          id: "account-debit",
+          name: "Operating",
+          status: "open",
+          type: "debit",
+          balances: ["debit"]
+        }],
+        metadata: {}
+      });
+    }
+    if (url.pathname === "/account/account-debit/balance") {
+      return Response.json({
+        balances: [{
+          accountId: "account-debit",
+          type: "debit",
+          available: { amountCents: 100_000 },
+          posted: { amountCents: 100_000 },
+          timestamp: "2026-07-28T12:00:00.000Z"
+        }]
+      });
+    }
+
+    assert.equal(url.pathname, "/transaction");
+    transactionRequests.push(url);
+    const cursor = url.searchParams.get("cursor");
+    if (!cursor) {
+      return Response.json({
+        items: [transaction("transaction-1"), transaction("transaction-2")],
+        metadata: { nextCursor: "page-2" }
+      });
+    }
+    if (cursor === "page-2") {
+      return Response.json({
+        items: [transaction("transaction-2"), transaction("transaction-3")],
+        metadata: { nextCursor: "page-3" }
+      });
+    }
+    assert.equal(cursor, "page-3");
+    return Response.json({
+      items: [transaction("transaction-3"), transaction("transaction-4")],
+      metadata: {}
+    });
+  };
+  const callbackPages: string[][] = [];
+
+  const result = await fetchSlashActivityForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher,
+    collectTransactions: false,
+    onTransactionPage: async (transactions) => {
+      await Promise.resolve();
+      callbackPages.push(transactions.map((item) => item.id));
+    }
+  });
+
+  assert.equal(transactionRequests.length, 3);
+  assert.deepEqual(callbackPages.map((page) => page.length), [2, 1, 1]);
+  assert.equal(Math.max(...callbackPages.map((page) => page.length)), 2);
+  assert.deepEqual(callbackPages.flat(), [
+    bankProviderTransactionId("slash", ["account-debit", "transaction-1"]),
+    bankProviderTransactionId("slash", ["account-debit", "transaction-2"]),
+    bankProviderTransactionId("slash", ["account-debit", "transaction-3"]),
+    bankProviderTransactionId("slash", ["account-debit", "transaction-4"])
+  ]);
+  assert.equal(new Set(callbackPages.flat()).size, 4);
+  assert.deepEqual(result.transactions, []);
+  assert.equal(result.accounts.length, 1);
+});
+
+test("Slash sync checkpoints resume the provider cursor with a frozen bounded window", async () => {
+  const transactionRequests: URL[] = [];
+  const callbackPages: string[][] = [];
+  const transaction = (id: string) => ({
+    id,
+    date: "2026-07-27T17:00:00.000Z",
+    description: `CARD PURCHASE ${id}`,
+    amountCents: -100,
+    accountId: "account-debit",
+    accountSubtype: "cash",
+    status: "posted"
+  });
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({
+        items: [{
+          id: "account-debit",
+          name: "Operating",
+          status: "open",
+          type: "debit",
+          balances: ["debit"]
+        }],
+        metadata: {}
+      });
+    }
+    if (url.pathname === "/account/account-debit/balance") {
+      return Response.json({
+        balances: [{
+          accountId: "account-debit",
+          type: "debit",
+          available: { amountCents: 100_000 },
+          posted: { amountCents: 100_000 },
+          timestamp: "2026-07-28T12:00:00.000Z"
+        }]
+      });
+    }
+
+    assert.equal(url.pathname, "/transaction");
+    transactionRequests.push(url);
+    if (!url.searchParams.get("cursor")) {
+      return Response.json({
+        items: [transaction("transaction-1"), transaction("transaction-2")],
+        metadata: { nextCursor: "native-page-2" }
+      });
+    }
+    assert.equal(url.searchParams.get("cursor"), "native-page-2");
+    return Response.json({
+      items: [transaction("transaction-3")],
+      metadata: {}
+    });
+  };
+  const common = {
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher,
+    pageBudget: 1,
+    collectTransactions: false,
+    onTransactionPage: (transactions: import("./types").Transaction[]) => {
+      callbackPages.push(transactions.map((item) => item.id));
+    }
+  };
+
+  const first = await fetchSlashActivityBatch({
+    ...common,
+    now: Date.parse("2026-07-28T12:00:00.000Z")
+  });
+  assert.equal(first.complete, false);
+  assert.equal(first.pagesFetched, 1);
+  assert.equal(first.providerTransactionsRead, 2);
+  assert.deepEqual(first.transactions, []);
+  assert.ok(first.nextCheckpoint);
+  assert.doesNotMatch(first.nextCheckpoint, /native|2026|cursor/);
+
+  const second = await fetchSlashActivityBatch({
+    ...common,
+    checkpoint: first.nextCheckpoint,
+    now: Date.parse("2027-01-01T00:00:00.000Z")
+  });
+  assert.equal(second.complete, true);
+  assert.equal(second.nextCheckpoint, null);
+  assert.equal(second.pagesFetched, 1);
+  assert.equal(second.providerTransactionsRead, 1);
+  assert.deepEqual(callbackPages, [
+    [
+      bankProviderTransactionId("slash", ["account-debit", "transaction-1"]),
+      bankProviderTransactionId("slash", ["account-debit", "transaction-2"])
+    ],
+    [bankProviderTransactionId("slash", ["account-debit", "transaction-3"])]
+  ]);
+  assert.equal(
+    transactionRequests[0].searchParams.get("filter:from_date"),
+    String(Date.parse("2026-06-13T12:00:00.000Z"))
+  );
+  assert.equal(
+    transactionRequests[1].searchParams.get("filter:from_date"),
+    transactionRequests[0].searchParams.get("filter:from_date")
+  );
+  assert.equal(
+    transactionRequests[1].searchParams.get("filter:to_date"),
+    transactionRequests[0].searchParams.get("filter:to_date")
+  );
+});
+
+test("Slash rejects malformed transaction IDs, cents, dates, statuses, and bounded text", async () => {
+  const baseTransaction = {
+    id: "transaction-1",
+    date: "2026-07-27T17:00:00.000Z",
+    description: "CARD PURCHASE",
+    amountCents: -100,
+    accountId: "account-debit",
+    accountSubtype: "cash",
+    status: "posted"
+  };
+  const cases: Array<{ transaction: Record<string, unknown>; expected: RegExp }> = [
+    { transaction: { ...baseTransaction, id: undefined }, expected: /missing transaction\.id/ },
+    {
+      transaction: { ...baseTransaction, amountCents: undefined },
+      expected: /missing transaction\.amountCents/
+    },
+    {
+      transaction: { ...baseTransaction, amountCents: 1.5 },
+      expected: /must be a safe integer number of cents/
+    },
+    {
+      transaction: { ...baseTransaction, date: "2026-02-30T17:00:00.000Z" },
+      expected: /date is not a valid ISO timestamp/
+    },
+    { transaction: { ...baseTransaction, status: "unknown" }, expected: /unsupported transaction\.status/ },
+    {
+      transaction: { ...baseTransaction, description: "x".repeat(1_025) },
+      expected: /description exceeds 1024 characters/
+    }
+  ];
+
+  for (const { transaction, expected } of cases) {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/transaction/transaction-1") return Response.json(transaction);
+      throw new Error(`Unexpected Slash request: ${url}`);
+    };
+    await assert.rejects(
+      fetchSlashTransactionForLegalEntity({
+        baseUrl: "https://api.slash.test",
+        apiKey: "slash-key",
+        legalEntityId: "legal-entity-1",
+        transactionId: "transaction-1",
+        fetcher
+      }),
+      expected
+    );
+  }
+});
+
+test("Slash rejects malformed balance cents and timestamps instead of fabricating account values", async () => {
+  const baseBalance = {
+    accountId: "account-debit",
+    type: "debit",
+    available: { amountCents: 100_000 },
+    posted: { amountCents: 100_000 },
+    timestamp: "2026-07-28T12:00:00.000Z"
+  };
+  const cases: Array<{ balance: Record<string, unknown>; expected: RegExp }> = [
+    {
+      balance: { ...baseBalance, available: {} },
+      expected: /missing account\.balances\[0\]\.available\.amountCents/
+    },
+    {
+      balance: { ...baseBalance, posted: { amountCents: 1.5 } },
+      expected: /must be a safe integer number of cents/
+    },
+    {
+      balance: { ...baseBalance, timestamp: "2026-02-30T12:00:00.000Z" },
+      expected: /timestamp is not a valid ISO timestamp/
+    }
+  ];
+
+  for (const { balance, expected } of cases) {
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/account") {
+        return Response.json({
+          items: [{
+            id: "account-debit",
+            name: "Operating",
+            status: "open",
+            type: "debit",
+            balances: ["debit"]
+          }],
+          metadata: {}
+        });
+      }
+      if (url.pathname === "/account/account-debit/balance") {
+        return Response.json({ balances: [balance] });
+      }
+      throw new Error(`Unexpected Slash request: ${url}`);
+    };
+    await assert.rejects(
+      fetchSlashActivityForLegalEntity({
+        baseUrl: "https://api.slash.test",
+        apiKey: "slash-key",
+        legalEntityId: "legal-entity-1",
+        fetcher
+      }),
+      expected
+    );
+  }
 });

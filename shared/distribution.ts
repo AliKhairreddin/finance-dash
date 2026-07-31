@@ -261,58 +261,132 @@ export function shouldKeepProfitDistributionAdjustment(adjustment: ProfitDistrib
   );
 }
 
-export function calculateProfitDistribution(
-  transactions: Transaction[],
+export interface ProfitDistributionAccumulator {
+  readonly defaultMonth: string;
+  readonly monthCurrencies: Map<string, Set<string>>;
+  readonly revenueTotals: Map<string, number>;
+  readonly costTotals: Map<string, number>;
+  readonly paymentTotals: Map<string, number>;
+}
+
+export const profitDistributionContributionVersion = 1 as const;
+
+export interface ProfitDistributionPaymentFact {
+  partnerId: ProfitDistributionPartnerId;
+  bucket: ProfitDistributionBucket;
+  amount: number;
+}
+
+export interface ProfitDistributionFact {
+  version: number;
+  month: string;
+  currency: string;
+  transactionCount: number;
+  revenue: number;
+  generalCosts: number;
+  payments: ProfitDistributionPaymentFact[];
+}
+
+export interface ProfitDistributionContribution extends ProfitDistributionFact {
+  transactionCount: 0 | 1;
+}
+
+export function createProfitDistributionAccumulator(): ProfitDistributionAccumulator {
+  return {
+    defaultMonth: new Date().toISOString().slice(0, 7),
+    monthCurrencies: new Map<string, Set<string>>(),
+    revenueTotals: new Map<string, number>(),
+    costTotals: new Map<string, number>(),
+    paymentTotals: new Map<string, number>()
+  };
+}
+
+function includeMonthCurrency(monthCurrencies: Map<string, Set<string>>, month: string, currency: string) {
+  const currencies = monthCurrencies.get(month) ?? new Set<string>();
+  currencies.add(currency);
+  currencies.add(salaryCurrency);
+  monthCurrencies.set(month, currencies);
+}
+
+export function profitDistributionContribution(transaction: Transaction): ProfitDistributionContribution {
+  const month = transactionMonth(transaction);
+  const currency = normalizeCurrency(transaction.currency);
+  if (transaction.status === "voided" || transaction.status === "pending") {
+    return {
+      version: profitDistributionContributionVersion,
+      month,
+      currency,
+      transactionCount: 0,
+      revenue: 0,
+      generalCosts: 0,
+      payments: []
+    };
+  }
+  const payment = paymentBucketForTransaction(transaction);
+  return {
+    version: profitDistributionContributionVersion,
+    month,
+    currency,
+    transactionCount: 1,
+    revenue: isOperatingRevenue(transaction) ? transaction.amount : 0,
+    generalCosts: isGeneralCost(transaction) ? transaction.amount : 0,
+    payments: payment
+      ? [{ ...payment, amount: transaction.amount }]
+      : []
+  };
+}
+
+export function addProfitDistributionFactPage(
+  accumulator: ProfitDistributionAccumulator,
+  facts: readonly ProfitDistributionFact[]
+): void {
+  for (const fact of facts) {
+    if (fact.version !== profitDistributionContributionVersion) {
+      throw new Error(`Unsupported profit distribution contribution version: ${fact.version}`);
+    }
+    if (fact.transactionCount <= 0) continue;
+    const currency = normalizeCurrency(fact.currency);
+    includeMonthCurrency(accumulator.monthCurrencies, fact.month, currency);
+    const key = ledgerKey(fact.month, currency);
+    accumulator.revenueTotals.set(key, (accumulator.revenueTotals.get(key) ?? 0) + fact.revenue);
+    accumulator.costTotals.set(key, (accumulator.costTotals.get(key) ?? 0) + fact.generalCosts);
+    for (const payment of fact.payments) {
+      const paidKey = paymentKey(fact.month, currency, payment.partnerId, payment.bucket);
+      accumulator.paymentTotals.set(paidKey, (accumulator.paymentTotals.get(paidKey) ?? 0) + payment.amount);
+    }
+  }
+}
+
+export function addProfitDistributionTransactionPage(
+  accumulator: ProfitDistributionAccumulator,
+  transactions: readonly Transaction[]
+): void {
+  addProfitDistributionFactPage(accumulator, transactions.map(profitDistributionContribution));
+}
+
+export function finalizeProfitDistribution(
+  accumulator: ProfitDistributionAccumulator,
   adjustments: ProfitDistributionAdjustment[]
 ): ProfitDistributionSnapshot {
   const adjustmentMap = buildAdjustmentMap(adjustments);
-  const months = new Map<string, Set<string>>();
-  const revenueTotals = new Map<string, number>();
-  const costTotals = new Map<string, number>();
-  const paymentTotals = new Map<string, number>();
-  const currentMonth = new Date().toISOString().slice(0, 7);
-
-  function includeMonthCurrency(month: string, currency: string) {
-    const currencies = months.get(month) ?? new Set<string>();
-    currencies.add(currency);
-    currencies.add(salaryCurrency);
-    months.set(month, currencies);
-  }
-
-  for (const transaction of transactions) {
-    const month = transactionMonth(transaction);
-    const currency = normalizeCurrency(transaction.currency);
-    includeMonthCurrency(month, currency);
-    const key = ledgerKey(month, currency);
-
-    if (isOperatingRevenue(transaction)) {
-      revenueTotals.set(key, (revenueTotals.get(key) ?? 0) + transaction.amount);
-    }
-    if (isGeneralCost(transaction)) {
-      costTotals.set(key, (costTotals.get(key) ?? 0) + transaction.amount);
-    }
-
-    const payment = paymentBucketForTransaction(transaction);
-    if (payment) {
-      const paidKey = paymentKey(month, currency, payment.partnerId, payment.bucket);
-      paymentTotals.set(paidKey, (paymentTotals.get(paidKey) ?? 0) + transaction.amount);
-    }
-  }
+  const monthCurrencies = new Map(
+    [...accumulator.monthCurrencies].map(([month, currencies]) => [month, new Set(currencies)] as const)
+  );
 
   for (const adjustment of adjustments) {
-    includeMonthCurrency(adjustment.month, adjustment.currency);
+    includeMonthCurrency(monthCurrencies, adjustment.month, adjustment.currency);
   }
 
-  if (months.size === 0) {
-    includeMonthCurrency(currentMonth, salaryCurrency);
+  if (monthCurrencies.size === 0) {
+    includeMonthCurrency(monthCurrencies, accumulator.defaultMonth, salaryCurrency);
   }
 
   const monthLedgers: ProfitDistributionMonthLedger[] = [];
-  for (const [month, currencySet] of months) {
+  for (const [month, currencySet] of monthCurrencies) {
     for (const currency of currencySet) {
       const key = ledgerKey(month, currency);
-      const revenue = roundMoney(revenueTotals.get(key) ?? 0);
-      const generalCosts = roundMoney(costTotals.get(key) ?? 0);
+      const revenue = roundMoney(accumulator.revenueTotals.get(key) ?? 0);
+      const generalCosts = roundMoney(accumulator.costTotals.get(key) ?? 0);
       const netProfitAfterGeneralCosts = roundMoney(revenue - generalCosts);
       const rawIshanProfitShare = netProfitAfterGeneralCosts > 0 ? netProfitAfterGeneralCosts * 0.25 : 0;
       const partnerRows = new Map<ProfitDistributionPartnerId, ProfitDistributionPartnerLedger>();
@@ -354,9 +428,15 @@ export function calculateProfitDistribution(
 
       const partners = profitDistributionPartners.map((partner) => {
         const row = partnerRows.get(partner.id)!;
-        row.profitSharePaid = roundMoney(paymentTotals.get(paymentKey(month, currency, partner.id, "profit-share")) ?? 0);
-        row.salaryPaid = roundMoney(paymentTotals.get(paymentKey(month, currency, partner.id, "salary")) ?? 0);
-        row.distributionPaid = roundMoney(paymentTotals.get(paymentKey(month, currency, partner.id, "distribution")) ?? 0);
+        row.profitSharePaid = roundMoney(
+          accumulator.paymentTotals.get(paymentKey(month, currency, partner.id, "profit-share")) ?? 0
+        );
+        row.salaryPaid = roundMoney(
+          accumulator.paymentTotals.get(paymentKey(month, currency, partner.id, "salary")) ?? 0
+        );
+        row.distributionPaid = roundMoney(
+          accumulator.paymentTotals.get(paymentKey(month, currency, partner.id, "distribution")) ?? 0
+        );
         row.totalPayable = roundMoney(row.profitSharePayable + row.salaryPayable + row.distributionPayable);
         row.totalPaid = roundMoney(row.profitSharePaid + row.salaryPaid + row.distributionPaid);
         row.remaining = roundMoney(row.totalPayable - row.totalPaid);
@@ -457,4 +537,22 @@ export function calculateProfitDistribution(
         bucketIds.indexOf(left.bucket) - bucketIds.indexOf(right.bucket)
     )
   };
+}
+
+export function calculateProfitDistribution(
+  transactions: Transaction[],
+  adjustments: ProfitDistributionAdjustment[]
+): ProfitDistributionSnapshot {
+  const accumulator = createProfitDistributionAccumulator();
+  addProfitDistributionTransactionPage(accumulator, transactions);
+  return finalizeProfitDistribution(accumulator, adjustments);
+}
+
+export function calculateProfitDistributionFromFacts(
+  facts: readonly ProfitDistributionFact[],
+  adjustments: ProfitDistributionAdjustment[]
+): ProfitDistributionSnapshot {
+  const accumulator = createProfitDistributionAccumulator();
+  addProfitDistributionFactPage(accumulator, facts);
+  return finalizeProfitDistribution(accumulator, adjustments);
 }

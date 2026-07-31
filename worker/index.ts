@@ -10,8 +10,8 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
-  BankActivityLoadResult,
-  ConnectedBankSource,
+  BankAnalyticsSnapshot,
+  BankTransactionSource,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -40,6 +40,7 @@ import type {
   PaymentAllocation,
   PersistedAiSettings,
   ProfitDistributionAdjustment,
+  ProfitDistributionSnapshot,
   Provider,
   RecordInvoicePaymentPayload,
   RevenueAccrual,
@@ -53,10 +54,10 @@ import type {
   StoredAiSettings,
   SyncRevenuePayload,
   Team,
-  TransactionTeamAssignment,
   Transaction,
   TransactionCategory,
   TransactionCategoryRule,
+  TransactionPage,
   UpdateProviderPayload,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
@@ -115,31 +116,25 @@ import {
 } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
-  fetchRevolutActivity as fetchRevolutApiActivity,
-  parseRevolutTransactionDateRange,
-  type RevolutTransactionDateRange
+  fetchRevolutActivityBatch
 } from "../shared/revolutApi";
 import {
-  fetchSlashActivityForLegalEntity,
-  fetchSlashTransactionForLegalEntity,
+  fetchSlashActivityBatch,
   parseSlashTransactionDateRange,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
 import {
   emptyWiseActivity,
-  fetchWiseActivityForAccessibleBusinesses,
+  fetchWiseActivityBatch,
   parseWiseProfileIds,
-  wiseSyncIssue,
-  type WiseActivityResult
+  type WiseActivityResult,
+  type WiseTransactionDateRange
 } from "../shared/wiseApi";
 import {
   normalizeImportedWiseTransactions,
   validateWiseStatementImportPayload
 } from "../shared/wiseStatements";
-import {
-  migrateLegacyWiseStatementImports,
-  migrateLegacyWiseTransactions
-} from "../shared/wiseEntities";
+import { migrateLegacyWiseStatementImports } from "../shared/wiseEntities";
 import {
   applyPaymentState,
   buildRevenueDraft,
@@ -161,11 +156,39 @@ import {
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
-  calculateProfitDistribution,
+  addProfitDistributionFactPage,
+  createProfitDistributionAccumulator,
+  finalizeProfitDistribution,
   profitDistributionAdjustmentFromPayload,
-  shouldKeepProfitDistributionAdjustment
+  shouldKeepProfitDistributionAdjustment,
+  type ProfitDistributionFact
 } from "../shared/distribution";
+import type { BankAnalyticsAccumulatorState } from "../shared/analytics";
+import {
+  assertBankAnalyticsSnapshotSize,
+  bankAnalyticsJobPageSize,
+  buildBankAnalyticsPageBudget,
+  createBankAnalyticsJobIdentity
+} from "../shared/analyticsJob";
 import { enforceSiteAuthentication } from "./auth";
+import {
+  appendAmexCursorFingerprint,
+  amexCursorFingerprint,
+  maximumAmexCursorHistory,
+  normalizeAmexAccount,
+  normalizeAmexTransactions,
+  parseAmexAccountConfigs,
+  type AmexAccountConfig
+} from "../shared/amexApi";
+import { decodeBankSyncCheckpoint, encodeBankSyncCheckpoint } from "../shared/bankSyncCheckpoint";
+import {
+  bankConnectionKey,
+  requireBankConnectionKey
+} from "../shared/bankConnectionIdentity";
+import {
+  bankProviderOAuthFetchPolicy,
+  fetchBankProvider
+} from "../shared/boundedHttp";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
@@ -200,9 +223,8 @@ interface PersistedState {
   transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
   revenuePartners: RevenuePartner[];
-  transactionTeamAssignments: TransactionTeamAssignment[];
   wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
-  wiseStatementTransactions: Transaction[];
+  pendingBankTransactions: Transaction[];
   wiseStatementImports: WiseStatementImport[];
   revenueRuns: RevenueRun[];
   revenueAccruals: RevenueAccrual[];
@@ -212,24 +234,118 @@ interface PersistedState {
   fxTrackedAssets: string[];
   automationRuns: AutomationRun[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
+  profitDistributionCache?: ProfitDistributionSnapshot;
+  meritTaxes: MeritTax[];
   aiSettings?: PersistedAiSettings;
   bankAccounts: AccountBalance[];
-  bankSyncStates: Partial<Record<SyncedBankSource, BankSyncState>>;
+  bankSyncStates: Partial<Record<BankTransactionSource, BankSyncState>>;
+  bankSyncHealth: Partial<Record<BankTransactionSource, BankSyncHealth>>;
   bankTransactionBaseline: Map<string, string>;
   dirtyBankTransactionIds: Set<string>;
 }
 
-type SyncedBankSource = ConnectedBankSource;
-
 interface BankSyncState {
-  source: SyncedBankSource;
+  source: BankTransactionSource;
   coveredRanges: SlashTransactionDateRange[];
   lastSyncedAt: string;
 }
 
-interface BankDateRanges {
-  revolut?: RevolutTransactionDateRange;
-  slash?: SlashTransactionDateRange;
+interface BankSyncHealth {
+  source: BankTransactionSource;
+  status: "running" | "healthy" | "failed";
+  lastAttemptAt: string;
+  lastSuccessAt?: string;
+  lastError?: string;
+  consecutiveFailures: number;
+}
+
+interface StoredBankSyncCheckpoint {
+  source: BankTransactionSource;
+  connectionKey: string;
+  laneKey: string;
+  accountIds: string[];
+  fromDate: string;
+  toDate: string;
+  checkpoint: string;
+  updatedAt: string;
+}
+
+interface BankBackfillJob {
+  key: string;
+  source: BankTransactionSource;
+  connectionKey: string;
+  fromDate: string;
+  toDate: string;
+  status: "queued" | "running" | "complete" | "failed";
+  attempts: number;
+  consecutiveFailures: number;
+  nextAttemptAt: string;
+  lastAttemptAt?: string;
+  lastError?: string;
+  completedAt?: string;
+  updatedAt: string;
+}
+
+const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
+
+async function bankConnectionDirectory(env: Env): Promise<Array<{
+  source: BankTransactionSource;
+  connectionKey: string;
+}>> {
+  return Promise.all(bankSources.filter((source) => bankSourceConfigured(env, source)).map(async (source) => ({
+    source,
+    connectionKey: await requireBankConnectionKey(env, source)
+  })));
+}
+
+async function bankStorageConnectionDirectory(env: Env): Promise<Array<{
+  source: BankTransactionSource;
+  connectionKey: string;
+}>> {
+  const connections = await Promise.all(bankSources.map(async (source) => {
+    const connectionKey = await bankConnectionKey(env, source);
+    return connectionKey ? { source, connectionKey } : null;
+  }));
+  return connections.filter((connection): connection is {
+    source: BankTransactionSource;
+    connectionKey: string;
+  } => connection !== null);
+}
+
+function bankSourceConfigured(env: Env, source: BankTransactionSource): boolean {
+  if (source === "wise") {
+    return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim());
+  }
+  if (source === "revolut") {
+    return Boolean(
+      env.REVOLUT_CLIENT_ID?.trim()
+      && env.REVOLUT_ISSUER?.trim()
+      && env.REVOLUT_PRIVATE_KEY_PEM?.trim()
+      && env.REVOLUT_REFRESH_TOKEN?.trim()
+    );
+  }
+  if (source === "slash") {
+    return Boolean(
+      env.SLASH_API_KEY?.trim()
+      && env.SLASH_LEGAL_ENTITY_ID?.trim()
+      && env.SLASH_BASE_URL?.trim()
+    );
+  }
+  return Boolean(
+    env.AMEX_TOKEN_URL?.trim()
+    && env.AMEX_API_BASE_URL?.trim()
+    && env.AMEX_CLIENT_ID?.trim()
+    && env.AMEX_CLIENT_SECRET?.trim()
+    && env.AMEX_REFRESH_TOKEN?.trim()
+    && env.AMEX_ACCOUNT_IDS?.trim()
+    && env.AMEX_ACCOUNT_PATH_TEMPLATE?.trim()
+    && env.AMEX_TRANSACTIONS_PATH_TEMPLATE?.trim()
+    && env.AMEX_TRANSACTIONS_ITEMS_PATH?.trim()
+    && env.AMEX_TRANSACTIONS_NEXT_CURSOR_PATH?.trim()
+    && env.AMEX_TRANSACTIONS_CURSOR_PARAM?.trim()
+    && env.AMEX_TRANSACTIONS_PAGE_SIZE_PARAM?.trim()
+    && env.AMEX_TRANSACTIONS_PAGE_SIZE?.trim()
+  );
 }
 
 class ApiError extends Error {
@@ -265,6 +381,7 @@ function isValidTimezone(value: string | undefined): boolean {
 }
 
 function categoryMutationError(error: unknown): never {
+  if (error instanceof ApiError) throw error;
   if (error instanceof ConvexError && isRecord(error.data)) {
     const message = typeof error.data.message === "string" ? error.data.message : "Category update failed";
     const code = typeof error.data.code === "string" ? error.data.code : "";
@@ -479,28 +596,6 @@ function mergeBankTransaction(existing: Transaction, fresh: Transaction): Transa
   };
 }
 
-export function retainCurrentSlashTransactions(
-  persisted: Transaction[],
-  live: Transaction[],
-  authoritative: boolean
-): Transaction[] {
-  if (!authoritative) return persisted;
-  const liveIds = new Set(live.map((transaction) => transaction.id));
-  return persisted.filter((transaction) => transaction.source !== "slash" || liveIds.has(transaction.id));
-}
-
-export function retainPersistedTransactions(
-  persisted: Transaction[],
-  reconciled: Transaction[]
-): Transaction[] {
-  const persistedIds = new Set(persisted.map((transaction) => transaction.id));
-  return reconciled.filter((transaction) => persistedIds.has(transaction.id));
-}
-
-export function transactionsForDashboardStorage(transactions: Transaction[]): Transaction[] {
-  return transactions.filter((transaction) => transaction.source === "wise");
-}
-
 function summarizeWiseStatementImport(existing: Transaction[], incoming: Transaction[]): ImportWiseStatementSummary {
   const existingKeys = new Set(existing.map((transaction) => wiseStatementTransactionKey(transaction)));
   const incomingKeys = new Set<string>();
@@ -522,13 +617,6 @@ function summarizeWiseStatementImport(existing: Transaction[], incoming: Transac
     newTransactions,
     duplicateTransactions
   };
-}
-
-function normalizedTeamAssignments(rows?: TransactionTeamAssignment[]): TransactionTeamAssignment[] {
-  return (rows ?? []).map((assignment) => ({
-    ...assignment,
-    teamId: canonicalTeamId(assignment.teamId)
-  }));
 }
 
 function bankAliasNames(transaction: Transaction): string[] {
@@ -557,9 +645,55 @@ async function getManagementReportDashboard(env: Env): Promise<unknown> {
   }
 }
 
+const maximumExternalJsonBytes = 4 * 1024 * 1024;
+
+async function boundedResponseText(response: Response, maximumBytes = maximumExternalJsonBytes): Promise<string> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`External API response exceeded ${maximumBytes} bytes`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > maximumBytes) {
+        throw new Error(`External API response exceeded ${maximumBytes} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const text = await response.text();
+  const text = await boundedResponseText(response);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+async function fetchBankJson<T>(
+  url: string,
+  init: RequestInit,
+  provider: string,
+  oauth = false
+): Promise<T> {
+  const response = await fetchBankProvider(fetch, url, init, {
+    provider,
+    ...(oauth ? bankProviderOAuthFetchPolicy : {})
+  });
+  const text = await boundedResponseText(response);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
@@ -581,71 +715,6 @@ function meritConnectionIssue(error: unknown): string {
   return `Merit read failed: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
 }
 
-async function fetchWiseActivity(env: Env): Promise<WiseActivityResult> {
-  const profileIds = parseWiseProfileIds(env.WISE_PROFILE_IDS);
-  if (!env.WISE_API_TOKEN || profileIds.size === 0) return emptyWiseActivity();
-  return fetchWiseActivityForAccessibleBusinesses({
-    baseUrl: wiseBaseUrl(env),
-    token: env.WISE_API_TOKEN,
-    profileIds,
-    includeTransactions: false
-  });
-}
-
-async function fetchRevolutActivity(
-  env: Env,
-  dateRange?: RevolutTransactionDateRange
-): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
-  return fetchRevolutApiActivity({
-    environment: env.REVOLUT_ENVIRONMENT,
-    clientId: env.REVOLUT_CLIENT_ID,
-    issuer: env.REVOLUT_ISSUER,
-    privateKeyPem: env.REVOLUT_PRIVATE_KEY_PEM,
-    refreshToken: env.REVOLUT_REFRESH_TOKEN,
-    dateRange
-  });
-}
-
-async function fetchSlashActivity(
-  env: Env,
-  dateRange?: SlashTransactionDateRange
-): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
-  const apiKey = env.SLASH_API_KEY?.trim();
-  const legalEntityId = env.SLASH_LEGAL_ENTITY_ID?.trim();
-  const baseUrl = env.SLASH_BASE_URL?.trim();
-  if (!apiKey || !legalEntityId || !baseUrl) return { accounts: [], transactions: [] };
-  return fetchSlashActivityForLegalEntity({
-    baseUrl,
-    apiKey,
-    legalEntityId,
-    dateRange
-  });
-}
-
-type AmexAccountConfig = {
-  id: string;
-  name: string;
-  currency: string;
-};
-
-function parseAmexAccountConfigs(value?: string): AmexAccountConfig[] {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((item) => {
-      const [id, name, currency = "USD"] = item.trim().split(":");
-      const accountId = id?.trim();
-      return accountId
-        ? {
-            id: accountId,
-            name: name?.trim() || `Amex ${accountId}`,
-            currency: currency.trim() || "USD"
-          }
-        : undefined;
-    })
-    .filter((item): item is AmexAccountConfig => Boolean(item));
-}
-
 async function fetchAmexAccessToken(env: Env): Promise<string | undefined> {
   if (!env.AMEX_TOKEN_URL || !env.AMEX_CLIENT_ID || !env.AMEX_CLIENT_SECRET || !env.AMEX_REFRESH_TOKEN) return undefined;
 
@@ -656,16 +725,22 @@ async function fetchAmexAccessToken(env: Env): Promise<string | undefined> {
     client_secret: env.AMEX_CLIENT_SECRET
   });
 
-  const response = await fetchJson<{ access_token?: string }>(env.AMEX_TOKEN_URL, {
+  const response = await fetchBankJson<{ access_token?: string }>(env.AMEX_TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json"
     },
     body
-  });
+  }, "Amex", true);
 
-  if (!response.access_token) {
+  if (
+    typeof response.access_token !== "string"
+    || !response.access_token.trim()
+    || response.access_token !== response.access_token.trim()
+    || response.access_token.length > 16_384
+    || /[\u0000-\u0020\u007f-\u009f]/u.test(response.access_token)
+  ) {
     throw new Error("Amex token response did not include access_token");
   }
   return response.access_token;
@@ -679,92 +754,159 @@ function amexEndpoint(env: Env, template: string, accountId: string, query?: URL
   return `${env.AMEX_API_BASE_URL.replace(/\/+$/, "")}${separator}${path}${suffix}`;
 }
 
-function amexString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+type AmexCheckpointCursor = {
+  accountIds: string[];
+  accountIndex: number;
+  providerCursor: string | null;
+  seenCursorFingerprints: string[];
+};
+
+type AmexActivityBatchResult = {
+  accounts: AccountBalance[];
+  nextCheckpoint: string | null;
+  complete: boolean;
+  pagesFetched: number;
+  providerTransactionsRead: number;
+};
+
+const maximumAmexTransactionPageSize = 200;
+
+function amexTransactionPageSize(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new Error("AMEX_TRANSACTIONS_PAGE_SIZE must be a whole number");
   }
-  return undefined;
-}
-
-function amexMoneyValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/,/g, ""));
-    return Number.isFinite(parsed) ? parsed : undefined;
+  const pageSize = Number(value);
+  if (pageSize < 1 || pageSize > maximumAmexTransactionPageSize) {
+    throw new Error(`AMEX_TRANSACTIONS_PAGE_SIZE must be between 1 and ${maximumAmexTransactionPageSize}`);
   }
-  if (isRecord(value)) {
-    return amexMoneyValue(value.value ?? value.amount ?? value.amountValue);
+  return pageSize;
+}
+
+function amexResponseValue(payload: unknown, path: string, label: string): unknown {
+  const normalizedPath = path.trim();
+  if (normalizedPath === "$") return payload;
+  const segments = normalizedPath.split(".");
+  if (
+    segments.length === 0
+    || segments.length > 10
+    || segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))
+  ) {
+    throw new Error(`${label} must be a dot-separated response path or $`);
   }
-  return undefined;
-}
-
-function amexCurrency(value: unknown, fallback: string): string {
-  if (isRecord(value)) {
-    return amexString(value.currency, value.currencyCode, value.isoCurrencyCode) ?? fallback;
+  let value = payload;
+  for (const segment of segments) {
+    if (!isRecord(value)) return undefined;
+    value = value[segment];
   }
-  return fallback;
+  return value;
 }
 
-function amexRecords(payload: unknown, primaryKey: string): Array<Record<string, unknown>> {
-  if (Array.isArray(payload)) return payload.filter(isRecord);
-  if (!isRecord(payload)) return [];
-  const rows = payload[primaryKey] ?? payload.items ?? payload.data;
-  return Array.isArray(rows) ? rows.filter(isRecord) : [];
+function amexTransactionItems(payload: unknown, path: string): Array<Record<string, unknown>> {
+  const value = amexResponseValue(payload, path, "AMEX_TRANSACTIONS_ITEMS_PATH");
+  if (!Array.isArray(value) || value.some((item) => !isRecord(item))) {
+    throw new Error("Amex transaction response did not contain the configured item array");
+  }
+  return value as Array<Record<string, unknown>>;
 }
 
-function amexStatus(value: unknown): Transaction["status"] {
-  const status = amexString(value)?.toLowerCase();
-  return status === "pending" || status === "authorized" || status === "authorization" ? "pending" : "posted";
+function amexNextCursor(payload: unknown, path: string): string | null {
+  const value = amexResponseValue(payload, path, "AMEX_TRANSACTIONS_NEXT_CURSOR_PATH");
+  if (value === undefined || value === null || value === "") return null;
+  const cursor = typeof value === "string"
+    ? value
+    : typeof value === "number" && Number.isSafeInteger(value)
+      ? String(value)
+      : "";
+  if (
+    !cursor
+    || cursor !== cursor.trim()
+    || cursor.length > 4_096
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(cursor)
+  ) {
+    throw new Error("Amex transaction response returned an invalid pagination cursor");
+  }
+  return cursor;
 }
 
-function normalizeAmexAccount(payload: unknown, config: AmexAccountConfig): AccountBalance {
-  const account = isRecord(payload) ? payload : {};
-  const balanceValue = amexMoneyValue(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance) ?? 0;
-  const currency = amexCurrency(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance, config.currency);
-  const name = amexString(account.name, account.displayName, account.productName, account.lastFive, account.last4) ?? config.name;
+async function amexCheckpointCursor(value: string, accountIds: string[]): Promise<AmexCheckpointCursor> {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("Amex sync checkpoint cursor is invalid");
+  }
+  if (!isRecord(payload)) throw new Error("Amex sync checkpoint cursor is invalid");
+  const storedAccountIds = payload.accountIds;
+  const accountIndex = payload.accountIndex;
+  const providerCursor = payload.providerCursor;
+  const seenCursorFingerprints = payload.seenCursorFingerprints;
+  if (
+    !Array.isArray(storedAccountIds)
+    || storedAccountIds.some((id) => typeof id !== "string")
+    || JSON.stringify(storedAccountIds) !== JSON.stringify(accountIds)
+    || !Number.isInteger(accountIndex)
+    || (accountIndex as number) < 0
+    || (accountIndex as number) >= accountIds.length
+    || (providerCursor !== null && (
+      typeof providerCursor !== "string"
+      || !providerCursor
+      || providerCursor !== providerCursor.trim()
+      || providerCursor.length > 4_096
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(providerCursor)
+    ))
+    || !Array.isArray(seenCursorFingerprints)
+    || seenCursorFingerprints.length > maximumAmexCursorHistory
+    || seenCursorFingerprints.some((fingerprint) => typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fingerprint))
+    || new Set(seenCursorFingerprints).size !== seenCursorFingerprints.length
+    || (providerCursor === null && seenCursorFingerprints.length !== 0)
+    || (providerCursor !== null && seenCursorFingerprints.length === 0)
+  ) {
+    throw new Error("Amex sync checkpoint cursor is invalid");
+  }
+  if (
+    typeof providerCursor === "string"
+    && seenCursorFingerprints.at(-1) !== await amexCursorFingerprint(providerCursor)
+  ) {
+    throw new Error("Amex sync checkpoint cursor is invalid");
+  }
   return {
-    id: `amex-${config.id}`,
-    name,
-    source: "amex",
-    balance: balanceValue === 0 ? 0 : -Math.abs(balanceValue),
-    currency,
-    updatedAt: amexString(account.updatedAt, account.lastUpdatedAt, account.asOfDate) ?? new Date().toISOString(),
-    status: "live"
+    accountIds,
+    accountIndex: accountIndex as number,
+    providerCursor: providerCursor as string | null,
+    seenCursorFingerprints: seenCursorFingerprints as string[]
   };
 }
 
-function normalizeAmexTransactions(payload: unknown, config: AmexAccountConfig): Transaction[] {
-  return amexRecords(payload, "transactions").map((item, index) => {
-    const rawAmount = amexMoneyValue(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount) ?? 0;
-    const status = amexStatus(item.status ?? item.transactionStatus);
-    const category = amexString(item.category, item.categoryCode, item.industry, item.merchantCategory) ?? "Amex";
-    const type = amexString(item.type, item.transactionType, item.kind)?.toLowerCase() ?? "";
-    const merchant = isRecord(item.merchant) ? item.merchant : {};
-    const counterparty =
-      amexString(merchant.name, item.merchantName, item.description, item.memo, item.reference) ?? "Amex transaction";
-    const transactionId = amexString(item.id, item.transactionId, item.reference, item.authorizationCode) ?? `${config.id}-${index}`;
-    const cardHolderName = amexString(item.cardHolderName, item.cardMemberName, item.employeeName);
-    const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
-    return {
-      id: `amex-${config.id}-${transactionId}`,
-      source: "amex",
-      accountName: config.name,
-      date: (amexString(item.postedDate, item.transactionDate, item.date, item.authorizationDate) ?? new Date().toISOString()).slice(0, 10),
-      description: amexString(item.description, item.memo, item.reference, counterparty) ?? counterparty,
-      rawName: counterparty,
-      counterparty,
-      amount: Math.abs(rawAmount),
-      currency: amexCurrency(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount, config.currency),
-      direction: isCredit ? "in" : "out",
-      status,
-      category,
-      ...(cardHolderName ? { cardHolderName } : {})
-    };
+function encodeAmexCheckpoint(
+  windowStart: string,
+  windowEnd: string,
+  cursor: AmexCheckpointCursor
+): string {
+  return encodeBankSyncCheckpoint({
+    provider: "amex",
+    windowStart,
+    windowEnd,
+    cursor: JSON.stringify(cursor)
   });
 }
 
-async function fetchAmexActivity(env: Env): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
+async function fetchAmexActivityBatch(
+  env: Env,
+  options: {
+    dateRange?: SlashTransactionDateRange;
+    checkpoint?: string;
+    pageBudget?: number;
+    onAccountsDiscovered?: (accounts: AccountBalance[]) => void | Promise<void>;
+    onTransactionPage: (transactions: Transaction[]) => void | Promise<void>;
+  }
+): Promise<AmexActivityBatchResult> {
+  if (options.dateRange && options.checkpoint) {
+    throw new Error("Amex sync accepts either a date range or a checkpoint, not both");
+  }
+  const pageBudget = options.pageBudget ?? 5;
+  if (!Number.isInteger(pageBudget) || pageBudget < 1 || pageBudget > 10) {
+    throw new Error("Amex sync page budget must be an integer from 1 to 10");
+  }
   const accountConfigs = parseAmexAccountConfigs(env.AMEX_ACCOUNT_IDS);
   const accessToken = await fetchAmexAccessToken(env);
   if (
@@ -772,68 +914,123 @@ async function fetchAmexActivity(env: Env): Promise<{ accounts: AccountBalance[]
     !env.AMEX_API_BASE_URL ||
     !env.AMEX_ACCOUNT_PATH_TEMPLATE ||
     !env.AMEX_TRANSACTIONS_PATH_TEMPLATE ||
+    !env.AMEX_TRANSACTIONS_ITEMS_PATH ||
+    !env.AMEX_TRANSACTIONS_NEXT_CURSOR_PATH ||
+    !env.AMEX_TRANSACTIONS_CURSOR_PARAM ||
+    !env.AMEX_TRANSACTIONS_PAGE_SIZE_PARAM ||
+    !env.AMEX_TRANSACTIONS_PAGE_SIZE ||
     accountConfigs.length === 0
   ) {
-    return { accounts: [], transactions: [] };
+    throw new Error("Amex bounded transaction pagination is not fully configured");
   }
 
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json"
   };
-  const intervalEnd = new Date().toISOString().slice(0, 10);
-  const intervalStart = new Date(Date.now() - 1000 * 60 * 60 * 24 * 45).toISOString().slice(0, 10);
-  const accountResults = await Promise.all(
-    accountConfigs.map(async (config) => {
-      const transactionParams = new URLSearchParams({ from: intervalStart, to: intervalEnd });
-      const [account, transactions] = await Promise.all([
-        fetchJson<unknown>(amexEndpoint(env, env.AMEX_ACCOUNT_PATH_TEMPLATE!, config.id), { headers }),
-        fetchJson<unknown>(amexEndpoint(env, env.AMEX_TRANSACTIONS_PATH_TEMPLATE!, config.id, transactionParams), { headers })
-      ]);
-      return {
-        account: normalizeAmexAccount(account, config),
-        transactions: normalizeAmexTransactions(transactions, config)
-      };
-    })
-  );
+  const decodedCheckpoint = options.checkpoint
+    ? decodeBankSyncCheckpoint(options.checkpoint, "amex")
+    : null;
+  const range = options.dateRange ?? defaultBankDateRange();
+  const windowStart = decodedCheckpoint?.windowStart ?? `${range.fromDate}T00:00:00.000Z`;
+  const windowEnd = decodedCheckpoint?.windowEnd ?? `${range.toDate}T23:59:59.999Z`;
+  const accountIds = accountConfigs.map((config) => config.id);
+  const accounts = await Promise.all(accountConfigs.map(async (config) => normalizeAmexAccount(
+    await fetchBankJson<unknown>(
+      amexEndpoint(env, env.AMEX_ACCOUNT_PATH_TEMPLATE!, config.id),
+      { headers },
+      "Amex"
+    ),
+    config
+  )));
+  if (options.onAccountsDiscovered) await options.onAccountsDiscovered(accounts);
+  const initialCursor: AmexCheckpointCursor = decodedCheckpoint
+    ? await amexCheckpointCursor(decodedCheckpoint.cursor, accountIds)
+    : { accountIds, accountIndex: 0, providerCursor: null, seenCursorFingerprints: [] };
+  let accountIndex = initialCursor.accountIndex;
+  let providerCursor = initialCursor.providerCursor;
+  let seenCursorFingerprints = initialCursor.seenCursorFingerprints;
+  let pagesFetched = 0;
+  let providerTransactionsRead = 0;
+  const providerPageSize = amexTransactionPageSize(env.AMEX_TRANSACTIONS_PAGE_SIZE);
 
+  while (pagesFetched < pageBudget && accountIndex < accountConfigs.length) {
+    const config = accountConfigs[accountIndex];
+    const params = new URLSearchParams({
+      from: windowStart.slice(0, 10),
+      to: windowEnd.slice(0, 10)
+    });
+    params.set(env.AMEX_TRANSACTIONS_PAGE_SIZE_PARAM, String(providerPageSize));
+    if (providerCursor) params.set(env.AMEX_TRANSACTIONS_CURSOR_PARAM, providerCursor);
+    const payload = await fetchBankJson<unknown>(
+      amexEndpoint(env, env.AMEX_TRANSACTIONS_PATH_TEMPLATE, config.id, params),
+      { headers },
+      "Amex"
+    );
+    pagesFetched += 1;
+    const items = amexTransactionItems(payload, env.AMEX_TRANSACTIONS_ITEMS_PATH);
+    if (items.length > providerPageSize) {
+      throw new Error("Amex returned more transactions than the requested page size");
+    }
+    const nextCursor = amexNextCursor(payload, env.AMEX_TRANSACTIONS_NEXT_CURSOR_PATH);
+    const nextCursorFingerprints = nextCursor
+      ? await appendAmexCursorFingerprint(seenCursorFingerprints, nextCursor)
+      : [];
+    const transactions = normalizeAmexTransactions(items, config);
+    if (transactions.length > 0) await options.onTransactionPage(transactions);
+    providerTransactionsRead += items.length;
+    if (nextCursor) {
+      seenCursorFingerprints = nextCursorFingerprints;
+      providerCursor = nextCursor;
+    } else {
+      accountIndex += 1;
+      providerCursor = null;
+      seenCursorFingerprints = [];
+    }
+  }
+
+  if (accountIndex >= accountConfigs.length) {
+    return {
+      accounts,
+      nextCheckpoint: null,
+      complete: true,
+      pagesFetched,
+      providerTransactionsRead
+    };
+  }
   return {
-    accounts: accountResults.map((result) => result.account),
-    transactions: accountResults.flatMap((result) => result.transactions)
+    accounts,
+    nextCheckpoint: encodeAmexCheckpoint(windowStart, windowEnd, {
+      accountIds,
+      accountIndex,
+      providerCursor,
+      seenCursorFingerprints
+    }),
+    complete: false,
+    pagesFetched,
+    providerTransactionsRead
   };
 }
 
-function mergeLiveAccounts(...accountGroups: AccountBalance[][]): AccountBalance[] {
-  return accountGroups.flat();
-}
-
 function findPersistedTransaction(state: PersistedState, transactionId: string): Transaction | undefined {
-  return state.wiseStatementTransactions.find((transaction) => transaction.id === transactionId);
+  return state.pendingBankTransactions.find((transaction) => transaction.id === transactionId);
 }
 
 function upsertPersistedTransaction(state: PersistedState, updated: Transaction): void {
-  const existing = state.wiseStatementTransactions.find((transaction) => transaction.id === updated.id);
-  state.wiseStatementTransactions = existing
-    ? state.wiseStatementTransactions.map((transaction) =>
+  const existing = state.pendingBankTransactions.find((transaction) => transaction.id === updated.id);
+  state.pendingBankTransactions = existing
+    ? state.pendingBankTransactions.map((transaction) =>
         transaction.id === updated.id ? { ...transaction, ...updated } : transaction
       )
-    : [updated, ...state.wiseStatementTransactions];
-  if (updated.source === "revolut" || updated.source === "slash") {
+    : [updated, ...state.pendingBankTransactions];
+  if (
+    updated.source === "wise"
+    || updated.source === "revolut"
+    || updated.source === "slash"
+    || updated.source === "amex"
+  ) {
     state.dirtyBankTransactionIds.add(updated.id);
   }
-}
-
-async function fetchSlashTransaction(env: Env, transactionId: string): Promise<Transaction | undefined> {
-  const apiKey = env.SLASH_API_KEY?.trim();
-  const legalEntityId = env.SLASH_LEGAL_ENTITY_ID?.trim();
-  const baseUrl = env.SLASH_BASE_URL?.trim();
-  if (!apiKey || !legalEntityId || !baseUrl || !transactionId.startsWith("slash-")) return undefined;
-  return fetchSlashTransactionForLegalEntity({
-    baseUrl,
-    apiKey,
-    legalEntityId,
-    transactionId: transactionId.slice("slash-".length)
-  });
 }
 
 async function fetchTransactionForUpdate(env: Env, transactionId: string, state?: PersistedState): Promise<Transaction | undefined> {
@@ -841,26 +1038,11 @@ async function fetchTransactionForUpdate(env: Env, transactionId: string, state?
     const persisted = findPersistedTransaction(state, transactionId);
     if (persisted) return persisted;
   }
-  const storedBankTransaction = await getConvexClient(env)
-    .query(api.banking.getTransaction, {
-      serviceToken: getConvexServiceToken(env),
-      id: transactionId
-    })
-    .catch(() => null);
-  if (storedBankTransaction) return storedBankTransaction;
-
-  if (transactionId.startsWith("slash-")) {
-    return fetchSlashTransaction(env, transactionId);
-  }
-
-  const [wise, revolut, amex] = await Promise.all([
-    fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error))),
-    fetchRevolutActivity(env).catch(() => ({ accounts: [], transactions: [] })),
-    fetchAmexActivity(env).catch(() => ({ accounts: [], transactions: [] }))
-  ]);
-  return [...wise.transactions, ...revolut.transactions, ...amex.transactions].find(
-    (transaction) => transaction.id === transactionId
-  );
+  const storedBankTransaction = await getConvexClient(env).query(api.banking.getTransaction, {
+    serviceToken: getConvexServiceToken(env),
+    id: transactionId
+  });
+  return storedBankTransaction ?? undefined;
 }
 
 async function fetchTransactionForMatch(env: Env, transactionId: string, state: PersistedState): Promise<Transaction | undefined> {
@@ -1427,6 +1609,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const bankActivityWindowDays = 45;
 const bankSyncOverlapDays = 3;
 const bankMutationBatchSize = 200;
+const bankClassificationBatchSize = 240;
 
 function isoDateShift(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -1442,31 +1625,367 @@ function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
   };
 }
 
-async function readBankActivity(
+async function readTransactionPage(
   env: Env,
-  source: SyncedBankSource,
-  dateRange: SlashTransactionDateRange
-) {
-  return getConvexClient(env).query(api.banking.getActivity, {
-    serviceToken: getConvexServiceToken(env),
-    source,
-    fromDate: dateRange.fromDate,
-    toDate: dateRange.toDate
-  });
-}
-
-async function loadPersisted(
-  env: Env,
-  dateRanges: BankDateRanges = {}
-): Promise<PersistedState> {
+  options: {
+    fromDate: string;
+    toDate: string;
+    source?: BankTransactionSource;
+    direction?: Transaction["direction"];
+    order?: "asc" | "desc";
+    cursor?: string | null;
+    limit?: number;
+  }
+): Promise<TransactionPage> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const revolutDateRange = dateRanges.revolut ?? defaultBankDateRange();
-  const slashDateRange = dateRanges.slash ?? defaultBankDateRange();
-  const [stored, revolut, slash] = await Promise.all([
+  const connections = await bankConnectionDirectory(env);
+  const [result, coverage] = await Promise.all([
+    convex.query(api.banking.getActivityPage, {
+      serviceToken,
+      source: options.source,
+      direction: options.direction,
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      order: options.order ?? "desc",
+      paginationOpts: {
+        cursor: options.cursor ?? null,
+        numItems: Math.max(1, Math.min(bankMutationBatchSize, Math.trunc(options.limit ?? bankMutationBatchSize)))
+      }
+    }),
+    convex.query(api.banking.getActivityCoverage, {
+      serviceToken,
+      connections,
+      source: options.source,
+      fromDate: options.fromDate,
+      toDate: options.toDate
+    })
+  ]);
+  return {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.direction ? { direction: options.direction } : {}),
+    transactions: result.page,
+    continueCursor: result.isDone ? null : result.continueCursor,
+    isDone: result.isDone,
+    coverage
+  };
+}
+
+interface BankAnalyticsDateRange {
+  fromDate: string;
+  toDate: string;
+}
+
+function bankAnalyticsDateRange(url: URL): BankAnalyticsDateRange {
+  const fromDate = url.searchParams.get("fromDate");
+  const toDate = url.searchParams.get("toDate");
+  if (!fromDate || !toDate) throw new ApiError(400, "Analytics fromDate and toDate are required");
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
+    || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
+    || fromDate > toDate
+    || toDate > new Date().toISOString().slice(0, 10)
+  ) {
+    throw new ApiError(400, "Analytics date range is invalid");
+  }
+  return { fromDate, toDate };
+}
+
+function analyticsBuildingResponse(): Response {
+  return json(
+    { status: "building" },
+    { status: 202, headers: { "Retry-After": "1" } }
+  );
+}
+
+function isAnalyticsJobConflict(error: unknown): boolean {
+  return error instanceof ConvexError
+    && isRecord(error.data)
+    && error.data.code === "ANALYTICS_JOB_CONFLICT";
+}
+
+function requireBankAnalyticsSnapshot(
+  value: unknown,
+  range: BankAnalyticsDateRange
+): BankAnalyticsSnapshot {
+  if (
+    !isRecord(value)
+    || value.version !== 1
+    || value.fromDate !== range.fromDate
+    || value.toDate !== range.toDate
+    || !isRecord(value.summary)
+    || !Array.isArray(value.categories)
+    || !Array.isArray(value.teams)
+    || !Array.isArray(value.sources)
+    || !Array.isArray(value.providers)
+    || !Array.isArray(value.relationships)
+    || !Array.isArray(value.reviewSamples)
+    || !isRecord(value.unmatchedMerchants)
+  ) {
+    throw new Error("Stored Analytics snapshot is invalid");
+  }
+  return value as unknown as BankAnalyticsSnapshot;
+}
+
+async function bankAnalyticsBuildContext(
+  env: Env,
+  range: BankAnalyticsDateRange
+) {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const [directory, ledger] = await Promise.all([
+    convex.query(api.dashboard.getAnalyticsDirectory, { serviceToken }),
+    convex.query(api.banking.getLedgerRevision, { serviceToken })
+  ]);
+  const options = {
+    ...range,
+    providers: directory.providers,
+    teams: directory.teams
+  };
+  return {
+    options,
+    identity: createBankAnalyticsJobIdentity(ledger.revision, options)
+  };
+}
+
+async function getBankAnalyticsSnapshot(
+  env: Env,
+  range: BankAnalyticsDateRange
+): Promise<Response> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const key = `${range.fromDate}:${range.toDate}`;
+  const [context, storedJob] = await Promise.all([
+    bankAnalyticsBuildContext(env, range),
+    convex.query(api.analytics.getJob, { serviceToken, key })
+  ]);
+
+  let job = storedJob;
+  if (!job || job.version !== context.identity.version) {
+    try {
+      job = await convex.mutation(api.analytics.startJob, {
+        serviceToken,
+        key,
+        version: context.identity.version,
+        expectedVersion: job?.version ?? null,
+        fromDate: range.fromDate,
+        toDate: range.toDate,
+        accumulator: context.identity.initialState
+      });
+    } catch (error) {
+      if (isAnalyticsJobConflict(error)) return analyticsBuildingResponse();
+      throw error;
+    }
+  }
+
+  if (job.version !== context.identity.version) return analyticsBuildingResponse();
+  if (job.status === "complete") {
+    return json(requireBankAnalyticsSnapshot(job.snapshot, range));
+  }
+  if (!job.accumulator) throw new Error("Stored Analytics build progress is missing its accumulator");
+
+  const expectedCursor = job.cursor;
+  const build = await buildBankAnalyticsPageBudget({
+    ...context.options,
+    state: job.accumulator as BankAnalyticsAccumulatorState,
+    cursor: expectedCursor,
+    readPage: (cursor) => readTransactionPage(env, {
+      ...range,
+      order: "asc",
+      cursor,
+      limit: bankAnalyticsJobPageSize
+    })
+  });
+
+  const latestContext = await bankAnalyticsBuildContext(env, range);
+  if (latestContext.identity.version !== context.identity.version) {
+    return analyticsBuildingResponse();
+  }
+
+  try {
+    if (build.status === "complete") {
+      assertBankAnalyticsSnapshotSize(build.snapshot);
+      await convex.mutation(api.analytics.completeJob, {
+        serviceToken,
+        key,
+        version: context.identity.version,
+        expectedCursor,
+        snapshot: build.snapshot
+      });
+      return json(build.snapshot);
+    }
+    await convex.mutation(api.analytics.saveProgress, {
+      serviceToken,
+      key,
+      version: context.identity.version,
+      expectedCursor,
+      cursor: build.cursor,
+      accumulator: build.accumulator
+    });
+    return analyticsBuildingResponse();
+  } catch (error) {
+    if (isAnalyticsJobConflict(error)) return analyticsBuildingResponse();
+    throw error;
+  }
+}
+
+async function invoicePaymentCandidates(
+  env: Env,
+  currency: string,
+  limit: number,
+  cursor: string | null
+): Promise<TransactionPage> {
+  const result = await getConvexClient(env).query(api.banking.getInvoicePaymentCandidates, {
+    serviceToken: getConvexServiceToken(env),
+    currency,
+    limit,
+    cursor
+  });
+  return {
+    fromDate: "1900-01-01",
+    toDate: "9999-12-31",
+    direction: "in",
+    transactions: result.transactions,
+    continueCursor: result.continueCursor,
+    isDone: !result.hasMore
+  };
+}
+
+async function profitDistributionFromFacts(
+  env: Env,
+  adjustments: ProfitDistributionAdjustment[]
+): Promise<{ snapshot: ProfitDistributionSnapshot; transactionCount: number }> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const status = await convex.query(api.banking.getProfitFactsBackfillStatus, { serviceToken });
+  if (!status.isComplete) {
+    throw new ApiError(503, "Profit distribution aggregates are still being prepared");
+  }
+  const accumulator = createProfitDistributionAccumulator();
+  const seenCursors = new Set<string>();
+  let transactionCount = 0;
+  let cursor: string | null = null;
+  do {
+    const page: {
+      page: ProfitDistributionFact[];
+      isDone: boolean;
+      continueCursor: string;
+    } = await convex.query(api.banking.getProfitFactsPage, {
+      serviceToken,
+      paginationOpts: {
+        cursor,
+        numItems: bankMutationBatchSize
+      }
+    });
+    addProfitDistributionFactPage(accumulator, page.page);
+    transactionCount += page.page.reduce((total, fact) => total + fact.transactionCount, 0);
+    cursor = page.isDone ? null : page.continueCursor;
+    if (cursor) {
+      if (seenCursors.has(cursor)) throw new ApiError(503, "Profit fact pagination did not advance");
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+  return {
+    snapshot: finalizeProfitDistribution(accumulator, adjustments),
+    transactionCount
+  };
+}
+
+async function rebuildProfitDistributionCache(env: Env): Promise<ProfitDistributionSnapshot> {
+  const state = await loadPersisted(env);
+  const { snapshot, transactionCount } = await profitDistributionFromFacts(
+    env,
+    state.profitDistributionAdjustments
+  );
+  console.log(JSON.stringify({
+    event: "profit_distribution_cache_rebuilt",
+    transactions: transactionCount,
+    months: snapshot.months.length
+  }));
+  return snapshot;
+}
+
+async function upsertLedgerTransactions(
+  env: Env,
+  source: BankTransactionSource,
+  transactions: Transaction[]
+): Promise<{ inserted: number; updated: number }> {
+  if (transactions.length === 0) return { inserted: 0, updated: 0 };
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const connectionKey = await requireBankConnectionKey(env, source);
+  const syncedAt = new Date().toISOString();
+  let inserted = 0;
+  let updated = 0;
+  for (let index = 0; index < transactions.length; index += bankMutationBatchSize) {
+    const result = await convex.mutation(api.banking.upsertActivityBatch, {
+      serviceToken,
+      source,
+      connectionKey,
+      replaceAccounts: false,
+      accounts: [],
+      transactions: transactions.slice(index, index + bankMutationBatchSize).map((transaction) => ({
+        ...transaction,
+        source
+      })),
+      syncedAt
+    });
+    inserted += result.insertedTransactions;
+    updated += result.updatedTransactions;
+  }
+  return { inserted, updated };
+}
+
+interface BankSyncLease {
+  token: string;
+  fence: number;
+  connectionKey: string;
+  renew: () => Promise<void>;
+}
+
+async function upsertSyncedLedgerTransactions(
+  env: Env,
+  source: BankTransactionSource,
+  transactions: Transaction[],
+  lease: BankSyncLease
+): Promise<{ inserted: number; updated: number }> {
+  if (transactions.length === 0) return { inserted: 0, updated: 0 };
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const syncedAt = new Date().toISOString();
+  let inserted = 0;
+  let updated = 0;
+  for (let index = 0; index < transactions.length; index += bankMutationBatchSize) {
+    await lease.renew();
+    const result = await convex.mutation(api.banking.upsertSyncedActivityBatch, {
+      serviceToken,
+      source,
+      replaceAccounts: false,
+      accounts: [],
+      transactions: transactions.slice(index, index + bankMutationBatchSize).map((transaction) => ({
+        ...transaction,
+        source
+      })),
+      syncedAt,
+      connectionKey: lease.connectionKey,
+      leaseToken: lease.token,
+      leaseFence: lease.fence
+    });
+    inserted += result.insertedTransactions;
+    updated += result.updatedTransactions;
+  }
+  return { inserted, updated };
+}
+
+async function loadPersisted(env: Env): Promise<PersistedState> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const connections = await bankStorageConnectionDirectory(env);
+  const [stored, activityMetadata] = await Promise.all([
     convex.query(api.dashboard.getState, { serviceToken }),
-    readBankActivity(env, "revolut", revolutDateRange),
-    readBankActivity(env, "slash", slashDateRange)
+    convex.query(api.banking.getActivityMetadata, { serviceToken, connections })
   ]).catch((error: unknown) => {
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   });
@@ -1485,16 +2004,14 @@ async function loadPersisted(
   }
 
   const storedCategoryRules = stored?.transactionCategoryRules ?? [];
-  const storedTransactions = stored?.wiseStatementTransactions ?? [];
-  const migratedStoredTransactions = migrateLegacyWiseTransactions(storedTransactions);
-  const sanitizedStoredTransactions = sanitizeStoredTransactionCategories(migratedStoredTransactions);
   const storedWiseStatementImports = stored?.wiseStatementImports ?? [];
   const migratedWiseStatementImports = migrateLegacyWiseStatementImports(storedWiseStatementImports);
-  const cachedTransactions = [...revolut.transactions, ...slash.transactions];
-  const allTransactions = mergeWiseStatementTransactions(
-    sanitizedStoredTransactions,
-    cachedTransactions
-  );
+  const bankSyncStates = new Map(activityMetadata.syncStates.map((syncState) => [syncState.source, syncState]));
+  const bankSyncHealth = new Map(activityMetadata.syncHealth.map((health) => [health.source, health]));
+  const wiseSyncState = bankSyncStates.get("wise");
+  const revolutSyncState = bankSyncStates.get("revolut");
+  const slashSyncState = bankSyncStates.get("slash");
+  const amexSyncState = bankSyncStates.get("amex");
   const state: PersistedState = {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
@@ -1505,9 +2022,8 @@ async function loadPersisted(
     transactionCategories: storedTransactionCategories,
     transactionCategoryRules: sanitizeStoredTransactionCategoryRules(storedCategoryRules),
     revenuePartners: mergeRevenuePartnerDirectory(stored?.revenuePartners ?? []),
-    transactionTeamAssignments: normalizedTeamAssignments(stored?.transactionTeamAssignments),
     wiseCardHolderTeamAssignments: mergeWiseCardHolderTeamAssignments(stored?.wiseCardHolderTeamAssignments ?? []),
-    wiseStatementTransactions: allTransactions,
+    pendingBankTransactions: [],
     wiseStatementImports: migratedWiseStatementImports,
     revenueRuns: stored?.revenueRuns ?? [],
     revenueAccruals: stored?.revenueAccruals ?? [],
@@ -1517,21 +2033,32 @@ async function loadPersisted(
     fxTrackedAssets: stored?.fxTrackedAssets ?? [],
     automationRuns: stored?.automationRuns ?? [],
     profitDistributionAdjustments: stored?.profitDistributionAdjustments ?? [],
+    profitDistributionCache: undefined,
+    meritTaxes: stored?.meritTaxes ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings },
-    bankAccounts: [...revolut.accounts, ...slash.accounts],
+    bankAccounts: activityMetadata.accounts,
     bankSyncStates: {
-      ...(revolut.syncState ? { revolut: revolut.syncState } : {}),
-      ...(slash.syncState ? { slash: slash.syncState } : {})
+      ...(wiseSyncState
+        ? { wise: { ...wiseSyncState, source: "wise" as const } }
+        : {}),
+      ...(revolutSyncState
+        ? { revolut: { ...revolutSyncState, source: "revolut" as const } }
+        : {}),
+      ...(slashSyncState
+        ? { slash: { ...slashSyncState, source: "slash" as const } }
+        : {}),
+      ...(amexSyncState
+        ? { amex: { ...amexSyncState, source: "amex" as const } }
+        : {})
     },
-    bankTransactionBaseline: new Map(
-      cachedTransactions.map((transaction) => [transaction.id, JSON.stringify(transaction)])
-    ),
+    bankSyncHealth: Object.fromEntries(bankSyncHealth) as Partial<Record<BankTransactionSource, BankSyncHealth>>,
+    bankTransactionBaseline: new Map(),
     dirtyBankTransactionIds: new Set()
   };
   if (
     JSON.stringify(state.transactionCategoryRules) !== JSON.stringify(storedCategoryRules)
-    || JSON.stringify(sanitizedStoredTransactions) !== JSON.stringify(storedTransactions)
     || JSON.stringify(migratedWiseStatementImports) !== JSON.stringify(storedWiseStatementImports)
+    || stored?.profitDistributionCache !== undefined
   ) {
     await savePersisted(env, state);
   }
@@ -1542,9 +2069,14 @@ async function saveBankTransactionUpdates(
   env: Env,
   state: PersistedState
 ): Promise<void> {
-  const changed = state.wiseStatementTransactions.filter(
-    (transaction): transaction is Transaction & { source: SyncedBankSource } =>
-      (transaction.source === "revolut" || transaction.source === "slash")
+  const changed = state.pendingBankTransactions.filter(
+    (transaction): transaction is Transaction & { source: BankTransactionSource } =>
+      (
+        transaction.source === "wise"
+        || transaction.source === "revolut"
+        || transaction.source === "slash"
+        || transaction.source === "amex"
+      )
       && state.dirtyBankTransactionIds.has(transaction.id)
       && state.bankTransactionBaseline.get(transaction.id) !== JSON.stringify(transaction)
   );
@@ -1552,7 +2084,36 @@ async function saveBankTransactionUpdates(
     const transactions = changed.slice(index, index + bankMutationBatchSize);
     await getConvexClient(env).mutation(api.banking.saveTransactionUpdates, {
       serviceToken: getConvexServiceToken(env),
-      transactions
+      transactions: transactions.map((transaction) => ({
+        id: transaction.id,
+        category: transaction.category,
+        merchantName: transaction.merchantName,
+        merchantKey: transaction.merchantKey,
+        classificationComplete: transaction.classificationComplete,
+        categorySource: transaction.categorySource,
+        categoryConfidence: transaction.categoryConfidence,
+        categoryReason: transaction.categoryReason,
+        matchedProviderId: transaction.matchedProviderId,
+        companyMatchSource: transaction.companyMatchSource,
+        companyConfidence: transaction.companyConfidence,
+        companyMatchReason: transaction.companyMatchReason,
+        confidence: transaction.confidence,
+        matchReason: transaction.matchReason
+      }))
+    });
+    await getConvexClient(env).mutation(api.banking.applyTeamAssignmentsBatch, {
+      serviceToken: getConvexServiceToken(env),
+      assignments: transactions.map((transaction) => ({
+        transactionId: transaction.id,
+        teamId: transaction.teamId ?? null
+      }))
+    });
+    await getConvexClient(env).mutation(api.banking.applyMatchedInvoiceAssignmentsBatch, {
+      serviceToken: getConvexServiceToken(env),
+      assignments: transactions.map((transaction) => ({
+        transactionId: transaction.id,
+        matchedInvoiceId: transaction.matchedInvoiceId ?? null
+      }))
     });
     for (const transaction of transactions) {
       state.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
@@ -1567,15 +2128,15 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
   const {
     revision,
     transactionCategories: _transactionCategories,
+    pendingBankTransactions: _pendingBankTransactions,
     bankAccounts: _bankAccounts,
     bankSyncStates: _bankSyncStates,
+    bankSyncHealth: _bankSyncHealth,
     bankTransactionBaseline: _bankTransactionBaseline,
     dirtyBankTransactionIds: _dirtyBankTransactionIds,
+    profitDistributionCache: _profitDistributionCache,
     ...dashboardState
   } = state;
-  dashboardState.wiseStatementTransactions = transactionsForDashboardStorage(
-    dashboardState.wiseStatementTransactions
-  );
   try {
     const result = await convex.mutation(api.dashboard.saveState, {
       ...dashboardState,
@@ -1588,7 +2149,6 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
     const cause = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({
       event: "dashboard_storage_save_failed",
-      transactionCount: dashboardState.wiseStatementTransactions.length,
       payloadBytes: new TextEncoder().encode(JSON.stringify(dashboardState)).length,
       cause
     }));
@@ -1609,12 +2169,17 @@ async function resetWiseImports(
   env: Env,
   confirmation: string | undefined
 ): Promise<{ deletedTransactions: number; deletedImports: number; updatedAt: string }> {
-  if (confirmation !== "DELETE_WISE_TRANSACTIONS") {
-    throw new ApiError(400, "Explicit DELETE_WISE_TRANSACTIONS confirmation is required");
+  if (confirmation !== "CLEAR_WISE_IMPORT_HISTORY") {
+    throw new ApiError(400, "Explicit CLEAR_WISE_IMPORT_HISTORY confirmation is required");
   }
-  return getConvexClient(env).mutation(api.dashboard.resetWiseImports, {
+  const dashboardResult = await getConvexClient(env).mutation(api.dashboard.resetWiseImports, {
     serviceToken: getConvexServiceToken(env)
   });
+  return {
+    deletedTransactions: 0,
+    deletedImports: dashboardResult.deletedImports,
+    updatedAt: dashboardResult.updatedAt
+  };
 }
 
 async function reserveIncomeAutomation(env: Env, run: AutomationRun): Promise<boolean> {
@@ -1683,13 +2248,13 @@ function integrationStatus(
   wiseActivity?: WiseActivityResult,
   revenuePartners: RevenuePartner[] = [],
   meritIssue?: string,
-  bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {},
+  bankIssues: Partial<Record<BankTransactionSource, string>> = {},
   fxRates: FxRate[] = [],
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !env[name as keyof Env]);
-  const wiseBalanceIssue = wiseNeeds.length === 0 ? wiseActivity?.balanceIssue : undefined;
+  const wiseBalanceIssue = wiseNeeds.length === 0 ? bankIssues.wise ?? wiseActivity?.balanceIssue : undefined;
 
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
@@ -1706,7 +2271,12 @@ function integrationStatus(
     "AMEX_REFRESH_TOKEN",
     "AMEX_ACCOUNT_IDS",
     "AMEX_ACCOUNT_PATH_TEMPLATE",
-    "AMEX_TRANSACTIONS_PATH_TEMPLATE"
+    "AMEX_TRANSACTIONS_PATH_TEMPLATE",
+    "AMEX_TRANSACTIONS_ITEMS_PATH",
+    "AMEX_TRANSACTIONS_NEXT_CURSOR_PATH",
+    "AMEX_TRANSACTIONS_CURSOR_PARAM",
+    "AMEX_TRANSACTIONS_PAGE_SIZE_PARAM",
+    "AMEX_TRANSACTIONS_PAGE_SIZE"
   ].filter((name) => !env[name as keyof Env]);
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
@@ -1724,7 +2294,7 @@ function integrationStatus(
       message:
         wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
+          ? "Balances and transactions sync in bounded statement pages; CSV imports remain available for historical statements."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
@@ -1736,7 +2306,7 @@ function integrationStatus(
       mode: revolutNeeds.length === 0 && !bankIssues.revolut ? "live" : "partial",
       message:
         bankIssues.revolut ?? (revolutNeeds.length === 0
-          ? "Transactions refresh every 15 minutes, are saved in Convex, and are categorized automatically."
+          ? "Transactions resume from a saved provider checkpoint into indexed storage."
           : "Revolut rows stay empty until the client ID, issuer, certificate private key, and refresh token are configured."),
       needs: revolutNeeds,
       issue: bankIssues.revolut
@@ -1748,7 +2318,7 @@ function integrationStatus(
       mode: slashNeeds.length === 0 && !bankIssues.slash ? "live" : "partial",
       message:
         bankIssues.slash ?? (slashNeeds.length === 0
-          ? "Transactions refresh every 15 minutes and are categorized automatically; older dates are backfilled when requested."
+          ? "Transactions resume from Slash's native cursor into indexed storage."
           : "Slash rows stay empty until the user-scoped API key, legal entity ID, and API base URL are configured."),
       needs: slashNeeds,
       issue: bankIssues.slash
@@ -1760,8 +2330,8 @@ function integrationStatus(
       mode: amexNeeds.length === 0 && !bankIssues.amex ? "live" : "partial",
       message:
         bankIssues.amex ?? (amexNeeds.length === 0
-          ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
-          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured."),
+          ? "Balances and transactions use the configured Amex cursor contract and resume in bounded pages."
+          : "Amex rows stay empty until OAuth, account, response-path, and cursor settings are configured."),
       needs: amexNeeds,
       issue: bankIssues.amex
     },
@@ -1812,26 +2382,24 @@ function integrationStatus(
   ];
 }
 
-function applyTeamAssignments(
-  rows: Transaction[],
-  assignments: TransactionTeamAssignment[]
-): Transaction[] {
-  const teamByTransaction = new Map(assignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
-  return rows.map((transaction) => {
-    const teamId = teamByTransaction.get(transaction.id) ?? transaction.teamId;
-    return teamId ? { ...transaction, teamId } : transaction;
-  });
-}
-
 function wiseImportId(payload: ImportWiseStatementPayload): string {
   return `wise-import-${payload.balanceId}-${payload.currency}-${payload.periodStart}-${payload.periodEnd}`;
 }
 
 async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload): Promise<ImportWiseStatementResult> {
-  let state = await loadPersisted(env);
+  const state = await loadPersisted(env);
   validateWiseStatementImportPayload(payload, state.wiseStatementImports);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
-  const summary = summarizeWiseStatementImport(state.wiseStatementTransactions, importedTransactions);
+  const stored = await upsertLedgerTransactions(env, "wise", importedTransactions);
+  const publicImportedTransactions = importedTransactions.map((transaction) => {
+    const { providerLegacyId: _providerLegacyId, ...publicTransaction } = transaction;
+    return publicTransaction;
+  });
+  const summary: ImportWiseStatementSummary = {
+    processedTransactions: importedTransactions.length,
+    newTransactions: stored.inserted,
+    duplicateTransactions: stored.updated
+  };
   const importedAt = new Date().toISOString();
   const importRecord: WiseStatementImport = {
     id: wiseImportId(payload),
@@ -1846,26 +2414,13 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
     importedAt
   };
 
-  state.wiseStatementTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, importedTransactions).sort((left, right) =>
-    right.date.localeCompare(left.date)
-  );
-  state.wiseStatementImports = [importRecord, ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
-    right.importedAt.localeCompare(left.importedAt)
-  );
-  await autoCategorizeState(env, state, {
-    transactionIds: importedTransactions.map((transaction) => transaction.id),
-    useAi: true
-  });
-  const reconciliation = reconcileExactInvoicePayments({
-    invoices: state.invoices,
-    transactions: state.wiseStatementTransactions,
-    allocations: state.paymentAllocations,
-    providers: state.providers
-  });
-  state.invoices = reconciliation.invoices;
-  state.paymentAllocations = reconciliation.allocations;
-  state.wiseStatementTransactions = reconciliation.transactions;
+  state.wiseStatementImports = migrateLegacyWiseStatementImports([
+    importRecord,
+    ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)
+  ]);
   await savePersisted(env, state);
+  await autoCategorizeBankTransactions(env, publicImportedTransactions);
+  await rebuildProfitDistributionCache(env);
   return {
     dashboard: await getSnapshot(env),
     summary
@@ -1874,101 +2429,761 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
 
 async function bankSyncState(
   env: Env,
-  source: SyncedBankSource
+  source: BankTransactionSource,
+  connectionKey: string
 ): Promise<BankSyncState | null> {
-  return getConvexClient(env).query(api.banking.getSyncState, {
+  const state = await getConvexClient(env).query(api.banking.getSyncState, {
     serviceToken: getConvexServiceToken(env),
-    source
+    source,
+    connectionKey
+  });
+  if (!state) return null;
+  return { ...state, source };
+}
+
+async function bankSyncCheckpoint(
+  env: Env,
+  source: BankTransactionSource,
+  connectionKey: string,
+  laneKey: string
+): Promise<StoredBankSyncCheckpoint | null> {
+  return getConvexClient(env).query(api.bankSync.getCheckpoint, {
+    serviceToken: getConvexServiceToken(env),
+    source,
+    connectionKey,
+    laneKey
   });
 }
 
-function incrementalBankDateRange(
+export function incrementalBankDateRange(
   state: BankSyncState | null,
   now = Date.now()
 ): SlashTransactionDateRange {
   const current = defaultBankDateRange(now);
-  if (!state) return current;
+  const latestCoveredDate = state?.coveredRanges.reduce<string | null>(
+    (latest, range) => latest === null || range.toDate > latest ? range.toDate : latest,
+    null
+  );
+  if (!latestCoveredDate) return current;
+  const boundedLatestCoveredDate = latestCoveredDate > current.toDate ? current.toDate : latestCoveredDate;
   return {
-    fromDate: isoDateShift(state.lastSyncedAt.slice(0, 10), 1 - bankSyncOverlapDays),
+    fromDate: isoDateShift(boundedLatestCoveredDate, 1 - bankSyncOverlapDays),
     toDate: current.toDate
   };
 }
 
-async function persistBankActivity(
+async function persistBankAccountSnapshot(
   env: Env,
-  source: SyncedBankSource,
-  activity: { accounts: AccountBalance[]; transactions: Transaction[] },
-  dateRange: SlashTransactionDateRange
-): Promise<Transaction[]> {
+  source: BankTransactionSource,
+  accounts: AccountBalance[],
+  lease: BankSyncLease
+): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const syncedAt = new Date().toISOString();
-  const accounts = activity.accounts.map((account) => ({ ...account, source }));
-  const transactions = activity.transactions.map((transaction) => ({ ...transaction, source }));
-  const batches = Math.max(1, Math.ceil(transactions.length / bankMutationBatchSize));
-  for (let batch = 0; batch < batches; batch += 1) {
-    await convex.mutation(api.banking.upsertActivityBatch, {
+  await lease.renew();
+  await convex.mutation(api.banking.upsertSyncedActivityBatch, {
+    serviceToken,
+    source,
+    replaceAccounts: true,
+    accounts: accounts.map((account) => ({ ...account, source })),
+    transactions: [],
+    syncedAt,
+    connectionKey: lease.connectionKey,
+    leaseToken: lease.token,
+    leaseFence: lease.fence
+  });
+}
+
+async function registerDiscoveredBankAccountSet(
+  env: Env,
+  source: BankTransactionSource,
+  laneKey: string,
+  currentCheckpoint: StoredBankSyncCheckpoint | null,
+  accounts: AccountBalance[],
+  lease: BankSyncLease
+): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const accountIds = [...new Set(accounts.map((account) => account.id))].sort();
+  await lease.renew();
+  await convex.mutation(api.bankSync.registerAccountSet, {
+    serviceToken,
+    source,
+    connectionKey: lease.connectionKey,
+    accountIds,
+    leaseToken: lease.token,
+    leaseFence: lease.fence
+  });
+  if (
+    currentCheckpoint
+    && JSON.stringify([...currentCheckpoint.accountIds].sort()) !== JSON.stringify(accountIds)
+  ) {
+    await lease.renew();
+    await convex.mutation(api.bankSync.clearCheckpoint, {
       serviceToken,
       source,
-      replaceAccounts: batch === 0,
-      accounts: batch === 0 ? accounts : [],
-      transactions: transactions.slice(
-        batch * bankMutationBatchSize,
-        (batch + 1) * bankMutationBatchSize
-      ),
-      syncedAt
+      connectionKey: lease.connectionKey,
+      laneKey,
+      expectedCheckpoint: currentCheckpoint.checkpoint,
+      leaseToken: lease.token,
+      leaseFence: lease.fence
     });
+    throw new Error(`${source} account set changed; the frozen sync lane will restart`);
   }
+}
+
+async function persistCheckpointedBankSync(
+  env: Env,
+  source: BankTransactionSource,
+  range: SlashTransactionDateRange,
+  laneKey: string,
+  currentCheckpoint: string | null,
+  checkpointAccountIds: readonly string[] | null,
+  lease: BankSyncLease,
+  result: {
+    accounts: AccountBalance[];
+    nextCheckpoint: string | null;
+    complete: boolean;
+    pagesFetched: number;
+    providerTransactionsRead: number;
+  }
+): Promise<void> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const accountIds = [...new Set(result.accounts.map((account) => account.id))].sort();
+  if (
+    checkpointAccountIds
+    && JSON.stringify([...checkpointAccountIds].sort()) !== JSON.stringify(accountIds)
+  ) {
+    await lease.renew();
+    await convex.mutation(api.bankSync.clearCheckpoint, {
+      serviceToken,
+      source,
+      connectionKey: lease.connectionKey,
+      laneKey,
+      expectedCheckpoint: currentCheckpoint,
+      leaseToken: lease.token,
+      leaseFence: lease.fence
+    });
+    throw new Error(`${source} account set changed during a paginated sync; the frozen range will restart`);
+  }
+  await persistBankAccountSnapshot(env, source, result.accounts, lease);
+  if (!result.complete) {
+    if (!result.nextCheckpoint) throw new Error(`${source} sync stopped without a resume checkpoint`);
+    await lease.renew();
+    await convex.mutation(api.bankSync.saveCheckpoint, {
+      serviceToken,
+      source,
+      connectionKey: lease.connectionKey,
+      laneKey,
+      accountIds,
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      checkpoint: result.nextCheckpoint,
+      expectedCheckpoint: currentCheckpoint,
+      leaseToken: lease.token,
+      leaseFence: lease.fence
+    });
+    console.log(JSON.stringify({
+      event: "bank_sync_checkpoint_saved",
+      source,
+      pagesFetched: result.pagesFetched,
+      providerTransactionsRead: result.providerTransactionsRead
+    }));
+    return;
+  }
+
+  const syncedAt = new Date().toISOString();
+  await lease.renew();
   await convex.mutation(api.banking.completeSync, {
     serviceToken,
     source,
-    fromDate: dateRange.fromDate,
-    toDate: dateRange.toDate,
-    syncedAt
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    syncedAt,
+    accountIds,
+    connectionKey: lease.connectionKey,
+    leaseToken: lease.token,
+    leaseFence: lease.fence
   });
-  return transactions;
+  await lease.renew();
+  await convex.mutation(api.bankSync.clearCheckpoint, {
+    serviceToken,
+    source,
+    connectionKey: lease.connectionKey,
+    laneKey,
+    expectedCheckpoint: currentCheckpoint,
+    leaseToken: lease.token,
+    leaseFence: lease.fence
+  });
+  console.log(JSON.stringify({
+    event: "bank_sync_completed",
+    source,
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    pagesFetched: result.pagesFetched,
+    providerTransactionsRead: result.providerTransactionsRead
+  }));
+}
+
+async function withBankSyncLease(
+  env: Env,
+  source: BankTransactionSource,
+  connectionKey: string,
+  run: (lease: BankSyncLease) => Promise<void | boolean>
+): Promise<boolean> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const token = crypto.randomUUID();
+  const claim = await convex.mutation(api.bankSync.claimLease, {
+    serviceToken,
+    source,
+    connectionKey,
+    token,
+    leaseMs: 10 * 60_000
+  });
+  if (!claim.claimed || claim.fence === null) {
+    console.log(JSON.stringify({ event: "bank_sync_skipped", source, reason: "active_lease" }));
+    return false;
+  }
+  const fence = claim.fence;
+  const lease: BankSyncLease = {
+    token,
+    fence,
+    connectionKey,
+    renew: async () => {
+      await convex.mutation(api.bankSync.renewLease, {
+        serviceToken,
+        source,
+        connectionKey,
+        token,
+        fence,
+        leaseMs: 10 * 60_000
+      });
+    }
+  };
+  try {
+    await convex.mutation(api.bankSync.recordSyncStarted, {
+      serviceToken,
+      source,
+      connectionKey,
+      leaseToken: token,
+      leaseFence: fence
+    });
+    try {
+      const completedRequestedWork = await run(lease);
+      await convex.mutation(api.bankSync.recordSyncFinished, {
+        serviceToken,
+        source,
+        connectionKey,
+        leaseToken: token,
+        leaseFence: fence,
+        success: true
+      });
+      return completedRequestedWork !== false;
+    } catch (error) {
+      try {
+        await convex.mutation(api.bankSync.recordSyncFinished, {
+          serviceToken,
+          source,
+          connectionKey,
+          leaseToken: token,
+          leaseFence: fence,
+          success: false,
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 2_048)
+        });
+      } catch (healthError) {
+        console.error(JSON.stringify({
+          event: "bank_sync_health_write_failed",
+          source,
+          error: healthError instanceof Error ? healthError.message : String(healthError)
+        }));
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      await convex.mutation(api.bankSync.releaseLease, {
+        serviceToken,
+        source,
+        connectionKey,
+        token,
+        fence
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "bank_sync_lease_release_failed",
+        source,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
 }
 
 async function syncRevolutActivity(
   env: Env,
-  dateRange?: RevolutTransactionDateRange
-): Promise<Transaction[]> {
-  const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "revolut"));
-  const activity = await fetchRevolutActivity(env, range);
-  return persistBankActivity(env, "revolut", activity, range);
+  requestedRange?: SlashTransactionDateRange,
+  laneKey = "live"
+): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "revolut");
+  return withBankSyncLease(env, "revolut", connectionKey, async (lease) => {
+    const storedCheckpoint = await bankSyncCheckpoint(env, "revolut", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range = storedCheckpoint
+      ?? requestedRange
+      ?? incrementalBankDateRange(await bankSyncState(env, "revolut", connectionKey));
+    const activity = await fetchRevolutActivityBatch({
+      environment: env.REVOLUT_ENVIRONMENT,
+      clientId: env.REVOLUT_CLIENT_ID,
+      issuer: env.REVOLUT_ISSUER,
+      privateKeyPem: env.REVOLUT_PRIVATE_KEY_PEM,
+      refreshToken: env.REVOLUT_REFRESH_TOKEN,
+      ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+      pageBudget: 10,
+      collectTransactions: false,
+      onAccountsDiscovered: async (accounts) => {
+        await registerDiscoveredBankAccountSet(
+          env,
+          "revolut",
+          laneKey,
+          storedCheckpoint,
+          accounts,
+          lease
+        );
+      },
+      onTransactionPage: async (transactions) => {
+        await upsertSyncedLedgerTransactions(env, "revolut", transactions, lease);
+      }
+    });
+    await persistCheckpointedBankSync(
+      env,
+      "revolut",
+      range,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
+    );
+  });
 }
 
 async function syncSlashActivity(
   env: Env,
-  dateRange?: SlashTransactionDateRange
-): Promise<Transaction[]> {
-  const range = dateRange ?? incrementalBankDateRange(await bankSyncState(env, "slash"));
-  const activity = await fetchSlashActivity(env, range);
-  return persistBankActivity(env, "slash", activity, range);
+  requestedRange?: SlashTransactionDateRange,
+  laneKey = "live"
+): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "slash");
+  return withBankSyncLease(env, "slash", connectionKey, async (lease) => {
+    const storedCheckpoint = await bankSyncCheckpoint(env, "slash", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range = storedCheckpoint
+      ?? requestedRange
+      ?? incrementalBankDateRange(await bankSyncState(env, "slash", connectionKey));
+    const activity = await fetchSlashActivityBatch({
+      baseUrl: env.SLASH_BASE_URL,
+      apiKey: env.SLASH_API_KEY,
+      legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
+      ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+      pageBudget: 10,
+      collectTransactions: false,
+      onAccountsDiscovered: async (accounts) => {
+        await registerDiscoveredBankAccountSet(
+          env,
+          "slash",
+          laneKey,
+          storedCheckpoint,
+          accounts,
+          lease
+        );
+      },
+      onTransactionPage: async (transactions) => {
+        await upsertSyncedLedgerTransactions(env, "slash", transactions, lease);
+      }
+    });
+    await persistCheckpointedBankSync(
+      env,
+      "slash",
+      range,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
+    );
+  });
 }
 
-async function syncLatestBankActivity(env: Env): Promise<void> {
-  const slashDefaultRange = defaultBankDateRange();
-  const storedSlash = await readBankActivity(env, "slash", slashDefaultRange);
-  const slashNeedsAccountSubtypeRefresh = storedSlash.transactions.some(
-    (transaction) => transaction.slashAccountSubtype === undefined
-  );
-  const results = await Promise.allSettled([
-    syncRevolutActivity(env),
-    syncSlashActivity(env, slashNeedsAccountSubtypeRefresh ? slashDefaultRange : undefined)
-  ]);
-  const failures = results.filter((result) => result.status === "rejected");
-  const transactions = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-  if (transactions.length > 0) {
-    await autoCategorizeBankTransactions(env, transactions);
+async function syncWiseActivity(
+  env: Env,
+  requestedRange?: WiseTransactionDateRange,
+  laneKey = "live"
+): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "wise");
+  return withBankSyncLease(env, "wise", connectionKey, async (lease) => {
+    const storedCheckpoint = await bankSyncCheckpoint(env, "wise", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range: WiseTransactionDateRange = storedCheckpoint
+      ?? requestedRange
+      ?? incrementalBankDateRange(await bankSyncState(env, "wise", connectionKey));
+    let activity: Awaited<ReturnType<typeof fetchWiseActivityBatch>>;
+    try {
+      activity = await fetchWiseActivityBatch({
+        baseUrl: wiseBaseUrl(env),
+        token: env.WISE_API_TOKEN,
+        profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS),
+        ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+        pageBudget: 10,
+        collectTransactions: false,
+        onAccountsDiscovered: async (accounts) => {
+          await registerDiscoveredBankAccountSet(
+            env,
+            "wise",
+            laneKey,
+            storedCheckpoint,
+            accounts,
+            lease
+          );
+        },
+        onTransactionPage: async (transactions) => {
+          await upsertSyncedLedgerTransactions(env, "wise", transactions, lease);
+        }
+      });
+    } catch (error) {
+      if (storedCheckpoint && /balance is no longer accessible|balances that are no longer accessible/i.test(
+        error instanceof Error ? error.message : String(error)
+      )) {
+        await lease.renew();
+        await getConvexClient(env).mutation(api.bankSync.clearCheckpoint, {
+          serviceToken: getConvexServiceToken(env),
+          source: "wise",
+          connectionKey,
+          laneKey,
+          expectedCheckpoint: storedCheckpoint.checkpoint,
+          leaseToken: lease.token,
+          leaseFence: lease.fence
+        });
+      }
+      throw error;
+    }
+    await persistCheckpointedBankSync(
+      env,
+      "wise",
+      range,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
+    );
+    if (!activity.complete && activity.statementIssues.length > 0) {
+      throw new Error(activity.statementIssues[0]);
+    }
+  });
+}
+
+async function syncAmexActivity(
+  env: Env,
+  requestedRange?: SlashTransactionDateRange,
+  laneKey = "live"
+): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "amex");
+  return withBankSyncLease(env, "amex", connectionKey, async (lease) => {
+    const storedCheckpoint = await bankSyncCheckpoint(env, "amex", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range = storedCheckpoint
+      ?? requestedRange
+      ?? incrementalBankDateRange(await bankSyncState(env, "amex", connectionKey));
+    let activity: Awaited<ReturnType<typeof fetchAmexActivityBatch>>;
+    try {
+      activity = await fetchAmexActivityBatch(env, {
+        ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+        pageBudget: 10,
+        onAccountsDiscovered: async (accounts) => {
+          await registerDiscoveredBankAccountSet(
+            env,
+            "amex",
+            laneKey,
+            storedCheckpoint,
+            accounts,
+            lease
+          );
+        },
+        onTransactionPage: async (transactions) => {
+          await upsertSyncedLedgerTransactions(env, "amex", transactions, lease);
+        }
+      });
+    } catch (error) {
+      if (storedCheckpoint && /account configuration changed/i.test(
+        error instanceof Error ? error.message : String(error)
+      )) {
+        await lease.renew();
+        await getConvexClient(env).mutation(api.bankSync.clearCheckpoint, {
+          serviceToken: getConvexServiceToken(env),
+          source: "amex",
+          connectionKey,
+          laneKey,
+          expectedCheckpoint: storedCheckpoint.checkpoint,
+          leaseToken: lease.token,
+          leaseFence: lease.fence
+        });
+      }
+      throw error;
+    }
+    await persistCheckpointedBankSync(
+      env,
+      "amex",
+      range,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
+    );
+  });
+}
+
+async function syncLatestBankActivity(
+  env: Env,
+  options: {
+    sources?: ReadonlySet<BankTransactionSource>;
+    dateRange?: SlashTransactionDateRange;
+  } = {}
+): Promise<void> {
+  const jobs: Array<{ source: BankTransactionSource; run: Promise<boolean> }> = [];
+  const includes = (source: BankTransactionSource) => !options.sources || options.sources.has(source);
+  const laneKey = options.dateRange
+    ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
+    : "live";
+  if (includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
+    jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange, laneKey) });
   }
-  for (const result of failures) {
+  if (
+    includes("revolut")
+    &&
+    env.REVOLUT_CLIENT_ID?.trim()
+    && env.REVOLUT_ISSUER?.trim()
+    && env.REVOLUT_PRIVATE_KEY_PEM?.trim()
+    && env.REVOLUT_REFRESH_TOKEN?.trim()
+  ) {
+    jobs.push({ source: "revolut", run: syncRevolutActivity(env, options.dateRange, laneKey) });
+  }
+  if (
+    includes("slash")
+    && env.SLASH_API_KEY?.trim()
+    && env.SLASH_LEGAL_ENTITY_ID?.trim()
+    && env.SLASH_BASE_URL?.trim()
+  ) {
+    jobs.push({ source: "slash", run: syncSlashActivity(env, options.dateRange, laneKey) });
+  }
+  if (
+    includes("amex")
+    &&
+    env.AMEX_TOKEN_URL?.trim()
+    && env.AMEX_API_BASE_URL?.trim()
+    && env.AMEX_CLIENT_ID?.trim()
+    && env.AMEX_CLIENT_SECRET?.trim()
+    && env.AMEX_REFRESH_TOKEN?.trim()
+    && env.AMEX_ACCOUNT_IDS?.trim()
+    && env.AMEX_ACCOUNT_PATH_TEMPLATE?.trim()
+    && env.AMEX_TRANSACTIONS_PATH_TEMPLATE?.trim()
+    && env.AMEX_TRANSACTIONS_ITEMS_PATH?.trim()
+    && env.AMEX_TRANSACTIONS_NEXT_CURSOR_PATH?.trim()
+    && env.AMEX_TRANSACTIONS_CURSOR_PARAM?.trim()
+    && env.AMEX_TRANSACTIONS_PAGE_SIZE_PARAM?.trim()
+    && env.AMEX_TRANSACTIONS_PAGE_SIZE?.trim()
+  ) {
+    jobs.push({ source: "amex", run: syncAmexActivity(env, options.dateRange, laneKey) });
+  }
+  const results = await Promise.allSettled(jobs.map((job) => job.run));
+  const failures = results.filter((result) => result.status === "rejected");
+  for (const [index, result] of results.entries()) {
+    if (result.status !== "rejected") continue;
     console.error(JSON.stringify({
       event: "bank_sync_failed",
+      source: jobs[index].source,
       error: result.reason instanceof Error ? result.reason.message : String(result.reason)
     }));
   }
   if (failures.length > 0) throw failures[0].reason;
+}
+
+async function syncBankSourceRange(
+  env: Env,
+  source: BankTransactionSource,
+  range: SlashTransactionDateRange,
+  laneKey: string
+): Promise<boolean> {
+  if (source === "wise") return syncWiseActivity(env, range, laneKey);
+  if (source === "revolut") return syncRevolutActivity(env, range, laneKey);
+  if (source === "slash") return syncSlashActivity(env, range, laneKey);
+  return syncAmexActivity(env, range, laneKey);
+}
+
+async function enqueueBankBackfill(
+  env: Env,
+  source: BankTransactionSource,
+  range: SlashTransactionDateRange
+): Promise<BankBackfillJob> {
+  if (!bankSourceConfigured(env, source)) {
+    throw new ApiError(409, `${source} is not configured for transaction sync`);
+  }
+  const connectionKey = await requireBankConnectionKey(env, source);
+  return getConvexClient(env).mutation(api.bankSync.enqueueBackfill, {
+    serviceToken: getConvexServiceToken(env),
+    source,
+    connectionKey,
+    fromDate: range.fromDate,
+    toDate: range.toDate
+  });
+}
+
+async function runBankBackfillJob(env: Env, key: string): Promise<BankBackfillJob | null> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const stored = await convex.query(api.bankSync.getBackfill, { serviceToken, key });
+  if (!stored || stored.status === "complete" || stored.status === "failed") return stored;
+  const attemptToken = crypto.randomUUID();
+  const attempt = await convex.mutation(api.bankSync.startBackfillAttempt, {
+    serviceToken,
+    key,
+    connectionKey: stored.connectionKey,
+    expectedUpdatedAt: stored.updatedAt,
+    attemptToken
+  });
+  if (!attempt.started) return attempt.job;
+  const currentConnectionKey = await bankConnectionKey(env, stored.source);
+  if (!bankSourceConfigured(env, stored.source) || currentConnectionKey !== stored.connectionKey) {
+    const message = `${stored.source} connection changed while its history job was queued`;
+    return convex.mutation(api.bankSync.finishBackfillAttempt, {
+      serviceToken,
+      key,
+      connectionKey: stored.connectionKey,
+      attemptToken,
+      complete: false,
+      error: message,
+      terminal: true
+    });
+  }
+  try {
+    const ran = await syncBankSourceRange(env, stored.source, {
+      fromDate: stored.fromDate,
+      toDate: stored.toDate
+    }, stored.key);
+    if (!ran) {
+      return convex.mutation(api.bankSync.finishBackfillAttempt, {
+        serviceToken,
+        key,
+        connectionKey: stored.connectionKey,
+        attemptToken,
+        complete: false
+      });
+    }
+    const coverage = await convex.query(api.banking.getActivityCoverage, {
+      serviceToken,
+      connections: [{ source: stored.source, connectionKey: stored.connectionKey }],
+      source: stored.source,
+      fromDate: stored.fromDate,
+      toDate: stored.toDate
+    });
+    const complete = coverage.length === 1 && coverage[0].missingRanges.length === 0;
+    return convex.mutation(api.bankSync.finishBackfillAttempt, {
+      serviceToken,
+      key,
+      connectionKey: stored.connectionKey,
+      attemptToken,
+      complete
+    });
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2_048);
+    await convex.mutation(api.bankSync.finishBackfillAttempt, {
+      serviceToken,
+      key,
+      connectionKey: stored.connectionKey,
+      attemptToken,
+      complete: false,
+      error: message
+    });
+    throw error;
+  }
+}
+
+async function processPendingBankBackfills(env: Env): Promise<void> {
+  const jobs = await getConvexClient(env).query(api.bankSync.getPendingBackfills, {
+    serviceToken: getConvexServiceToken(env),
+    limit: 8
+  });
+  const sourceJobs = new Map<BankTransactionSource, BankBackfillJob>();
+  for (const job of jobs) {
+    if (!sourceJobs.has(job.source)) sourceJobs.set(job.source, job);
+  }
+  const results = await Promise.allSettled(
+    [...sourceJobs.values()].map((job) => runBankBackfillJob(env, job.key))
+  );
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
+
+async function reconcilePendingBankTransactions(env: Env): Promise<void> {
+  const connections = await bankConnectionDirectory(env);
+  const pending = await getConvexClient(env).mutation(api.banking.getPendingReconciliationDates, {
+    serviceToken: getConvexServiceToken(env),
+    connections
+  });
+  await Promise.all(pending.flatMap((item) => item.dates.map((date) =>
+    enqueueBankBackfill(env, item.source, { fromDate: date, toDate: date })
+  )));
+  await processPendingBankBackfills(env);
+}
+
+async function syncMeritActivity(env: Env): Promise<void> {
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return;
+  const state = await loadPersisted(env);
+  const results = await Promise.allSettled([
+    fetchMeritInvoices(env, state.invoices),
+    fetchMeritTaxes(env),
+    fetchMeritCustomers(env),
+    fetchMeritVendors(env)
+  ]);
+  const [invoiceResult, taxResult, customerResult, vendorResult] = results;
+  if (customerResult.status === "fulfilled") {
+    state.providers = reconcileMeritProviders(state.providers, customerResult.value, "customer");
+  }
+  if (vendorResult.status === "fulfilled") {
+    state.providers = reconcileMeritProviders(state.providers, vendorResult.value, "vendor");
+  }
+  state.providers = mergeProviderDirectory(state.providers);
+  if (invoiceResult.status === "fulfilled") {
+    const liveInvoices = linkMeritInvoiceProviders(invoiceResult.value, state.providers);
+    state.invoices = assignMeritStyleDraftNumbers(
+      mergeInvoices(liveInvoices, state.invoices, true),
+      liveInvoices
+    );
+  }
+  if (taxResult.status === "fulfilled") state.meritTaxes = taxResult.value;
+  await savePersisted(env, state);
+
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") {
+    throw new Error(meritConnectionIssue(failure.reason));
+  }
 }
 
 export function missingBankActivityRanges(
@@ -2001,101 +3216,34 @@ export function missingBankActivityRanges(
   return missing;
 }
 
-async function syncBankActivityRanges(
-  env: Env,
-  source: SyncedBankSource,
-  ranges: SlashTransactionDateRange[]
-): Promise<string[]> {
-  const transactionIds: string[] = [];
-  for (const range of ranges) {
-    const transactions = source === "revolut"
-        ? await syncRevolutActivity(env, range)
-        : await syncSlashActivity(env, range);
-    transactionIds.push(...transactions.map((transaction) => transaction.id));
-  }
-  return transactionIds;
-}
-
-async function loadBankActivity(
-  env: Env,
-  sources: ConnectedBankSource[],
-  dateRange: SlashTransactionDateRange
-): Promise<BankActivityLoadResult> {
-  const convex = getConvexClient(env);
-  const serviceToken = getConvexServiceToken(env);
-  const [context, initialActivity] = await Promise.all([
-    convex.query(api.dashboard.getBankContext, { serviceToken }),
-    Promise.all(sources.map((source) => readBankActivity(env, source, dateRange)))
-  ]);
-  if (!context) throw new ApiError(503, "Dashboard bank context is not initialized");
-
-  const missingBySource = sources.map((source, index) => ({
-    source,
-    ranges:
-      source === "slash"
-      && initialActivity[index].transactions.some((transaction) => transaction.slashAccountSubtype === undefined)
-        ? [{ ...dateRange }]
-        : missingBankActivityRanges(initialActivity[index].syncState, dateRange)
-  }));
-  const syncedTransactionIds = (await Promise.all(
-    missingBySource.map(({ source, ranges }) => syncBankActivityRanges(env, source, ranges))
-  )).flat();
-  const refreshedBySource = new Map<ConnectedBankSource, Awaited<ReturnType<typeof readBankActivity>>>();
-  await Promise.all(
-    missingBySource.map(async ({ source, ranges }) => {
-      if (ranges.length === 0) return;
-      refreshedBySource.set(source, await readBankActivity(env, source, dateRange));
-    })
-  );
-  if (syncedTransactionIds.length > 0) {
-    const syncedTransactions = sources.flatMap((source, index) =>
-      (refreshedBySource.get(source) ?? initialActivity[index]).transactions
-        .filter((transaction) => syncedTransactionIds.includes(transaction.id))
-    );
-    await autoCategorizeBankTransactions(env, syncedTransactions);
-    await Promise.all(
-      missingBySource.map(async ({ source, ranges }) => {
-        if (ranges.length === 0) return;
-        refreshedBySource.set(source, await readBankActivity(env, source, dateRange));
-      })
-    );
-  }
-
-  const transactions = enrichTransactions(
-    applyTeamAssignments(
-      sources.flatMap((source, index) =>
-        (refreshedBySource.get(source) ?? initialActivity[index]).transactions
-      ),
-      context.transactionTeamAssignments
-    ),
-    mergeProviderDirectory(context.providers),
-    sanitizeStoredTransactionCategoryRules(context.transactionCategoryRules)
-  ).sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id));
-
-  return {
-    fromDate: dateRange.fromDate,
-    toDate: dateRange.toDate,
-    sources,
-    transactions
-  };
-}
-
 async function getSnapshot(
   env: Env,
-  options: { refreshFxRates?: boolean; bankDateRanges?: BankDateRanges } = {}
+  options: { refreshFxRates?: boolean } = {}
 ): Promise<DashboardSnapshot> {
-  const bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
-  const bankIssue = (label: string, error: unknown): string => {
-    const message = error instanceof Error ? error.message : String(error);
-    return `${label} balance sync failed: ${message.slice(0, 240)}`;
-  };
-  const statePromise = loadPersisted(env, options.bankDateRanges);
-  const wisePromise = fetchWiseActivity(env).catch((error: unknown) => emptyWiseActivity(wiseSyncIssue(error)));
-  const amexPromise = fetchAmexActivity(env).catch((error: unknown) => {
-    bankIssues.amex = bankIssue("Amex", error);
-    return { accounts: [], transactions: [] };
-  });
-  const state = await statePromise;
+  const bankIssues: Partial<Record<BankTransactionSource, string>> = {};
+  const state = await loadPersisted(env);
+  const now = Date.now();
+  for (const source of bankSources) {
+    const health = state.bankSyncHealth[source];
+    if (!health) continue;
+    if (health.status === "failed" && health.lastError) {
+      bankIssues[source] = `Latest sync failed: ${health.lastError}`;
+      continue;
+    }
+    const lastSuccess = health.lastSuccessAt ? Date.parse(health.lastSuccessAt) : Number.NaN;
+    if (health.status === "running" && now - Date.parse(health.lastAttemptAt) > 20 * 60_000) {
+      bankIssues[source] = "Bank sync has been running longer than expected.";
+    } else if (Number.isFinite(lastSuccess) && now - lastSuccess > 30 * 60_000) {
+      bankIssues[source] = `Bank data has not synced successfully since ${health.lastSuccessAt}.`;
+    }
+  }
+  if (
+    env.WISE_API_TOKEN
+    && env.WISE_PROFILE_IDS
+    && !state.bankSyncStates.wise
+  ) {
+    bankIssues.wise ??= "No saved Wise balances yet. The next automatic refresh will populate them.";
+  }
   if (
     env.REVOLUT_CLIENT_ID
     && env.REVOLUT_ISSUER
@@ -2103,7 +3251,7 @@ async function getSnapshot(
     && env.REVOLUT_REFRESH_TOKEN
     && !state.bankSyncStates.revolut
   ) {
-    bankIssues.revolut = "No saved Revolut activity yet. The next automatic refresh will create the initial 45-day cache.";
+    bankIssues.revolut ??= "No saved Revolut activity yet. The next automatic refresh will create the initial 45-day cache.";
   }
   if (
     env.SLASH_API_KEY
@@ -2111,127 +3259,64 @@ async function getSnapshot(
     && env.SLASH_BASE_URL
     && !state.bankSyncStates.slash
   ) {
-    bankIssues.slash = "No saved Slash activity yet. The next automatic refresh will create the initial 45-day cache.";
+    bankIssues.slash ??= "No saved Slash activity yet. The next automatic refresh will create the initial 45-day cache.";
   }
-  const revolut = {
-    accounts: state.bankAccounts.filter((account) => account.source === "revolut"),
-    transactions: state.wiseStatementTransactions.filter((transaction) => transaction.source === "revolut")
+  if (
+    env.AMEX_CLIENT_ID
+    && env.AMEX_CLIENT_SECRET
+    && env.AMEX_REFRESH_TOKEN
+    && env.AMEX_ACCOUNT_IDS
+    && !state.bankSyncStates.amex
+  ) {
+    bankIssues.amex ??= "No saved Amex activity yet. The next automatic refresh will create the initial 45-day cache.";
+  }
+  const wise: WiseActivityResult = {
+    ...emptyWiseActivity(),
+    accounts: state.bankAccounts.filter((account) => account.source === "wise")
   };
-  const slash = {
-    accounts: state.bankAccounts.filter((account) => account.source === "slash"),
-    transactions: state.wiseStatementTransactions.filter((transaction) => transaction.source === "slash")
-  };
-  const [wise, amex, meritResults] = await Promise.all([
-    wisePromise,
-    amexPromise,
-    Promise.allSettled([
-      fetchMeritInvoices(env, state.invoices),
-      fetchMeritTaxes(env),
-      fetchMeritCustomers(env),
-      fetchMeritVendors(env)
-    ])
-  ]);
-  const [meritInvoicesResult, meritTaxesResult, meritCustomersResult, meritVendorsResult] = meritResults;
-  const meritConfigured = Boolean(env.MERIT_API_ID && env.MERIT_API_KEY);
-  const meritTaxes = meritTaxesResult.status === "fulfilled" ? meritTaxesResult.value : [];
-  const meritIssue =
-    meritInvoicesResult.status === "rejected"
-      ? meritConnectionIssue(meritInvoicesResult.reason)
-      : meritTaxesResult.status === "rejected"
-        ? meritConnectionIssue(meritTaxesResult.reason)
-        : meritCustomersResult.status === "rejected"
-          ? meritConnectionIssue(meritCustomersResult.reason)
-          : meritVendorsResult.status === "rejected"
-            ? meritConnectionIssue(meritVendorsResult.reason)
-            : undefined;
-  const providersBeforeSync = JSON.stringify(state.providers);
-  if (meritConfigured && meritCustomersResult.status === "fulfilled") {
-    state.providers = reconcileMeritProviders(state.providers, meritCustomersResult.value, "customer");
-  }
-  if (meritConfigured && meritVendorsResult.status === "fulfilled") {
-    state.providers = reconcileMeritProviders(state.providers, meritVendorsResult.value, "vendor");
-  }
+  const reviewBacklog = await getConvexClient(env).query(api.banking.getClassificationBacklog, {
+    serviceToken: getConvexServiceToken(env),
+    limit: 5
+  });
+  const meritIssue = undefined;
   state.providers = mergeProviderDirectory(state.providers);
-  const providerStateChanged = JSON.stringify(state.providers) !== providersBeforeSync;
-  const liveMeritInvoices = meritInvoicesResult.status === "fulfilled"
-    ? linkMeritInvoiceProviders(meritInvoicesResult.value, state.providers)
-    : [];
-  const accounts = mergeLiveAccounts(wise.accounts, revolut.accounts, slash.accounts, amex.accounts);
+  const accounts = state.bankAccounts;
   const trackedAssetsBefore = state.fxTrackedAssets.join("|");
-  state.fxTrackedAssets = trackedFxAssets(state, accounts, liveMeritInvoices);
+  state.fxTrackedAssets = trackedFxAssets(state, accounts, state.invoices);
   const fxAssetInventoryChanged = state.fxTrackedAssets.join("|") !== trackedAssetsBefore;
   let fxRatesRefreshed = false;
   if (options.refreshFxRates) {
-    await updateCurrentFxRates(env, state, accounts, liveMeritInvoices);
+    await updateCurrentFxRates(env, state, accounts, state.invoices);
     fxRatesRefreshed = true;
   }
-  const invoicesBeforeReconciliation = assignMeritStyleDraftNumbers(
-    mergeInvoices(
-      liveMeritInvoices,
-      state.invoices,
-      meritConfigured && meritInvoicesResult.status === "fulfilled"
-    ),
-    liveMeritInvoices
-  );
+  const invoicesBeforeReconciliation = assignMeritStyleDraftNumbers(state.invoices);
   const liveInvoiceIds = new Set(invoicesBeforeReconciliation.map((invoice) => invoice.id));
   const paymentAllocationsBeforeSync = state.paymentAllocations;
   state.paymentAllocations = state.paymentAllocations.filter((allocation) => liveInvoiceIds.has(allocation.invoiceId));
   const paymentAllocationsChanged = state.paymentAllocations.length !== paymentAllocationsBeforeSync.length;
-  const persistedTransactionsBeforeSync = transactionsForDashboardStorage(
-    state.wiseStatementTransactions
-  );
-  const rawTransactions = mergeWiseStatementTransactions(state.wiseStatementTransactions, [
-    ...wise.transactions,
-    ...amex.transactions
-  ]).map((transaction) => {
-    if (!transaction.matchedInvoiceId || liveInvoiceIds.has(transaction.matchedInvoiceId)) return transaction;
-    const { matchedInvoiceId: _matchedInvoiceId, ...withoutDeletedInvoice } = transaction;
-    return withoutDeletedInvoice;
-  }).sort((left, right) => right.date.localeCompare(left.date));
-  const enrichedTransactions = enrichTransactions(
-    applyTeamAssignments(
-      rawTransactions.map((transaction) => {
-        const invoice = invoicesBeforeReconciliation.find((item) => item.transactionId === transaction.id);
-        return invoice
-          ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
-          : transaction;
-      }),
-      state.transactionTeamAssignments
-    ),
-    state.providers,
-    state.transactionCategoryRules
-  );
-  const reconciliation = reconcileExactInvoicePayments({
-    invoices: invoicesBeforeReconciliation,
-    transactions: enrichedTransactions,
-    allocations: state.paymentAllocations,
-    providers: state.providers
-  });
-  const persistedTransactionsAfterSync = transactionsForDashboardStorage(
-    reconciliation.transactions
-  );
-  const bankStateChanged =
-    JSON.stringify(persistedTransactionsAfterSync) !== JSON.stringify(persistedTransactionsBeforeSync);
   const invoiceStateChanged = JSON.stringify(invoicesBeforeReconciliation) !== JSON.stringify(state.invoices);
   if (
-    reconciliation.matched > 0 ||
-    bankStateChanged ||
     invoiceStateChanged ||
-    providerStateChanged ||
     paymentAllocationsChanged ||
     fxRatesRefreshed ||
     fxAssetInventoryChanged
   ) {
-    state.invoices = reconciliation.invoices;
-    state.paymentAllocations = reconciliation.allocations;
-    state.wiseStatementTransactions = persistedTransactionsAfterSync;
+    state.invoices = invoicesBeforeReconciliation;
     await savePersisted(env, state);
   }
-  const invoices = reconciliation.invoices;
-  const transactions = reconciliation.transactions;
-  const receivables = [...openInvoiceReceivables(invoices, reconciliation.allocations), ...state.manualReceivables];
+  const invoices = invoicesBeforeReconciliation;
+  const transactionReviewPreview = enrichTransactions(
+    reviewBacklog.transactions,
+    state.providers,
+    state.transactionCategoryRules
+  );
+  const receivables = [...openInvoiceReceivables(invoices, state.paymentAllocations), ...state.manualReceivables];
   const payables = expensePayables(state.expenses);
   const approximateUsdTotals = calculateApproximateUsdTotals(accounts, state.holdings, state.fxRates);
+  const profitDistribution = (await profitDistributionFromFacts(
+    env,
+    state.profitDistributionAdjustments
+  )).snapshot;
 
   return {
     asOf: new Date().toISOString(),
@@ -2247,16 +3332,16 @@ async function getSnapshot(
     revenueAccruals: state.revenueAccruals,
     revenueMetrics: calculateRevenueMetrics(state.revenuePartners, state.revenueRuns),
     aiSettings: publicAiSettings(runtimeAiSettings(env, state.aiSettings)),
-    transactions,
+    transactionReviewPreview,
     invoices,
     expenses: state.expenses,
-    paymentAllocations: reconciliation.allocations,
-    invoicePredictions: calculateInvoicePredictions(invoices, reconciliation.allocations),
+    paymentAllocations: state.paymentAllocations,
+    invoicePredictions: calculateInvoicePredictions(invoices, state.paymentAllocations),
     holdings: state.holdings,
     fxRates: state.fxRates,
     approximateUsdTotals,
     automationRuns: state.automationRuns,
-    meritTaxes,
+    meritTaxes: state.meritTaxes,
     transactionCategories: state.transactionCategories,
     transactionCategoryRules: state.transactionCategoryRules,
     wiseStatementImports: state.wiseStatementImports,
@@ -2271,7 +3356,7 @@ async function getSnapshot(
       approximateUsdTotals.staleAssets
     ),
     metrics: calculateMetrics(accounts, receivables, [], payables, []),
-    profitDistribution: calculateProfitDistribution(transactions, state.profitDistributionAdjustments),
+    profitDistribution,
     lastSync: new Date().toISOString()
   };
 }
@@ -2322,26 +3407,28 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
 
 async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
   const state = await loadPersisted(env);
-  for (const transaction of state.wiseStatementTransactions) {
-    if (
-      transaction.matchedProviderId === providerId
-      && (transaction.source === "revolut" || transaction.source === "slash")
-    ) {
-      state.dirtyBankTransactionIds.add(transaction.id);
-    }
-  }
   const deletion = deleteProviderReferences(
     {
       providers: state.providers,
       invoices: state.invoices,
       revenuePartners: state.revenuePartners,
       revenueRuns: state.revenueRuns,
-      transactions: state.wiseStatementTransactions,
-      wiseStatementTransactions: state.wiseStatementTransactions
+      transactions: state.pendingBankTransactions,
+      wiseStatementTransactions: state.pendingBankTransactions
     },
     providerId
   );
   if (!deletion) throw new ApiError(404, "Company not found");
+
+  let hasMore = false;
+  do {
+    const result = await getConvexClient(env).mutation(api.banking.clearProviderReferencesBatch, {
+      serviceToken: getConvexServiceToken(env),
+      providerId,
+      limit: bankMutationBatchSize
+    });
+    hasMore = result.hasMore;
+  } while (hasMore);
 
   state.providers = deletion.providers;
   state.invoices = deletion.invoices;
@@ -2352,7 +3439,7 @@ async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
     const { providerId: _providerId, ...withoutProvider } = expense;
     return withoutProvider;
   });
-  state.wiseStatementTransactions = deletion.wiseStatementTransactions;
+  state.pendingBankTransactions = deletion.wiseStatementTransactions;
   await savePersisted(env, state);
   return deletion.deletedProvider;
 }
@@ -2559,13 +3646,16 @@ async function autoCategorizeState(
   let categorizedOnly = 0;
   let reviewed = 0;
 
-  state.wiseStatementTransactions = state.wiseStatementTransactions.map((transaction) => {
+  state.pendingBankTransactions = state.pendingBankTransactions.map((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return transaction;
     if (!transactionNeedsCategorization(transaction, state.transactionCategories)) return transaction;
     reviewed += 1;
     const categorized = semanticCategorizeTransaction(transaction, state.providers, state.transactionCategoryRules);
     if (
-      (transaction.source === "revolut" || transaction.source === "slash")
+      (transaction.source === "wise"
+        || transaction.source === "revolut"
+        || transaction.source === "slash"
+        || transaction.source === "amex")
       && JSON.stringify(categorized) !== JSON.stringify(transaction)
     ) {
       state.dirtyBankTransactionIds.add(transaction.id);
@@ -2582,7 +3672,7 @@ async function autoCategorizeState(
   let aiMatches = 0;
   const activeAiSettings = runtimeAiSettings(env, state.aiSettings);
   const shouldUseAi = payload.useAi !== false && Boolean(activeAiSettings.openRouterApiKey);
-  const remaining = state.wiseStatementTransactions.filter((transaction) => {
+  const remaining = state.pendingBankTransactions.filter((transaction) => {
     if (targetIds && !targetIds.has(transaction.id)) return false;
     return transactionNeedsCategorization(transaction, state.transactionCategories);
   });
@@ -2672,27 +3762,16 @@ async function autoCategorizeBankTransactions(
   if (candidates.length === 0) return undefined;
   for (const transaction of candidates) {
     const existing = findPersistedTransaction(state, transaction.id);
-    state.wiseStatementTransactions = existing
-      ? state.wiseStatementTransactions.map((item) => item.id === transaction.id ? transaction : item)
-      : [transaction, ...state.wiseStatementTransactions];
+    state.pendingBankTransactions = existing
+      ? state.pendingBankTransactions.map((item) => item.id === transaction.id ? transaction : item)
+      : [transaction, ...state.pendingBankTransactions];
     state.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
   }
   const summary = await autoCategorizeState(env, state, {
     transactionIds: candidates.map((transaction) => transaction.id),
     useAi: true
   });
-  const candidateIds = new Set(candidates.map((transaction) => transaction.id));
-  const updates = state.wiseStatementTransactions.filter(
-    (transaction): transaction is Transaction & { source: SyncedBankSource } =>
-      candidateIds.has(transaction.id)
-      && (transaction.source === "revolut" || transaction.source === "slash")
-  );
-  for (let index = 0; index < updates.length; index += bankMutationBatchSize) {
-    await getConvexClient(env).mutation(api.banking.saveTransactionUpdates, {
-      serviceToken: getConvexServiceToken(env),
-      transactions: updates.slice(index, index + bankMutationBatchSize)
-    });
-  }
+  await savePersisted(env, state);
   return summary;
 }
 
@@ -2715,29 +3794,6 @@ async function categorizeHistoricalBankBacklog(
   return { processed: backlog.transactions.length, hasMore: backlog.hasMore };
 }
 
-async function categorizeHistoricalWiseBacklog(
-  env: Env,
-  limit = 240
-): Promise<{ processed: number; hasMore: boolean }> {
-  const state = await loadPersisted(env);
-  const candidates = state.wiseStatementTransactions
-    .filter((transaction) => transaction.source === "wise" && transaction.classificationComplete !== true);
-  const batch = candidates.slice(0, limit);
-  if (batch.length > 0) {
-    await autoCategorizeState(env, state, {
-      transactionIds: batch.map((transaction) => transaction.id),
-      useAi: true
-    });
-    await savePersisted(env, state);
-  }
-  console.log(JSON.stringify({
-    event: "wise_transaction_classification_backlog",
-    processed: batch.length,
-    hasMore: candidates.length > batch.length
-  }));
-  return { processed: batch.length, hasMore: candidates.length > batch.length };
-}
-
 async function runHistoricalClassificationBackfill(env: Env): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
@@ -2753,7 +3809,6 @@ async function runHistoricalClassificationBackfill(env: Env): Promise<void> {
   }
   try {
     await categorizeHistoricalBankBacklog(env);
-    await categorizeHistoricalWiseBacklog(env);
   } finally {
     try {
       await convex.mutation(api.banking.releaseClassificationBackfill, {
@@ -2774,6 +3829,7 @@ async function autoCategorizeTransactions(
   payload: AutoCategorizeTransactionsPayload = {}
 ): Promise<AutoCategorizeTransactionsResult> {
   const summary = await autoCategorizeStoredTransactions(env, payload);
+  await rebuildProfitDistributionCache(env);
   return {
     dashboard: await getSnapshot(env),
     ...summary
@@ -2785,27 +3841,22 @@ async function autoCategorizeStoredTransactions(
   payload: AutoCategorizeTransactionsPayload = {},
   limit?: number
 ): Promise<Omit<AutoCategorizeTransactionsResult, "dashboard">> {
-  const state = await loadPersisted(env);
-  const requestedIds = payload.transactionIds?.length ? new Set(payload.transactionIds) : undefined;
-  const limitedIds = limit
-    ? state.wiseStatementTransactions
-        .filter(
-          (transaction) =>
-            (!requestedIds || requestedIds.has(transaction.id))
-            && transactionNeedsCategorization(transaction, state.transactionCategories)
-        )
-        .slice(0, limit)
-        .map((transaction) => transaction.id)
-    : payload.transactionIds;
-  if (limit && limitedIds?.length === 0) {
+  const maximum = Math.max(1, Math.min(240, Math.trunc(limit ?? 240)));
+  const requestedIds = [...new Set(payload.transactionIds ?? [])].slice(0, maximum);
+  const transactions: Transaction[] = requestedIds.length > 0
+    ? (await Promise.all(requestedIds.map((id) => getConvexClient(env).query(api.banking.getTransaction, {
+        serviceToken: getConvexServiceToken(env),
+        id
+      })))).filter((transaction) => transaction !== null).map((transaction) => transaction as Transaction)
+    : (await getConvexClient(env).query(api.banking.getClassificationBacklog, {
+        serviceToken: getConvexServiceToken(env),
+        limit: maximum
+      })).transactions;
+  if (transactions.length === 0) {
     return { semanticMatches: 0, aiMatches: 0, categorizedOnly: 0, reviewed: 0 };
   }
-  const summary = await autoCategorizeState(env, state, {
-    ...payload,
-    transactionIds: limitedIds
-  });
-  await savePersisted(env, state);
-  return summary;
+  return (await autoCategorizeBankTransactions(env, transactions, maximum))
+    ?? { semanticMatches: 0, aiMatches: 0, categorizedOnly: 0, reviewed: 0 };
 }
 
 async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
@@ -2835,7 +3886,7 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
     state.providers = state.providers.map((item) =>
       item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
     );
-    state.wiseStatementTransactions = state.wiseStatementTransactions.map((item) =>
+    state.pendingBankTransactions = state.pendingBankTransactions.map((item) =>
       transactionsShareMerchant(item, transaction)
         ? {
             ...item,
@@ -2848,26 +3899,24 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
           }
         : item
     );
-    await getConvexClient(env).mutation(api.banking.applyMerchantCompany, {
-      serviceToken: getConvexServiceToken(env),
-      merchantKey: transactionMerchantKey(transaction),
-      merchantName: transaction.merchantName,
-      direction: transaction.direction,
-      providerId: provider.id
-    });
+    let cursor: string | null = null;
+    do {
+      const result: { hasMore: boolean; continueCursor: string | null } = await getConvexClient(env).mutation(api.banking.applyMerchantCompany, {
+        serviceToken: getConvexServiceToken(env),
+        merchantKey: transactionMerchantKey(transaction),
+        merchantName: transaction.merchantName,
+        direction: transaction.direction,
+        providerId: provider.id,
+        cursor,
+        limit: bankMutationBatchSize
+      });
+      cursor = result.hasMore ? result.continueCursor : null;
+      if (result.hasMore && !cursor) throw new ApiError(503, "Merchant company update did not advance");
+    } while (cursor);
   }
   upsertPersistedTransaction(state, matchedTransaction);
   await savePersisted(env, state);
-  return enrichTransactions(
-    [
-      {
-        ...matchedTransaction,
-        teamId: state.transactionTeamAssignments.find((assignment) => assignment.transactionId === transaction.id)?.teamId,
-      }
-    ],
-    state.providers,
-    state.transactionCategoryRules
-  )[0];
+  return enrichTransactions([matchedTransaction], state.providers, state.transactionCategoryRules)[0];
 }
 
 async function updateTransactionCategory(env: Env, payload: UpdateTransactionCategoryPayload): Promise<Transaction> {
@@ -2896,7 +3945,7 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
       throw new Error("This transaction needs an AI merchant name before a merchant-wide category rule can be saved");
     }
     state.transactionCategoryRules = learnCategoryAliases(state.transactionCategoryRules, transaction, category);
-    state.wiseStatementTransactions = state.wiseStatementTransactions.map((item) =>
+    state.pendingBankTransactions = state.pendingBankTransactions.map((item) =>
       transactionsShareMerchant(item, transaction)
         ? {
             ...item,
@@ -2908,16 +3957,24 @@ async function updateTransactionCategory(env: Env, payload: UpdateTransactionCat
           }
         : item
     );
-    await getConvexClient(env).mutation(api.banking.applyMerchantCategory, {
-      serviceToken: getConvexServiceToken(env),
-      merchantKey: transactionMerchantKey(transaction),
-      merchantName: transaction.merchantName,
-      direction: transaction.direction,
-      category
-    });
+    let cursor: string | null = null;
+    do {
+      const result: { hasMore: boolean; continueCursor: string | null } = await getConvexClient(env).mutation(api.banking.applyMerchantCategory, {
+        serviceToken: getConvexServiceToken(env),
+        merchantKey: transactionMerchantKey(transaction),
+        merchantName: transaction.merchantName,
+        direction: transaction.direction,
+        category,
+        cursor,
+        limit: bankMutationBatchSize
+      });
+      cursor = result.hasMore ? result.continueCursor : null;
+      if (result.hasMore && !cursor) throw new ApiError(503, "Merchant category update did not advance");
+    } while (cursor);
   }
 
   await savePersisted(env, state);
+  await rebuildProfitDistributionCache(env);
   return enrichTransactions([updated], state.providers, state.transactionCategoryRules)[0];
 }
 
@@ -2932,6 +3989,7 @@ async function saveProfitDistributionAdjustment(
     state.profitDistributionAdjustments = [adjustment, ...state.profitDistributionAdjustments];
   }
   await savePersisted(env, state);
+  await rebuildProfitDistributionCache(env);
   return getSnapshot(env);
 }
 
@@ -2946,21 +4004,10 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
     throw new Error("Owner not found");
   }
 
-  state.transactionTeamAssignments = state.transactionTeamAssignments.filter(
-    (assignment) => assignment.transactionId !== payload.transactionId
-  );
-  if (teamId) {
-    state.transactionTeamAssignments = [
-      { transactionId: payload.transactionId, teamId, updatedAt: new Date().toISOString() },
-      ...state.transactionTeamAssignments
-    ];
-  }
-
+  const updated = { ...transaction, teamId };
+  upsertPersistedTransaction(state, updated);
   await savePersisted(env, state);
-  return {
-    ...transaction,
-    teamId
-  };
+  return updated;
 }
 
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
@@ -3006,11 +4053,43 @@ async function updateTransactionCategoryDefinition(
   payload: UpdateTransactionCategoryDefinitionPayload
 ): Promise<TransactionCategory[]> {
   const convex = getConvexClient(env);
+  const categoriesBeforeUpdate = (await loadPersisted(env)).transactionCategories;
+  const existing = categoriesBeforeUpdate.find((category) => category.id === categoryId);
+  if (!existing) throw new ApiError(404, "Category not found");
   try {
+    const targetName = payload.name.trim().replace(/\s+/g, " ");
+    if (!targetName) throw new ApiError(400, "Category name is required");
+    if (!/^#[0-9a-f]{6}$/i.test(payload.color)) {
+      throw new ApiError(400, "Category color must be a six-digit hex value");
+    }
+    if (existing.system && (targetName !== existing.name || payload.direction !== existing.direction)) {
+      throw new ApiError(409, "Built-in category names and types are locked because reporting rules depend on them");
+    }
+    if (categoriesBeforeUpdate.some(
+      (category) => category.id !== categoryId && normalizeName(category.name) === normalizeName(targetName)
+    )) {
+      throw new ApiError(409, "A category with this name already exists");
+    }
+
+    // Move ledger rows first while the old definition remains the durable resume marker.
+    // A retry after any failed batch still discovers the old name and continues safely.
+    if (existing.name !== targetName) {
+      let hasMore = false;
+      do {
+        const result = await convex.mutation(api.banking.renameCategoryBatch, {
+          serviceToken: getConvexServiceToken(env),
+          fromCategory: existing.name,
+          toCategory: targetName,
+          limit: bankMutationBatchSize
+        });
+        hasMore = result.hasMore;
+      } while (hasMore);
+    }
     return await convex.mutation(api.dashboard.updateTransactionCategory, {
       serviceToken: getConvexServiceToken(env),
       id: categoryId,
-      ...payload
+      ...payload,
+      name: targetName
     });
   } catch (error) {
     categoryMutationError(error);
@@ -3019,7 +4098,16 @@ async function updateTransactionCategoryDefinition(
 
 async function deleteTransactionCategoryDefinition(env: Env, categoryId: string): Promise<TransactionCategory[]> {
   const convex = getConvexClient(env);
+  const existing = (await loadPersisted(env)).transactionCategories.find((category) => category.id === categoryId);
+  if (!existing) throw new ApiError(404, "Category not found");
   try {
+    const hasBankReference = await convex.query(api.banking.hasCategoryReference, {
+      serviceToken: getConvexServiceToken(env),
+      category: existing.name
+    });
+    if (hasBankReference) {
+      throw new ApiError(409, "Reassign bank transactions before deleting this category");
+    }
     return await convex.mutation(api.dashboard.deleteTransactionCategory, {
       serviceToken: getConvexServiceToken(env),
       id: categoryId
@@ -3189,12 +4277,6 @@ async function createExpense(env: Env, payload: CreateExpensePayload): Promise<E
       confidence: 1,
       matchReason: "Paid expense reviewed with source document"
     });
-    if (expense.teamId) {
-      state.transactionTeamAssignments = [
-        { transactionId: transaction.id, teamId: expense.teamId, updatedAt: createdAt },
-        ...state.transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
-      ];
-    }
     if (provider) {
       state.providers = state.providers.map((item) =>
         item.id === provider.id ? learnAliases(item, bankAliasNames(transaction)) : item
@@ -3241,12 +4323,6 @@ async function matchExpensePayment(
     confidence: 1,
     matchReason: `Matched to supplier bill ${expense.recordNumber}`
   });
-  if (expense.teamId) {
-    state.transactionTeamAssignments = [
-      { transactionId: transaction.id, teamId: expense.teamId, updatedAt },
-      ...state.transactionTeamAssignments.filter((assignment) => assignment.transactionId !== transaction.id)
-    ];
-  }
   await savePersisted(env, state);
   return updated;
 }
@@ -3931,8 +5007,7 @@ function trackedFxAssets(
     ...state.manualReceivables.map((receivable) => receivable.currency),
     ...state.revenuePartners.map((partner) => partner.currency),
     ...state.revenueRuns.map((run) => run.currency),
-    ...state.revenueAccruals.map((accrual) => accrual.currency),
-    ...state.wiseStatementTransactions.map((transaction) => transaction.currency)
+    ...state.revenueAccruals.map((accrual) => accrual.currency)
   ].map((asset) => asset.trim().toUpperCase()).filter(Boolean))].sort();
 }
 
@@ -4214,56 +5289,62 @@ export async function runIncomeAutomation(env: Env, scheduledAt: Date): Promise<
   }
 }
 
-function requestedBankDateRanges(url: URL): BankDateRanges {
-  try {
-    return {
-      revolut: parseRevolutTransactionDateRange(
-        url.searchParams.get("revolutFromDate"),
-        url.searchParams.get("revolutToDate")
-      ),
-      slash: parseSlashTransactionDateRange(
-        url.searchParams.get("slashFromDate"),
-        url.searchParams.get("slashToDate")
-      )
-    };
-  } catch (error) {
-    throw new ApiError(400, error instanceof Error ? error.message : "Invalid bank transaction date range");
+function boundedPageLimit(value: string | null): number {
+  if (value === null) return bankMutationBatchSize;
+  if (!/^\d+$/.test(value)) throw new ApiError(400, "Transaction limit must be a whole number");
+  const limit = Number(value);
+  if (limit < 1 || limit > bankMutationBatchSize) {
+    throw new ApiError(400, `Transaction limit must be between 1 and ${bankMutationBatchSize}`);
   }
+  return limit;
 }
 
-function bankActivityRequest(value: unknown): {
-  dateRange: SlashTransactionDateRange;
-  sources: ConnectedBankSource[];
-} {
-  if (!isRecord(value)) throw new ApiError(400, "Bank activity request is required");
-  const rawSources = value.sources;
-  if (!Array.isArray(rawSources) || rawSources.length === 0) {
-    throw new ApiError(400, "Choose at least one bank source");
-  }
-  const sources: ConnectedBankSource[] = [];
-  for (const source of rawSources) {
-    if (source !== "revolut" && source !== "slash") {
-      throw new ApiError(400, "Bank activity sources must be Revolut or Slash");
-    }
-    if (!sources.includes(source)) sources.push(source);
-  }
-  try {
-    const dateRange = parseSlashTransactionDateRange(
-      typeof value.fromDate === "string" ? value.fromDate : undefined,
-      typeof value.toDate === "string" ? value.toDate : undefined
-    );
-    if (!dateRange) throw new ApiError(400, "Bank activity from and to dates are required");
-    return { dateRange, sources };
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    const message = error instanceof Error
-      ? error.message.replaceAll("Slash", "Bank activity")
-      : "Invalid bank activity date range";
-    throw new ApiError(400, message);
-  }
+function opaqueCursor(value: string | null): string | null {
+  if (!value) return null;
+  if (value.length > 4096) throw new ApiError(400, "Transaction cursor is invalid");
+  return value;
 }
 
-async function handleApi(request: Request, env: Env): Promise<Response> {
+function transactionPageOptions(url: URL): Parameters<typeof readTransactionPage>[1] {
+  const fromDate = url.searchParams.get("fromDate");
+  const toDate = url.searchParams.get("toDate");
+  if (!fromDate || !toDate) {
+    throw new ApiError(400, "Transaction fromDate and toDate are required");
+  }
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
+    || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
+    || fromDate > toDate
+    || toDate > new Date().toISOString().slice(0, 10)
+  ) {
+    throw new ApiError(400, "Transaction date range is invalid");
+  }
+  const source = url.searchParams.get("source");
+  if (source !== null && source !== "wise" && source !== "revolut" && source !== "slash" && source !== "amex") {
+    throw new ApiError(400, "Transaction source is invalid");
+  }
+  const direction = url.searchParams.get("direction");
+  if (direction !== null && direction !== "in" && direction !== "out") {
+    throw new ApiError(400, "Transaction direction is invalid");
+  }
+  const order = url.searchParams.get("order") ?? "desc";
+  if (order !== "asc" && order !== "desc") throw new ApiError(400, "Transaction order is invalid");
+  return {
+    fromDate,
+    toDate,
+    ...(source ? { source } : {}),
+    ...(direction ? { direction } : {}),
+    order,
+    cursor: opaqueCursor(url.searchParams.get("cursor")),
+    limit: boundedPageLimit(url.searchParams.get("limit"))
+  };
+}
+
+async function handleApi(
+  request: Request,
+  env: Env,
+  executionContext?: { waitUntil(promise: Promise<unknown>): void }
+): Promise<Response> {
   const url = new URL(request.url);
 
   try {
@@ -4272,7 +5353,128 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
-      return json(await getSnapshot(env, { bankDateRanges: requestedBankDateRanges(url) }));
+      return json(await getSnapshot(env));
+    }
+
+    if (url.pathname === "/api/analytics" && request.method === "GET") {
+      const range = bankAnalyticsDateRange(url);
+      const coverage = await getConvexClient(env).query(api.banking.getActivityCoverage, {
+        serviceToken: getConvexServiceToken(env),
+        connections: await bankConnectionDirectory(env),
+        fromDate: range.fromDate,
+        toDate: range.toDate
+      });
+      const missingSources = coverage.filter((item) => item.missingRanges.length > 0);
+      if (missingSources.length > 0) {
+        const jobs = await Promise.all(missingSources.flatMap((item) =>
+          item.missingRanges.map((missingRange) => enqueueBankBackfill(env, item.source, missingRange))
+        ));
+        const failedJob = jobs.find((job) => job.status === "failed");
+        if (failedJob) {
+          throw new ApiError(502, failedJob.lastError ?? `${failedJob.source} history sync failed`);
+        }
+        const run = Promise.allSettled(jobs.map((job) => runBankBackfillJob(env, job.key))).then(() => undefined);
+        if (executionContext) executionContext.waitUntil(run);
+        else void run;
+        return json(
+          { status: "building", reason: "historical-coverage", jobs: jobs.map((job) => job.key) },
+          { status: 202, headers: { "Retry-After": "5" } }
+        );
+      }
+      return await getBankAnalyticsSnapshot(env, range);
+    }
+
+    if (url.pathname === "/api/transactions" && request.method === "GET") {
+      const startedAt = Date.now();
+      const options = transactionPageOptions(url);
+      if (options.source && !bankSourceConfigured(env, options.source)) {
+        throw new ApiError(409, `${options.source} is not configured for transaction sync`);
+      }
+      const page = await readTransactionPage(env, options);
+      const durationMs = Date.now() - startedAt;
+      console.log(JSON.stringify({
+        event: "transaction_page_loaded",
+        durationMs,
+        fromDate: page.fromDate,
+        toDate: page.toDate,
+        source: page.source ?? "all",
+        direction: page.direction ?? "all",
+        transactions: page.transactions.length,
+        isDone: page.isDone
+      }));
+      return json(page, { headers: { "server-timing": `transactions;dur=${durationMs}` } });
+    }
+
+    if (url.pathname === "/api/transactions/sync" && request.method === "GET") {
+      const key = url.searchParams.get("key")?.trim();
+      if (!key || key.length > 512) throw new ApiError(400, "Historical transaction sync key is invalid");
+      const job = await getConvexClient(env).query(api.bankSync.getBackfill, {
+        serviceToken: getConvexServiceToken(env),
+        key
+      });
+      if (!job) throw new ApiError(404, "Historical transaction sync job was not found");
+      if (job.status === "failed") {
+        return json(
+          { ...job, message: job.lastError ?? "Historical transaction sync failed" },
+          { status: 409 }
+        );
+      }
+      return json(job, job.status === "complete"
+        ? undefined
+        : { status: 202, headers: { "Retry-After": "5" } });
+    }
+
+    if (url.pathname === "/api/transactions/sync" && request.method === "POST") {
+      const payload = (await request.json()) as Partial<{
+        source: BankTransactionSource;
+        fromDate: string;
+        toDate: string;
+      }>;
+      if (
+        payload.source !== "wise"
+        && payload.source !== "revolut"
+        && payload.source !== "slash"
+        && payload.source !== "amex"
+      ) {
+        throw new ApiError(400, "Historical transaction sync source is invalid");
+      }
+      const dateRange = parseSlashTransactionDateRange(payload.fromDate, payload.toDate);
+      if (!dateRange) throw new ApiError(400, "Historical transaction sync date range is required");
+      let queued = await enqueueBankBackfill(env, payload.source, dateRange);
+      if (queued.status === "failed") {
+        queued = await getConvexClient(env).mutation(api.bankSync.retryBackfill, {
+          serviceToken: getConvexServiceToken(env),
+          key: queued.key,
+          connectionKey: queued.connectionKey
+        });
+      }
+      const run = runBankBackfillJob(env, queued.key).catch((error: unknown) => {
+        console.error(JSON.stringify({
+          event: "historical_bank_sync_failed",
+          source: payload.source,
+          fromDate: dateRange.fromDate,
+          toDate: dateRange.toDate,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        throw error;
+      });
+      if (executionContext) executionContext.waitUntil(run);
+      else void run.catch(() => undefined);
+      return json(
+        { status: "queued", key: queued.key, source: payload.source, ...dateRange },
+        { status: 202, headers: { "Retry-After": "5" } }
+      );
+    }
+
+    if (url.pathname === "/api/invoice-payment-candidates" && request.method === "GET") {
+      const currency = url.searchParams.get("currency")?.trim().toUpperCase();
+      if (!currency) throw new ApiError(400, "Invoice payment candidate currency is required");
+      return json(await invoicePaymentCandidates(
+        env,
+        currency,
+        boundedPageLimit(url.searchParams.get("limit")),
+        url.searchParams.get("cursor")
+      ));
     }
 
     if (url.pathname === "/api/management-report" && request.method === "GET") {
@@ -4309,29 +5511,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
-      await syncLatestBankActivity(env);
-      return json(await getSnapshot(env, {
-        refreshFxRates: true,
-        bankDateRanges: requestedBankDateRanges(url)
-      }));
-    }
-
-    if (url.pathname === "/api/banks/activity" && request.method === "POST") {
-      const startedAt = Date.now();
-      const { dateRange, sources } = bankActivityRequest(await request.json());
-      const result = await loadBankActivity(env, sources, dateRange);
-      const durationMs = Date.now() - startedAt;
-      console.log(JSON.stringify({
-        event: "bank_activity_loaded",
-        durationMs,
-        fromDate: result.fromDate,
-        toDate: result.toDate,
-        sources: result.sources,
-        transactions: result.transactions.length
-      }));
-      return json(result, {
-        headers: { "server-timing": `bank-activity;dur=${durationMs}` }
-      });
+      const syncResults = await Promise.allSettled([
+        syncLatestBankActivity(env),
+        syncMeritActivity(env)
+      ]);
+      const failure = syncResults.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") {
+        const reason = failure.reason instanceof Error ? failure.reason.message : String(failure.reason);
+        console.error(JSON.stringify({ event: "manual_sync_failed", error: reason }));
+        throw new ApiError(502, `Financial data sync failed: ${reason}`, { cause: failure.reason });
+      }
+      await rebuildProfitDistributionCache(env);
+      return json(await getSnapshot(env, { refreshFxRates: true }));
     }
 
     if (url.pathname === "/api/merit/default-taxes/sync" && request.method === "POST") {
@@ -4513,24 +5704,50 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+    executionContext?: { waitUntil(promise: Promise<unknown>): void }
+  ): Promise<Response> {
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;
 
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
-      return handleApi(request, env);
+      return handleApi(request, env, executionContext);
     }
     return env.ASSETS.fetch(request);
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
-    if (controller.cron === "*/15 * * * *") {
+    if (controller.cron === "*/5 * * * *") {
+      try {
+        await processPendingBankBackfills(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "bank_backfill_queue_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
       try {
         await syncLatestBankActivity(env);
       } catch (error) {
         console.error(JSON.stringify({
           event: "bank_activity_sync_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
+    if (controller.cron === "*/15 * * * *") {
+      try {
+        await syncMeritActivity(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "merit_activity_sync_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
@@ -4546,6 +5763,16 @@ export default {
         }));
         failures.push(error);
       }
+      try {
+        await rebuildProfitDistributionCache(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "profit_distribution_cache_rebuild_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
     }
     if (controller.cron === "17 * * * *") {
       try {
@@ -4553,6 +5780,18 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({
           event: "fx_rate_refresh_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
+    if (controller.cron === "23 3 * * *") {
+      try {
+        await reconcilePendingBankTransactions(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "pending_bank_reconciliation_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));

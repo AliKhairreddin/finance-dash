@@ -5,7 +5,7 @@ import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
   AutoCategorizeTransactionsPayload,
-  ConnectedBankSource,
+  BankTransactionSource,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -15,6 +15,7 @@ import type {
   CreateTeamPayload,
   CreateTransactionCategoryPayload,
   DeleteInvoicesPayload,
+  Direction,
   DraftRevenueRunPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
@@ -48,11 +49,12 @@ import {
   deleteHolding,
   draftRevenueRun,
   getSnapshot,
+  getTransactionPage,
+  getInvoicePaymentCandidates,
   getOpenRouterZdrModels,
   expenseDocumentById,
   initializeStore,
   importWiseStatement,
-  loadBankActivity,
   matchTransaction,
   matchExpensePayment,
   previewInvoiceDuplicate,
@@ -126,27 +128,66 @@ app.post("/api/sync", async (request, response, next) => {
   }
 });
 
-app.post("/api/banks/activity", async (request, response, next) => {
+app.get("/api/transactions", (request, response, next) => {
   try {
-    const rawSources = request.body?.sources;
-    if (!Array.isArray(rawSources) || rawSources.length === 0) {
-      response.status(400).json({ message: "Choose at least one bank source" });
+    const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
+    const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate) || fromDate > toDate) {
+      response.status(400).json({ message: "Transaction date range is invalid" });
       return;
     }
-    const sources: ConnectedBankSource[] = [];
-    for (const source of rawSources) {
-      if (source !== "revolut" && source !== "slash") {
-        response.status(400).json({ message: "Bank activity sources must be Revolut or Slash" });
-        return;
-      }
-      if (!sources.includes(source)) sources.push(source);
-    }
-    const dateRange = parseSlashTransactionDateRange(request.body?.fromDate, request.body?.toDate);
-    if (!dateRange) {
-      response.status(400).json({ message: "Bank activity from and to dates are required" });
+    const rawSource = typeof request.query.source === "string" ? request.query.source : undefined;
+    if (rawSource && rawSource !== "wise" && rawSource !== "revolut" && rawSource !== "slash" && rawSource !== "amex") {
+      response.status(400).json({ message: "Transaction source is invalid" });
       return;
     }
-    response.json(await loadBankActivity(sources, dateRange));
+    const source: BankTransactionSource | undefined =
+      rawSource === "wise" || rawSource === "revolut" || rawSource === "slash" || rawSource === "amex"
+        ? rawSource
+        : undefined;
+    const rawDirection = typeof request.query.direction === "string" ? request.query.direction : undefined;
+    if (rawDirection && rawDirection !== "in" && rawDirection !== "out") {
+      response.status(400).json({ message: "Transaction direction is invalid" });
+      return;
+    }
+    const direction: Direction | undefined = rawDirection === "in" || rawDirection === "out" ? rawDirection : undefined;
+    const order = request.query.order === "asc" ? "asc" : "desc";
+    const rawLimit = typeof request.query.limit === "string" ? request.query.limit : "200";
+    const limit = /^\d+$/.test(rawLimit) ? Number(rawLimit) : 0;
+    if (limit < 1 || limit > 200) {
+      response.status(400).json({ message: "Transaction limit must be between 1 and 200" });
+      return;
+    }
+    const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
+    response.json(getTransactionPage({
+      fromDate,
+      toDate,
+      ...(source ? { source } : {}),
+      ...(direction ? { direction } : {}),
+      order,
+      cursor,
+      limit
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/invoice-payment-candidates", (request, response, next) => {
+  try {
+    const currency = typeof request.query.currency === "string" ? request.query.currency.trim().toUpperCase() : "";
+    if (!currency) {
+      response.status(400).json({ message: "Invoice payment candidate currency is required" });
+      return;
+    }
+    const rawLimit = typeof request.query.limit === "string" ? request.query.limit : "200";
+    const limit = /^\d+$/.test(rawLimit) ? Number(rawLimit) : 0;
+    if (limit < 1 || limit > 200) {
+      response.status(400).json({ message: "Transaction limit must be between 1 and 200" });
+      return;
+    }
+    const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
+    response.json(getInvoicePaymentCandidates(currency, cursor, limit));
   } catch (error) {
     next(error);
   }

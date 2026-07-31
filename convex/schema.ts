@@ -11,6 +11,13 @@ const dataSource = v.union(
   v.literal("tune")
 );
 
+const bankSource = v.union(
+  v.literal("wise"),
+  v.literal("revolut"),
+  v.literal("slash"),
+  v.literal("amex")
+);
+
 const providerType = v.union(v.literal("client"), v.literal("supplier"));
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"));
 const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
@@ -217,6 +224,7 @@ const transaction = v.object({
   source: dataSource,
   wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
+  accountId: v.optional(v.string()),
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
@@ -230,7 +238,12 @@ const transaction = v.object({
     rate: v.number()
   })),
   direction: v.union(v.literal("in"), v.literal("out")),
-  status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
+  status: v.union(
+    v.literal("posted"),
+    v.literal("pending"),
+    v.literal("settled"),
+    v.literal("voided")
+  ),
   category: v.string(),
   merchantName: v.optional(v.string()),
   merchantKey: v.optional(v.string()),
@@ -248,12 +261,25 @@ const transaction = v.object({
   matchReason: v.optional(v.string())
 });
 
-const syncedBankSource = v.union(v.literal("revolut"), v.literal("slash"));
+const profitDistributionPaymentFact = v.object({
+  partnerId: v.union(
+    v.literal("ishan"),
+    v.literal("ben"),
+    v.literal("sanjan"),
+    v.literal("amin")
+  ),
+  bucket: v.union(
+    v.literal("profit-share"),
+    v.literal("salary"),
+    v.literal("distribution")
+  ),
+  amount: v.number()
+});
 
 const accountBalance = v.object({
   id: v.string(),
   name: v.string(),
-  source: syncedBankSource,
+  source: bankSource,
   slashAccountSubtype: v.optional(slashAccountSubtype),
   balance: v.number(),
   currency: v.string(),
@@ -439,6 +465,55 @@ const profitDistributionAdjustment = v.object({
   updatedAt: v.string()
 });
 
+const meritTax = v.object({
+  id: v.string(),
+  code: v.string(),
+  name: v.string(),
+  taxPct: v.number()
+});
+
+const profitDistributionPartnerLedger = v.object({
+  partnerId: profitDistributionPartnerId,
+  partnerName: v.string(),
+  entityName: v.optional(v.string()),
+  currency: v.string(),
+  profitSharePayable: v.number(),
+  salaryPayable: v.number(),
+  distributionPayable: v.number(),
+  totalPayable: v.number(),
+  profitSharePaid: v.number(),
+  salaryPaid: v.number(),
+  distributionPaid: v.number(),
+  totalPaid: v.number(),
+  remaining: v.number(),
+  hasAdjustment: v.boolean(),
+  hasDeferred: v.boolean()
+});
+
+const profitDistributionSnapshot = v.object({
+  partners: v.array(profitDistributionPartnerLedger),
+  months: v.array(v.object({
+    id: v.string(),
+    month: v.string(),
+    currency: v.string(),
+    revenue: v.number(),
+    generalCosts: v.number(),
+    netProfitAfterGeneralCosts: v.number(),
+    ishanProfitShare: v.number(),
+    salaryDeductions: v.number(),
+    profitAvailableForDistribution: v.number(),
+    distributionPool: v.number(),
+    partners: v.array(profitDistributionPartnerLedger)
+  })),
+  currencies: v.array(v.object({
+    currency: v.string(),
+    totalPayable: v.number(),
+    totalPaid: v.number(),
+    remaining: v.number()
+  })),
+  adjustments: v.array(profitDistributionAdjustment)
+});
+
 export default defineSchema({
   dashboardState: defineTable({
     key: v.string(),
@@ -449,9 +524,9 @@ export default defineSchema({
     teams: v.array(team),
     transactionCategoryRules: v.array(transactionCategoryRule),
     revenuePartners: v.array(revenuePartner),
-    transactionTeamAssignments: v.array(transactionTeamAssignment),
+    transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
     wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
-    wiseStatementTransactions: v.array(transaction),
+    wiseStatementTransactions: v.optional(v.array(transaction)),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
     revenueAccruals: v.array(revenueAccrual),
@@ -461,6 +536,8 @@ export default defineSchema({
     fxTrackedAssets: v.optional(v.array(v.string())),
     automationRuns: v.array(automationRun),
     profitDistributionAdjustments: v.array(profitDistributionAdjustment),
+    profitDistributionCache: v.optional(profitDistributionSnapshot),
+    meritTaxes: v.optional(v.array(meritTax)),
     aiSettings: v.optional(aiSettings),
     updatedAt: v.string()
   }).index("by_key", ["key"]),
@@ -478,27 +555,196 @@ export default defineSchema({
     .index("by_name_normalized", ["nameNormalized"]),
   bankTransactions: defineTable({
     ...transaction.fields,
-    source: syncedBankSource,
-    syncedAt: v.string()
+    source: bankSource,
+    connectionKey: v.optional(v.string()),
+    syncedAt: v.string(),
+    profitContributionVersion: v.optional(v.number()),
+    identityVersion: v.optional(v.number())
   })
     .index("by_transaction_id", ["id"])
-    .index("by_source_date", ["source", "date"])
+    .index("by_transaction_account_id", ["accountId"])
+    .index("by_connection_key", ["connectionKey"])
+    .index("by_source", ["source"])
+    .index("by_source_connection", ["source", "connectionKey"])
+    .index("by_source_connection_date_id", ["source", "connectionKey", "date", "id"])
+    .index("by_source_connection_direction_date_id", ["source", "connectionKey", "direction", "date", "id"])
+    .index("by_source_connection_status_date_id", ["source", "connectionKey", "status", "date", "id"])
+    .index("by_source_connection_classification_complete", ["source", "connectionKey", "classificationComplete"])
+    .index("by_source_connection_direction_currency_status_date_id", [
+      "source",
+      "connectionKey",
+      "direction",
+      "currency",
+      "status",
+      "date",
+      "id"
+    ])
+    .index("by_source_status_date_id", ["source", "status", "date", "id"])
+    .index("by_date_id", ["date", "id"])
+    .index("by_direction_date_id", ["direction", "date", "id"])
+    .index("by_direction_currency_status_date_id", ["direction", "currency", "status", "date", "id"])
+    .index("by_source_date_id", ["source", "date", "id"])
+    .index("by_source_direction_date_id", ["source", "direction", "date", "id"])
     .index("by_classification_complete", ["classificationComplete"])
-    .index("by_merchant_direction", ["merchantKey", "direction"]),
+    .index("by_profit_contribution_version", ["profitContributionVersion"])
+    .index("by_identity_version", ["identityVersion"])
+    .index("by_source_identity_version", ["source", "identityVersion"])
+    .index("by_source_connection_identity_version", ["source", "connectionKey", "identityVersion"])
+    .index("by_merchant_direction", ["merchantKey", "direction"])
+    .index("by_matched_provider", ["matchedProviderId"])
+    .index("by_category", ["category"]),
+  profitDistributionFacts: defineTable({
+    key: v.string(),
+    version: v.number(),
+    month: v.string(),
+    currency: v.string(),
+    transactionCount: v.number(),
+    revenue: v.number(),
+    generalCosts: v.number(),
+    payments: v.array(profitDistributionPaymentFact),
+    updatedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_month_currency", ["month", "currency"]),
+  bankLedgerRevision: defineTable({
+    key: v.string(),
+    revision: v.number(),
+    updatedAt: v.string()
+  }).index("by_key", ["key"]),
+  bankLedgerCutover: defineTable({
+    key: v.string(),
+    status: v.literal("ready"),
+    completedAt: v.string()
+  }).index("by_key", ["key"]),
+  bankConnectionBindings: defineTable({
+    source: bankSource,
+    connectionKey: v.string(),
+    boundAt: v.string()
+  })
+    .index("by_source", ["source"])
+    .index("by_source_connection", ["source", "connectionKey"]),
+  bankTransactionAliases: defineTable({
+    key: v.string(),
+    source: bankSource,
+    connectionKey: v.optional(v.string()),
+    alias: v.string(),
+    transactionId: v.string(),
+    updatedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_transaction_id", ["transactionId"]),
+  bankIdentityMigrations: defineTable({
+    source: bankSource,
+    version: v.number(),
+    completedAt: v.string()
+  }).index("by_source", ["source"]),
+  bankIdentityDispositions: defineTable({
+    key: v.string(),
+    source: bankSource,
+    connectionKey: v.string(),
+    disposition: v.literal("accept-surrogate-identities"),
+    acceptedCount: v.number(),
+    earliestDate: v.string(),
+    latestDate: v.string(),
+    updatedAt: v.string()
+  }).index("by_key", ["key"]),
+  bankLegacyReferenceDispositions: defineTable({
+    key: v.string(),
+    transactionId: v.string(),
+    teamId: v.string(),
+    disposition: v.literal("discard-orphaned-team-assignment"),
+    disposedAt: v.string()
+  }).index("by_key", ["key"]),
   bankAccounts: defineTable({
     ...accountBalance.fields,
+    connectionKey: v.optional(v.string()),
     syncedAt: v.string()
   })
     .index("by_account_id", ["id"])
-    .index("by_source", ["source"]),
+    .index("by_connection_key", ["connectionKey"])
+    .index("by_source", ["source"])
+    .index("by_source_connection", ["source", "connectionKey"]),
   bankSyncState: defineTable({
-    source: syncedBankSource,
+    source: bankSource,
+    connectionKey: v.optional(v.string()),
+    accountIds: v.optional(v.array(v.string())),
     coveredRanges: v.array(v.object({ fromDate: v.string(), toDate: v.string() })),
     lastSyncedAt: v.string()
-  }).index("by_source", ["source"]),
+  })
+    .index("by_source", ["source"])
+    .index("by_source_connection", ["source", "connectionKey"]),
+  bankSyncCheckpoints: defineTable({
+    source: bankSource,
+    connectionKey: v.optional(v.string()),
+    laneKey: v.optional(v.string()),
+    accountIds: v.optional(v.array(v.string())),
+    fromDate: v.string(),
+    toDate: v.string(),
+    checkpoint: v.string(),
+    updatedAt: v.string()
+  })
+    .index("by_source", ["source"])
+    .index("by_source_connection", ["source", "connectionKey"])
+    .index("by_source_connection_lane", ["source", "connectionKey", "laneKey"]),
+  bankBackfillJobs: defineTable({
+    key: v.string(),
+    source: bankSource,
+    connectionKey: v.string(),
+    fromDate: v.string(),
+    toDate: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("complete"),
+      v.literal("failed")
+    ),
+    attempts: v.number(),
+    consecutiveFailures: v.number(),
+    attemptToken: v.optional(v.string()),
+    nextAttemptAt: v.string(),
+    lastAttemptAt: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    completedAt: v.optional(v.string()),
+    updatedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_status_next_attempt", ["status", "nextAttemptAt", "updatedAt"])
+    .index("by_source_status_next_attempt", ["source", "status", "nextAttemptAt", "updatedAt"]),
+  bankSyncHealth: defineTable({
+    key: v.string(),
+    source: bankSource,
+    connectionKey: v.string(),
+    status: v.union(v.literal("running"), v.literal("healthy"), v.literal("failed")),
+    lastAttemptAt: v.string(),
+    lastSuccessAt: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    consecutiveFailures: v.number(),
+    updatedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_source_connection", ["source", "connectionKey"]),
+  bankReconciliationCursors: defineTable({
+    key: v.string(),
+    source: bankSource,
+    connectionKey: v.string(),
+    cursor: v.optional(v.string()),
+    updatedAt: v.string()
+  }).index("by_key", ["key"]),
+  bankAnalyticsJobs: defineTable({
+    key: v.string(),
+    version: v.string(),
+    fromDate: v.string(),
+    toDate: v.string(),
+    status: v.union(v.literal("building"), v.literal("complete")),
+    cursor: v.optional(v.string()),
+    accumulator: v.optional(v.any()),
+    snapshot: v.optional(v.any()),
+    updatedAt: v.string()
+  }).index("by_key", ["key"]),
   workerLeases: defineTable({
     key: v.string(),
     token: v.string(),
+    fence: v.optional(v.number()),
     expiresAt: v.number()
   }).index("by_key", ["key"]),
   managementReportImports: defineTable({

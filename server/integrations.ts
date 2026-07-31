@@ -11,6 +11,16 @@ import type {
   Transaction
 } from "../shared/types";
 import {
+  normalizeAmexAccount,
+  normalizeAmexTransactions,
+  parseAmexAccountConfigs
+} from "../shared/amexApi";
+import {
+  bankProviderOAuthFetchPolicy,
+  fetchBankProvider,
+  readBoundedResponseText
+} from "../shared/boundedHttp";
+import {
   meritInvoiceCopyDetails,
   meritInvoiceLineDescription,
   meritInvoicePeriods,
@@ -73,6 +83,23 @@ async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
 
+async function fetchBankJson<T>(
+  url: string,
+  init: RequestInit,
+  provider: string,
+  oauth = false
+): Promise<T> {
+  const response = await fetchBankProvider(fetch, url, init, {
+    provider,
+    ...(oauth ? bankProviderOAuthFetchPolicy : {})
+  });
+  const text = await readBoundedResponseText(response, provider);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+  }
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
 export function meritConnectionIssue(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Merit API error";
   if (/\b401\b/.test(message)) {
@@ -120,7 +147,12 @@ export function getIntegrationStatus(
     "AMEX_REFRESH_TOKEN",
     "AMEX_ACCOUNT_IDS",
     "AMEX_ACCOUNT_PATH_TEMPLATE",
-    "AMEX_TRANSACTIONS_PATH_TEMPLATE"
+    "AMEX_TRANSACTIONS_PATH_TEMPLATE",
+    "AMEX_TRANSACTIONS_ITEMS_PATH",
+    "AMEX_TRANSACTIONS_NEXT_CURSOR_PATH",
+    "AMEX_TRANSACTIONS_CURSOR_PARAM",
+    "AMEX_TRANSACTIONS_PAGE_SIZE_PARAM",
+    "AMEX_TRANSACTIONS_PAGE_SIZE"
   ].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !process.env[name]);
   const meritWriteEnabled = meritWritesEnabled() && meritNeeds.length === 0;
@@ -265,30 +297,6 @@ export async function fetchSlashActivity(
   });
 }
 
-type AmexAccountConfig = {
-  id: string;
-  name: string;
-  currency: string;
-};
-
-function parseAmexAccountConfigs(value?: string): AmexAccountConfig[] {
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((item) => {
-      const [id, name, currency = "USD"] = item.trim().split(":");
-      const accountId = id?.trim();
-      return accountId
-        ? {
-            id: accountId,
-            name: name?.trim() || `Amex ${accountId}`,
-            currency: currency.trim() || "USD"
-          }
-        : undefined;
-    })
-    .filter((item): item is AmexAccountConfig => Boolean(item));
-}
-
 async function fetchAmexAccessToken(): Promise<string | undefined> {
   if (!amexTokenUrl || !process.env.AMEX_CLIENT_ID || !process.env.AMEX_CLIENT_SECRET || !process.env.AMEX_REFRESH_TOKEN) {
     return undefined;
@@ -301,16 +309,22 @@ async function fetchAmexAccessToken(): Promise<string | undefined> {
     client_secret: process.env.AMEX_CLIENT_SECRET
   });
 
-  const response = await fetchJson<{ access_token?: string }>(amexTokenUrl, {
+  const response = await fetchBankJson<{ access_token?: string }>(amexTokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json"
     },
     body
-  });
+  }, "Amex", true);
 
-  if (!response.access_token) {
+  if (
+    typeof response.access_token !== "string"
+    || !response.access_token.trim()
+    || response.access_token !== response.access_token.trim()
+    || response.access_token.length > 16_384
+    || /[\u0000-\u0020\u007f-\u009f]/u.test(response.access_token)
+  ) {
     throw new Error("Amex token response did not include access_token");
   }
   return response.access_token;
@@ -322,90 +336,6 @@ function amexEndpoint(template: string, accountId: string, query?: URLSearchPara
   const separator = path.startsWith("/") ? "" : "/";
   const suffix = query ? `?${query.toString()}` : "";
   return `${amexApiBaseUrl.replace(/\/+$/, "")}${separator}${path}${suffix}`;
-}
-
-function amexString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-    if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  }
-  return undefined;
-}
-
-function amexMoneyValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/,/g, ""));
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  if (isRecord(value)) {
-    return amexMoneyValue(value.value ?? value.amount ?? value.amountValue);
-  }
-  return undefined;
-}
-
-function amexCurrency(value: unknown, fallback: string): string {
-  if (isRecord(value)) {
-    return amexString(value.currency, value.currencyCode, value.isoCurrencyCode) ?? fallback;
-  }
-  return fallback;
-}
-
-function amexRecords(payload: unknown, primaryKey: string): Array<Record<string, unknown>> {
-  if (Array.isArray(payload)) return payload.filter(isRecord);
-  if (!isRecord(payload)) return [];
-  const rows = payload[primaryKey] ?? payload.items ?? payload.data;
-  return Array.isArray(rows) ? rows.filter(isRecord) : [];
-}
-
-function amexStatus(value: unknown): Transaction["status"] {
-  const status = amexString(value)?.toLowerCase();
-  return status === "pending" || status === "authorized" || status === "authorization" ? "pending" : "posted";
-}
-
-function normalizeAmexAccount(payload: unknown, config: AmexAccountConfig): AccountBalance {
-  const account = isRecord(payload) ? payload : {};
-  const balanceValue = amexMoneyValue(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance) ?? 0;
-  const currency = amexCurrency(account.currentBalance ?? account.balance ?? account.outstandingBalance ?? account.statementBalance, config.currency);
-  const name = amexString(account.name, account.displayName, account.productName, account.lastFive, account.last4) ?? config.name;
-  return {
-    id: `amex-${config.id}`,
-    name,
-    source: "amex",
-    balance: balanceValue === 0 ? 0 : -Math.abs(balanceValue),
-    currency,
-    updatedAt: amexString(account.updatedAt, account.lastUpdatedAt, account.asOfDate) ?? new Date().toISOString(),
-    status: "live"
-  };
-}
-
-function normalizeAmexTransactions(payload: unknown, config: AmexAccountConfig): Transaction[] {
-  return amexRecords(payload, "transactions").map((item, index) => {
-    const rawAmount = amexMoneyValue(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount) ?? 0;
-    const status = amexStatus(item.status ?? item.transactionStatus);
-    const category = amexString(item.category, item.categoryCode, item.industry, item.merchantCategory) ?? "Amex";
-    const type = amexString(item.type, item.transactionType, item.kind)?.toLowerCase() ?? "";
-    const merchant = isRecord(item.merchant) ? item.merchant : {};
-    const counterparty =
-      amexString(merchant.name, item.merchantName, item.description, item.memo, item.reference) ?? "Amex transaction";
-    const transactionId = amexString(item.id, item.transactionId, item.reference, item.authorizationCode) ?? `${config.id}-${index}`;
-    const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
-    return {
-      id: `amex-${config.id}-${transactionId}`,
-      source: "amex",
-      accountName: config.name,
-      date: (amexString(item.postedDate, item.transactionDate, item.date, item.authorizationDate) ?? new Date().toISOString()).slice(0, 10),
-      description: amexString(item.description, item.memo, item.reference, counterparty) ?? counterparty,
-      rawName: counterparty,
-      counterparty,
-      amount: Math.abs(rawAmount),
-      currency: amexCurrency(item.amount ?? item.transactionAmount ?? item.billingAmount ?? item.totalAmount, config.currency),
-      direction: isCredit ? "in" : "out",
-      status,
-      category,
-      ...(amexString(item.cardHolderName, item.cardMemberName, item.employeeName) ? { cardHolderName: amexString(item.cardHolderName, item.cardMemberName, item.employeeName) } : {})
-    };
-  });
 }
 
 export async function fetchAmexActivity(): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
@@ -425,8 +355,12 @@ export async function fetchAmexActivity(): Promise<{ accounts: AccountBalance[];
     accountConfigs.map(async (config) => {
       const transactionParams = new URLSearchParams({ from: intervalStart, to: intervalEnd });
       const [account, transactions] = await Promise.all([
-        fetchJson<unknown>(amexEndpoint(amexAccountPathTemplate, config.id), { headers }),
-        fetchJson<unknown>(amexEndpoint(amexTransactionsPathTemplate, config.id, transactionParams), { headers })
+        fetchBankJson<unknown>(amexEndpoint(amexAccountPathTemplate, config.id), { headers }, "Amex"),
+        fetchBankJson<unknown>(
+          amexEndpoint(amexTransactionsPathTemplate, config.id, transactionParams),
+          { headers },
+          "Amex"
+        )
       ]);
       return {
         account: normalizeAmexAccount(account, config),

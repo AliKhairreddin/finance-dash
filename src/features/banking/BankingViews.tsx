@@ -61,18 +61,24 @@ function sourceLabel(source: DataSource): string {
   return transactionSources.find((item) => item.value === source)?.label ?? source;
 }
 
-const bankTablePageSize = 200;
-
 export function AllBankTransactionsView({
   dashboard,
   providersById,
   rangeControls,
-  transactions
+  transactions,
+  hasMore,
+  isLoading,
+  loadError,
+  onLoadMore
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   rangeControls: ReactNode;
   transactions: Transaction[];
+  hasMore: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  onLoadMore: () => Promise<void>;
 }) {
   const [query, setQuery] = useUrlState("allBankQuery", "");
   const [source, setSource] = useUrlState<"all" | DataSource>("allBankSource", "all", {
@@ -90,7 +96,6 @@ export function AllBankTransactionsView({
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("allBankOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
-  const [visibleRowCount, setVisibleRowCount] = useState(bankTablePageSize);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const expenseByTransactionId = useMemo(
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
@@ -130,12 +135,6 @@ export function AllBankTransactionsView({
       );
   }, [dashboard.transactionCategories, direction, match, providersById, query, sortDirection, sortKey, source, transactions]);
 
-  useEffect(() => {
-    setVisibleRowCount(bankTablePageSize);
-  }, [direction, match, query, sortDirection, sortKey, source, transactions]);
-
-  const visibleRows = rows.slice(0, visibleRowCount);
-
   function requestSort(nextSortKey: BankTransactionSortKey) {
     if (nextSortKey === sortKey) {
       setSortDirection((current) => current === "asc" ? "desc" : "asc");
@@ -165,7 +164,7 @@ export function AllBankTransactionsView({
 
   return (
     <section className="panel wide-panel">
-      <div className="panel-header compact"><div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div><span className="total-pill">{rows.length} rows</span></div>
+      <div className="panel-header compact"><div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div><span className="total-pill">{rows.length} loaded</span></div>
       <div className="list-toolbar unified-bank-toolbar">
         <div className="list-toolbar-main">
           <ToolbarSearchField
@@ -210,7 +209,7 @@ export function AllBankTransactionsView({
             className="icon-text-button"
             type="button"
             disabled={rows.length === 0}
-            title={`Export ${rows.length} row${rows.length === 1 ? "" : "s"} from this filtered view`}
+            title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
             onClick={() => exportBankTransactionsCsv({
               providersById,
               rows,
@@ -219,13 +218,13 @@ export function AllBankTransactionsView({
             })}
           >
             <Download size={15} />
-            Export CSV
+            Export loaded CSV
           </Button>
         </div>
       </div>
       <ActiveFilterBar
         filters={bankActiveFilters}
-        resultLabel={`${rows.length} bank transactions shown`}
+        resultLabel={`${rows.length} loaded bank transactions shown`}
         onClearAll={() => {
           setSource("all");
           setDirection("all");
@@ -245,24 +244,28 @@ export function AllBankTransactionsView({
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
           </tr></thead>
           <tbody>
-            {rows.length > 0 ? visibleRows.map((transaction) => {
+            {rows.length > 0 ? rows.map((transaction) => {
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
               return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transaction.counterparty} · {transaction.description}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{internalTransfer ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
-            }) : <tr><td colSpan={7}>No transactions match these filters</td></tr>}
+            }) : <tr><td colSpan={7}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>
       </div>
-      {visibleRows.length < rows.length && (
+      {(hasMore || isLoading || loadError) && (
         <div className="bank-table-pagination">
-          <span>Showing {visibleRows.length} of {rows.length} transactions</span>
+          <span className={loadError ? "danger-text" : undefined}>
+            {loadError ?? `${rows.length} loaded transactions shown`}
+          </span>
           <Button
             className="secondary-button"
             type="button"
-            onClick={() => setVisibleRowCount((current) => current + bankTablePageSize)}
+            disabled={isLoading}
+            onClick={() => void onLoadMore()}
           >
-            Show {Math.min(bankTablePageSize, rows.length - visibleRows.length)} more
+            {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <Plus size={15} />}
+            {isLoading ? "Loading" : loadError ? "Retry" : "Show 200 more"}
           </Button>
         </div>
       )}

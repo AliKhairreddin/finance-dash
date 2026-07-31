@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as analytics from "../analytics.js";
+import type * as bankLease from "../bankLease.js";
+import type * as bankSync from "../bankSync.js";
 import type * as banking from "../banking.js";
 import type * as dashboard from "../dashboard.js";
 import type * as managementReport from "../managementReport.js";
@@ -19,6 +22,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analytics: typeof analytics;
+  bankLease: typeof bankLease;
+  bankSync: typeof bankSync;
   banking: typeof banking;
   dashboard: typeof dashboard;
   managementReport: typeof managementReport;

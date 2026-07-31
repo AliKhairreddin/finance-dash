@@ -7,6 +7,8 @@ import {
   isTransactionCategoryDirection,
   normalizeTransactionCategoryName
 } from "../shared/categories";
+import { canonicalTeamId } from "../shared/business";
+import { maximumWiseStatementImportHistory } from "../shared/wiseEntities";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -228,7 +230,12 @@ const transaction = v.object({
     rate: v.number()
   })),
   direction: v.union(v.literal("in"), v.literal("out")),
-  status: v.union(v.literal("posted"), v.literal("pending"), v.literal("settled")),
+  status: v.union(
+    v.literal("posted"),
+    v.literal("pending"),
+    v.literal("settled"),
+    v.literal("voided")
+  ),
   category: v.string(),
   merchantName: v.optional(v.string()),
   merchantKey: v.optional(v.string()),
@@ -395,6 +402,59 @@ const profitDistributionAdjustment = v.object({
   updatedAt: v.string()
 });
 
+const meritTax = v.object({
+  id: v.string(),
+  code: v.string(),
+  name: v.string(),
+  taxPct: v.number()
+});
+const profitDistributionPartnerId = v.union(
+  v.literal("ishan"),
+  v.literal("ben"),
+  v.literal("sanjan"),
+  v.literal("amin")
+);
+const profitDistributionPartnerLedger = v.object({
+  partnerId: profitDistributionPartnerId,
+  partnerName: v.string(),
+  entityName: v.optional(v.string()),
+  currency: v.string(),
+  profitSharePayable: v.number(),
+  salaryPayable: v.number(),
+  distributionPayable: v.number(),
+  totalPayable: v.number(),
+  profitSharePaid: v.number(),
+  salaryPaid: v.number(),
+  distributionPaid: v.number(),
+  totalPaid: v.number(),
+  remaining: v.number(),
+  hasAdjustment: v.boolean(),
+  hasDeferred: v.boolean()
+});
+const profitDistributionSnapshot = v.object({
+  partners: v.array(profitDistributionPartnerLedger),
+  months: v.array(v.object({
+    id: v.string(),
+    month: v.string(),
+    currency: v.string(),
+    revenue: v.number(),
+    generalCosts: v.number(),
+    netProfitAfterGeneralCosts: v.number(),
+    ishanProfitShare: v.number(),
+    salaryDeductions: v.number(),
+    profitAvailableForDistribution: v.number(),
+    distributionPool: v.number(),
+    partners: v.array(profitDistributionPartnerLedger)
+  })),
+  currencies: v.array(v.object({
+    currency: v.string(),
+    totalPayable: v.number(),
+    totalPaid: v.number(),
+    remaining: v.number()
+  })),
+  adjustments: v.array(profitDistributionAdjustment)
+});
+
 function requireServiceToken(serviceToken: string): void {
   const expected = process.env.CONVEX_SERVICE_TOKEN;
   if (!expected || serviceToken !== expected) throw new ConvexError({ code: "UNAUTHORIZED" });
@@ -404,6 +464,303 @@ function nextUpdatedAt(previous?: string): string {
   const previousTimestamp = previous ? Date.parse(previous) : 0;
   return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
 }
+
+async function bumpBankLedgerRevision(ctx: MutationCtx): Promise<void> {
+  const existing = await ctx.db
+    .query("bankLedgerRevision")
+    .withIndex("by_key", (q) => q.eq("key", "default"))
+    .unique();
+  const next = {
+    key: "default",
+    revision: (existing?.revision ?? 0) + 1,
+    updatedAt: new Date().toISOString()
+  };
+  if (existing) await ctx.db.patch(existing._id, next);
+  else await ctx.db.insert("bankLedgerRevision", next);
+}
+
+const maximumLegacyLedgerMigrationBatchSize = 100;
+
+function isBankTransactionSource(
+  source: string
+): source is "wise" | "revolut" | "slash" | "amex" {
+  return source === "wise" || source === "revolut" || source === "slash" || source === "amex";
+}
+
+export const disposeOrphanedLegacyTeamAssignments = mutation({
+  args: {
+    serviceToken: v.string(),
+    disposition: v.literal("discard-orphaned-team-assignment"),
+    limit: v.optional(v.number())
+  },
+  returns: v.object({
+    disposed: v.number(),
+    remainingAssignments: v.number(),
+    updatedAt: v.union(v.string(), v.null())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) return { disposed: 0, remainingAssignments: 0, updatedAt: null };
+    if ((state.wiseStatementTransactions?.length ?? 0) > 0) {
+      throw new ConvexError({ code: "LEGACY_TRANSACTIONS_NOT_MIGRATED" });
+    }
+    const assignments = state.transactionTeamAssignments ?? [];
+    if (assignments.length === 0) {
+      return { disposed: 0, remainingAssignments: 0, updatedAt: state.updatedAt };
+    }
+    const requestedLimit = args.limit === undefined || !Number.isFinite(args.limit)
+      ? maximumLegacyLedgerMigrationBatchSize
+      : Math.trunc(args.limit);
+    const limit = Math.max(1, Math.min(maximumLegacyLedgerMigrationBatchSize, requestedLimit));
+    const retained = [];
+    const disposed = [];
+    for (const assignment of assignments) {
+      if (disposed.length >= limit) {
+        retained.push(assignment);
+        continue;
+      }
+      const transaction = await ctx.db
+        .query("bankTransactions")
+        .withIndex("by_transaction_id", (q) => q.eq("id", assignment.transactionId))
+        .unique();
+      if (transaction) retained.push(assignment);
+      else disposed.push(assignment);
+    }
+    if (disposed.length === 0) {
+      return {
+        disposed: 0,
+        remainingAssignments: assignments.length,
+        updatedAt: state.updatedAt
+      };
+    }
+    const disposedAt = nextUpdatedAt(state.updatedAt);
+    for (const assignment of disposed) {
+      const key = JSON.stringify([assignment.transactionId, assignment.teamId]);
+      const existing = await ctx.db
+        .query("bankLegacyReferenceDispositions")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .unique();
+      if (
+        existing
+        && (
+          existing.transactionId !== assignment.transactionId
+          || existing.teamId !== assignment.teamId
+          || existing.disposition !== args.disposition
+        )
+      ) {
+        throw new ConvexError({ code: "LEGACY_REFERENCE_DISPOSITION_CONFLICT", key });
+      }
+      if (!existing) {
+        await ctx.db.insert("bankLegacyReferenceDispositions", {
+          key,
+          transactionId: assignment.transactionId,
+          teamId: assignment.teamId,
+          disposition: args.disposition,
+          disposedAt
+        });
+      }
+    }
+    await ctx.db.patch(state._id, {
+      transactionTeamAssignments: retained.length > 0 ? retained : undefined,
+      profitDistributionCache: undefined,
+      updatedAt: disposedAt
+    });
+    return {
+      disposed: disposed.length,
+      remainingAssignments: retained.length,
+      updatedAt: disposedAt
+    };
+  }
+});
+
+export const migrateLegacyLedgerBatch = mutation({
+  args: {
+    serviceToken: v.string(),
+    limit: v.optional(v.number())
+  },
+  returns: v.object({
+    processedTransactions: v.number(),
+    insertedTransactions: v.number(),
+    updatedTransactions: v.number(),
+    appliedTeamAssignments: v.number(),
+    orphanedTeamAssignments: v.number(),
+    remainingTransactions: v.number(),
+    remainingTeamAssignments: v.number(),
+    isDone: v.boolean(),
+    updatedAt: v.union(v.string(), v.null())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) {
+      return {
+        processedTransactions: 0,
+        insertedTransactions: 0,
+        updatedTransactions: 0,
+        appliedTeamAssignments: 0,
+        orphanedTeamAssignments: 0,
+        remainingTransactions: 0,
+        remainingTeamAssignments: 0,
+        isDone: true,
+        updatedAt: null
+      };
+    }
+
+    const hasLegacyTransactionField = state.wiseStatementTransactions !== undefined;
+    const hasLegacyAssignmentField = state.transactionTeamAssignments !== undefined;
+    if (!hasLegacyTransactionField && !hasLegacyAssignmentField) {
+      return {
+        processedTransactions: 0,
+        insertedTransactions: 0,
+        updatedTransactions: 0,
+        appliedTeamAssignments: 0,
+        orphanedTeamAssignments: 0,
+        remainingTransactions: 0,
+        remainingTeamAssignments: 0,
+        isDone: true,
+        updatedAt: state.updatedAt
+      };
+    }
+
+    const requestedLimit = args.limit === undefined || !Number.isFinite(args.limit)
+      ? maximumLegacyLedgerMigrationBatchSize
+      : Math.trunc(args.limit);
+    const limit = Math.max(1, Math.min(maximumLegacyLedgerMigrationBatchSize, requestedLimit));
+    const legacyTransactions = state.wiseStatementTransactions ?? [];
+    const transactionBatch = legacyTransactions.slice(0, limit);
+    const remainingTransactions = legacyTransactions.slice(transactionBatch.length);
+    const legacyAssignments = state.transactionTeamAssignments ?? [];
+    const assignmentByTransactionId = new Map(
+      legacyAssignments.map((assignment) => [assignment.transactionId, assignment])
+    );
+    const processedTransactionIds = new Set(transactionBatch.map((item) => item.id));
+    let remainingAssignments = legacyAssignments.filter(
+      (assignment) => !processedTransactionIds.has(assignment.transactionId)
+    );
+    let insertedTransactions = 0;
+    let updatedTransactions = 0;
+    let appliedTeamAssignments = 0;
+    let orphanedTeamAssignments = 0;
+    const syncedAt = nextUpdatedAt(state.updatedAt);
+
+    for (const legacyTransaction of transactionBatch) {
+      if (!isBankTransactionSource(legacyTransaction.source)) {
+        throw new ConvexError({
+          code: "INVALID_LEGACY_BANK_SOURCE",
+          transactionId: legacyTransaction.id,
+          source: legacyTransaction.source
+        });
+      }
+      const source = legacyTransaction.source;
+      const legacyAssignment = assignmentByTransactionId.get(legacyTransaction.id);
+      const assignedTeamId = legacyAssignment
+        ? canonicalTeamId(legacyAssignment.teamId)
+        : legacyTransaction.teamId
+          ? canonicalTeamId(legacyTransaction.teamId)
+          : undefined;
+      const existing = await ctx.db
+        .query("bankTransactions")
+        .withIndex("by_transaction_id", (q) => q.eq("id", legacyTransaction.id))
+        .unique();
+      if (existing && existing.source !== source) {
+        throw new ConvexError({
+          code: "LEGACY_TRANSACTION_SOURCE_CONFLICT",
+          transactionId: legacyTransaction.id,
+          legacySource: source,
+          storedSource: existing.source
+        });
+      }
+
+      if (existing) {
+        if (existing.profitContributionVersion !== undefined) {
+          throw new ConvexError({
+            code: "LEGACY_MIGRATION_VERSIONED_CONFLICT",
+            transactionId: legacyTransaction.id
+          });
+        }
+        await ctx.db.patch(existing._id, {
+          ...legacyTransaction,
+          source,
+          category: existing.category,
+          merchantName: existing.merchantName ?? legacyTransaction.merchantName,
+          merchantKey: existing.merchantKey ?? legacyTransaction.merchantKey,
+          classificationComplete: existing.classificationComplete ?? legacyTransaction.classificationComplete,
+          categorySource: existing.categorySource ?? legacyTransaction.categorySource,
+          categoryConfidence: existing.categoryConfidence ?? legacyTransaction.categoryConfidence,
+          categoryReason: existing.categoryReason ?? legacyTransaction.categoryReason,
+          matchedProviderId: existing.matchedProviderId ?? legacyTransaction.matchedProviderId,
+          companyMatchSource: existing.companyMatchSource ?? legacyTransaction.companyMatchSource,
+          companyConfidence: existing.companyConfidence ?? legacyTransaction.companyConfidence,
+          companyMatchReason: existing.companyMatchReason ?? legacyTransaction.companyMatchReason,
+          matchedInvoiceId: existing.matchedInvoiceId ?? legacyTransaction.matchedInvoiceId,
+          teamId: existing.teamId ?? assignedTeamId,
+          confidence: existing.confidence ?? legacyTransaction.confidence,
+          matchReason: existing.matchReason ?? legacyTransaction.matchReason,
+          syncedAt
+        });
+        updatedTransactions += 1;
+      } else {
+        await ctx.db.insert("bankTransactions", {
+          ...legacyTransaction,
+          source,
+          ...(assignedTeamId ? { teamId: assignedTeamId } : {}),
+          syncedAt
+        });
+        insertedTransactions += 1;
+      }
+      if (legacyAssignment) appliedTeamAssignments += 1;
+    }
+
+    if (transactionBatch.length === 0 && remainingAssignments.length > 0) {
+      const assignmentBatch = remainingAssignments.slice(0, limit);
+      remainingAssignments = remainingAssignments.slice(assignmentBatch.length);
+      for (const assignment of assignmentBatch) {
+        const existing = await ctx.db
+          .query("bankTransactions")
+          .withIndex("by_transaction_id", (q) => q.eq("id", assignment.transactionId))
+          .unique();
+        if (!existing) {
+          throw new ConvexError({
+            code: "ORPHANED_LEGACY_TEAM_ASSIGNMENT",
+            transactionId: assignment.transactionId,
+            teamId: assignment.teamId
+          });
+        }
+        await ctx.db.patch(existing._id, { teamId: canonicalTeamId(assignment.teamId) });
+        appliedTeamAssignments += 1;
+      }
+    }
+
+    const isDone = remainingTransactions.length === 0 && remainingAssignments.length === 0;
+    await ctx.db.patch(state._id, {
+      wiseStatementTransactions: remainingTransactions.length > 0 ? remainingTransactions : undefined,
+      transactionTeamAssignments: remainingAssignments.length > 0 ? remainingAssignments : undefined,
+      profitDistributionCache: undefined,
+      updatedAt: syncedAt
+    });
+    if (transactionBatch.length > 0 || appliedTeamAssignments > 0) {
+      await bumpBankLedgerRevision(ctx);
+    }
+    return {
+      processedTransactions: transactionBatch.length,
+      insertedTransactions,
+      updatedTransactions,
+      appliedTeamAssignments,
+      orphanedTeamAssignments,
+      remainingTransactions: remainingTransactions.length,
+      remainingTeamAssignments: remainingAssignments.length,
+      isDone,
+      updatedAt: syncedAt
+    };
+  }
+});
 
 async function listTransactionCategories(ctx: QueryCtx | MutationCtx) {
   const categories = await ctx.db.query("transactionCategories").collect();
@@ -420,6 +777,32 @@ async function listTransactionCategories(ctx: QueryCtx | MutationCtx) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+export const getAnalyticsDirectory = query({
+  args: { serviceToken: v.string() },
+  returns: v.object({
+    providers: v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      type: providerType
+    })),
+    teams: v.array(v.object({
+      id: v.string(),
+      name: v.string()
+    }))
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    return {
+      providers: (state?.providers ?? []).map(({ id, name, type }) => ({ id, name, type })),
+      teams: (state?.teams ?? []).map(({ id, name }) => ({ id, name }))
+    };
+  }
+});
+
 export const getState = query({
   args: { serviceToken: v.string() },
   returns: v.union(
@@ -433,9 +816,7 @@ export const getState = query({
       transactionCategories: v.array(transactionCategory),
       transactionCategoryRules: v.array(transactionCategoryRule),
       revenuePartners: v.array(revenuePartner),
-      transactionTeamAssignments: v.array(transactionTeamAssignment),
       wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
-      wiseStatementTransactions: v.array(transaction),
       wiseStatementImports: v.array(wiseStatementImport),
       revenueRuns: v.array(revenueRun),
       revenueAccruals: v.array(revenueAccrual),
@@ -445,6 +826,8 @@ export const getState = query({
       fxTrackedAssets: v.optional(v.array(v.string())),
       automationRuns: v.array(automationRun),
       profitDistributionAdjustments: v.array(profitDistributionAdjustment),
+      profitDistributionCache: v.optional(profitDistributionSnapshot),
+      meritTaxes: v.optional(v.array(meritTax)),
       aiSettings: v.optional(aiSettings),
       updatedAt: v.string()
     })
@@ -465,9 +848,7 @@ export const getState = query({
       transactionCategories,
       transactionCategoryRules: state.transactionCategoryRules,
       revenuePartners: state.revenuePartners,
-      transactionTeamAssignments: state.transactionTeamAssignments,
       wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
-      wiseStatementTransactions: state.wiseStatementTransactions,
       wiseStatementImports: state.wiseStatementImports,
       revenueRuns: state.revenueRuns,
       revenueAccruals: state.revenueAccruals,
@@ -477,32 +858,10 @@ export const getState = query({
       fxTrackedAssets: state.fxTrackedAssets,
       automationRuns: state.automationRuns,
       profitDistributionAdjustments: state.profitDistributionAdjustments,
+      profitDistributionCache: state.profitDistributionCache,
+      meritTaxes: state.meritTaxes,
       aiSettings: state.aiSettings,
       updatedAt: state.updatedAt
-    };
-  }
-});
-
-export const getBankContext = query({
-  args: { serviceToken: v.string() },
-  returns: v.union(
-    v.null(),
-    v.object({
-      providers: v.array(provider),
-      transactionCategoryRules: v.array(transactionCategoryRule),
-      transactionTeamAssignments: v.array(transactionTeamAssignment),
-      wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment)
-    })
-  ),
-  handler: async (ctx, args) => {
-    requireServiceToken(args.serviceToken);
-    const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
-    if (!state) return null;
-    return {
-      providers: state.providers,
-      transactionCategoryRules: state.transactionCategoryRules,
-      transactionTeamAssignments: state.transactionTeamAssignments,
-      wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments
     };
   }
 });
@@ -641,9 +1000,6 @@ export const updateTransactionCategory = mutation({
           transactionCategoryRules: state.transactionCategoryRules.map((rule) =>
             rule.category === category.name ? { ...rule, category: name, updatedAt: new Date().toISOString() } : rule
           ),
-          wiseStatementTransactions: state.wiseStatementTransactions.map((transaction) =>
-            transaction.category === category.name ? { ...transaction, category: name } : transaction
-          ),
           revenuePartners: state.revenuePartners.map((partner) =>
             partner.revenueCategory === category.name ? { ...partner, revenueCategory: name } : partner
           ),
@@ -675,8 +1031,7 @@ export const deleteTransactionCategory = mutation({
     }
     const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
     const referenceCount = state
-      ? state.wiseStatementTransactions.filter((transaction) => transaction.category === category.name).length
-        + state.transactionCategoryRules.filter((rule) => rule.category === category.name).length
+      ? state.transactionCategoryRules.filter((rule) => rule.category === category.name).length
         + state.revenuePartners.filter((partner) => partner.revenueCategory === category.name).length
       : 0;
     if (referenceCount > 0) {
@@ -699,9 +1054,9 @@ export const saveState = mutation({
     teams: v.array(team),
     transactionCategoryRules: v.array(transactionCategoryRule),
     revenuePartners: v.array(revenuePartner),
-    transactionTeamAssignments: v.array(transactionTeamAssignment),
+    transactionTeamAssignments: v.optional(v.array(transactionTeamAssignment)),
     wiseCardHolderTeamAssignments: v.array(wiseCardHolderTeamAssignment),
-    wiseStatementTransactions: v.array(transaction),
+    wiseStatementTransactions: v.optional(v.array(transaction)),
     wiseStatementImports: v.array(wiseStatementImport),
     revenueRuns: v.array(revenueRun),
     revenueAccruals: v.array(revenueAccrual),
@@ -711,6 +1066,8 @@ export const saveState = mutation({
     fxTrackedAssets: v.optional(v.array(v.string())),
     automationRuns: v.array(automationRun),
     profitDistributionAdjustments: v.array(profitDistributionAdjustment),
+    profitDistributionCache: v.optional(profitDistributionSnapshot),
+    meritTaxes: v.optional(v.array(meritTax)),
     aiSettings: v.optional(aiSettings),
     serviceToken: v.string(),
     expectedUpdatedAt: v.union(v.string(), v.null())
@@ -720,6 +1077,15 @@ export const saveState = mutation({
     requireServiceToken(args.serviceToken);
     const existing = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
     if ((existing?.updatedAt ?? null) !== args.expectedUpdatedAt) throw new ConvexError({ code: "STATE_CONFLICT" });
+    if (args.transactionTeamAssignments !== undefined || args.wiseStatementTransactions !== undefined) {
+      throw new ConvexError({ code: "LEDGER_MIGRATION_IN_PROGRESS" });
+    }
+    if (args.wiseStatementImports.length > maximumWiseStatementImportHistory) {
+      throw new ConvexError({
+        code: "WISE_IMPORT_HISTORY_LIMIT",
+        limit: maximumWiseStatementImportHistory
+      });
+    }
 
     const updatedAt = nextUpdatedAt(existing?.updatedAt);
     const dashboardState = {
@@ -730,9 +1096,7 @@ export const saveState = mutation({
       teams: args.teams,
       transactionCategoryRules: args.transactionCategoryRules,
       revenuePartners: args.revenuePartners,
-      transactionTeamAssignments: args.transactionTeamAssignments,
       wiseCardHolderTeamAssignments: args.wiseCardHolderTeamAssignments,
-      wiseStatementTransactions: args.wiseStatementTransactions,
       wiseStatementImports: args.wiseStatementImports,
       revenueRuns: args.revenueRuns,
       revenueAccruals: args.revenueAccruals,
@@ -742,12 +1106,44 @@ export const saveState = mutation({
       fxTrackedAssets: args.fxTrackedAssets ?? existing?.fxTrackedAssets ?? [],
       automationRuns: args.automationRuns,
       profitDistributionAdjustments: args.profitDistributionAdjustments,
+      profitDistributionCache: args.profitDistributionCache,
+      meritTaxes: args.meritTaxes ?? existing?.meritTaxes ?? [],
       aiSettings: args.aiSettings,
       updatedAt
     };
     if (existing) await ctx.db.patch(existing._id, dashboardState);
     else await ctx.db.insert("dashboardState", { key: "default", ...dashboardState });
     return { updatedAt };
+  }
+});
+
+export const clearLegacyLedgerState = mutation({
+  args: {
+    serviceToken: v.string(),
+    expectedUpdatedAt: v.string()
+  },
+  returns: v.object({
+    clearedTransactions: v.number(),
+    clearedTeamAssignments: v.number(),
+    updatedAt: v.string()
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) throw new ConvexError({ code: "STATE_NOT_FOUND" });
+    if (state.updatedAt !== args.expectedUpdatedAt) throw new ConvexError({ code: "STATE_CONFLICT" });
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    const clearedTransactions = state.wiseStatementTransactions?.length ?? 0;
+    const clearedTeamAssignments = state.transactionTeamAssignments?.length ?? 0;
+    await ctx.db.patch(state._id, {
+      wiseStatementTransactions: undefined,
+      transactionTeamAssignments: undefined,
+      updatedAt
+    });
+    return { clearedTransactions, clearedTeamAssignments, updatedAt };
   }
 });
 
@@ -764,8 +1160,7 @@ export const getWiseResetPreview = query({
       .withIndex("by_key", (q) => q.eq("key", "default"))
       .unique();
     return {
-      transactions:
-        state?.wiseStatementTransactions.filter((item) => item.source === "wise").length ?? 0,
+      transactions: 0,
       imports: state?.wiseStatementImports.length ?? 0
     };
   }
@@ -787,15 +1182,10 @@ export const resetWiseImports = mutation({
     if (!state) {
       throw new ConvexError({ code: "STATE_NOT_FOUND" });
     }
-    const deletedTransactions = state.wiseStatementTransactions.filter(
-      (item) => item.source === "wise"
-    ).length;
+    const deletedTransactions = 0;
     const deletedImports = state.wiseStatementImports.length;
     const updatedAt = nextUpdatedAt(state.updatedAt);
     await ctx.db.patch(state._id, {
-      wiseStatementTransactions: state.wiseStatementTransactions.filter(
-        (item) => item.source !== "wise"
-      ),
       wiseStatementImports: [],
       updatedAt
     });

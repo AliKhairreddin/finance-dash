@@ -6,8 +6,7 @@ import type {
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
-  BankActivityLoadResult,
-  ConnectedBankSource,
+  BankTransactionSource,
   CreateHoldingPayload,
   CreateExpensePayload,
   CreateInvoicePayload,
@@ -50,6 +49,7 @@ import type {
   TransactionCategory,
   TransactionCategoryRule,
   TransactionTeamAssignment,
+  TransactionPage,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateProviderPayload,
@@ -646,7 +646,7 @@ export function getSnapshot(): DashboardSnapshot {
     revenueAccruals,
     revenueMetrics: calculateRevenueMetrics(revenuePartners, revenueRuns),
     aiSettings: publicAiSettings(runtimeAiSettings()),
-    transactions: matchedTransactions,
+    transactionReviewPreview: matchedTransactions.slice(0, 5),
     invoices: paymentAwareInvoices,
     expenses,
     paymentAllocations,
@@ -699,9 +699,10 @@ export async function importWiseStatement(payload: ImportWiseStatementPayload): 
   wiseStatementTransactions = mergeWiseStatementTransactions(wiseStatementTransactions, importedTransactions).sort((left, right) =>
     right.date.localeCompare(left.date)
   );
-  wiseStatementImports = [importRecord, ...wiseStatementImports.filter((item) => item.id !== importRecord.id)].sort((left, right) =>
-    right.importedAt.localeCompare(left.importedAt)
-  );
+  wiseStatementImports = migrateLegacyWiseStatementImports([
+    importRecord,
+    ...wiseStatementImports.filter((item) => item.id !== importRecord.id)
+  ]);
   await autoCategorizeTransactions({
     transactionIds: importedTransactions.map((transaction) => transaction.id),
     useAi: true
@@ -2325,63 +2326,76 @@ export async function syncExternalActivity(
   return getSnapshot();
 }
 
-export async function loadBankActivity(
-  sources: ConnectedBankSource[],
-  dateRange: SlashTransactionDateRange
-): Promise<BankActivityLoadResult> {
-  const activity = await Promise.all(
-    sources.map(async (source) => ({
-      source,
-      result: source === "revolut"
-        ? await fetchRevolutActivity(dateRange)
-        : await fetchSlashActivity(dateRange)
-    }))
-  );
-  const loadedTransactions = activity.flatMap(({ source, result }) =>
-    result.transactions.map((transaction) => ({ ...transaction, source }))
-  );
-  for (const { source, result } of activity) {
-    if (result.accounts.length > 0) {
-      accounts = [
-        ...accounts.filter((account) => account.source !== source),
-        ...result.accounts.map((account) => ({ ...account, source }))
-      ];
-    }
-  }
+type LocalTransactionPageOptions = {
+  fromDate: string;
+  toDate: string;
+  source?: BankTransactionSource;
+  direction?: Transaction["direction"];
+  order: "asc" | "desc";
+  cursor: string | null;
+  limit: number;
+};
 
-  const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
-  const loadedIds = new Set(loadedTransactions.map((transaction) => transaction.id));
-  const mergedTransactions = loadedTransactions.map((transaction) => {
-    const existing = existingById.get(transaction.id);
-    if (!existing) return transaction;
-    return {
-      ...transaction,
-      category: existing.category,
-      matchedProviderId: existing.matchedProviderId ?? transaction.matchedProviderId,
-      matchedInvoiceId: existing.matchedInvoiceId ?? transaction.matchedInvoiceId,
-      teamId: existing.teamId ?? transaction.teamId,
-      confidence: existing.confidence ?? transaction.confidence,
-      matchReason: existing.matchReason ?? transaction.matchReason
-    };
+function localTransactionCursor(transaction: Transaction): string {
+  return Buffer.from(`${transaction.date}\0${transaction.id}`, "utf8").toString("base64url");
+}
+
+function localTransactionPage(rows: Transaction[], options: LocalTransactionPageOptions): TransactionPage {
+  const sorted = rows.sort((left, right) => {
+    const comparison = left.date.localeCompare(right.date) || left.id.localeCompare(right.id);
+    return options.order === "asc" ? comparison : -comparison;
   });
-  transactions = [
-    ...mergedTransactions,
-    ...transactions.filter((transaction) => !loadedIds.has(transaction.id))
-  ];
-  lastSync = new Date().toISOString();
-  await persist();
-
+  const start = options.cursor
+    ? sorted.findIndex((transaction) => localTransactionCursor(transaction) === options.cursor) + 1
+    : 0;
+  if (options.cursor && start === 0) throw new Error("Transaction cursor is stale");
+  const page = sorted.slice(start, start + options.limit);
+  const isDone = start + page.length >= sorted.length;
   return {
-    fromDate: dateRange.fromDate,
-    toDate: dateRange.toDate,
-    sources,
-    transactions: getMatchedTransactions()
-      .filter((transaction) =>
-        (transaction.source === "revolut" || transaction.source === "slash")
-        && sources.includes(transaction.source)
-        && transaction.date >= dateRange.fromDate
-        && transaction.date <= dateRange.toDate
-      )
-      .sort((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id))
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.direction ? { direction: options.direction } : {}),
+    transactions: page,
+    continueCursor: isDone || page.length === 0 ? null : localTransactionCursor(page.at(-1)!),
+    isDone
   };
+}
+
+export function getTransactionPage(options: LocalTransactionPageOptions): TransactionPage {
+  return localTransactionPage(
+    getMatchedTransactions().filter((transaction) =>
+      (transaction.source === "wise"
+        || transaction.source === "revolut"
+        || transaction.source === "slash"
+        || transaction.source === "amex")
+      && (!options.source || transaction.source === options.source)
+      && (!options.direction || transaction.direction === options.direction)
+      && transaction.date >= options.fromDate
+      && transaction.date <= options.toDate
+    ),
+    options
+  );
+}
+
+export function getInvoicePaymentCandidates(
+  currency: string,
+  cursor: string | null,
+  limit: number
+): TransactionPage {
+  return localTransactionPage(
+    getMatchedTransactions().filter((transaction) =>
+      transaction.direction === "in"
+      && transaction.currency === currency
+      && (transaction.status === "posted" || transaction.status === "settled")
+    ),
+    {
+      fromDate: "1900-01-01",
+      toDate: "9999-12-31",
+      direction: "in",
+      order: "desc",
+      cursor,
+      limit
+    }
+  );
 }

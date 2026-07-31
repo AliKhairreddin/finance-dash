@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AccountBalance, WiseStatementImport } from "./types";
 import {
+  normalizeImportedWiseTransactions,
   parseWiseStatementCsv,
   prepareWiseStatementImport,
   validateWiseStatementImportPayload
@@ -129,7 +130,10 @@ test("Wise CSV ownership is verified by balance ID instead of counterparty names
   assert.equal(dnPayload.transactions[0].accountName, "Digital nudge OÜ · Wise USD");
   assert.equal(lmdPayload.transactions[0].accountName, "LoveMeDo B.V. · Wise USD");
   assert.notEqual(dnPayload.transactions[0].id, lmdPayload.transactions[0].id);
-  assert.match(lmdPayload.transactions[0].id, /^wise-csv-lmd-/);
+  assert.equal(
+    lmdPayload.transactions[0].id,
+    "wise-v2-37067652-5452414e534645522d32323733353833323238"
+  );
 });
 
 test("a Wise CSV selected in the wrong entity view is rejected before import", () => {
@@ -193,5 +197,83 @@ test("a known Wise balance cannot be reassigned to another entity", () => {
   assert.throws(
     () => validateWiseStatementImportPayload(payload, existingImports),
     /already assigned to DN/
+  );
+});
+
+test("Wise CSV keeps zero-value provider rows and rejects invalid calendar dates", () => {
+  const fileName = "statement_114115192_USD_2026-07-01_2026-07-30.csv";
+  const parsed = parseWiseStatementCsv(
+    `${header}\n${statementRow({ amount: "0.00", description: "Zero-value provider row" })}`,
+    fileName
+  )[0];
+  assert.equal(parsed.transactions.length, 1);
+  assert.equal(parsed.transactions[0].amount, 0);
+
+  const invalidDateRow = statementRow({ amount: "1.00", description: "Invalid date" })
+    .replace('"27-07-2026"', '"31-02-2026"');
+  assert.throws(
+    () => parseWiseStatementCsv(`${header}\n${invalidDateRow}`, fileName),
+    /valid ISO calendar date/
+  );
+});
+
+test("Wise import normalization rejects every malformed row instead of silently dropping it", () => {
+  const fileName = "statement_114115192_USD_2026-07-01_2026-07-30.csv";
+  const parsed = parseWiseStatementCsv(
+    `${header}\n${statementRow({ amount: "10.00", description: "Valid transaction" })}`,
+    fileName
+  )[0];
+  const payload = prepareWiseStatementImport(
+    parsed,
+    verifyWiseStatementAccount(parsed.metadata, accounts, "dn")
+  );
+  const transaction = payload.transactions[0];
+  const malformedTransactions = [
+    { ...transaction, id: "" },
+    { ...transaction, date: "" },
+    { ...transaction, date: "2026-02-30" },
+    { ...transaction, amount: Number.NaN },
+    { ...transaction, currency: "EUR" },
+    { ...transaction, status: "pending" as const },
+    { ...transaction, description: "" }
+  ];
+
+  for (const malformed of malformedTransactions) {
+    assert.throws(
+      () => normalizeImportedWiseTransactions({ ...payload, transactions: [malformed] }),
+      /Wise import transaction|identity/
+    );
+  }
+});
+
+test("Wise import validation bounds transaction count and serialized payload bytes", () => {
+  const fileName = "statement_114115192_USD_2026-07-01_2026-07-30.csv";
+  const parsed = parseWiseStatementCsv(
+    `${header}\n${statementRow({ amount: "10.00", description: "Valid transaction" })}`,
+    fileName
+  )[0];
+  const payload = prepareWiseStatementImport(
+    parsed,
+    verifyWiseStatementAccount(parsed.metadata, accounts, "dn")
+  );
+  const transaction = payload.transactions[0];
+
+  assert.throws(
+    () => validateWiseStatementImportPayload({
+      ...payload,
+      transactions: Array.from({ length: 5_001 }, () => transaction)
+    }, []),
+    /exceeds 5000 transactions/
+  );
+
+  assert.throws(
+    () => validateWiseStatementImportPayload({
+      ...payload,
+      transactions: Array.from({ length: 3_000 }, () => ({
+        ...transaction,
+        description: "x".repeat(900)
+      }))
+    }, []),
+    /payload exceeds 2097152 bytes/
   );
 });

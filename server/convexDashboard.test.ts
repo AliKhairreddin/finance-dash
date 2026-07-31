@@ -3,9 +3,11 @@ import test from "node:test";
 import { ConvexError } from "convex/values";
 import type { AutomationRun, Invoice, RevenueRun, Transaction } from "../shared/types";
 import {
+  disposeOrphanedLegacyTeamAssignments,
   finalizeInvoiceCreation,
   getWiseResetPreview,
   getState,
+  migrateLegacyLedgerBatch,
   resetWiseImports,
   reserveIncomeAutomation,
   reserveInvoiceCreation,
@@ -45,6 +47,28 @@ const resetWiseImportsHandler = handlerOf<
   { serviceToken: string },
   { deletedTransactions: number; deletedImports: number; updatedAt: string }
 >(resetWiseImports);
+const migrateLegacyLedgerBatchHandler = handlerOf<
+  { serviceToken: string; limit?: number },
+  {
+    processedTransactions: number;
+    insertedTransactions: number;
+    updatedTransactions: number;
+    appliedTeamAssignments: number;
+    orphanedTeamAssignments: number;
+    remainingTransactions: number;
+    remainingTeamAssignments: number;
+    isDone: boolean;
+    updatedAt: string;
+  }
+>(migrateLegacyLedgerBatch);
+const disposeOrphanedLegacyTeamAssignmentsHandler = handlerOf<
+  {
+    serviceToken: string;
+    disposition: "discard-orphaned-team-assignment";
+    limit?: number;
+  },
+  { disposed: number; remainingAssignments: number; updatedAt: string | null }
+>(disposeOrphanedLegacyTeamAssignments);
 function convexErrorCode(error: unknown): string | undefined {
   return error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data
     ? String(error.data.code)
@@ -88,29 +112,300 @@ test("dashboard state rejects stale whole-state writes", async () => {
   });
 });
 
-test("Wise reset removes only imported Wise rows and import history", async () => {
+function legacyTransaction(id: string, source: Transaction["source"] = "wise"): Transaction {
+  return {
+    id,
+    source,
+    accountName: "Operating",
+    date: "2026-07-31",
+    description: "Merchant",
+    rawName: "Merchant",
+    counterparty: "Merchant",
+    amount: 10,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Review"
+  };
+}
+
+function legacyMigrationContext(
+  state: Record<string, unknown> & { _id: string; updatedAt: string },
+  initialBankRows: Array<Transaction & { _id: string; _creationTime: number; syncedAt: string }> = []
+) {
+  const bankRows = new Map(initialBankRows.map((row) => [row.id, { ...row }]));
+  const referenceDispositions = new Map<string, Record<string, unknown>>();
+  let ledgerRevision: { _id: string; key: string; revision: number; updatedAt: string } | null = null;
+  let inserted = 0;
+  let dashboardPatches = 0;
+  const applyPatch = (target: Record<string, unknown>, patch: Record<string, unknown>) => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete target[key];
+      else target[key] = value;
+    }
+  };
+  const db = {
+    query(table: string) {
+      if (table === "dashboardState") {
+        return {
+          withIndex: (_index: string, applyRange: (range: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
+            const range = { eq: () => range };
+            applyRange(range);
+            return { unique: async () => state };
+          }
+        };
+      }
+      if (table === "bankTransactions") {
+        return {
+          withIndex: (_index: string, applyRange: (range: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
+            let transactionId = "";
+            const range = {
+              eq: (_field: string, value: unknown) => {
+                transactionId = String(value);
+                return range;
+              }
+            };
+            applyRange(range);
+            return { unique: async () => bankRows.get(transactionId) ?? null };
+          }
+        };
+      }
+      if (table === "bankLedgerRevision") {
+        return {
+          withIndex: (_index: string, applyRange: (range: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
+            const range = { eq: () => range };
+            applyRange(range);
+            return { unique: async () => ledgerRevision };
+          }
+        };
+      }
+      if (table === "bankLegacyReferenceDispositions") {
+        return {
+          withIndex: (_index: string, applyRange: (range: { eq: (field: string, value: unknown) => unknown }) => unknown) => {
+            let key = "";
+            const range = {
+              eq: (_field: string, value: unknown) => {
+                key = String(value);
+                return range;
+              }
+            };
+            applyRange(range);
+            return { unique: async () => referenceDispositions.get(key) ?? null };
+          }
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+    async insert(table: string, value: Record<string, unknown>) {
+      if (table === "bankLedgerRevision") {
+        ledgerRevision = { ...(value as Omit<NonNullable<typeof ledgerRevision>, "_id">), _id: "ledger-revision" };
+        return "ledger-revision";
+      }
+      if (table === "bankLegacyReferenceDispositions") {
+        referenceDispositions.set(String(value.key), { ...value, _id: `reference-${referenceDispositions.size + 1}` });
+        return `reference-${referenceDispositions.size}`;
+      }
+      assert.equal(table, "bankTransactions");
+      inserted += 1;
+      const transaction = value as unknown as Transaction & { syncedAt: string };
+      bankRows.set(transaction.id, {
+        ...transaction,
+        _id: `bank-row-${inserted}`,
+        _creationTime: inserted
+      });
+      return `bank-row-${inserted}`;
+    },
+    async patch(id: string, patch: Record<string, unknown>) {
+      if (id === state._id) {
+        dashboardPatches += 1;
+        applyPatch(state, patch);
+        return;
+      }
+      if (ledgerRevision?._id === id) {
+        applyPatch(ledgerRevision, patch);
+        return;
+      }
+      const row = [...bankRows.values()].find((candidate) => candidate._id === id);
+      if (!row) throw new Error(`Unknown bank row ${id}`);
+      applyPatch(row, patch);
+    }
+  };
+  return {
+    ctx: { db },
+    bankRows,
+    referenceDispositions,
+    dashboardPatchCount: () => dashboardPatches
+  };
+}
+
+test("legacy ledger migration moves at most 100 rows atomically and finishes assignments separately", async () => {
   await withServiceToken(async () => {
-    const transaction = (id: string, source: Transaction["source"]): Transaction => ({
-      id,
-      source,
-      accountName: "Operating",
-      date: "2026-07-28",
-      description: "Activity",
-      rawName: "Activity",
-      counterparty: "Activity",
-      amount: 10,
-      currency: "USD",
-      direction: "out",
-      status: "posted",
-      category: "Review"
+    const state: Record<string, unknown> & { _id: string; updatedAt: string } = {
+      _id: "dashboard-state",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      wiseStatementTransactions: Array.from({ length: 101 }, (_, index) => legacyTransaction(`legacy-${index}`)),
+      transactionTeamAssignments: [
+        { transactionId: "legacy-0", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" },
+        { transactionId: "ledger-only", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" }
+      ]
+    };
+    const existingLegacy = {
+      ...legacyTransaction("legacy-0"),
+      category: "Software",
+      merchantName: "Existing merchant",
+      classificationComplete: true,
+      _id: "existing-legacy",
+      _creationTime: 1,
+      syncedAt: "2026-07-30T00:00:00.000Z"
+    };
+    const existingAssignmentOnly = {
+      ...legacyTransaction("ledger-only", "revolut"),
+      _id: "existing-assignment-only",
+      _creationTime: 2,
+      syncedAt: "2026-07-30T00:00:00.000Z"
+    };
+    const { ctx, bankRows, dashboardPatchCount } = legacyMigrationContext(
+      state,
+      [existingLegacy, existingAssignmentOnly]
+    );
+
+    const first = await migrateLegacyLedgerBatchHandler(ctx, {
+      serviceToken: "expected-token",
+      limit: 9_001
     });
+    assert.deepEqual(
+      {
+        processedTransactions: first.processedTransactions,
+        insertedTransactions: first.insertedTransactions,
+        updatedTransactions: first.updatedTransactions,
+        appliedTeamAssignments: first.appliedTeamAssignments,
+        remainingTransactions: first.remainingTransactions,
+        remainingTeamAssignments: first.remainingTeamAssignments,
+        isDone: first.isDone
+      },
+      {
+        processedTransactions: 100,
+        insertedTransactions: 99,
+        updatedTransactions: 1,
+        appliedTeamAssignments: 1,
+        remainingTransactions: 1,
+        remainingTeamAssignments: 1,
+        isDone: false
+      }
+    );
+    assert.equal("transactions" in first, false);
+    assert.equal((state.wiseStatementTransactions as Transaction[]).length, 1);
+    assert.equal((state.transactionTeamAssignments as unknown[]).length, 1);
+    assert.equal(bankRows.get("legacy-0")?.category, "Software");
+    assert.equal(bankRows.get("legacy-0")?.merchantName, "Existing merchant");
+    assert.equal(bankRows.get("legacy-0")?.teamId, "team-wagner");
+
+    const second = await migrateLegacyLedgerBatchHandler(ctx, { serviceToken: "expected-token" });
+    assert.equal(second.processedTransactions, 1);
+    assert.equal(second.insertedTransactions, 1);
+    assert.equal(second.remainingTransactions, 0);
+    assert.equal(second.remainingTeamAssignments, 1);
+    assert.equal(second.isDone, false);
+    assert.equal("wiseStatementTransactions" in state, false);
+
+    const third = await migrateLegacyLedgerBatchHandler(ctx, { serviceToken: "expected-token" });
+    assert.equal(third.processedTransactions, 0);
+    assert.equal(third.appliedTeamAssignments, 1);
+    assert.equal(third.orphanedTeamAssignments, 0);
+    assert.equal(third.isDone, true);
+    assert.equal("transactionTeamAssignments" in state, false);
+    assert.equal(bankRows.get("ledger-only")?.teamId, "team-wagner");
+
+    const patchesBeforeNoop = dashboardPatchCount();
+    const fourth = await migrateLegacyLedgerBatchHandler(ctx, { serviceToken: "expected-token" });
+    assert.equal(fourth.isDone, true);
+    assert.equal(fourth.updatedAt, third.updatedAt);
+    assert.equal(dashboardPatchCount(), patchesBeforeNoop);
+  });
+});
+
+test("legacy ledger migration aborts on orphaned assignments without deleting audit evidence", async () => {
+  await withServiceToken(async () => {
+    const state: Record<string, unknown> & { _id: string; updatedAt: string } = {
+      _id: "dashboard-state",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      transactionTeamAssignments: [
+        { transactionId: "missing", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" }
+      ]
+    };
+    const { ctx } = legacyMigrationContext(state);
+    await assert.rejects(
+      () => migrateLegacyLedgerBatchHandler(ctx, { serviceToken: "expected-token", limit: 1 }),
+      (error) => {
+        assert.equal(convexErrorCode(error), "ORPHANED_LEGACY_TEAM_ASSIGNMENT");
+        return true;
+      }
+    );
+    assert.deepEqual(state.transactionTeamAssignments, [
+      { transactionId: "missing", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" }
+    ]);
+  });
+});
+
+test("legacy orphan disposition is explicit, audited, and cannot run before transaction migration", async () => {
+  await withServiceToken(async () => {
+    const state: Record<string, unknown> & { _id: string; updatedAt: string } = {
+      _id: "dashboard-state",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      wiseStatementTransactions: [legacyTransaction("not-migrated")],
+      transactionTeamAssignments: [
+        { transactionId: "existing", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" },
+        { transactionId: "missing", teamId: "team-general", updatedAt: "2026-07-31T00:00:00.000Z" }
+      ]
+    };
+    const existing = {
+      ...legacyTransaction("existing"),
+      _id: "existing",
+      _creationTime: 1,
+      syncedAt: "2026-07-30T00:00:00.000Z"
+    };
+    const { ctx, referenceDispositions } = legacyMigrationContext(state, [existing]);
+    await assert.rejects(
+      () => disposeOrphanedLegacyTeamAssignmentsHandler(ctx, {
+        serviceToken: "expected-token",
+        disposition: "discard-orphaned-team-assignment"
+      }),
+      (error) => {
+        assert.equal(convexErrorCode(error), "LEGACY_TRANSACTIONS_NOT_MIGRATED");
+        return true;
+      }
+    );
+
+    delete state.wiseStatementTransactions;
+    const result = await disposeOrphanedLegacyTeamAssignmentsHandler(ctx, {
+      serviceToken: "expected-token",
+      disposition: "discard-orphaned-team-assignment"
+    });
+    assert.equal(result.disposed, 1);
+    assert.equal(result.remainingAssignments, 1);
+    assert.deepEqual(state.transactionTeamAssignments, [
+      { transactionId: "existing", teamId: "team-wgnr", updatedAt: "2026-07-31T00:00:00.000Z" }
+    ]);
+    assert.deepEqual(
+      [...referenceDispositions.values()].map(({ transactionId, teamId, disposition }) => ({
+        transactionId,
+        teamId,
+        disposition
+      })),
+      [{
+        transactionId: "missing",
+        teamId: "team-general",
+        disposition: "discard-orphaned-team-assignment"
+      }]
+    );
+  });
+});
+
+test("Wise dashboard reset clears import history after ledger rows are deleted in batches", async () => {
+  await withServiceToken(async () => {
     const state = {
       _id: "dashboard-state",
       updatedAt: "2026-07-28T00:00:00.000Z",
-      wiseStatementTransactions: [
-        transaction("wise-1", "wise"),
-        transaction("revolut-1", "revolut")
-      ],
       wiseStatementImports: [
         {
           id: "import-1",
@@ -132,12 +427,11 @@ test("Wise reset removes only imported Wise rows and import history", async () =
     };
     assert.deepEqual(
       await getWiseResetPreviewHandler(ctx, { serviceToken: "expected-token" }),
-      { transactions: 1, imports: 1 }
+      { transactions: 0, imports: 1 }
     );
     const result = await resetWiseImportsHandler(ctx, { serviceToken: "expected-token" });
-    assert.equal(result.deletedTransactions, 1);
+    assert.equal(result.deletedTransactions, 0);
     assert.equal(result.deletedImports, 1);
-    assert.deepEqual(state.wiseStatementTransactions.map((item) => item.id), ["revolut-1"]);
     assert.deepEqual(state.wiseStatementImports, []);
   });
 });

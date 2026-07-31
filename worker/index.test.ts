@@ -11,11 +11,9 @@ import worker, {
   fetchMeritInvoiceCopyDetails,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
+  incrementalBankDateRange,
   missingBankActivityRanges,
-  mergeInvoices,
-  retainPersistedTransactions,
-  retainCurrentSlashTransactions,
-  transactionsForDashboardStorage
+  mergeInvoices
 } from "./index";
 
 const workerTestAuth = {
@@ -105,19 +103,17 @@ test("dashboard API fails closed when Convex authentication is not configured", 
   assert.deepEqual(await response.json(), { message: "Dashboard storage authentication is not configured" });
 });
 
-test("dashboard API rejects incomplete Revolut date ranges before reading storage", async () => {
+test("dashboard API ignores transaction range query parameters and goes straight to compact storage", async () => {
   const response = await worker.fetch(
     await authenticatedRequest("https://finance.example/api/dashboard?revolutFromDate=2026-06-01"),
     authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
   );
 
-  assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), {
-    message: "Revolut transaction loading requires both a from date and a to date"
-  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: "Dashboard storage is not configured" });
 });
 
-test("bank activity API validates sources before reading storage", async () => {
+test("legacy bank activity API is removed", async () => {
   const response = await worker.fetch(
     await authenticatedRequest("https://finance.example/api/banks/activity", {
       method: "POST",
@@ -131,10 +127,122 @@ test("bank activity API validates sources before reading storage", async () => {
     authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
   );
 
-  assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), {
-    message: "Bank activity sources must be Revolut or Slash"
-  });
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { message: "Not found" });
+});
+
+test("transaction page API validates every bound before reading storage", async () => {
+  const invalidRequests = [
+    {
+      query: "",
+      message: "Transaction fromDate and toDate are required"
+    },
+    {
+      query: "fromDate=2026-06-01",
+      message: "Transaction fromDate and toDate are required"
+    },
+    {
+      query: "fromDate=06-01-2026&toDate=2026-06-30",
+      message: "Transaction date range is invalid"
+    },
+    {
+      query: "fromDate=2026-07-01&toDate=2026-06-30",
+      message: "Transaction date range is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&source=plaid",
+      message: "Transaction source is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&direction=sideways",
+      message: "Transaction direction is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&order=newest",
+      message: "Transaction order is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&limit=0",
+      message: "Transaction limit must be between 1 and 200"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&limit=201",
+      message: "Transaction limit must be between 1 and 200"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&limit=12.5",
+      message: "Transaction limit must be a whole number"
+    },
+    {
+      query: `fromDate=2026-06-01&toDate=2026-06-30&cursor=${"x".repeat(4097)}`,
+      message: "Transaction cursor is invalid"
+    }
+  ];
+
+  for (const invalid of invalidRequests) {
+    const response = await worker.fetch(
+      await authenticatedRequest(`https://finance.example/api/transactions?${invalid.query}`),
+      authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+    );
+    assert.equal(response.status, 400, invalid.query);
+    assert.deepEqual(await response.json(), { message: invalid.message }, invalid.query);
+  }
+});
+
+test("transaction page API rejects unconfigured bank sources before reading storage", async () => {
+  for (const source of ["wise", "revolut", "slash", "amex"] as const) {
+    const response = await worker.fetch(
+      await authenticatedRequest(
+        `https://finance.example/api/transactions?fromDate=2026-06-01&toDate=2026-06-30&source=${source}&direction=out&order=asc&limit=200`
+      ),
+      authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+    );
+    assert.equal(response.status, 409, source);
+    assert.deepEqual(
+      await response.json(),
+      { message: `${source} is not configured for transaction sync` },
+      source
+    );
+  }
+});
+
+test("Analytics API validates its bounded period before reading storage", async () => {
+  const invalidRequests = [
+    {
+      query: "",
+      message: "Analytics fromDate and toDate are required"
+    },
+    {
+      query: "fromDate=2026-07-01",
+      message: "Analytics fromDate and toDate are required"
+    },
+    {
+      query: "fromDate=07-01-2026&toDate=2026-07-31",
+      message: "Analytics date range is invalid"
+    },
+    {
+      query: "fromDate=2026-08-01&toDate=2026-07-31",
+      message: "Analytics date range is invalid"
+    }
+  ];
+
+  for (const invalid of invalidRequests) {
+    const response = await worker.fetch(
+      await authenticatedRequest(`https://finance.example/api/analytics?${invalid.query}`),
+      authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+    );
+    assert.equal(response.status, 400, invalid.query);
+    assert.deepEqual(await response.json(), { message: invalid.message }, invalid.query);
+  }
+
+  const valid = await worker.fetch(
+    await authenticatedRequest(
+      "https://finance.example/api/analytics?fromDate=2026-07-01&toDate=2026-07-31"
+    ),
+    authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+  );
+  assert.equal(valid.status, 503);
+  assert.deepEqual(await valid.json(), { message: "Dashboard storage is not configured" });
 });
 
 test("bank activity range loading requests only uncovered dates", () => {
@@ -162,6 +270,21 @@ test("bank activity range loading requests only uncovered dates", () => {
       requested
     ),
     []
+  );
+});
+
+test("incremental bank sync resumes from durable covered ranges instead of completion time", () => {
+  const now = Date.parse("2026-07-31T18:00:00.000Z");
+  assert.deepEqual(
+    incrementalBankDateRange(
+      {
+        source: "revolut",
+        coveredRanges: [{ fromDate: "2026-05-01", toDate: "2026-07-10" }],
+        lastSyncedAt: "2026-07-31T17:59:00.000Z"
+      },
+      now
+    ),
+    { fromDate: "2026-07-08", toDate: "2026-07-31" }
   );
 });
 
@@ -553,95 +676,6 @@ test("live Merit refresh only updates the read-only Merit status for a persisted
   };
 
   assert.deepEqual(mergeInvoices([live], [persisted]), [{ ...persisted, meritStatus: "paid" }]);
-});
-
-test("successful Slash sync drops transactions outside the current live window", () => {
-  const transaction = (id: string, source: Transaction["source"]): Transaction => ({
-    id,
-    source,
-    accountName: "Operating",
-    date: "2026-07-28",
-    description: "CARD PURCHASE",
-    rawName: "Example Merchant",
-    counterparty: "Example Merchant",
-    amount: 10,
-    currency: "USD",
-    direction: "out",
-    status: "posted",
-    category: "Card"
-  });
-  const wise = transaction("wise-current", "wise");
-  const slashCurrent = transaction("slash-current", "slash");
-  const slashStale = transaction("slash-stale", "slash");
-
-  assert.deepEqual(
-    retainCurrentSlashTransactions(
-      [wise, slashCurrent, slashStale],
-      [transaction("slash-current", "slash")],
-      true
-    ),
-    [wise, slashCurrent]
-  );
-  assert.deepEqual(
-    retainCurrentSlashTransactions([wise, slashCurrent, slashStale], [], false),
-    [wise, slashCurrent, slashStale]
-  );
-});
-
-test("live sync returns fresh rows without adding them to persisted dashboard state", () => {
-  const transaction = (id: string, source: Transaction["source"], category = "Card"): Transaction => ({
-    id,
-    source,
-    accountName: "Operating",
-    date: "2026-07-28",
-    description: "CARD PURCHASE",
-    rawName: "Example Merchant",
-    counterparty: "Example Merchant",
-    amount: 10,
-    currency: "USD",
-    direction: "out",
-    status: "posted",
-    category
-  });
-  const importedWise = transaction("wise-imported", "wise", "Software");
-  const editedSlash = transaction("slash-edited", "slash", "Media buying");
-  const reconciled = [
-    transaction("slash-fresh-1", "slash"),
-    { ...editedSlash, matchedProviderId: "provider-1" },
-    importedWise,
-    transaction("slash-fresh-2", "slash")
-  ];
-
-  assert.deepEqual(
-    retainPersistedTransactions([importedWise, editedSlash], reconciled),
-    [{ ...editedSlash, matchedProviderId: "provider-1" }, importedWise]
-  );
-});
-
-test("dashboard singleton persistence contains only imported Wise rows", () => {
-  const transaction = (id: string, source: Transaction["source"]): Transaction => ({
-    id,
-    source,
-    accountName: "Operating",
-    date: "2026-07-28",
-    description: "CARD PURCHASE",
-    rawName: "Example Merchant",
-    counterparty: "Example Merchant",
-    amount: 10,
-    currency: "USD",
-    direction: "out",
-    status: "posted",
-    category: "Card"
-  });
-
-  assert.deepEqual(
-    transactionsForDashboardStorage([
-      transaction("slash-live", "slash"),
-      transaction("wise-imported", "wise"),
-      transaction("revolut-edited", "revolut")
-    ]),
-    [transaction("wise-imported", "wise")]
-  );
 });
 
 test("Coinbase quote refresh loads direct USD spot prices for every tracked asset", async () => {
