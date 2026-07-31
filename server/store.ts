@@ -3,7 +3,6 @@ import type {
   AiPromptPayload,
   AiPromptResult,
   AssignTransactionTeamPayload,
-  AssignWiseCardHolderTeamPayload,
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
@@ -155,7 +154,6 @@ import {
   mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
-  normalizeCardHolderName,
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
@@ -395,14 +393,8 @@ function providerTags(payload: CreateProviderPayload | UpdateProviderPayload): s
 
 function applyTeamAssignments(rows: Transaction[]): Transaction[] {
   const teamByTransaction = new Map(transactionTeamAssignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
-  const teamByCardHolder = new Map(
-    wiseCardHolderTeamAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
-  );
   return rows.map((transaction) => {
-    const teamId =
-      teamByTransaction.get(transaction.id) ??
-      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
-      transaction.teamId;
+    const teamId = teamByTransaction.get(transaction.id) ?? transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -642,7 +634,6 @@ export function getSnapshot(): DashboardSnapshot {
     meritTaxes,
     transactionCategories,
     transactionCategoryRules,
-    wiseCardHolderTeamAssignments,
     wiseStatementImports,
     integrationStatus: getIntegrationStatus(
       wiseBalanceSyncIssue,
@@ -740,34 +731,6 @@ export async function assignTransactionTeam(payload: AssignTransactionTeamPayloa
 
   await persist();
   return getMatchedTransactions().find((item) => item.id === payload.transactionId)!;
-}
-
-export async function assignWiseCardHolderTeam(
-  payload: AssignWiseCardHolderTeamPayload
-): Promise<WiseCardHolderTeamAssignment> {
-  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
-  const teamId = canonicalTeamId(payload.teamId);
-  if (!cardHolderName) {
-    throw new Error("Card holder name is required");
-  }
-  if (!teams.some((team) => team.id === teamId)) {
-    throw new Error("Team not found");
-  }
-
-  const assignment: WiseCardHolderTeamAssignment = {
-    cardHolderName,
-    teamId,
-    updatedAt: new Date().toISOString()
-  };
-  wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
-    ...wiseCardHolderTeamAssignments.filter(
-      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
-    ),
-    assignment
-  ]);
-
-  await persist();
-  return assignment;
 }
 
 export async function createTeam(payload: CreateTeamPayload): Promise<Team> {

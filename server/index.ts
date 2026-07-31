@@ -16,7 +16,6 @@ import type {
   CreateTransactionCategoryPayload,
   DeleteInvoicesPayload,
   DraftRevenueRunPayload,
-  AssignWiseCardHolderTeamPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
   MatchExpensePaymentPayload,
@@ -33,7 +32,6 @@ import type {
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import {
   assignTransactionTeam,
-  assignWiseCardHolderTeam,
   autoCategorizeTransactions,
   createExpense,
   createHolding,
@@ -157,19 +155,6 @@ app.post("/api/banks/activity", async (request, response, next) => {
 app.post("/api/wise/import-statement", async (request, response, next) => {
   try {
     response.json(await importWiseStatement(request.body as ImportWiseStatementPayload));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/wise/card-holder-team", async (request, response, next) => {
-  try {
-    const payload = request.body as AssignWiseCardHolderTeamPayload;
-    if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
-      response.status(400).json({ message: "cardHolderName and teamId are required" });
-      return;
-    }
-    response.json(await assignWiseCardHolderTeam(payload));
   } catch (error) {
     next(error);
   }

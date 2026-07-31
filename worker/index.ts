@@ -7,7 +7,6 @@ import type {
   AccountBalance,
   AiPromptPayload,
   AssignTransactionTeamPayload,
-  AssignWiseCardHolderTeamPayload,
   AutomationRun,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
@@ -170,7 +169,6 @@ import {
   mergeWiseCardHolderTeamAssignments,
   mergeProviderDirectory,
   mergeTeamDirectory,
-  normalizeCardHolderName,
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
@@ -1790,18 +1788,11 @@ function integrationStatus(
 
 function applyTeamAssignments(
   rows: Transaction[],
-  assignments: TransactionTeamAssignment[],
-  cardHolderAssignments: WiseCardHolderTeamAssignment[]
+  assignments: TransactionTeamAssignment[]
 ): Transaction[] {
   const teamByTransaction = new Map(assignments.map((assignment) => [assignment.transactionId, assignment.teamId]));
-  const teamByCardHolder = new Map(
-    cardHolderAssignments.map((assignment) => [normalizeCardHolderName(assignment.cardHolderName), assignment.teamId])
-  );
   return rows.map((transaction) => {
-    const teamId =
-      teamByTransaction.get(transaction.id) ??
-      (transaction.cardHolderName ? teamByCardHolder.get(normalizeCardHolderName(transaction.cardHolderName)) : undefined) ??
-      transaction.teamId;
+    const teamId = teamByTransaction.get(transaction.id) ?? transaction.teamId;
     return teamId ? { ...transaction, teamId } : transaction;
   });
 }
@@ -2059,8 +2050,7 @@ async function loadBankActivity(
       sources.flatMap((source, index) =>
         (refreshedBySource.get(source) ?? initialActivity[index]).transactions
       ),
-      context.transactionTeamAssignments,
-      context.wiseCardHolderTeamAssignments
+      context.transactionTeamAssignments
     ),
     mergeProviderDirectory(context.providers),
     sanitizeStoredTransactionCategoryRules(context.transactionCategoryRules)
@@ -2190,8 +2180,7 @@ async function getSnapshot(
           ? { ...transaction, matchedInvoiceId: invoice.id, matchedProviderId: invoice.providerId ?? transaction.matchedProviderId }
           : transaction;
       }),
-      state.transactionTeamAssignments,
-      state.wiseCardHolderTeamAssignments
+      state.transactionTeamAssignments
     ),
     state.providers,
     state.transactionCategoryRules
@@ -2254,7 +2243,6 @@ async function getSnapshot(
     meritTaxes,
     transactionCategories: state.transactionCategories,
     transactionCategoryRules: state.transactionCategoryRules,
-    wiseCardHolderTeamAssignments: state.wiseCardHolderTeamAssignments,
     wiseStatementImports: state.wiseStatementImports,
     integrationStatus: integrationStatus(
       env,
@@ -2957,36 +2945,6 @@ async function assignTransactionTeam(env: Env, payload: AssignTransactionTeamPay
     ...transaction,
     teamId
   };
-}
-
-async function assignWiseCardHolderTeam(
-  env: Env,
-  payload: AssignWiseCardHolderTeamPayload
-): Promise<WiseCardHolderTeamAssignment> {
-  const state = await loadPersisted(env);
-  const cardHolderName = payload.cardHolderName.trim().replace(/\s+/g, " ");
-  const teamId = canonicalTeamId(payload.teamId);
-  if (!cardHolderName) {
-    throw new Error("Card holder name is required");
-  }
-  if (!state.teams.some((team) => team.id === teamId)) {
-    throw new Error("Team not found");
-  }
-
-  const assignment: WiseCardHolderTeamAssignment = {
-    cardHolderName,
-    teamId,
-    updatedAt: new Date().toISOString()
-  };
-  state.wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments([
-    ...state.wiseCardHolderTeamAssignments.filter(
-      (assignment) => normalizeCardHolderName(assignment.cardHolderName) !== normalizeCardHolderName(cardHolderName)
-    ),
-    assignment
-  ]);
-
-  await savePersisted(env, state);
-  return assignment;
 }
 
 async function createTeam(env: Env, payload: CreateTeamPayload): Promise<Team> {
@@ -4366,14 +4324,6 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/api/wise/import-statement" && request.method === "POST") {
       return json(await importWiseStatement(env, (await request.json()) as ImportWiseStatementPayload));
-    }
-
-    if (url.pathname === "/api/wise/card-holder-team" && request.method === "POST") {
-      const payload = (await request.json()) as AssignWiseCardHolderTeamPayload;
-      if (!payload.cardHolderName?.trim() || !payload.teamId?.trim()) {
-        return json({ message: "cardHolderName and teamId are required" }, { status: 400 });
-      }
-      return json(await assignWiseCardHolderTeam(env, payload));
     }
 
     if (url.pathname === "/api/revenue/sync" && request.method === "POST") {

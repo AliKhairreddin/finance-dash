@@ -5,6 +5,7 @@ import {
   aiProviderDirectoryForTransactions,
   canonicalProviders,
   mergeProviderDirectory,
+  mergeWiseCardHolderTeamAssignments,
   transactionAiGroupKey,
   transactionMerchantKey,
   transactionsShareMerchant
@@ -17,6 +18,10 @@ test("mergeProviderDirectory does not restore deleted default companies", () => 
 test("mergeProviderDirectory keeps and normalizes companies that are actually stored", () => {
   const storedProvider = canonicalProviders[0];
   assert.deepEqual(mergeProviderDirectory([storedProvider]), [storedProvider]);
+});
+
+test("card-holder metadata does not create a responsibility assignment", () => {
+  assert.deepEqual(mergeWiseCardHolderTeamAssignments([]), []);
 });
 
 test("merchant equivalence uses the AI-normalized name and transaction direction", () => {

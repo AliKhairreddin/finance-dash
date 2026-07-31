@@ -60,7 +60,6 @@ import { useUrlDateRangeState, useUrlState } from "@/lib/url-state";
 import type {
   AiPromptPayload,
   AiPromptResult,
-  AssignWiseCardHolderTeamPayload,
   BankActivityLoadResult,
   ConnectedBankSource,
   CreateExpensePayload,
@@ -107,8 +106,7 @@ import type {
   UpdateInvoicePayload,
   UpdateProviderPayload,
   UpdateRevenuePartnerPayload,
-  UpdateTransactionCategoryDefinitionPayload,
-  WiseCardHolderTeamAssignment
+  UpdateTransactionCategoryDefinitionPayload
 } from "../shared/types";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
@@ -156,7 +154,6 @@ type BankTransactionDateRange = {
 };
 type TransactionSortKey =
   | "amount"
-  | "cardHolder"
   | "category"
   | "company"
   | "counterparty"
@@ -189,7 +186,6 @@ const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
 const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "holdings"];
 const transactionSortKeys: readonly TransactionSortKey[] = [
   "amount",
-  "cardHolder",
   "category",
   "company",
   "counterparty",
@@ -703,7 +699,6 @@ function transactionSortValue(
   expenseTransactionIds: Set<string>
 ): boolean | number | string | undefined {
   if (sortKey === "amount") return transaction.amount;
-  if (sortKey === "cardHolder") return transaction.cardHolderName;
   if (sortKey === "category") return effectiveCategory(transaction);
   if (sortKey === "company") {
     return transaction.matchedProviderId
@@ -926,7 +921,6 @@ function App() {
           transaction.counterparty,
           transaction.description,
           transaction.rawName,
-          transaction.cardHolderName ?? "",
           provider?.name ?? "",
           team?.name ?? ""
         ]
@@ -1284,38 +1278,6 @@ function App() {
     }
     applyTransactionUpdate((await response.json()) as Transaction);
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "team"}.` : "Transaction team cleared.");
-  }
-
-  async function assignWiseCardHolderTeam(payload: AssignWiseCardHolderTeamPayload) {
-    const response = await fetch(`${apiBase}/wise/card-holder-team`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      throw new Error(await apiErrorMessage(response, "Card holder team assignment failed"));
-    }
-    const assignment = (await response.json()) as WiseCardHolderTeamAssignment;
-    const normalizedName = assignment.cardHolderName.trim().replace(/\s+/g, " ").toLowerCase();
-    setDashboard((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        wiseCardHolderTeamAssignments: [
-          assignment,
-          ...current.wiseCardHolderTeamAssignments.filter(
-            (item) => item.cardHolderName.trim().replace(/\s+/g, " ").toLowerCase() !== normalizedName
-          )
-        ],
-        transactions: current.transactions.map((transaction) =>
-          transaction.source === "wise"
-          && transaction.cardHolderName?.trim().replace(/\s+/g, " ").toLowerCase() === normalizedName
-            ? { ...transaction, teamId: assignment.teamId }
-            : transaction
-        )
-      };
-    });
-    setNotice(`Assigned ${payload.cardHolderName.trim()} to ${teamsById.get(payload.teamId)?.name ?? "team"}.`);
   }
 
   async function createTeam(payload: CreateTeamPayload) {
@@ -1983,7 +1945,6 @@ function App() {
           onUpdateCategory={updateTransactionCategoryDefinition}
           onDeleteCategory={deleteTransactionCategoryDefinition}
           onSaveAiSettings={saveAiSettings}
-          onSaveWiseCardHolderTeam={assignWiseCardHolderTeam}
           onRunAiPrompt={runAiPrompt}
         />
       )}
@@ -4251,7 +4212,6 @@ function TransactionTable({
           <col className="transaction-counterparty-col" />
           <col className="transaction-direction-col" />
           <col className="transaction-amount-col" />
-          <col className="transaction-card-holder-col" />
           <col className="transaction-team-col" />
           <col className="transaction-category-col" />
           <col className="transaction-company-col" />
@@ -4264,7 +4224,6 @@ function TransactionTable({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="direction">Direction</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="amount">Amount</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="cardHolder">Card holder</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} label="Team" onSort={onSort} sortKey="team">
               <>Team <span className="column-note">Optional</span></>
             </SortableTableHead>
@@ -4323,9 +4282,6 @@ function TransactionTable({
                     </span>
                   </td>
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
-                  <td className="card-holder-cell" title={transaction.cardHolderName ?? ""}>
-                    {transaction.cardHolderName ? transaction.cardHolderName : <span className="muted-cell">—</span>}
-                  </td>
                   <td>
                     <div className="team-select">
                       <NativeSelect value={transaction.teamId ?? ""} onValueChange={(value) => onAssignTeam(transaction, value || undefined)}>
@@ -5620,7 +5576,6 @@ function SettingsView({
   onUpdateCategory,
   onDeleteCategory,
   onSaveAiSettings,
-  onSaveWiseCardHolderTeam,
   onRunAiPrompt
 }: {
   dashboard: DashboardSnapshot;
@@ -5632,7 +5587,6 @@ function SettingsView({
   ) => Promise<void>;
   onDeleteCategory: (category: TransactionCategory) => Promise<void>;
   onSaveAiSettings: (payload: SaveAiSettingsPayload) => Promise<void>;
-  onSaveWiseCardHolderTeam: (payload: AssignWiseCardHolderTeamPayload) => Promise<void>;
   onRunAiPrompt: (payload: AiPromptPayload) => Promise<AiPromptResult>;
 }) {
   const missing = dashboard.integrationStatus.flatMap((item) => item.needs.map((need) => ({ source: item.label, need })));
@@ -5645,11 +5599,8 @@ function SettingsView({
   const [prompt, setPrompt] = useState("");
   const [aiResult, setAiResult] = useState<AiPromptResult | null>(null);
   const [busy, setBusy] = useState<"team" | "save" | "prompt" | null>(null);
-  const [cardHolderBusy, setCardHolderBusy] = useState<string | null>(null);
-  const [cardHolderSelections, setCardHolderSelections] = useState<Record<string, string>>({});
   const [teamError, setTeamError] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [cardHolderError, setCardHolderError] = useState<string | null>(null);
   const [categoryEditor, setCategoryEditor] = useState<TransactionCategory | "new" | null>(null);
   const [categoryDeleteTarget, setCategoryDeleteTarget] = useState<TransactionCategory | null>(null);
 
@@ -5678,37 +5629,6 @@ function SettingsView({
     void loadZdrModels();
     return () => controller.abort();
   }, []);
-
-  const cardHolderRows = useMemo(() => {
-    const rows = new Map<string, { key: string; cardHolderName: string; transactionCount: number; teamId?: string }>();
-
-    for (const assignment of dashboard.wiseCardHolderTeamAssignments) {
-      const key = normalizeLookupName(assignment.cardHolderName);
-      if (!key) continue;
-      rows.set(key, {
-        key,
-        cardHolderName: assignment.cardHolderName,
-        transactionCount: 0,
-        teamId: assignment.teamId
-      });
-    }
-
-    for (const transaction of dashboard.transactions) {
-      if (transaction.source !== "wise" || !transaction.cardHolderName) continue;
-      const cardHolderName = transaction.cardHolderName.trim().replace(/\s+/g, " ");
-      const key = normalizeLookupName(cardHolderName);
-      if (!key) continue;
-      const existing = rows.get(key);
-      rows.set(key, {
-        key,
-        cardHolderName: existing?.cardHolderName ?? cardHolderName,
-        transactionCount: (existing?.transactionCount ?? 0) + 1,
-        teamId: existing?.teamId
-      });
-    }
-
-    return [...rows.values()].sort((left, right) => left.cardHolderName.localeCompare(right.cardHolderName));
-  }, [dashboard.transactions, dashboard.wiseCardHolderTeamAssignments]);
 
   const categoryUsage = useMemo(() => {
     const usage = new Map<string, number>();
@@ -5751,18 +5671,6 @@ function SettingsView({
       setAiError(err instanceof Error ? err.message : "AI settings could not be saved");
     } finally {
       setBusy(null);
-    }
-  }
-
-  async function saveCardHolderTeam(cardHolderName: string, key: string, teamId: string) {
-    setCardHolderBusy(key);
-    setCardHolderError(null);
-    try {
-      await onSaveWiseCardHolderTeam({ cardHolderName, teamId });
-    } catch (err) {
-      setCardHolderError(err instanceof Error ? err.message : "Card holder team could not be saved");
-    } finally {
-      setCardHolderBusy(null);
     }
   }
 
@@ -5879,60 +5787,6 @@ function SettingsView({
             <span key={team.id}>{team.name}</span>
           ))}
         </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Wise card holders</p>
-            <h2>Card holder teams</h2>
-          </div>
-          <span className="total-pill">{cardHolderRows.length} holders</span>
-        </div>
-        <div className="card-holder-rules">
-          {cardHolderRows.length > 0 ? (
-            cardHolderRows.map((row) => {
-              const selectedTeamId = cardHolderSelections[row.key] ?? row.teamId ?? "";
-              const savedTeamId = row.teamId ?? "";
-              return (
-                <div className="card-holder-rule" key={row.key}>
-                  <div className="card-holder-rule-name">
-                    <strong>{row.cardHolderName}</strong>
-                    <span>{row.transactionCount > 0 ? `${row.transactionCount} Wise rows` : "Saved rule"}</span>
-                  </div>
-                  <NativeSelect
-                    value={selectedTeamId}
-                    onValueChange={(value) =>
-                      setCardHolderSelections((current) => ({
-                        ...current,
-                        [row.key]: value
-                      }))
-                    }
-                  >
-                    <NativeSelectOption value="">Choose team</NativeSelectOption>
-                    {dashboard.teams.map((team) => (
-                      <NativeSelectOption key={team.id} value={team.id}>
-                        {team.name}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!selectedTeamId || selectedTeamId === savedTeamId || cardHolderBusy === row.key}
-                    onClick={() => void saveCardHolderTeam(row.cardHolderName, row.key, selectedTeamId)}
-                  >
-                    {cardHolderBusy === row.key ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-                    Save
-                  </button>
-                </div>
-              );
-            })
-          ) : (
-            <div className="empty-state">No Wise card holders</div>
-          )}
-        </div>
-        {cardHolderError && <div className="inline-error">{cardHolderError}</div>}
       </section>
 
       <section className="panel">

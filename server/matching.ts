@@ -176,14 +176,6 @@ export const canonicalTeams: Team[] = [
   }
 ];
 
-export const canonicalWiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [
-  {
-    cardHolderName: "Sanjin Beckovic",
-    teamId: wagnerTeamId,
-    updatedAt: canonicalCreatedAt
-  }
-];
-
 const categoryRules: Array<{ category: string; phrases: string[]; direction?: Transaction["direction"] }> = [
   {
     category: "Media buying direct",
@@ -384,9 +376,6 @@ export function transactionAiGroupKey(
 
 export function mergeWiseCardHolderTeamAssignments(assignments: WiseCardHolderTeamAssignment[]): WiseCardHolderTeamAssignment[] {
   const byName = new Map<string, WiseCardHolderTeamAssignment>();
-  for (const assignment of canonicalWiseCardHolderTeamAssignments) {
-    byName.set(normalizeCardHolderName(assignment.cardHolderName), assignment);
-  }
   for (const assignment of assignments) {
     const cardHolderName = assignment.cardHolderName.trim().replace(/\s+/g, " ");
     const normalizedName = normalizeCardHolderName(cardHolderName);

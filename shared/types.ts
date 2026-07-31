@@ -588,7 +588,6 @@ export interface DashboardSnapshot {
   meritTaxes: MeritTax[];
   transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
-  wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[];
   wiseStatementImports: WiseStatementImport[];
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
@@ -746,11 +745,6 @@ export type TransactionOverrideScope = "transaction" | "merchant";
 export interface AssignTransactionTeamPayload {
   transactionId: string;
   teamId?: string;
-}
-
-export interface AssignWiseCardHolderTeamPayload {
-  cardHolderName: string;
-  teamId: string;
 }
 
 export interface CreateTeamPayload {
