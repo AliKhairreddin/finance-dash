@@ -18,6 +18,21 @@ export function transactionCounterpartyLabel(transaction: Transaction): string {
     : transaction.merchantName ?? transaction.counterparty;
 }
 
+export function transactionDescriptionLabel(transaction: Transaction): string {
+  const descriptions: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of [transaction.rawName, transaction.counterparty, transaction.description]) {
+    const description = value.trim();
+    const key = description.toLowerCase().replace(/\s+/g, " ");
+    if (!description || seen.has(key)) continue;
+    seen.add(key);
+    descriptions.push(description);
+  }
+
+  return descriptions.join(" · ");
+}
+
 export function transactionMovementLabel(transaction: Transaction): string {
   if (transaction.source !== "slash") return transaction.direction === "in" ? "In" : "Out";
 

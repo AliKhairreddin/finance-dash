@@ -165,6 +165,7 @@ import {
 import {
   isInternalTransferTransaction,
   transactionCounterpartyLabel,
+  transactionDescriptionLabel,
   transactionMovementLabel
 } from "../shared/transactionPresentation";
 import {
@@ -4830,6 +4831,7 @@ function TransactionTable({
               const displayCategory = effectiveCategory(transaction);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const counterpartyLabel = transactionCounterpartyLabel(transaction);
+              const transactionDescription = transactionDescriptionLabel(transaction);
               const categoryDetail = `${(categoryConfidence * 100).toFixed(0)}% · ${transaction.categoryReason ?? "AI classification pending"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
@@ -4858,12 +4860,12 @@ function TransactionTable({
                       <strong>{counterpartyLabel}</strong>
                     </div>
                     <small className="transaction-detail-line">
-                      <span className="transaction-detail-text">{transaction.counterparty} · {transaction.description}</span>
+                      <span className="transaction-detail-text">{transactionDescription}</span>
                       {detailInfoButton(
                         counterpartyDetailId,
-                        transaction.counterparty,
-                        transaction.description,
-                        `Show counterparty description for ${transaction.counterparty}`
+                        "Transaction description",
+                        transactionDescription,
+                        `Show full transaction description for ${counterpartyLabel}`
                       )}
                     </small>
                     {transaction.cashback && (

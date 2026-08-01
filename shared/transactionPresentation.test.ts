@@ -4,6 +4,7 @@ import type { Transaction } from "./types";
 import {
   isInternalTransferTransaction,
   transactionCounterpartyLabel,
+  transactionDescriptionLabel,
   transactionMovementLabel
 } from "./transactionPresentation";
 
@@ -48,4 +49,18 @@ test("Slash card purchases remain spend instead of internal payments", () => {
   assert.equal(transactionMovementLabel(purchase), "Card spend");
   assert.equal(transactionCounterpartyLabel(purchase), "Amex");
   assert.equal(isInternalTransferTransaction(purchase), false);
+});
+
+test("transaction descriptions preserve every distinct bank-provided detail", () => {
+  const purchase = slashTransaction("purchase-detail", "out", "credit", "Facebook", "Ad spend");
+  purchase.rawName = "FACEBK *5JR9SYHGG2";
+  purchase.counterparty = "FACEBK *5JR9SYHGG2";
+
+  assert.equal(transactionDescriptionLabel(purchase), "FACEBK *5JR9SYHGG2 · Facebook");
+});
+
+test("transaction descriptions remove repeated provider labels", () => {
+  const fee = slashTransaction("fee-detail", "out", "cash", "Slash fee: Foreign transaction fee", "Bank fees");
+
+  assert.equal(transactionDescriptionLabel(fee), "Slash fee: Foreign transaction fee");
 });

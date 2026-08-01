@@ -1505,11 +1505,10 @@ th.amount .sortable-table-heading {
 
 .transaction-detail-popover strong {
   min-width: 0;
-  overflow: hidden;
   color: var(--ink);
   font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .transaction-detail-popover span {
