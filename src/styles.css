@@ -7337,10 +7337,11 @@ body {
 }
 
 .app-shell {
-  width: min(1640px, calc(100vw - 36px));
+  width: 100%;
+  margin: 0;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   gap: 18px;
-  padding: 18px 0 36px;
+  padding: 18px max(18px, calc(100vw - 1640px)) 36px 0;
 }
 
 .topbar {
@@ -7370,7 +7371,7 @@ body {
   top: 18px;
   gap: 14px;
   padding: 12px;
-  border-radius: 18px;
+  border-radius: 0;
   box-shadow: var(--shadow-soft);
 }
 
