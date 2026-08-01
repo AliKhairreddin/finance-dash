@@ -225,7 +225,7 @@ type TransactionSortKey =
 type TransactionDetailPopover = {
   id: string;
   title: string;
-  description: string;
+  details: string[];
   left: number;
   top: number;
   placement: "above" | "below";
@@ -4647,9 +4647,16 @@ function TransactionTable({
     };
   }, [detailPopover]);
 
-  function toggleDetailPopover(id: string, title: string, detail: string, event: ReactMouseEvent<HTMLButtonElement>) {
-    const description = detail.trim();
-    if (!description) {
+  function toggleDetailPopover(
+    id: string,
+    title: string,
+    detail: string | readonly string[],
+    event: ReactMouseEvent<HTMLButtonElement>
+  ) {
+    const details = (typeof detail === "string" ? [detail] : detail)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (details.length === 0) {
       setDetailPopover(null);
       return;
     }
@@ -4658,12 +4665,12 @@ function TransactionTable({
     setDetailPopover((current) => current?.id === id ? null : {
       id,
       title,
-      description,
+      details,
       ...position
     });
   }
 
-  function detailInfoButton(id: string, title: string, detail: string, label: string) {
+  function detailInfoButton(id: string, title: string, detail: string | readonly string[], label: string) {
     const isOpen = detailPopover?.id === id;
 
     return (
@@ -4753,7 +4760,7 @@ function TransactionTable({
           style={{ left: detailPopover.left, top: detailPopover.top }}
         >
           <strong>{detailPopover.title}</strong>
-          <span>{detailPopover.description}</span>
+          {detailPopover.details.map((detail, index) => <span key={`${detailPopover.id}-${index}`}>{detail}</span>)}
         </div>,
         document.body
       )}
@@ -4832,6 +4839,14 @@ function TransactionTable({
               const internalTransfer = isInternalTransferTransaction(transaction);
               const counterpartyLabel = transactionCounterpartyLabel(transaction);
               const transactionDescription = transactionDescriptionLabel(transaction);
+              const cashbackDetail = transaction.cashback
+                ? `Cashback earned ${money(transaction.cashback.amount, transaction.currency)}${transaction.amount > 0
+                  ? ` · ${((transaction.cashback.amount / transaction.amount) * 100).toFixed(2)}% effective`
+                  : ""}`
+                : undefined;
+              const transactionDetails = cashbackDetail
+                ? [transactionDescription, cashbackDetail]
+                : [transactionDescription];
               const categoryDetail = `${(categoryConfidence * 100).toFixed(0)}% · ${transaction.categoryReason ?? "AI classification pending"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
@@ -4863,19 +4878,12 @@ function TransactionTable({
                       <span className="transaction-detail-text">{transactionDescription}</span>
                       {detailInfoButton(
                         counterpartyDetailId,
-                        "Transaction description",
-                        transactionDescription,
-                        `Show full transaction description for ${counterpartyLabel}`
+                        "Transaction details",
+                        transactionDetails,
+                        `Show full transaction details for ${counterpartyLabel}`
                       )}
                     </small>
-                    {transaction.cashback && (
-                      <small className="good-text">
-                        Cashback earned {money(transaction.cashback.amount, transaction.currency)}
-                        {transaction.amount > 0
-                          ? ` · ${((transaction.cashback.amount / transaction.amount) * 100).toFixed(2)}% effective`
-                          : ""}
-                      </small>
-                    )}
+                    {cashbackDetail && <small className="good-text">{cashbackDetail}</small>}
                   </td>
                   <td>
                     <span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>
