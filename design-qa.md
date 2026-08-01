@@ -1,3 +1,97 @@
+# Single-row bank reconciliation toolbar design QA
+
+## Scope
+
+This pass verifies the compact reconciliation toolbar requested for connected-bank views, with focused visual and interaction coverage of Slash. It also verifies the coordinated wide-monitor gutter change included in the same release.
+
+## Evidence
+
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-c6feabc3-d50a-4409-8120-2883eab208d8.png`.
+- Browser-rendered implementation: `/tmp/finance-toolbar-local-1163x676.jpg`.
+- Same-input focused comparison, source above and implementation below: `/tmp/finance-toolbar-comparison.png`.
+- Source image: 1905 × 979 px.
+- Implementation capture: 1163 × 676 px from a 1314 × 676 CSS viewport at device pixel ratio 1.
+- Focused comparison: 1162 × 328 px. The source was proportionally normalized and both toolbar regions were cropped to equal width for direct layout review.
+- State: Slash, money out, all category rows, light theme. The source contains live rows; the local API had no authenticated bank rows, so data-content fidelity was not part of this toolbar-only comparison.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+### Fonts and typography
+
+- Existing Geist typography and optical weights remain unchanged.
+- Toolbar controls use the dashboard's compact 0.75–0.78 rem control scale, while the section title remains visually dominant.
+- `Spent / sent`, the full selected period, and `Filters` remain readable without desktop truncation.
+
+### Spacing and layout rhythm
+
+- The source uses a 54 px control row followed by a separate 54 px period row. The implementation places direction, search, filters, period, information, and export in one 54 px reconciliation header.
+- Direction is one 148 px dropdown instead of a two-button segmented control.
+- Search is capped at 230 px and can shrink to 130 px before the 980 px stacked-header breakpoint.
+- Desktop controls remain one row at 1024, 1180, 1314, 1905, and 2560 CSS px with no page-level horizontal overflow.
+- At 760 px and below, search, the compact action row, and period form three explicit rows instead of auto-placing controls unpredictably.
+- The coordinated `.app-shell` change retains a computed 18 px right padding at 1905 and 2560 px.
+
+### Colors and visual tokens
+
+- The implementation reuses the existing panel, control, border, muted-text, active-filter, hover, and focus tokens.
+- No new palette, gradient, or elevation treatment was introduced.
+
+### Image quality and asset fidelity
+
+- The affected toolbar contains no raster assets or custom illustrations.
+- Existing Lucide control icons remain unchanged; no placeholders, inline drawings, or replacement assets were added.
+
+### Copy and content
+
+- Direction keeps the existing `Added` and `Spent / sent` terminology for Slash and `Money in` / `Money out` for other connected banks.
+- Category status retains `Needs category`, `Categorized`, and `All rows` inside Filters.
+- Period presets retain Today, This week, Last week, This month, Last month, Recent 45 days, and This year inside the period popover.
+- Automatic-update guidance remains in the existing information control and does not consume persistent toolbar space.
+
+## Full-view comparison evidence
+
+- The implementation keeps the same bank page hierarchy, panel treatment, summary strip, table header, and action placement as the source.
+- The reconciliation table begins one full control row higher, which is the requested outcome.
+- The implementation capture contains no clipped controls, page-level overflow, or overlap at the target desktop viewport.
+
+## Focused comparison evidence
+
+- `/tmp/finance-toolbar-comparison.png` places the two-row source toolbar above the one-row implementation.
+- The lower implementation visibly retains every interactive capability while removing the standalone category-status and preset controls from persistent layout.
+- The comparison also confirms that existing typography, borders, radii, icon style, and table alignment remain coherent with the source.
+
+## Interaction and runtime checks
+
+- Direction dropdown: opened and changed from `Spent / sent` to `Added`; the URL-backed direction and live status text updated.
+- Filters: opened, category status changed from `All rows` to `Needs category`, and the active-filter count updated without closing the parent popover unexpectedly.
+- Period: opened the calendar, opened its nested preset selector, applied `Last month`, and confirmed the trigger changed to `Jul 1–31, 2026`.
+- Responsive layout: one desktop control row at 1024–2560 px; three intentional control rows at 600 and 760 px; zero page-level horizontal overflow.
+- Browser console warnings/errors: none.
+- `npm run check`: passed (280 tests passed, 1 intentionally skipped, production build passed).
+- `git diff --check`: passed.
+
+## Comparison history
+
+1. [P1] The source consumed two full rows for reconciliation controls and period controls.
+   - Moved the period control into the reconciliation toolbar, category status into Filters, presets into the period popover, and direction into one dropdown.
+   - Post-fix evidence: the focused comparison shows a single desktop control row and the table begins materially higher.
+2. [P2] The first narrow-width pass let CSS grid auto-placement spread five controls across five rows.
+   - Assigned explicit grid rows and changed Filters to its icon treatment at the mobile breakpoint.
+   - Post-fix evidence: 600 px and 760 px checks show three intentional rows with no horizontal overflow.
+3. [P2] The first compact direction width truncated `Spent / sent`.
+   - Increased the desktop direction control to 148 px and rebalanced the shrinkable search track.
+   - Post-fix evidence: the final implementation capture shows the complete selected direction label.
+
+## Follow-up polish
+
+No P3 follow-up is required for this pass.
+
+final result: passed
+
+---
+
 # Compact dashboard summary-strip design QA
 
 ## Scope

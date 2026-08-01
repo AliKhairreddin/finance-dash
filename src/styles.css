@@ -2577,13 +2577,13 @@ th.amount .sortable-table-heading {
 
 .panel-header.bank-reconciliation-header {
   align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
+  gap: 10px;
+  padding: 7px 12px;
 }
 
 .bank-reconciliation-title {
-  flex: 0 1 250px;
-  min-width: 190px;
+  flex: 0 0 190px;
+  min-width: 0;
 }
 
 .bank-reconciliation-title .eyebrow {
@@ -2591,6 +2591,8 @@ th.amount .sortable-table-heading {
 }
 
 .bank-reconciliation-title h2 {
+  font-size: 1rem;
+  letter-spacing: -0.018em;
   white-space: nowrap;
 }
 
@@ -2605,16 +2607,27 @@ th.amount .sortable-table-heading {
 .reconciliation-toolbar .list-toolbar-main {
   justify-content: flex-end;
   flex-wrap: nowrap;
+  gap: 6px;
 }
 
-.reconciliation-toolbar .segmented-control {
-  gap: 2px;
-  padding: 3px;
+.reconciliation-direction-select {
+  position: relative;
+  flex: 0 0 148px;
+  width: 148px;
 }
 
-.reconciliation-toolbar .segmented-control button {
-  gap: 4px;
-  padding-inline: 7px;
+.reconciliation-direction-select > svg {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  z-index: 1;
+  color: var(--app-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.reconciliation-direction-select .searchable-select-control {
+  padding-left: 28px;
 }
 
 .wise-entity-nav {
@@ -2630,26 +2643,34 @@ th.amount .sortable-table-heading {
 }
 
 .reconciliation-toolbar .toolbar-search-field {
-  flex: 1 1 200px;
+  flex: 1 1 170px;
   width: auto;
-  min-width: 160px;
-  max-width: 320px;
+  min-width: 130px;
+  max-width: 230px;
+  min-height: 30px;
 }
 
-.reconciliation-toolbar .promoted-filter-select {
-  flex: 0 1 168px;
-  width: 168px;
-  min-width: 142px;
+.reconciliation-toolbar .toolbar-search-field input {
+  min-height: 28px;
+  font-size: 0.78rem;
 }
 
 .reconciliation-toolbar .toolbar-popover-trigger {
   gap: 5px;
-  padding-inline: 9px;
+  min-height: 30px;
+  padding-inline: 8px;
+  font-size: 0.75rem;
 }
 
 .reconciliation-toolbar .file-button {
   gap: 6px;
   padding-inline: 10px;
+}
+
+.reconciliation-toolbar .list-toolbar-actions .icon-button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
 }
 
 .reconciliation-transfer-positioner {
@@ -5003,19 +5024,31 @@ th.amount .sortable-table-heading {
   background: var(--subtle-bg);
 }
 
+.reconciliation-toolbar .bank-date-controls {
+  flex: 0 1 auto;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .bank-date-range-trigger {
   max-width: min(420px, 48vw);
   min-height: 34px;
+}
+
+.reconciliation-toolbar .bank-date-range-trigger {
+  max-width: 190px;
+  min-height: 30px;
+  padding-inline: 8px;
+  font-size: 0.75rem;
 }
 
 .bank-date-range-trigger span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.bank-period-presets {
-  width: 144px;
 }
 
 .bank-date-controls > .note-popover,
@@ -5046,6 +5079,29 @@ th.amount .sortable-table-heading {
   color: var(--ink);
   background: var(--panel);
   box-shadow: var(--modal-shadow);
+}
+
+.bank-calendar-shortcuts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bank-calendar-shortcuts > span {
+  color: var(--app-muted);
+  font-size: 0.7rem;
+  font-weight: 740;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.bank-calendar-preset-select {
+  justify-self: end;
+  width: 168px;
 }
 
 .bank-calendar-header {
@@ -6074,7 +6130,7 @@ th.amount .sortable-table-heading {
 
   .bank-date-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .bank-date-range-trigger {
@@ -7341,7 +7397,7 @@ body {
   margin: 0;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   gap: 18px;
-  padding: 18px max(18px, calc(100vw - 1640px)) 36px 0;
+  padding: 18px 18px 36px 0;
 }
 
 .topbar {
@@ -8208,14 +8264,12 @@ body {
     --sidebar-width: 174px;
   }
 
-  .bank-reconciliation-header {
-    grid-template-columns: 1fr;
+  .bank-reconciliation-title {
+    flex-basis: 176px;
   }
 
-  .bank-reconciliation-header .list-toolbar,
-  .reconciliation-toolbar .list-toolbar-main {
-    width: 100%;
-    justify-content: flex-start;
+  .reconciliation-toolbar .toolbar-search-field {
+    max-width: 190px;
   }
 
   .metric-grid {
@@ -8234,6 +8288,21 @@ body {
 }
 
 @media (max-width: 980px) {
+  .bank-reconciliation-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bank-reconciliation-title {
+    flex: none;
+  }
+
+  .bank-reconciliation-header .list-toolbar,
+  .reconciliation-toolbar .list-toolbar-main {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .overview-balances-grid,
   .overview-bottom-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -8357,31 +8426,54 @@ body {
     height: 14px;
   }
 
-  .reconciliation-toolbar .segmented-control {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
   .reconciliation-toolbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
+    gap: 6px;
   }
 
   .reconciliation-toolbar .list-toolbar-main {
     display: contents;
   }
 
-  .reconciliation-toolbar .promoted-filter-select {
+  .reconciliation-direction-select {
     grid-column: 1;
+    grid-row: 2;
+    width: 100%;
   }
 
   .reconciliation-toolbar .toolbar-popover-trigger {
     grid-column: 2;
+    grid-row: 2;
+    width: 36px;
+    padding: 0;
   }
 
-  .reconciliation-toolbar .segmented-control button {
-    flex: 1 1 50%;
+  .reconciliation-toolbar .toolbar-popover-trigger > span:not(.toolbar-filter-count) {
+    display: none;
+  }
+
+  .reconciliation-toolbar .bank-date-controls {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    width: 100%;
+  }
+
+  .reconciliation-toolbar .toolbar-search-field {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .reconciliation-toolbar .list-toolbar-actions {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .reconciliation-toolbar .bank-date-range-trigger {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: none;
   }
 
   .wise-entity-nav .wise-entity-tabs {

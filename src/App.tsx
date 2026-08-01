@@ -54,7 +54,7 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ActiveFilterBar, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
+import { FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -3039,6 +3039,15 @@ function BankReconciliationView({
     const unassigned = settledRows.filter((transaction) => !transaction.teamId).length;
     return { volume, count: settledRows.length, unassigned };
   }, [rows]);
+  const directionLabel = bankDirection === "in"
+    ? (source === "slash" ? "Added" : "Money in")
+    : (source === "slash" ? "Spent / sent" : "Money out");
+  const categoryStatusLabel = matchFilter === "matched"
+    ? "Categorized"
+    : matchFilter === "all"
+      ? "All rows"
+      : "Needs category";
+  const activeFilterCount = (matchFilter === "all" ? 0 : 1) + (teamFilter === "all" ? 0 : 1);
 
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
@@ -3049,15 +3058,19 @@ function BankReconciliationView({
         </div>
         <div className="list-toolbar reconciliation-toolbar">
           <div className="list-toolbar-main">
-            <div className="segmented-control" aria-label={`${sourceLabel} transaction direction`}>
-              <button className={bankDirection === "in" ? "active" : ""} onClick={() => setBankDirection("in")}>
-                <ArrowUpRight size={15} />
-                {source === "slash" ? "Added" : "In"}
-              </button>
-              <button className={bankDirection === "out" ? "active" : ""} onClick={() => setBankDirection("out")}>
-                <ArrowDownRight size={15} />
-                {source === "slash" ? "Spent / sent" : "Out"}
-              </button>
+            <div className="reconciliation-direction-select">
+              {bankDirection === "in"
+                ? <ArrowUpRight size={14} aria-hidden="true" />
+                : <ArrowDownRight size={14} aria-hidden="true" />}
+              <NativeSelect
+                aria-label={`${sourceLabel} transaction direction`}
+                size="sm"
+                value={bankDirection}
+                onValueChange={(value) => setBankDirection(value as "in" | "out")}
+              >
+                <NativeSelectOption value="in">{source === "slash" ? "Added" : "Money in"}</NativeSelectOption>
+                <NativeSelectOption value="out">{source === "slash" ? "Spent / sent" : "Money out"}</NativeSelectOption>
+              </NativeSelect>
             </div>
             <ToolbarSearchField
               ariaLabel={`Search ${sourceLabel} transactions`}
@@ -3065,21 +3078,21 @@ function BankReconciliationView({
               value={searchTerm}
               onChange={setSearchTerm}
             />
-            <NativeSelect
-              aria-label="Category status"
-              className="promoted-filter-select"
-              value={matchFilter}
-              onValueChange={setMatchFilter}
-            >
-              <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
-              <NativeSelectOption value="matched">Categorized</NativeSelectOption>
-              <NativeSelectOption value="all">All rows</NativeSelectOption>
-            </NativeSelect>
             <FilterPopover
-              activeCount={teamFilter === "all" ? 0 : 1}
-              iconOnly
-              title="Transaction filters"
+              activeCount={activeFilterCount}
+              label="Filters"
+              title={`Transaction filters · ${categoryStatusLabel}`}
             >
+              <FilterFieldGroup title="Category">
+                <label>
+                  Status
+                  <NativeSelect aria-label="Category status" value={matchFilter} onValueChange={setMatchFilter}>
+                    <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
+                    <NativeSelectOption value="matched">Categorized</NativeSelectOption>
+                    <NativeSelectOption value="all">All rows</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              </FilterFieldGroup>
               <FilterFieldGroup title="Ownership">
                 <label>
                   Owner
@@ -3095,6 +3108,7 @@ function BankReconciliationView({
                 </label>
               </FilterFieldGroup>
             </FilterPopover>
+            {rangeControls}
           </div>
           <div className="list-toolbar-actions">
             {onImportWiseStatements ? (
@@ -3170,16 +3184,9 @@ function BankReconciliationView({
           </div>
         </div>
       </div>
-      <ActiveFilterBar
-        filters={teamFilter === "all" ? [] : [{
-          key: "team",
-          label: `Owner: ${teamFilter === "unassigned" ? "Unassigned" : teamsById.get(teamFilter)?.name ?? teamFilter}`,
-          onRemove: () => setTeamFilter("all")
-        }]}
-        resultLabel={`${rows.length} loaded transactions shown`}
-        onClearAll={() => setTeamFilter("all")}
-      />
-      {rangeControls}
+      <span className="screen-reader-only" role="status" aria-live="polite">
+        {rows.length} loaded transactions shown. Direction: {directionLabel}. Category status: {categoryStatusLabel}.
+      </span>
       <div className="wise-summary-grid">
         <SummaryTile
           label="Loaded volume"
@@ -5552,11 +5559,13 @@ function bankCalendarDays(value: string): Array<string | null> {
 function BankDateRangePicker({
   dateRange,
   isLoading,
-  onLoad
+  onLoad,
+  windowDays
 }: {
   dateRange: BankTransactionDateRange;
   isLoading: boolean;
   onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
+  windowDays: number;
 }) {
   const today = localIsoDate();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -5566,6 +5575,7 @@ function BankDateRangePicker({
   const [draftToDate, setDraftToDate] = useState(dateRange.toDate);
   const [visibleMonth, setVisibleMonth] = useState(bankCalendarMonth(dateRange.toDate));
   const [selectingEnd, setSelectingEnd] = useState(false);
+  const [preset, setPreset] = useState("");
   const [panelPosition, setPanelPosition] = useState({ top: 0, left: 0 });
   const calendarDays = useMemo(() => bankCalendarDays(visibleMonth), [visibleMonth]);
 
@@ -5574,7 +5584,7 @@ function BankDateRangePicker({
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
     const panelWidth = Math.min(340, window.innerWidth - 24);
-    const estimatedHeight = 390;
+    const estimatedHeight = 440;
     const left = Math.min(
       Math.max(12, rect.left),
       Math.max(12, window.innerWidth - panelWidth - 12)
@@ -5612,7 +5622,11 @@ function BankDateRangePicker({
 
     function closeOnOutsidePointer(event: PointerEvent) {
       const target = event.target as Node;
-      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      if (
+        panelRef.current?.contains(target)
+        || triggerRef.current?.contains(target)
+        || (target instanceof Element && target.closest(".searchable-select-positioner"))
+      ) return;
       setIsOpen(false);
     }
 
@@ -5659,6 +5673,31 @@ function BankDateRangePicker({
           aria-label="Choose transaction period"
           style={{ top: panelPosition.top, left: panelPosition.left }}
         >
+          <div className="bank-calendar-shortcuts">
+            <span>Quick period</span>
+            <NativeSelect
+              className="bank-calendar-preset-select"
+              aria-label="Transaction period presets"
+              size="sm"
+              value={preset}
+              disabled={isLoading}
+              onValueChange={(value) => {
+                if (!value) return;
+                const nextPreset = value as BankPeriodPreset;
+                setPreset(nextPreset);
+                setIsOpen(false);
+                void onLoad(bankPeriodPresetRange(nextPreset, localIsoDate(), windowDays))
+                  .finally(() => setPreset(""));
+              }}
+            >
+              <NativeSelectOption value="" disabled>Presets</NativeSelectOption>
+              {bankPeriodPresets.map((option) => (
+                <NativeSelectOption key={option} value={option}>
+                  {bankPeriodPresetLabel(option, windowDays)}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
           <div className="bank-calendar-header">
             <Button
               className="icon-button"
@@ -5744,31 +5783,14 @@ function BankDateRangeControls({
   onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
   windowDays: number;
 }) {
-  const [preset, setPreset] = useState("");
-
   return (
     <div className="bank-date-controls">
-      <BankDateRangePicker dateRange={dateRange} isLoading={isLoading} onLoad={onLoad} />
-      <NativeSelect
-        className="bank-period-presets"
-        aria-label="Transaction period presets"
-        value={preset}
-        disabled={isLoading}
-        onValueChange={(value) => {
-          if (!value) return;
-          const nextPreset = value as BankPeriodPreset;
-          setPreset(nextPreset);
-          void onLoad(bankPeriodPresetRange(nextPreset, localIsoDate(), windowDays))
-            .finally(() => setPreset(""));
-        }}
-      >
-        <NativeSelectOption value="" disabled>Presets</NativeSelectOption>
-        {bankPeriodPresets.map((option) => (
-          <NativeSelectOption key={option} value={option}>
-            {bankPeriodPresetLabel(option, windowDays)}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+      <BankDateRangePicker
+        dateRange={dateRange}
+        isLoading={isLoading}
+        onLoad={onLoad}
+        windowDays={windowDays}
+      />
       <InfoPopover label="automatic bank updates">
         Revolut and Slash refresh every 15 minutes. New activity is saved in Convex and categorized automatically.
       </InfoPopover>
