@@ -14,6 +14,16 @@ export interface AnalyticsDateRange {
   toDate: string;
 }
 
+function analyticsDateRangeKey(range: AnalyticsDateRange): string {
+  return `${range.fromDate}:${range.toDate}`;
+}
+
+function uniqueAnalyticsDateRanges(ranges: AnalyticsDateRange[]): AnalyticsDateRange[] {
+  const unique = new Map<string, AnalyticsDateRange>();
+  for (const range of ranges) unique.set(analyticsDateRangeKey(range), range);
+  return [...unique.values()];
+}
+
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
@@ -86,4 +96,38 @@ export function analyticsPeriodLabel(
     timeZone: "UTC",
     year: "numeric"
   }).format(new Date(`${range.fromDate}T00:00:00Z`));
+}
+
+/** Live ranges that can change as new transactions arrive during the current day. */
+export function analyticsCurrentPeriodRanges(today: string): AnalyticsDateRange[] {
+  assertIsoDate(today);
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const quarter = Math.floor((month - 1) / 3) + 1;
+  return uniqueAnalyticsDateRanges([
+    analyticsDateRange({ mode: "ytd", year, month, quarter }, today),
+    analyticsDateRange({ mode: "month", year, month, quarter }, today),
+    analyticsDateRange({ mode: "quarter", year, month, quarter }, today)
+  ]);
+}
+
+/**
+ * Bounded presets to warm while the dashboard is open. Current ranges come first,
+ * followed by completed months and quarters from the current calendar year.
+ */
+export function analyticsPresetWarmRanges(today: string): AnalyticsDateRange[] {
+  assertIsoDate(today);
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const quarter = Math.floor((month - 1) / 3) + 1;
+  const ranges = analyticsCurrentPeriodRanges(today);
+
+  for (let completedMonth = month - 1; completedMonth >= 1; completedMonth -= 1) {
+    ranges.push(analyticsDateRange({ mode: "month", year, month: completedMonth, quarter }, today));
+  }
+  for (let completedQuarter = quarter - 1; completedQuarter >= 1; completedQuarter -= 1) {
+    ranges.push(analyticsDateRange({ mode: "quarter", year, month, quarter: completedQuarter }, today));
+  }
+
+  return uniqueAnalyticsDateRanges(ranges);
 }

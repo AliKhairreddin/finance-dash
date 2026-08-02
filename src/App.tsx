@@ -45,6 +45,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -131,9 +132,12 @@ import {
   type CategoryPieGroup
 } from "../shared/categoryPie";
 import {
+  analyticsCurrentPeriodRanges,
   analyticsDateRange,
   analyticsPeriodLabel,
   analyticsPeriodModes,
+  analyticsPresetWarmRanges,
+  type AnalyticsDateRange,
   type AnalyticsPeriodMode,
   type AnalyticsPeriodSelection
 } from "../shared/analyticsPeriod";
@@ -257,6 +261,7 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
 const transactionTablePageSize = 200;
 const bankHistoryLoadIncrementDays = 30;
 const analyticsBuildDefaultRetryMs = 1_000;
+const analyticsLiveRefreshMs = 5 * 60_000;
 const analyticsMonthOptions = [
   "January",
   "February",
@@ -370,6 +375,46 @@ function waitForAnalyticsRetry(delayMs: number, signal: AbortSignal): Promise<vo
     };
     signal.addEventListener("abort", abort, { once: true });
   });
+}
+
+function analyticsSnapshotKey(range: AnalyticsDateRange): string {
+  return `${range.fromDate}:${range.toDate}`;
+}
+
+async function fetchAnalyticsSnapshotRange(
+  range: AnalyticsDateRange,
+  signal: AbortSignal,
+  onBuildReason?: (reason: "historical-coverage" | "snapshot") => void
+): Promise<BankAnalyticsSnapshot> {
+  const query = new URLSearchParams({
+    fromDate: range.fromDate,
+    toDate: range.toDate
+  });
+  while (!signal.aborted) {
+    const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal });
+    if (response.status === 202) {
+      const body = (await response.json().catch(() => null)) as { status?: string; reason?: string } | null;
+      if (body?.status !== "building") {
+        throw new Error("Analytics returned an invalid build status");
+      }
+      onBuildReason?.(body.reason === "historical-coverage" ? "historical-coverage" : "snapshot");
+      await waitForAnalyticsRetry(analyticsRetryAfterMs(response.headers.get("Retry-After")), signal);
+      continue;
+    }
+    if (!response.ok) {
+      throw new Error(await apiErrorMessage(response, "Analytics snapshot could not be loaded"));
+    }
+    const snapshot = (await response.json()) as BankAnalyticsSnapshot;
+    if (
+      snapshot.version !== 1
+      || snapshot.fromDate !== range.fromDate
+      || snapshot.toDate !== range.toDate
+    ) {
+      throw new Error("Analytics returned a snapshot for the wrong period");
+    }
+    return snapshot;
+  }
+  throw new DOMException("Aborted", "AbortError");
 }
 
 const timezoneOptions = [
@@ -759,6 +804,40 @@ function App() {
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
   const [creatingRevenueRuleProviderId, setCreatingRevenueRuleProviderId] = useState<string | null>(null);
   const [directoryDeleteTarget, setDirectoryDeleteTarget] = useState<DirectoryDeleteTarget | null>(null);
+  const [analyticsSnapshots, setAnalyticsSnapshots] = useState<Record<string, BankAnalyticsSnapshot>>({});
+  const [analyticsBuildReasons, setAnalyticsBuildReasons] = useState<Record<string, "historical-coverage" | "snapshot">>({});
+  const [analyticsDataRevision, setAnalyticsDataRevision] = useState(0);
+  const analyticsSnapshotRequestsRef = useRef(new Map<string, Promise<BankAnalyticsSnapshot>>());
+
+  const ensureAnalyticsSnapshot = useCallback((range: AnalyticsDateRange): Promise<BankAnalyticsSnapshot> => {
+    const key = analyticsSnapshotKey(range);
+    const existing = analyticsSnapshotRequestsRef.current.get(key);
+    if (existing) return existing;
+
+    const controller = new AbortController();
+    let request: Promise<BankAnalyticsSnapshot>;
+    request = fetchAnalyticsSnapshotRange(range, controller.signal, (reason) => {
+      setAnalyticsBuildReasons((current) => current[key] === reason ? current : { ...current, [key]: reason });
+    })
+      .then((snapshot) => {
+        setAnalyticsSnapshots((current) => current[key]?.generatedAt === snapshot.generatedAt
+          ? current
+          : { ...current, [key]: snapshot });
+        return snapshot;
+      })
+      .finally(() => {
+        if (analyticsSnapshotRequestsRef.current.get(key) === request) {
+          analyticsSnapshotRequestsRef.current.delete(key);
+        }
+        setAnalyticsBuildReasons((current) => {
+          if (!(key in current)) return current;
+          const { [key]: _completed, ...remaining } = current;
+          return remaining;
+        });
+      });
+    analyticsSnapshotRequestsRef.current.set(key, request);
+    return request;
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
@@ -795,6 +874,28 @@ function App() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load dashboard"))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!dashboard) return;
+    let cancelled = false;
+
+    async function warmRanges(ranges: AnalyticsDateRange[]): Promise<void> {
+      for (const range of ranges) {
+        if (cancelled) return;
+        await ensureAnalyticsSnapshot(range).catch(() => undefined);
+      }
+    }
+
+    void warmRanges(analyticsPresetWarmRanges(localIsoDate()));
+    const liveRefresh = window.setInterval(() => {
+      void warmRanges(analyticsCurrentPeriodRanges(localIsoDate()));
+    }, analyticsLiveRefreshMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(liveRefresh);
+    };
+  }, [analyticsDataRevision, dashboard?.asOf, ensureAnalyticsSnapshot]);
 
   async function requestTransactionPage(
     request: TransactionPageRequest,
@@ -900,6 +1001,7 @@ function App() {
             await waitForHistoricalTransactionSync(queued.key, request.key);
           })).then(() => {
             for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
+            setAnalyticsDataRevision((revision) => revision + 1);
             const latestRequest = transactionPageRequestRef.current;
             if (latestRequest?.key === request.key) {
               setNotice("Historical bank activity is up to date.");
@@ -1088,6 +1190,7 @@ function App() {
   );
 
   function applyTransactionUpdate(updated: Transaction) {
+    setAnalyticsDataRevision((revision) => revision + 1);
     setDashboard((current) => {
       if (!current) return current;
       return {
@@ -1357,6 +1460,7 @@ function App() {
     renamedTo?: string
   ) {
     if (renamedFrom && renamedTo && renamedFrom !== renamedTo) {
+      setAnalyticsDataRevision((revision) => revision + 1);
       setTransactionPageState((current) => ({
         ...current,
         transactions: current.transactions.map((transaction) =>
@@ -1946,7 +2050,13 @@ function App() {
       )}
 
       {activeTab === "analytics" && (
-        <AnalyticsView dashboard={dashboard} />
+        <AnalyticsView
+          analyticsBuildReasons={analyticsBuildReasons}
+          analyticsDataRevision={analyticsDataRevision}
+          analyticsSnapshots={analyticsSnapshots}
+          dashboard={dashboard}
+          ensureAnalyticsSnapshot={ensureAnalyticsSnapshot}
+        />
       )}
 
       {activeTab === "distribution" && (
@@ -3263,7 +3373,19 @@ function analyticsRelationshipLabel(relationship: BankAnalyticsRelationship): st
   return "Unknown";
 }
 
-function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
+function AnalyticsView({
+  dashboard,
+  analyticsSnapshots,
+  analyticsBuildReasons,
+  analyticsDataRevision,
+  ensureAnalyticsSnapshot
+}: {
+  dashboard: DashboardSnapshot;
+  analyticsSnapshots: Record<string, BankAnalyticsSnapshot>;
+  analyticsBuildReasons: Record<string, "historical-coverage" | "snapshot">;
+  analyticsDataRevision: number;
+  ensureAnalyticsSnapshot: (range: AnalyticsDateRange) => Promise<BankAnalyticsSnapshot>;
+}) {
   const analyticsToday = localIsoDate();
   const currentAnalyticsYear = Number(analyticsToday.slice(0, 4));
   const currentAnalyticsMonth = Number(analyticsToday.slice(5, 7));
@@ -3305,12 +3427,7 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
   };
   const selectedAnalyticsRange = analyticsDateRange(periodSelection, analyticsToday);
   const selectedAnalyticsRangeKey = `${selectedAnalyticsRange.fromDate}:${selectedAnalyticsRange.toDate}`;
-  const [loadedAnalyticsPeriod, setLoadedAnalyticsPeriod] = useState<{
-    key: string;
-    snapshot: BankAnalyticsSnapshot;
-  } | null>(null);
   const [isLoadingAnalyticsPeriod, setIsLoadingAnalyticsPeriod] = useState(false);
-  const [analyticsBuildReason, setAnalyticsBuildReason] = useState<"historical-coverage" | "snapshot" | null>(null);
   const [analyticsPeriodError, setAnalyticsPeriodError] = useState<string | null>(null);
   const [analyticsLoadAttempt, setAnalyticsLoadAttempt] = useState(0);
 
@@ -3338,63 +3455,34 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
   ]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    const query = new URLSearchParams({
-      fromDate: selectedAnalyticsRange.fromDate,
-      toDate: selectedAnalyticsRange.toDate
-    });
-    setIsLoadingAnalyticsPeriod(true);
-    setAnalyticsBuildReason(null);
+    let cancelled = false;
+    setIsLoadingAnalyticsPeriod(!analyticsSnapshots[selectedAnalyticsRangeKey]);
     setAnalyticsPeriodError(null);
-    setLoadedAnalyticsPeriod(null);
 
-    async function loadAnalyticsSnapshot(): Promise<void> {
-      while (!controller.signal.aborted) {
-        const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal: controller.signal });
-        if (response.status === 202) {
-          const body = (await response.json().catch(() => null)) as { status?: string; reason?: string } | null;
-          if (body?.status !== "building") {
-            throw new Error("Analytics returned an invalid build status");
-          }
-          setAnalyticsBuildReason(body.reason === "historical-coverage" ? "historical-coverage" : "snapshot");
-          const delayMs = analyticsRetryAfterMs(response.headers.get("Retry-After"));
-          await waitForAnalyticsRetry(delayMs, controller.signal);
-          continue;
-        }
-        if (!response.ok) {
-          throw new Error(await apiErrorMessage(response, "Analytics snapshot could not be loaded"));
-        }
-        const snapshot = (await response.json()) as BankAnalyticsSnapshot;
-        if (
-          snapshot.version !== 1
-          || snapshot.fromDate !== selectedAnalyticsRange.fromDate
-          || snapshot.toDate !== selectedAnalyticsRange.toDate
-        ) {
-          throw new Error("Analytics returned a snapshot for the wrong period");
-        }
-        setLoadedAnalyticsPeriod({ key: selectedAnalyticsRangeKey, snapshot });
-        setAnalyticsBuildReason(null);
-        return;
-      }
-    }
-
-    void loadAnalyticsSnapshot()
+    void ensureAnalyticsSnapshot(selectedAnalyticsRange)
       .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setLoadedAnalyticsPeriod(null);
-        setAnalyticsBuildReason(null);
+        if (cancelled) return;
         setAnalyticsPeriodError(error instanceof Error ? error.message : "Analytics snapshot could not be loaded");
       })
       .finally(() => {
-        if (!controller.signal.aborted) setIsLoadingAnalyticsPeriod(false);
+        if (!cancelled) setIsLoadingAnalyticsPeriod(false);
       });
 
-    return () => controller.abort();
-  }, [analyticsLoadAttempt, selectedAnalyticsRange.fromDate, selectedAnalyticsRange.toDate, selectedAnalyticsRangeKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    analyticsDataRevision,
+    analyticsLoadAttempt,
+    ensureAnalyticsSnapshot,
+    selectedAnalyticsRange.fromDate,
+    selectedAnalyticsRange.toDate,
+    selectedAnalyticsRangeKey
+  ]);
 
-  const analytics = loadedAnalyticsPeriod?.key === selectedAnalyticsRangeKey
-    ? loadedAnalyticsPeriod.snapshot
-    : null;
+  const analytics = analyticsSnapshots[selectedAnalyticsRangeKey] ?? null;
+  const analyticsBuildReason = analyticsBuildReasons[selectedAnalyticsRangeKey] ?? null;
+  const analyticsPeriodBusy = isLoadingAnalyticsPeriod || analyticsBuildReason !== null;
   const summary = analytics?.summary;
   const categoryRows = analytics?.categories ?? [];
   const spendPieGroups = analyticsCategoryPieGroups(categoryRows, "out");
@@ -3700,16 +3788,17 @@ function AnalyticsView({ dashboard }: { dashboard: DashboardSnapshot }) {
               </NativeSelect>
             )}
             <span className="analytics-period-status" aria-live="polite">
-              <span className={`analytics-period-value ${isLoadingAnalyticsPeriod ? "loading" : ""}`}>
-                {isLoadingAnalyticsPeriod && <Loader2 className="spin" aria-hidden="true" size={13} />}
-                {isLoadingAnalyticsPeriod
+              <span className={`analytics-period-value ${analyticsPeriodBusy ? "loading" : ""}`}>
+                {analyticsPeriodBusy && <Loader2 className="spin" aria-hidden="true" size={13} />}
+                {analyticsPeriodBusy
                   ? `${analyticsBuildReason === "historical-coverage" ? "Syncing" : "Building"} ${analyticsPeriodLabel(periodSelection, analyticsToday)}…`
                   : analyticsPeriodLabel(periodSelection, analyticsToday)}
                 {analytics && <> · {analytics.summary.transactionCount.toLocaleString()} transactions</>}
               </span>
               <InfoPopover label="analytics period data">
                 <span>Every Analytics card and rollup uses this calendar period.</span>
-                <span>The server streams indexed transaction pages into a compact snapshot; transaction rows are never downloaded for Analytics.</span>
+                <span>Completed monthly and quarterly snapshots are cached in Convex and warmed while the dashboard is open.</span>
+                <span>Only ranges whose underlying monthly revision changed are rebuilt.</span>
               </InfoPopover>
               {analyticsPeriodError && (
                 <>

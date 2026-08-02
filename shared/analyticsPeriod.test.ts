@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  analyticsCurrentPeriodRanges,
   analyticsDateRange,
   analyticsPeriodLabel,
+  analyticsPresetWarmRanges,
   type AnalyticsPeriodSelection
 } from "./analyticsPeriod";
 
@@ -72,4 +74,32 @@ test("current month, quarter, and year periods stop at today", () => {
     analyticsDateRange(selection("year", { year: 2026 }), today),
     { fromDate: "2026-01-01", toDate: "2026-07-30" }
   );
+});
+
+test("Analytics current-period warming includes only unique live ranges", () => {
+  assert.deepEqual(analyticsCurrentPeriodRanges("2026-08-01"), [
+    { fromDate: "2026-01-01", toDate: "2026-08-01" },
+    { fromDate: "2026-08-01", toDate: "2026-08-01" },
+    { fromDate: "2026-07-01", toDate: "2026-08-01" }
+  ]);
+  assert.deepEqual(analyticsCurrentPeriodRanges("2026-01-01"), [
+    { fromDate: "2026-01-01", toDate: "2026-01-01" }
+  ]);
+});
+
+test("Analytics preset warming prioritizes live ranges then completed current-year periods", () => {
+  assert.deepEqual(analyticsPresetWarmRanges("2026-08-01"), [
+    { fromDate: "2026-01-01", toDate: "2026-08-01" },
+    { fromDate: "2026-08-01", toDate: "2026-08-01" },
+    { fromDate: "2026-07-01", toDate: "2026-08-01" },
+    { fromDate: "2026-07-01", toDate: "2026-07-31" },
+    { fromDate: "2026-06-01", toDate: "2026-06-30" },
+    { fromDate: "2026-05-01", toDate: "2026-05-31" },
+    { fromDate: "2026-04-01", toDate: "2026-04-30" },
+    { fromDate: "2026-03-01", toDate: "2026-03-31" },
+    { fromDate: "2026-02-01", toDate: "2026-02-28" },
+    { fromDate: "2026-01-01", toDate: "2026-01-31" },
+    { fromDate: "2026-04-01", toDate: "2026-06-30" },
+    { fromDate: "2026-01-01", toDate: "2026-03-31" }
+  ]);
 });
