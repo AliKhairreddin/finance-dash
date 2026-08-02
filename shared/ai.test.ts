@@ -171,7 +171,7 @@ test("transaction AI isolates an invalid multi-row response and retries smaller 
               : transactions.map((transaction) => ({
                   transactionId: transaction.id,
                   providerId: null,
-                  category: transaction.id === aiTransaction.id ? "Food and meals" : "Software subscription",
+                  category: transaction.id === aiTransaction.id ? "Food and meals" : "Software",
                   merchantName: transaction.id === aiTransaction.id ? "Pizza Hut" : "Cursor",
                   confidence: 0.8,
                   reason: "Merchant evidence"

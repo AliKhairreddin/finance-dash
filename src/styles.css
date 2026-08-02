@@ -5018,6 +5018,59 @@ th.amount .sortable-table-heading {
   background: transparent;
 }
 
+.unified-bank-toolbar .bank-date-controls {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.unified-bank-header {
+  align-items: center;
+  gap: 12px;
+}
+
+.unified-bank-title {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.unified-bank-title .eyebrow {
+  margin-bottom: 3px;
+}
+
+.unified-bank-header .unified-bank-toolbar {
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.unified-bank-toolbar .list-toolbar-main {
+  justify-content: flex-end;
+}
+
+.unified-bank-toolbar .bank-toolbar-search {
+  max-width: 360px;
+}
+
+.unified-bank-toolbar .bank-date-range-trigger {
+  max-width: 230px;
+}
+
+@media (max-width: 1100px) {
+  .unified-bank-header {
+    flex-wrap: wrap;
+  }
+
+  .unified-bank-header .unified-bank-toolbar {
+    flex-basis: 100%;
+  }
+}
+
 .bank-date-range-trigger {
   max-width: min(420px, 48vw);
   min-height: 34px;

@@ -221,7 +221,7 @@ const categoryRules: Array<{ category: string; phrases: string[]; direction?: Tr
     phrases: ["creative", "creative production", "video editor", "designer", "ugc"]
   },
   {
-    category: "Software subscription",
+    category: "Software",
     direction: "out",
     phrases: ["subscription", "software", "saas", "cursor", "namecheap", "openai", "github", "cloudflare", "vercel", "notion", "slack", "zoom"]
   },

@@ -37,7 +37,7 @@ function transaction(id: string): Transaction {
     currency: "USD",
     direction: "out",
     status: "posted",
-    category: "Software subscription"
+    category: "Software"
   };
 }
 

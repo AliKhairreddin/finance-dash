@@ -300,30 +300,73 @@ export async function initializeStore(): Promise<void> {
   automationRuns = persisted.automationRuns ?? [];
   teams = mergeTeamDirectory(persisted.teams ?? []);
   const storedTransactionCategories = persisted.transactionCategories ?? [];
+  const systemCategoryRenames = new Map<string, string>();
   const storedCategoryIds = new Set(storedTransactionCategories.map((category) => category.id));
   const now = new Date().toISOString();
+  let systemCategoriesChanged = false;
   transactionCategories = [
-    ...storedTransactionCategories,
+    ...storedTransactionCategories.map((storedCategory) => {
+      const definition = initialTransactionCategories.find((category) => category.id === storedCategory.id);
+      if (!definition || !storedCategory.system) return storedCategory;
+      if (
+        storedCategory.name === definition.name
+        && storedCategory.direction === definition.direction
+        && storedCategory.system === definition.system
+      ) {
+        return storedCategory;
+      }
+      systemCategoriesChanged = true;
+      if (storedCategory.name !== definition.name) {
+        systemCategoryRenames.set(storedCategory.name, definition.name);
+      }
+      return {
+        ...storedCategory,
+        name: definition.name,
+        direction: definition.direction,
+        system: definition.system,
+        updatedAt: now
+      };
+    }),
     ...initialTransactionCategories
       .filter((category) => !storedCategoryIds.has(category.id))
-      .map((category) => ({ ...category, createdAt: now, updatedAt: now }))
+      .map((category) => {
+        systemCategoriesChanged = true;
+        return { ...category, createdAt: now, updatedAt: now };
+      })
   ];
-  transactionCategoryRules = persisted.transactionCategoryRules ?? [];
-  revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []);
+  const renamedSystemCategory = (category: string) => systemCategoryRenames.get(category) ?? category;
+  expenses = expenses.map((expense) => ({ ...expense, category: renamedSystemCategory(expense.category) }));
+  transactionCategoryRules = (persisted.transactionCategoryRules ?? []).map((rule) => ({
+    ...rule,
+    category: renamedSystemCategory(rule.category)
+  }));
+  revenuePartners = mergeRevenuePartnerDirectory(persisted.revenuePartners ?? []).map((partner) => ({
+    ...partner,
+    revenueCategory: partner.revenueCategory
+      ? renamedSystemCategory(partner.revenueCategory)
+      : undefined
+  }));
   revenueRuns = persisted.revenueRuns ?? [];
   revenueAccruals = persisted.revenueAccruals ?? [];
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
   wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
-  transactions = persisted.transactions ?? [];
+  transactions = (persisted.transactions ?? []).map((transaction) => ({
+    ...transaction,
+    category: renamedSystemCategory(transaction.category)
+  }));
   const storedWiseStatementTransactions = persisted.wiseStatementTransactions ?? [];
   const storedWiseStatementImports = persisted.wiseStatementImports ?? [];
-  wiseStatementTransactions = migrateLegacyWiseTransactions(storedWiseStatementTransactions);
+  wiseStatementTransactions = migrateLegacyWiseTransactions(storedWiseStatementTransactions).map((transaction) => ({
+    ...transaction,
+    category: renamedSystemCategory(transaction.category)
+  }));
   wiseStatementImports = migrateLegacyWiseStatementImports(storedWiseStatementImports);
   profitDistributionAdjustments = persisted.profitDistributionAdjustments ?? [];
   if (
     JSON.stringify(wiseStatementTransactions) !== JSON.stringify(storedWiseStatementTransactions)
     || JSON.stringify(wiseStatementImports) !== JSON.stringify(storedWiseStatementImports)
+    || systemCategoriesChanged
   ) {
     await persist();
   }

@@ -19,7 +19,7 @@ function transaction(
     currency: "USD",
     direction: "out",
     status: "posted",
-    category: "Software subscription",
+    category: "Software",
     ...overrides
   };
 }
@@ -98,7 +98,7 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
     [
       ["Media buying direct", 1, { USD: 100 }, {}],
       ["Partner network revenue", 1, { EUR: 75 }, {}],
-      ["Software subscription", 1, {}, { USD: 40 }],
+      ["Software", 1, {}, { USD: 40 }],
       ["Uncategorized", 1, {}, { EUR: 25 }]
     ]
   );
@@ -216,7 +216,7 @@ test("unmatched merchant cardinality and snapshot payload stay hard-bounded", ()
           merchantName: `Merchant ${index}`,
           merchantKey: `merchant-${index}`,
           amount: 1,
-          category: index < 100 ? "Uncategorized" : "Software subscription"
+          category: index < 100 ? "Uncategorized" : "Software"
         });
       })
     );
@@ -262,7 +262,7 @@ test("serialized Analytics progress resumes to the exact one-shot snapshot", () 
     amount: index + 0.25,
     currency: index % 3 === 0 ? "EUR" : "USD",
     direction: index % 4 === 0 ? "in" : "out",
-    category: index % 13 === 0 ? "Uncategorized" : "Software subscription",
+    category: index % 13 === 0 ? "Uncategorized" : "Software",
     ...(index % 9 === 0 ? { matchedProviderId: "provider-1" } : {}),
     ...(index % 4 === 0 ? { teamId: "ops" } : {})
   }));

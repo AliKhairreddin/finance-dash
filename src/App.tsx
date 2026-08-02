@@ -170,6 +170,7 @@ import {
 } from "../shared/slashApi";
 import {
   isInternalTransferTransaction,
+  isNonOperatingMovementTransaction,
   transactionCounterpartyLabel,
   transactionDescriptionLabel,
   transactionMovementLabel
@@ -702,6 +703,9 @@ function App() {
     allowedValues: bankTabs,
     history: "push"
   });
+  const [allBankSource, setAllBankSource] = useUrlState<"all" | BankSource>("allBankSource", "all", {
+    allowedValues: ["all", ...bankSources.map((source) => source.id)]
+  });
   const [wiseEntityView, setWiseEntityView] = useUrlState<WiseEntityView>(
     "wiseEntity",
     "all",
@@ -770,16 +774,20 @@ function App() {
   });
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
     if (activeTab !== "banks" || bankTab === "holdings") return null;
-    const source = bankTab === "all" ? undefined : bankTab;
-    const direction = source && source !== "amex" ? bankDirection : undefined;
-    const dateRange = source === "wise"
-      ? wiseDateRange
-      : source === "revolut"
-        ? revolutDateRange
-        : source === "slash"
-          ? slashDateRange
-          : allBankDateRange;
-    const order = source && transactionSortKey === "date" ? transactionSortDirection : "desc";
+    const source = bankTab === "all"
+      ? allBankSource === "all" ? undefined : allBankSource
+      : bankTab;
+    const direction = bankTab !== "all" && source && source !== "amex" ? bankDirection : undefined;
+    const dateRange = bankTab === "all"
+      ? allBankDateRange
+      : source === "wise"
+        ? wiseDateRange
+        : source === "revolut"
+          ? revolutDateRange
+          : source === "slash"
+            ? slashDateRange
+            : allBankDateRange;
+    const order = bankTab !== "all" && source && transactionSortKey === "date" ? transactionSortDirection : "desc";
     return {
       key: [source ?? "all", direction ?? "all", dateRange.fromDate, dateRange.toDate, order].join(":"),
       dateRange,
@@ -789,6 +797,7 @@ function App() {
     };
   }, [
     activeTab,
+    allBankSource,
     allBankDateRange,
     bankDirection,
     bankTab,
@@ -2020,6 +2029,8 @@ function App() {
           setTransactionSortDirection={setTransactionSortDirection}
           allBankTransactions={allBankTransactions}
           allBankDateRange={allBankDateRange}
+          allBankSource={allBankSource}
+          setAllBankSource={setAllBankSource}
           wiseTransactions={wiseTransactions}
           wiseDateRange={wiseDateRange}
           revolutTransactions={revolutTransactions}
@@ -2771,6 +2782,8 @@ function BanksView({
   setTransactionSortDirection,
   allBankTransactions,
   allBankDateRange,
+  allBankSource,
+  setAllBankSource,
   wiseTransactions,
   wiseDateRange,
   revolutTransactions,
@@ -2817,6 +2830,8 @@ function BanksView({
   setTransactionSortDirection: (value: SortDirection) => void;
   allBankTransactions: Transaction[];
   allBankDateRange: BankTransactionDateRange;
+  allBankSource: "all" | BankSource;
+  setAllBankSource: (source: "all" | BankSource) => void;
   wiseTransactions: Transaction[];
   wiseDateRange: BankTransactionDateRange;
   revolutTransactions: Transaction[];
@@ -3004,6 +3019,8 @@ function BanksView({
         <AllBankTransactionsView
           dashboard={dashboard}
           providersById={providersById}
+          source={allBankSource}
+          setSource={setAllBankSource}
           transactions={allBankTransactions}
           hasMore={hasMoreTransactions}
           isLoading={isLoadingTransactions}
@@ -4973,6 +4990,7 @@ function TransactionTable({
               const categoryConfidence = transaction.categoryConfidence ?? 0;
               const displayCategory = effectiveCategory(transaction);
               const internalTransfer = isInternalTransferTransaction(transaction);
+              const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
               const counterpartyLabel = transactionCounterpartyLabel(transaction);
               const transactionDescription = transactionDescriptionLabel(transaction);
               const cashbackDetail = transaction.cashback
@@ -4986,8 +5004,8 @@ function TransactionTable({
               const categoryDetail = `${(categoryConfidence * 100).toFixed(0)}% · ${transaction.categoryReason ?? "AI classification pending"}`;
               const counterpartyDetailId = `${transaction.id}-counterparty-description`;
               const categoryDetailId = `${transaction.id}-category-description`;
-              const documentTitle = internalTransfer
-                ? "Internal transfers do not need an invoice or receipt"
+              const documentTitle = nonOperatingMovement
+                ? `${displayCategory} does not need an invoice or receipt`
                 : transaction.direction === "in"
                 ? "Create exceptional sales invoice draft"
                 : expense
@@ -5067,7 +5085,7 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="company-match">
-                      {internalTransfer ? (
+                      {nonOperatingMovement ? (
                         <span className="status-pill">Not applicable</span>
                       ) : (
                       <NativeSelect
@@ -5091,11 +5109,11 @@ function TransactionTable({
                         ))}
                       </NativeSelect>
                       )}
-                      {!internalTransfer && provider && <small>{providerTagLabel(provider)}</small>}
+                      {!nonOperatingMovement && provider && <small>{providerTagLabel(provider)}</small>}
                     </div>
                   </td>
                   <td>
-                    {internalTransfer ? (
+                    {nonOperatingMovement ? (
                       <span className="status-pill">Not required</span>
                     ) : transaction.matchedInvoiceId || expense ? (
                       <span className="status-pill good">{expense ? "Expense linked" : "Invoice linked"}</span>
@@ -5105,7 +5123,7 @@ function TransactionTable({
                   </td>
                   <td>
                     <div className="row-actions">
-                      <Button className="icon-button" title={documentTitle} disabled={internalTransfer || Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
+                      <Button className="icon-button" title={documentTitle} disabled={nonOperatingMovement || Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
                         {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
                     </div>

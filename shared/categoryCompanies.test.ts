@@ -19,7 +19,7 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
     currency: "USD",
     direction: "out",
     status: "posted",
-    category: "Software subscription",
+    category: "Software",
     ...overrides
   };
 }
@@ -47,7 +47,7 @@ test("category company aggregation merges merchants and filters the selected sli
     toDate: "2026-07-31",
     direction: "out",
     currency: "USD",
-    category: "Software subscription"
+    category: "Software"
   });
 
   assert.deepEqual(rows, [

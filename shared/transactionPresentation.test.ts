@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Transaction } from "./types";
 import {
   isInternalTransferTransaction,
+  isNonOperatingMovementTransaction,
   transactionCounterpartyLabel,
   transactionDescriptionLabel,
   transactionMovementLabel
@@ -41,14 +42,23 @@ test("Slash daily card payments name both internal sides plainly", () => {
   assert.equal(transactionMovementLabel(cardSide), "Card paid");
   assert.equal(transactionCounterpartyLabel(cardSide), "Slash card payment");
   assert.equal(isInternalTransferTransaction(cardSide), true);
+  assert.equal(isNonOperatingMovementTransaction(cardSide), true);
 });
 
 test("Slash card purchases remain spend instead of internal payments", () => {
-  const purchase = slashTransaction("purchase", "out", "credit", "CARD PURCHASE", "Software subscription");
+  const purchase = slashTransaction("purchase", "out", "credit", "CARD PURCHASE", "Software");
 
   assert.equal(transactionMovementLabel(purchase), "Card spend");
   assert.equal(transactionCounterpartyLabel(purchase), "Amex");
   assert.equal(isInternalTransferTransaction(purchase), false);
+  assert.equal(isNonOperatingMovementTransaction(purchase), false);
+});
+
+test("capital movements are non-operating movements without being internal transfers", () => {
+  const capitalMovement = slashTransaction("capital-out", "out", "cash", "Owner transfer", "Capital movement");
+
+  assert.equal(isInternalTransferTransaction(capitalMovement), false);
+  assert.equal(isNonOperatingMovementTransaction(capitalMovement), true);
 });
 
 test("transaction descriptions preserve every distinct bank-provided detail", () => {

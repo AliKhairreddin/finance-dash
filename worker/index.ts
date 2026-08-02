@@ -1996,24 +1996,52 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const connections = await bankStorageConnectionDirectory(env);
-  const [stored, activityMetadata] = await Promise.all([
+  const [loadedState, activityMetadata] = await Promise.all([
     convex.query(api.dashboard.getState, { serviceToken }),
     convex.query(api.banking.getActivityMetadata, { serviceToken, connections })
   ]).catch((error: unknown) => {
     throw new ApiError(503, "Dashboard storage is temporarily unavailable", { cause: error });
   });
+  let stored = loadedState;
 
   let storedTransactionCategories = stored?.transactionCategories ?? [];
-  if (
-    initialTransactionCategories.some(
-      (category) => !storedTransactionCategories.some((storedCategory) => storedCategory.id === category.id)
-    )
-  ) {
-    storedTransactionCategories = await convex
+  const changedSystemCategories = initialTransactionCategories.filter((category) => {
+    const storedCategory = storedTransactionCategories.find((storedItem) => storedItem.id === category.id);
+    return !storedCategory
+      || storedCategory.name !== category.name
+      || storedCategory.direction !== category.direction
+      || storedCategory.system !== category.system;
+  });
+  if (changedSystemCategories.length > 0) {
+    for (const category of changedSystemCategories) {
+      const storedCategory = storedTransactionCategories.find((storedItem) => storedItem.id === category.id);
+      if (!storedCategory || storedCategory.name === category.name) continue;
+      const duplicate = storedTransactionCategories.find(
+        (storedItem) => storedItem.id !== category.id && normalizeName(storedItem.name) === normalizeName(category.name)
+      );
+      if (duplicate) {
+        throw new ApiError(409, `The built-in category ${category.name} conflicts with an existing category`);
+      }
+      let hasMore = false;
+      do {
+        const result = await convex.mutation(api.banking.renameCategoryBatch, {
+          serviceToken,
+          fromCategory: storedCategory.name,
+          toCategory: category.name,
+          limit: bankMutationBatchSize
+        });
+        hasMore = result.hasMore;
+      } while (hasMore);
+    }
+    await convex
       .mutation(api.dashboard.seedTransactionCategories, { serviceToken })
       .catch((error: unknown) => {
         throw new ApiError(503, "Transaction categories could not be initialized", { cause: error });
       });
+    stored = await convex.query(api.dashboard.getState, { serviceToken }).catch((error: unknown) => {
+      throw new ApiError(503, "Migrated dashboard storage could not be reloaded", { cause: error });
+    });
+    storedTransactionCategories = stored?.transactionCategories ?? [];
   }
 
   const storedCategoryRules = stored?.transactionCategoryRules ?? [];

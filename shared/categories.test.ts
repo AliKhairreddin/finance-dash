@@ -42,7 +42,7 @@ test("stored merchant category codes are removed from transactions and category 
   const validRule: TransactionCategoryRule = {
     ...invalidRule,
     id: "category-rule-out-software-subscription",
-    category: "Software subscription"
+    category: "Software"
   };
 
   assert.deepEqual(sanitizeStoredTransactionCategories([transaction]), [
@@ -71,4 +71,16 @@ test("income categories include ACP and offer verticals without exposing them to
     assert.ok(!expenseOptions.includes(name), `${name} should not be available for expenses`);
     assert.equal(initialTransactionCategories.find((category) => category.name === name)?.direction, "in");
   }
+});
+
+test("capital movement supports money in and money out while Software remains an expense category", () => {
+  const incomeOptions = transactionCategoryOptionsForDirection("in");
+  const expenseOptions = transactionCategoryOptionsForDirection("out");
+
+  assert.equal(initialTransactionCategories.find((category) => category.id === "capital-movement")?.direction, "both");
+  assert.ok(incomeOptions.includes("Capital movement"));
+  assert.ok(expenseOptions.includes("Capital movement"));
+  assert.ok(expenseOptions.includes("Software"));
+  assert.ok(!expenseOptions.includes("Software subscription"));
+  assert.equal(transactionBusinessCategory("subscription"), "Software");
 });

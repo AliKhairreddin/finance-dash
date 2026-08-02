@@ -20,9 +20,11 @@ import type {
   Transaction,
   UpdateHoldingPayload
 } from "../../../shared/types";
-import { isRequiredTransactionCategory } from "../../../shared/categories";
+import { isRequiredTransactionCategory, transactionBusinessCategory } from "../../../shared/categories";
+import { bankSources, type BankSource } from "../../../shared/banks";
 import {
   isInternalTransferTransaction,
+  isNonOperatingMovementTransaction,
   transactionCounterpartyLabel,
   transactionDescriptionLabel,
   transactionMovementLabel
@@ -66,6 +68,8 @@ export function AllBankTransactionsView({
   dashboard,
   providersById,
   rangeControls,
+  source,
+  setSource,
   transactions,
   hasMore,
   isLoading,
@@ -75,6 +79,8 @@ export function AllBankTransactionsView({
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   rangeControls: ReactNode;
+  source: "all" | BankSource;
+  setSource: (source: "all" | BankSource) => void;
   transactions: Transaction[];
   hasMore: boolean;
   isLoading: boolean;
@@ -82,15 +88,14 @@ export function AllBankTransactionsView({
   onLoadMore: () => Promise<void>;
 }) {
   const [query, setQuery] = useUrlState("allBankQuery", "");
-  const [source, setSource] = useUrlState<"all" | DataSource>("allBankSource", "all", {
-    allowedValues: ["all", ...transactionSources.map((item) => item.value)]
-  });
   const [direction, setDirection] = useUrlState<"all" | "in" | "out">("allBankDirection", "all", {
     allowedValues: ["all", "in", "out"]
   });
   const [match, setMatch] = useUrlState<"all" | "matched" | "unmatched">("allBankMatch", "all", {
     allowedValues: ["all", "matched", "unmatched"]
   });
+  const [account, setAccount] = useUrlState("allBankAccount", "all");
+  const [category, setCategory] = useUrlState("allBankCategory", "all");
   const [sortKey, setSortKey] = useUrlState<BankTransactionSortKey>("allBankSort", "date", {
     allowedValues: ["account", "amount", "category", "counterparty", "date", "direction", "source"]
   });
@@ -102,11 +107,19 @@ export function AllBankTransactionsView({
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
     [dashboard.expenses]
   );
-
-  const availableSources = useMemo(
-    () => [...new Set(transactions.map((transaction) => transaction.source))].sort(),
-    [transactions]
+  const accountOptions = useMemo(
+    () => dashboard.accounts
+      .filter((item) => bankSources.some((bankSource) => bankSource.id === item.source))
+      .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
+    [dashboard.accounts]
   );
+
+  useEffect(() => {
+    if (account === "all") return;
+    const selectedAccount = accountOptions.find((item) => item.id === account);
+    if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
+  }, [account, accountOptions, setAccount, source]);
+
   const rows = useMemo(() => {
     function sortValue(transaction: Transaction): number | string {
       if (sortKey === "account") return transaction.accountName;
@@ -121,7 +134,9 @@ export function AllBankTransactionsView({
     return transactions
       .filter((transaction) => {
         if (source !== "all" && transaction.source !== source) return false;
+        if (account !== "all" && transaction.accountId !== account) return false;
         if (direction !== "all" && transaction.direction !== direction) return false;
+        if (category !== "all" && transactionBusinessCategory(transaction.category) !== category) return false;
         const categorized = isRequiredTransactionCategory(transaction.category, transaction.direction, dashboard.transactionCategories);
         if (match === "matched" && !categorized) return false;
         if (match === "unmatched" && categorized) return false;
@@ -134,7 +149,7 @@ export function AllBankTransactionsView({
         || compareTableValues(left.date, right.date, "desc")
         || left.id.localeCompare(right.id)
       );
-  }, [dashboard.transactionCategories, direction, match, providersById, query, sortDirection, sortKey, source, transactions]);
+  }, [account, category, dashboard.transactionCategories, direction, match, providersById, query, sortDirection, sortKey, source, transactions]);
 
   function requestSort(nextSortKey: BankTransactionSortKey) {
     if (nextSortKey === sortKey) {
@@ -151,76 +166,121 @@ export function AllBankTransactionsView({
       label: `Source: ${sourceLabel(source)}`,
       onRemove: () => setSource("all")
     }]),
+    ...(account === "all" ? [] : [{
+      key: "account",
+      label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`,
+      onRemove: () => setAccount("all")
+    }]),
     ...(direction === "all" ? [] : [{
       key: "direction",
       label: `Direction: ${direction === "in" ? "Money in" : "Money out"}`,
       onRemove: () => setDirection("all")
     }]),
+    ...(category === "all" ? [] : [{
+      key: "category",
+      label: `Category: ${category}`,
+      onRemove: () => setCategory("all")
+    }]),
     ...(match === "all" ? [] : [{
       key: "match",
-      label: match === "matched" ? "Category: Ready" : "Category: Needs review",
+      label: match === "matched" ? "Status: Categorized" : "Status: Needs category",
       onRemove: () => setMatch("all")
     }])
   ];
 
   return (
     <section className="panel wide-panel">
-      <div className="panel-header compact"><div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div><span className="total-pill">{rows.length} loaded</span></div>
-      <div className="list-toolbar unified-bank-toolbar">
-        <div className="list-toolbar-main">
-          <ToolbarSearchField
-            ariaLabel="Search all bank transactions"
-            className="bank-toolbar-search"
-            placeholder="Search counterparty, account, company"
-            value={query}
-            onChange={setQuery}
-          />
-          <NativeSelect
-            aria-label="Filter bank transactions by source"
-            className="promoted-filter-select bank-source-filter"
-            value={source}
-            onValueChange={(value) => setSource(value as "all" | DataSource)}
-          >
-            <NativeSelectOption value="all">All sources</NativeSelectOption>
-            {availableSources.map((item) => <NativeSelectOption key={item} value={item}>{sourceLabel(item)}</NativeSelectOption>)}
-          </NativeSelect>
-          <FilterPopover activeCount={bankActiveFilters.length} title="Bank transaction filters">
-            <FilterFieldGroup title="Transaction">
-              <label>
-                Direction
-                <NativeSelect aria-label="Filter bank transactions by direction" value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}>
-                  <NativeSelectOption value="all">Money in & out</NativeSelectOption>
-                  <NativeSelectOption value="in">Money in</NativeSelectOption>
-                  <NativeSelectOption value="out">Money out</NativeSelectOption>
-                </NativeSelect>
-              </label>
-              <label>
-                Category status
-                <NativeSelect aria-label="Filter bank transactions by category state" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
-                  <NativeSelectOption value="all">All categories</NativeSelectOption>
-                  <NativeSelectOption value="matched">Categorized</NativeSelectOption>
-                  <NativeSelectOption value="unmatched">Needs category</NativeSelectOption>
-                </NativeSelect>
-              </label>
-            </FilterFieldGroup>
-          </FilterPopover>
+      <div className="panel-header compact unified-bank-header">
+        <div className="unified-bank-title">
+          <div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div>
+          <span className="total-pill">{rows.length} loaded</span>
         </div>
-        <div className="list-toolbar-actions">
-          <Button
-            className="icon-text-button"
-            type="button"
-            disabled={rows.length === 0}
-            title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
-            onClick={() => exportBankTransactionsCsv({
-              providersById,
-              rows,
-              scope: "all",
-              teamsById
-            })}
-          >
-            <Download size={15} />
-            Export loaded CSV
-          </Button>
+        <div className="list-toolbar unified-bank-toolbar">
+          <div className="list-toolbar-main">
+            <ToolbarSearchField
+              ariaLabel="Search all bank transactions"
+              className="bank-toolbar-search"
+              placeholder="Search transactions"
+              value={query}
+              onChange={setQuery}
+            />
+            <FilterPopover activeCount={bankActiveFilters.length} title="Bank transaction filters">
+              <FilterFieldGroup title="Transaction">
+                <label>
+                  Source
+                  <NativeSelect
+                    aria-label="Filter bank transactions by source"
+                    value={source}
+                    onValueChange={(value) => {
+                      const nextSource = value as "all" | BankSource;
+                      setSource(nextSource);
+                      const selectedAccount = accountOptions.find((item) => item.id === account);
+                      if (nextSource !== "all" && selectedAccount?.source !== nextSource) setAccount("all");
+                    }}
+                  >
+                    <NativeSelectOption value="all">All sources</NativeSelectOption>
+                    {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+                <label>
+                  Account
+                  <NativeSelect aria-label="Filter bank transactions by account" value={account} onValueChange={setAccount}>
+                    <NativeSelectOption value="all">All accounts</NativeSelectOption>
+                    {accountOptions
+                      .filter((item) => source === "all" || item.source === source)
+                      .map((item) => (
+                        <NativeSelectOption key={item.id} value={item.id}>
+                          {source === "all" ? `${sourceLabel(item.source)} · ${item.name}` : item.name}
+                        </NativeSelectOption>
+                      ))}
+                  </NativeSelect>
+                </label>
+                <label>
+                  Direction
+                  <NativeSelect aria-label="Filter bank transactions by direction" value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}>
+                    <NativeSelectOption value="all">Money in & out</NativeSelectOption>
+                    <NativeSelectOption value="in">Money in</NativeSelectOption>
+                    <NativeSelectOption value="out">Money out</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+                <label>
+                  Transaction status
+                  <NativeSelect aria-label="Filter bank transactions by transaction status" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
+                    <NativeSelectOption value="all">All transactions</NativeSelectOption>
+                    <NativeSelectOption value="matched">Categorized</NativeSelectOption>
+                    <NativeSelectOption value="unmatched">Needs category</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+                <label>
+                  Category
+                  <NativeSelect aria-label="Filter bank transactions by category" value={category} onValueChange={setCategory}>
+                    <NativeSelectOption value="all">All categories</NativeSelectOption>
+                    {[...dashboard.transactionCategories]
+                      .sort((left, right) => left.name.localeCompare(right.name))
+                      .map((item) => <NativeSelectOption key={item.id} value={item.name}>{item.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+              </FilterFieldGroup>
+            </FilterPopover>
+          </div>
+          <div className="list-toolbar-actions">
+            {rangeControls}
+            <Button
+              aria-label="Export loaded CSV"
+              className="icon-button"
+              type="button"
+              disabled={rows.length === 0}
+              title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
+              onClick={() => exportBankTransactionsCsv({
+                providersById,
+                rows,
+                scope: "all",
+                teamsById
+              })}
+            >
+              <Download size={15} />
+            </Button>
+          </div>
         </div>
       </div>
       <ActiveFilterBar
@@ -228,11 +288,12 @@ export function AllBankTransactionsView({
         resultLabel={`${rows.length} loaded bank transactions shown`}
         onClearAll={() => {
           setSource("all");
+          setAccount("all");
           setDirection("all");
+          setCategory("all");
           setMatch("all");
         }}
       />
-      {rangeControls}
       <div className="table-wrap">
         <table className="data-table modern-income-table unified-bank-table">
           <thead><tr>
@@ -249,7 +310,8 @@ export function AllBankTransactionsView({
               const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{internalTransfer ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
+              const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
             }) : <tr><td colSpan={7}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>

@@ -18,7 +18,7 @@ const expense: ExpenseRecord = {
   sourceDocumentNumber: "INV-100",
   issueDate: "2026-07-01",
   dueDate: "2026-07-31",
-  category: "Software subscription",
+  category: "Software",
   businessPurpose: "Finance operations software",
   description: "Monthly subscription",
   netAmount: 100,
@@ -44,7 +44,7 @@ const transaction: Transaction = {
   currency: "EUR",
   direction: "out",
   status: "posted",
-  category: "Software subscription"
+  category: "Software"
 };
 
 test("expense record numbers are sequential within the issue year", () => {
@@ -88,7 +88,7 @@ test("unpaid supplier bills become payables and match exact outgoing payments", 
     supplier: "Example OU",
     balance: 124,
     currency: "EUR",
-    category: "Software subscription",
+    category: "Software",
     monthBuckets: { "2026-07": 124 },
     aliases: []
   }]);

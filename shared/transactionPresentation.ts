@@ -5,6 +5,11 @@ export function isInternalTransferTransaction(transaction: Transaction): boolean
   return transactionBusinessCategory(transaction.category) === "Internal transfer";
 }
 
+export function isNonOperatingMovementTransaction(transaction: Transaction): boolean {
+  const category = transactionBusinessCategory(transaction.category);
+  return category === "Internal transfer" || category === "Capital movement";
+}
+
 export function isSlashDailyCardPayment(transaction: Transaction): boolean {
   return transaction.source === "slash"
     && /daily credit card payment|payment from platinum account/i.test(

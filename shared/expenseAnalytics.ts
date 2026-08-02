@@ -1,4 +1,5 @@
 import { transactionBusinessCategory } from "./categories";
+import { isNonOperatingMovementTransaction } from "./transactionPresentation";
 import type { Transaction } from "./types";
 
 export type ExpenseAnalyticsAttribution = {
@@ -55,8 +56,8 @@ export function groupExpenseAnalytics(
   for (const transaction of transactions) {
     if (transaction.direction !== "out") continue;
 
+    if (isNonOperatingMovementTransaction(transaction)) continue;
     const category = transactionBusinessCategory(transaction.category);
-    if (category === "Internal transfer") continue;
     const matchedCompanyName = transaction.matchedProviderId
       ? companyNamesById.get(transaction.matchedProviderId)
       : undefined;

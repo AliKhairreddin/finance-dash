@@ -34,14 +34,14 @@ export const initialTransactionCategories: readonly TransactionCategorySeed[] = 
   { id: "offer-pest-control", name: "Pest control", direction: "in", color: "#57534e", system: true },
   { id: "revenue-adjustment", name: "Revenue adjustment", direction: "in", color: "#16a34a", system: true },
   { id: "refunds-and-chargebacks", name: "Refunds and chargebacks", direction: "in", color: "#65a30d", system: true },
-  { id: "capital-movement", name: "Capital movement", direction: "in", color: "#7c3aed", system: true },
+  { id: "capital-movement", name: "Capital movement", direction: "both", color: "#7c3aed", system: true },
   { id: "ad-account-funding", name: "Ad account funding", direction: "out", color: "#dc2626", system: true },
   { id: "ad-spend", name: "Ad spend", direction: "out", color: "#ea580c", system: true },
   { id: "affiliate-payout", name: "Affiliate payout", direction: "out", color: "#d97706", system: true },
   { id: "partner-payout", name: "Partner payout", direction: "out", color: "#ca8a04", system: true },
   { id: "distribution", name: "Distribution", direction: "out", color: "#9333ea", system: true },
   { id: "creative-production", name: "Creative production", direction: "out", color: "#db2777", system: true },
-  { id: "software-subscription", name: "Software subscription", direction: "out", color: "#4f46e5", system: true },
+  { id: "software-subscription", name: "Software", direction: "out", color: "#4f46e5", system: true },
   { id: "cloud-and-hosting", name: "Cloud and hosting", direction: "out", color: "#0284c7", system: true },
   { id: "tracking-and-analytics", name: "Tracking and analytics", direction: "out", color: "#0369a1", system: true },
   { id: "food-and-meals", name: "Food and meals", direction: "out", color: "#be123c", system: true },
@@ -100,7 +100,7 @@ function canonicalCategory(category?: string): string {
     revenue: "Media buying direct",
     "affiliate revenue": "Affiliate team revenue",
     "partner revenue": "Partner network revenue",
-    subscription: "Software subscription"
+    subscription: "Software"
   };
   return replacements[key] ?? (category ?? "").trim();
 }

@@ -926,18 +926,69 @@ export const seedTransactionCategories = mutation({
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     const now = new Date().toISOString();
+    const renamedCategories = new Map<string, string>();
     for (const category of initialTransactionCategories) {
       const existing = await ctx.db
         .query("transactionCategories")
         .withIndex("by_category_id", (q) => q.eq("id", category.id))
         .unique();
-      if (existing) continue;
-      await ctx.db.insert("transactionCategories", {
-        ...category,
+      if (!existing) {
+        await ctx.db.insert("transactionCategories", {
+          ...category,
+          nameNormalized: category.name.toLowerCase(),
+          createdAt: now,
+          updatedAt: now
+        });
+        continue;
+      }
+      if (
+        existing.name === category.name
+        && existing.direction === category.direction
+        && existing.system === category.system
+      ) {
+        continue;
+      }
+      const duplicate = await ctx.db
+        .query("transactionCategories")
+        .withIndex("by_name_normalized", (q) => q.eq("nameNormalized", category.name.toLowerCase()))
+        .unique();
+      if (duplicate && duplicate._id !== existing._id) {
+        throw new ConvexError({
+          code: "CATEGORY_EXISTS",
+          message: `The built-in category ${category.name} conflicts with an existing category`
+        });
+      }
+      if (existing.name !== category.name) renamedCategories.set(existing.name, category.name);
+      await ctx.db.patch(existing._id, {
+        name: category.name,
         nameNormalized: category.name.toLowerCase(),
-        createdAt: now,
+        direction: category.direction,
+        system: category.system,
         updatedAt: now
       });
+    }
+    if (renamedCategories.size > 0) {
+      const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+      if (state) {
+        const renamedCategory = (category: string) => renamedCategories.get(category) ?? category;
+        await ctx.db.patch(state._id, {
+          expenses: state.expenses.map((expense) => ({
+            ...expense,
+            category: renamedCategory(expense.category)
+          })),
+          transactionCategoryRules: state.transactionCategoryRules.map((rule) => ({
+            ...rule,
+            category: renamedCategory(rule.category)
+          })),
+          revenuePartners: state.revenuePartners.map((partner) => ({
+            ...partner,
+            revenueCategory: partner.revenueCategory
+              ? renamedCategory(partner.revenueCategory)
+              : undefined
+          })),
+          updatedAt: nextUpdatedAt(state.updatedAt)
+        });
+      }
     }
     return listTransactionCategories(ctx);
   }

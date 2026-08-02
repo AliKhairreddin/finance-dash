@@ -7,7 +7,7 @@ function expense(
   id: string,
   counterparty: string,
   amount: number,
-  category = "Software subscription",
+  category = "Software",
   matchedProviderId?: string
 ): Transaction {
   return {
@@ -28,7 +28,7 @@ function expense(
 }
 
 test("expense analytics uses the official company name when one is assigned", () => {
-  const transaction = expense("cursor-1", "CURSOR AI 1234", 90, "Software subscription", "provider-cursor");
+  const transaction = expense("cursor-1", "CURSOR AI 1234", 90, "Software", "provider-cursor");
 
   assert.equal(expenseAnalyticsLabel(transaction, "Cursor"), "Cursor");
   assert.deepEqual(groupExpenseAnalytics([transaction], new Map([["provider-cursor", "Cursor"]])), [
@@ -37,7 +37,7 @@ test("expense analytics uses the official company name when one is assigned", ()
       total: 90,
       categories: [
         {
-          category: "Software subscription",
+          category: "Software",
           amount: 90,
           transactionCount: 1,
           attributions: [{ label: "Cursor", amount: 90, transactionCount: 1 }]
@@ -51,12 +51,13 @@ test("expense analytics groups repeated unassigned transaction titles once and s
   const transactions = [
     expense("openai-1", "OPENAI *CHATGPT", 4),
     expense("openai-2", "openai *chatgpt", 6),
-    expense("cursor-1", "CURSOR AI 1234", 90, "Software subscription", "provider-cursor"),
+    expense("cursor-1", "CURSOR AI 1234", 90, "Software", "provider-cursor"),
     {
       ...expense("income-1", "Revenue customer", 1_000),
       direction: "in" as const
     },
-    expense("card-payment", "Daily Credit Card Payment", 34_740.24, "Internal transfer")
+    expense("card-payment", "Daily Credit Card Payment", 34_740.24, "Internal transfer"),
+    expense("owner-transfer", "Owner transfer", 20_000, "Capital movement")
   ];
 
   assert.deepEqual(groupExpenseAnalytics(transactions, new Map([["provider-cursor", "Cursor"]])), [
@@ -65,7 +66,7 @@ test("expense analytics groups repeated unassigned transaction titles once and s
       total: 100,
       categories: [
         {
-          category: "Software subscription",
+          category: "Software",
           amount: 100,
           transactionCount: 3,
           attributions: [
@@ -90,7 +91,7 @@ test("expense analytics groups noisy bank descriptors by the AI merchant name wi
       total: 60,
       categories: [
         {
-          category: "Software subscription",
+          category: "Software",
           amount: 60,
           transactionCount: 2,
           attributions: [{ label: "Pizza Hut", amount: 60, transactionCount: 2 }]
