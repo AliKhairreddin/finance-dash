@@ -3557,52 +3557,26 @@ th.amount .sortable-table-heading {
   text-align: center;
 }
 
-.analytics-company-list-head,
-.analytics-company-list li {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) 110px 140px 80px;
-  gap: 14px;
-  align-items: center;
+.analytics-company-table {
+  min-width: 620px;
 }
 
-.analytics-company-list-head {
-  min-height: 34px;
-  padding: 0 14px;
-  color: var(--app-muted);
-  background: var(--control-bg);
-  border-bottom: 1px solid var(--line);
-  font-size: 0.69rem;
-  font-weight: 760;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.analytics-company-table th:first-child {
+  width: 100%;
 }
 
-.analytics-company-list-head span:not(:first-child),
-.analytics-company-list li > span:not(:first-child),
-.analytics-company-list li > strong {
+.analytics-company-table th.analytics-company-numeric,
+.analytics-company-table td.analytics-company-numeric {
   text-align: right;
 }
 
-.analytics-company-list ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.analytics-company-table th.analytics-company-numeric .sortable-table-heading {
+  justify-content: flex-end;
 }
 
-.analytics-company-list li {
-  min-height: 56px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 0.82rem;
+.analytics-company-table td.analytics-company-numeric {
   font-variant-numeric: lining-nums tabular-nums;
-}
-
-.analytics-company-list li:last-child {
-  border-bottom: 0;
-}
-
-.analytics-company-list li:hover {
-  background: var(--row-hover);
+  white-space: nowrap;
 }
 
 .analytics-company-name {
@@ -6107,35 +6081,6 @@ th.amount .sortable-table-heading {
 
   .analytics-category-summary {
     justify-content: space-between;
-  }
-
-  .analytics-company-list-head {
-    display: none;
-  }
-
-  .analytics-company-list li {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px 12px;
-    padding-block: 11px;
-  }
-
-  .analytics-company-name {
-    grid-column: 1 / -1;
-  }
-
-  .analytics-company-list li > [data-label] {
-    display: grid;
-    gap: 2px;
-    text-align: left;
-  }
-
-  .analytics-company-list li > [data-label]::before {
-    content: attr(data-label);
-    color: var(--app-muted);
-    font-size: 0.64rem;
-    font-weight: 740;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
   }
 
   .bank-date-controls,

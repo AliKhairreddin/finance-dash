@@ -57,7 +57,7 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
+import { ActiveFilterBar, type ActiveFilter, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -126,11 +126,12 @@ import type {
 } from "../shared/types";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
+  isRequiredTransactionCategory,
   isReviewOnlyTransactionCategory,
   transactionBusinessCategory,
   transactionCategoryOptionsForDirection
 } from "../shared/categories";
-import { convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
+import { combineCurrencyTotals, convertCurrencyTotalsToUsd, hasCurrencyTotals, sumCurrencyTotals } from "../shared/currencyTotals";
 import {
   analyticsCategoryPieGroups,
   categoryDonutSegmentPath,
@@ -547,10 +548,6 @@ function categoryNeedsReview(transaction: Transaction): boolean {
   return isReviewOnlyTransactionCategory(transaction.category);
 }
 
-function transactionNeedsReview(transaction: Transaction): boolean {
-  return categoryNeedsReview(transaction);
-}
-
 function transactionCategoryChoices(
   currentCategory: string,
   direction: Transaction["direction"],
@@ -589,6 +586,18 @@ function emptyBankPeriodDirectionMetrics(): BankPeriodDirectionMetrics {
     categorizedTransactionCount: 0,
     unassignedOwnerTransactionCount: 0,
     volume: {}
+  };
+}
+
+function combineBankPeriodDirectionMetrics(
+  moneyIn: BankPeriodDirectionMetrics,
+  moneyOut: BankPeriodDirectionMetrics
+): BankPeriodDirectionMetrics {
+  return {
+    transactionCount: moneyIn.transactionCount + moneyOut.transactionCount,
+    categorizedTransactionCount: moneyIn.categorizedTransactionCount + moneyOut.categorizedTransactionCount,
+    unassignedOwnerTransactionCount: moneyIn.unassignedOwnerTransactionCount + moneyOut.unassignedOwnerTransactionCount,
+    volume: combineCurrencyTotals(moneyIn.volume, moneyOut.volume)
   };
 }
 
@@ -736,10 +745,12 @@ function App() {
     "all",
     { allowedValues: wiseEntityViews }
   );
-  const [bankDirection, setBankDirection] = useUrlState<"in" | "out">("bankDirection", "in", {
-    allowedValues: ["in", "out"]
+  const [bankDirection, setBankDirection] = useUrlState<"all" | "in" | "out">("bankDirection", "all", {
+    allowedValues: ["all", "in", "out"]
   });
   const [teamFilter, setTeamFilter] = useUrlState("bankTeam", "all");
+  const [bankAccountFilter, setBankAccountFilter] = useUrlState("bankAccount", "all");
+  const [bankCategoryFilter, setBankCategoryFilter] = useUrlState("bankCategory", "all");
   const defaultRevolutRange = useMemo(defaultRevolutTransactionDateRange, []);
   const defaultSlashRange = useMemo(defaultSlashTransactionDateRange, []);
   const defaultAllBankRange = useMemo(
@@ -788,7 +799,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useUrlState("bankQuery", "");
-  const [matchFilter, setMatchFilter] = useUrlState<string>("bankMatch", "needs-review", {
+  const [matchFilter, setMatchFilter] = useUrlState<string>("bankMatch", "all", {
     allowedValues: ["needs-review", "matched", "all"]
   });
   const [transactionSortKey, setTransactionSortKey] = useUrlState<TransactionSortKey>("bankSort", "date", {
@@ -802,7 +813,7 @@ function App() {
     const source = bankTab === "all"
       ? allBankSource === "all" ? undefined : allBankSource
       : bankTab;
-    const direction = bankTab !== "all" && source && source !== "amex" ? bankDirection : undefined;
+    const direction = bankTab !== "all" && source && bankDirection !== "all" ? bankDirection : undefined;
     const dateRange = bankTab === "all"
       ? allBankDateRange
       : source === "wise"
@@ -1208,15 +1219,26 @@ function App() {
           .join(" ")
           .toLowerCase()
           .includes(query);
+      const categorized = isRequiredTransactionCategory(
+        transaction.category,
+        transaction.direction,
+        dashboard?.transactionCategories ?? []
+      );
       const matchesStatus =
         matchFilter === "all" ||
-        (matchFilter === "needs-review" && transactionNeedsReview(transaction)) ||
-        (matchFilter === "matched" && !transactionNeedsReview(transaction));
-      return matchesQuery && matchesStatus;
+        (matchFilter === "needs-review" && !categorized) ||
+        (matchFilter === "matched" && categorized);
+      const matchesAccount = bankAccountFilter === "all" || transaction.accountId === bankAccountFilter;
+      const matchesCategory = bankCategoryFilter === "all" || transactionBusinessCategory(transaction.category) === bankCategoryFilter;
+      const matchesOwner = teamFilter === "all"
+        || (teamFilter === "unassigned" && !transaction.teamId)
+        || transaction.teamId === teamFilter;
+      const matchesDirection = bankDirection === "all" || transaction.direction === bankDirection;
+      return matchesQuery && matchesStatus && matchesAccount && matchesCategory && matchesOwner && matchesDirection;
     });
     const expenseTransactionIds = new Set((dashboard?.expenses ?? []).flatMap((expense) => expense.transactionId ? [expense.transactionId] : []));
     return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById, expenseTransactionIds);
-  }, [activeTab, bankTab, dashboard?.expenses, loadedBankTransactions, matchFilter, providersById, searchTerm, teamsById, transactionSortDirection, transactionSortKey]);
+  }, [activeTab, bankAccountFilter, bankCategoryFilter, bankDirection, bankTab, dashboard?.expenses, loadedBankTransactions, matchFilter, providersById, searchTerm, teamFilter, teamsById, transactionSortDirection, transactionSortKey]);
 
   const allBankTransactions = useMemo(() => {
     if (activeTab !== "banks" || bankTab !== "all") return [];
@@ -1228,39 +1250,29 @@ function App() {
       filteredTransactions.filter((transaction) => {
         const matchesDirection =
           transaction.source === "wise"
-          && transaction.direction === bankDirection
+          && (bankDirection === "all" || transaction.direction === bankDirection)
           && transactionIsInDateRange(transaction, wiseDateRange);
         const matchesWiseEntity =
           wiseEntityView === "all" || transaction.wiseEntity === wiseEntityView;
-        const matchesTeam =
-          teamFilter === "all" ||
-          (teamFilter === "unassigned" && !transaction.teamId) ||
-          transaction.teamId === teamFilter;
-        return matchesDirection && matchesWiseEntity && matchesTeam;
+        return matchesDirection && matchesWiseEntity;
       }),
-    [bankDirection, filteredTransactions, teamFilter, wiseDateRange, wiseEntityView]
+    [bankDirection, filteredTransactions, wiseDateRange, wiseEntityView]
   );
 
   const slashTransactions = useMemo(
     () =>
       filteredTransactions.filter((transaction) => {
-        if (transaction.source !== "slash" || transaction.direction !== bankDirection) return false;
-        return teamFilter === "all"
-          || (teamFilter === "unassigned" && !transaction.teamId)
-          || transaction.teamId === teamFilter;
+        return transaction.source === "slash" && (bankDirection === "all" || transaction.direction === bankDirection);
       }),
-    [bankDirection, filteredTransactions, teamFilter]
+    [bankDirection, filteredTransactions]
   );
 
   const revolutTransactions = useMemo(
     () =>
       filteredTransactions.filter((transaction) => {
-        if (transaction.source !== "revolut" || transaction.direction !== bankDirection) return false;
-        return teamFilter === "all"
-          || (teamFilter === "unassigned" && !transaction.teamId)
-          || transaction.teamId === teamFilter;
+        return transaction.source === "revolut" && (bankDirection === "all" || transaction.direction === bankDirection);
       }),
-    [bankDirection, filteredTransactions, teamFilter]
+    [bankDirection, filteredTransactions]
   );
 
   const amexTransactions = useMemo(
@@ -2087,6 +2099,10 @@ function App() {
           setWiseEntityView={setWiseEntityView}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
+          bankAccountFilter={bankAccountFilter}
+          setBankAccountFilter={setBankAccountFilter}
+          bankCategoryFilter={bankCategoryFilter}
+          setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -2843,6 +2859,10 @@ function BanksView({
   setWiseEntityView,
   bankDirection,
   setBankDirection,
+  bankAccountFilter,
+  setBankAccountFilter,
+  bankCategoryFilter,
+  setBankCategoryFilter,
   teamFilter,
   setTeamFilter,
   searchTerm,
@@ -2892,8 +2912,12 @@ function BanksView({
   setActiveBank: (source: BankTab) => void;
   wiseEntityView: WiseEntityView;
   setWiseEntityView: (entity: WiseEntityView) => void;
-  bankDirection: "in" | "out";
-  setBankDirection: (direction: "in" | "out") => void;
+  bankDirection: "all" | "in" | "out";
+  setBankDirection: (direction: "all" | "in" | "out") => void;
+  bankAccountFilter: string;
+  setBankAccountFilter: (accountId: string) => void;
+  bankCategoryFilter: string;
+  setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
   setTeamFilter: (teamId: string) => void;
   searchTerm: string;
@@ -2967,6 +2991,12 @@ function BanksView({
     : activeSourceAccounts;
   const activeSourceBalance = sumCurrencyTotals(activeSourceDisplayAccounts, (account) => account.balance);
   const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
+
+  useEffect(() => {
+    if (bankAccountFilter === "all" || !activeSource) return;
+    const selectedAccount = dashboard.accounts.find((account) => account.id === bankAccountFilter);
+    if (!selectedAccount || selectedAccount.source !== activeSource.id) setBankAccountFilter("all");
+  }, [activeSource, bankAccountFilter, dashboard.accounts, setBankAccountFilter]);
   const periodMetricsReady = bankPeriodMetrics !== null && bankPeriodMetricsError === null;
   const periodSourceById = new Map(
     periodMetricsReady ? bankPeriodMetrics.sources.map((item) => [item.source, item]) : []
@@ -3137,6 +3167,10 @@ function BanksView({
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
+          bankAccountFilter={bankAccountFilter}
+          setBankAccountFilter={setBankAccountFilter}
+          bankCategoryFilter={bankCategoryFilter}
+          setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -3182,6 +3216,10 @@ function BanksView({
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
+          bankAccountFilter={bankAccountFilter}
+          setBankAccountFilter={setBankAccountFilter}
+          bankCategoryFilter={bankCategoryFilter}
+          setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -3216,6 +3254,10 @@ function BanksView({
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
+          bankAccountFilter={bankAccountFilter}
+          setBankAccountFilter={setBankAccountFilter}
+          bankCategoryFilter={bankCategoryFilter}
+          setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
           setTeamFilter={setTeamFilter}
           searchTerm={searchTerm}
@@ -3246,6 +3288,24 @@ function BanksView({
           dashboard={dashboard}
           rows={amexTransactions}
           dateRange={allBankDateRange}
+          isLoadingDateRange={isLoadingTransactions}
+          providersById={providersById}
+          bankDirection={bankDirection}
+          setBankDirection={setBankDirection}
+          bankAccountFilter={bankAccountFilter}
+          setBankAccountFilter={setBankAccountFilter}
+          bankCategoryFilter={bankCategoryFilter}
+          setBankCategoryFilter={setBankCategoryFilter}
+          teamFilter={teamFilter}
+          setTeamFilter={setTeamFilter}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          matchFilter={matchFilter}
+          setMatchFilter={setMatchFilter}
+          transactionSortKey={transactionSortKey}
+          setTransactionSortKey={setTransactionSortKey}
+          transactionSortDirection={transactionSortDirection}
+          setTransactionSortDirection={setTransactionSortDirection}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
@@ -3255,6 +3315,10 @@ function BanksView({
           periodMetricsReady={periodMetricsReady}
           onLoadDateRange={onLoadAllBankTransactions}
           onLoadMoreTransactions={onLoadMoreTransactions}
+          onMatch={onMatch}
+          onAssignTeam={onAssignTeam}
+          onUpdateCategory={onUpdateCategory}
+          onOpenInvoice={onOpenInvoice}
         />
       )}
       {activeBank === "holdings" && (
@@ -3273,10 +3337,14 @@ function BanksView({
 type BankReconciliationViewProps = {
   dashboard: DashboardSnapshot;
   rows: Transaction[];
-  source: Extract<BankSource, "wise" | "revolut" | "slash">;
+  source: BankSource;
   providersById: Map<string, Provider>;
-  bankDirection: "in" | "out";
-  setBankDirection: (direction: "in" | "out") => void;
+  bankDirection: "all" | "in" | "out";
+  setBankDirection: (direction: "all" | "in" | "out") => void;
+  bankAccountFilter: string;
+  setBankAccountFilter: (accountId: string) => void;
+  bankCategoryFilter: string;
+  setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
   setTeamFilter: (teamId: string) => void;
   searchTerm: string;
@@ -3314,6 +3382,10 @@ function BankReconciliationView({
   providersById,
   bankDirection,
   setBankDirection,
+  bankAccountFilter,
+  setBankAccountFilter,
+  bankCategoryFilter,
+  setBankCategoryFilter,
   teamFilter,
   setTeamFilter,
   searchTerm,
@@ -3348,21 +3420,56 @@ function BankReconciliationView({
   const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const resolvedPeriodActivity = resolvedBankPeriodActivity(periodActivity, periodMetricsReady);
-  const periodDirection = resolvedPeriodActivity?.[bankDirection === "in" ? "moneyIn" : "moneyOut"] ?? null;
+  const periodDirection = resolvedPeriodActivity
+    ? bankDirection === "all"
+      ? combineBankPeriodDirectionMetrics(resolvedPeriodActivity.moneyIn, resolvedPeriodActivity.moneyOut)
+      : resolvedPeriodActivity[bankDirection === "in" ? "moneyIn" : "moneyOut"]
+    : null;
   const periodMetricPlaceholder = periodMetricsError
     ? "Unavailable"
     : periodMetricsLoading || !periodMetricsReady
       ? "Calculating…"
       : "0";
-  const directionLabel = bankDirection === "in"
-    ? (source === "slash" ? "Added" : "Money in")
-    : (source === "slash" ? "Spent / sent" : "Money out");
+  const directionLabel = bankDirection === "all"
+    ? "Money in & out"
+    : bankDirection === "in"
+      ? (source === "slash" ? "Added" : "Money in")
+      : (source === "slash" ? "Spent / sent" : "Money out");
   const categoryStatusLabel = matchFilter === "matched"
     ? "Categorized"
     : matchFilter === "all"
-      ? "All rows"
+      ? "All transactions"
       : "Needs category";
-  const activeFilterCount = (matchFilter === "all" ? 0 : 1) + (teamFilter === "all" ? 0 : 1);
+  const accountOptions = dashboard.accounts
+    .filter((account) => account.source === source)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const activeFilters: ActiveFilter[] = [
+    ...(bankAccountFilter === "all" ? [] : [{
+      key: "account",
+      label: `Account: ${accountOptions.find((account) => account.id === bankAccountFilter)?.name ?? bankAccountFilter}`,
+      onRemove: () => setBankAccountFilter("all")
+    }]),
+    ...(bankDirection === "all" ? [] : [{
+      key: "direction",
+      label: `Direction: ${directionLabel}`,
+      onRemove: () => setBankDirection("all")
+    }]),
+    ...(matchFilter === "all" ? [] : [{
+      key: "status",
+      label: `Status: ${categoryStatusLabel}`,
+      onRemove: () => setMatchFilter("all")
+    }]),
+    ...(bankCategoryFilter === "all" ? [] : [{
+      key: "category",
+      label: `Category: ${bankCategoryFilter}`,
+      onRemove: () => setBankCategoryFilter("all")
+    }]),
+    ...(teamFilter === "all" ? [] : [{
+      key: "owner",
+      label: `Owner: ${teamFilter === "unassigned" ? "Unassigned" : dashboard.teams.find((team) => team.id === teamFilter)?.name ?? teamFilter}`,
+      onRemove: () => setTeamFilter("all")
+    }])
+  ];
 
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
@@ -3373,20 +3480,6 @@ function BankReconciliationView({
         </div>
         <div className="list-toolbar reconciliation-toolbar">
           <div className="list-toolbar-main">
-            <div className="reconciliation-direction-select">
-              {bankDirection === "in"
-                ? <ArrowUpRight size={14} aria-hidden="true" />
-                : <ArrowDownRight size={14} aria-hidden="true" />}
-              <NativeSelect
-                aria-label={`${sourceLabel} transaction direction`}
-                size="sm"
-                value={bankDirection}
-                onValueChange={(value) => setBankDirection(value as "in" | "out")}
-              >
-                <NativeSelectOption value="in">{source === "slash" ? "Added" : "Money in"}</NativeSelectOption>
-                <NativeSelectOption value="out">{source === "slash" ? "Spent / sent" : "Money out"}</NativeSelectOption>
-              </NativeSelect>
-            </div>
             <ToolbarSearchField
               ariaLabel={`Search ${sourceLabel} transactions`}
               placeholder="Search"
@@ -3394,21 +3487,43 @@ function BankReconciliationView({
               onChange={setSearchTerm}
             />
             <FilterPopover
-              activeCount={activeFilterCount}
+              activeCount={activeFilters.length}
               label="Filters"
-              title={`Transaction filters · ${categoryStatusLabel}`}
+              title="Bank transaction filters"
             >
-              <FilterFieldGroup title="Category">
+              <FilterFieldGroup title="Transaction">
                 <label>
-                  Status
-                  <NativeSelect aria-label="Category status" value={matchFilter} onValueChange={setMatchFilter}>
-                    <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
-                    <NativeSelectOption value="matched">Categorized</NativeSelectOption>
-                    <NativeSelectOption value="all">All rows</NativeSelectOption>
+                  Account
+                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by account`} value={bankAccountFilter} onValueChange={setBankAccountFilter}>
+                    <NativeSelectOption value="all">All accounts</NativeSelectOption>
+                    {accountOptions.map((account) => <NativeSelectOption key={account.id} value={account.id}>{account.name}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
-              </FilterFieldGroup>
-              <FilterFieldGroup title="Ownership">
+                <label>
+                  Direction
+                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by direction`} value={bankDirection} onValueChange={(value) => setBankDirection(value as "all" | "in" | "out")}>
+                    <NativeSelectOption value="all">Money in &amp; out</NativeSelectOption>
+                    <NativeSelectOption value="in">{source === "slash" ? "Added" : "Money in"}</NativeSelectOption>
+                    <NativeSelectOption value="out">{source === "slash" ? "Spent / sent" : "Money out"}</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+                <label>
+                  Transaction status
+                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by transaction status`} value={matchFilter} onValueChange={setMatchFilter}>
+                    <NativeSelectOption value="all">All transactions</NativeSelectOption>
+                    <NativeSelectOption value="matched">Categorized</NativeSelectOption>
+                    <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+                <label>
+                  Category
+                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by category`} value={bankCategoryFilter} onValueChange={setBankCategoryFilter}>
+                    <NativeSelectOption value="all">All categories</NativeSelectOption>
+                    {[...dashboard.transactionCategories]
+                      .sort((left, right) => left.name.localeCompare(right.name))
+                      .map((category) => <NativeSelectOption key={category.id} value={category.name}>{category.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
                 <label>
                   Owner
                   <NativeSelect aria-label="Filter transactions by owner" value={teamFilter} onValueChange={setTeamFilter}>
@@ -3423,9 +3538,9 @@ function BankReconciliationView({
                 </label>
               </FilterFieldGroup>
             </FilterPopover>
-            {rangeControls}
           </div>
           <div className="list-toolbar-actions">
+            {rangeControls}
             {onImportWiseStatements ? (
               <>
                 <Menu.Root>
@@ -3499,8 +3614,19 @@ function BankReconciliationView({
           </div>
         </div>
       </div>
+      <ActiveFilterBar
+        filters={activeFilters}
+        resultLabel={`${rows.length} loaded bank transactions shown`}
+        onClearAll={() => {
+          setBankAccountFilter("all");
+          setBankDirection("all");
+          setMatchFilter("all");
+          setBankCategoryFilter("all");
+          setTeamFilter("all");
+        }}
+      />
       <span className="screen-reader-only" role="status" aria-live="polite">
-        {rows.length} loaded transactions shown. Direction: {directionLabel}. Category status: {categoryStatusLabel}.
+        {rows.length} loaded transactions shown. Direction: {directionLabel}. Transaction status: {categoryStatusLabel}.
       </span>
       <div className="wise-summary-grid">
         <SummaryTile
@@ -4255,6 +4381,15 @@ function AnalyticsView({
   );
 }
 
+type AnalyticsCategoryCompanySortKey = "name" | "transactions" | "amount" | "share";
+
+const analyticsCategoryCompanySortKeys: readonly AnalyticsCategoryCompanySortKey[] = [
+  "name",
+  "transactions",
+  "amount",
+  "share"
+];
+
 function AnalyticsCategoryCompaniesPanel({
   selection,
   periodLabel,
@@ -4274,6 +4409,36 @@ function AnalyticsCategoryCompaniesPanel({
   onBack: () => void;
   onRetry: () => void;
 }) {
+  const [sortKey, setSortKey] = useUrlState<AnalyticsCategoryCompanySortKey>(
+    "analyticsCategorySort",
+    "amount",
+    { allowedValues: analyticsCategoryCompanySortKeys }
+  );
+  const [sortDirection, setSortDirection] = useUrlState<SortDirection>(
+    "analyticsCategoryOrder",
+    "desc",
+    { allowedValues: ["asc", "desc"] }
+  );
+  const sortedRows = useMemo(() => [...rows].sort((left, right) => {
+    const sortValue = (company: typeof left): number | string => {
+      if (sortKey === "name") return company.name;
+      if (sortKey === "transactions") return company.transactionCount;
+      if (sortKey === "share") return total > 0 ? company.amount / total : 0;
+      return company.amount;
+    };
+    return compareTableValues(sortValue(left), sortValue(right), sortDirection)
+      || left.name.localeCompare(right.name);
+  }), [rows, sortDirection, sortKey, total]);
+
+  function requestSort(nextSortKey: AnalyticsCategoryCompanySortKey): void {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection("asc");
+  }
+
   return (
     <section className="panel wide-panel analytics-category-companies">
       <div className="panel-header analytics-category-companies-header">
@@ -4300,26 +4465,32 @@ function AnalyticsCategoryCompaniesPanel({
           </Button>
         </div>
       ) : rows.length > 0 ? (
-        <div className="analytics-company-list">
-          <div className="analytics-company-list-head" aria-hidden="true">
-            <span>Company or merchant</span>
-            <span>Transactions</span>
-            <span>Amount</span>
-            <span>Share</span>
-          </div>
-          <ol aria-label={`${selection.category} company and merchant shares`}>
-            {rows.map((company) => (
-              <li key={company.companyKey}>
-                <span className="analytics-company-name">
-                  <strong>{company.name}</strong>
-                  <small>{company.kind}</small>
-                </span>
-                <span data-label="Transactions">{company.transactionCount.toLocaleString()}</span>
-                <strong data-label="Amount">{money(company.amount, selection.currency)}</strong>
-                <strong data-label="Share">{formatShare(company.amount, total)}</strong>
-              </li>
-            ))}
-          </ol>
+        <div className="table-wrap">
+          <table className="data-table analytics-company-table">
+            <thead>
+              <tr>
+                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Company or merchant</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="share">Share</SortableTableHead>
+              </tr>
+            </thead>
+            <tbody aria-label={`${selection.category} company and merchant shares`}>
+              {sortedRows.map((company) => (
+                <tr key={company.companyKey}>
+                  <td>
+                    <span className="analytics-company-name">
+                      <strong>{company.name}</strong>
+                      <small>{company.kind}</small>
+                    </span>
+                  </td>
+                  <td className="analytics-company-numeric">{company.transactionCount.toLocaleString()}</td>
+                  <td className="analytics-company-numeric"><strong>{money(company.amount, selection.currency)}</strong></td>
+                  <td className="analytics-company-numeric"><strong>{formatShare(company.amount, total)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div className="analytics-category-state">
@@ -4874,7 +5045,7 @@ function TransactionTable({
   loadError: string | null;
   onLoadMore: () => Promise<void>;
   showWiseEntity?: boolean;
-  source: Extract<BankSource, "wise" | "revolut" | "slash">;
+  source: BankSource;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
   const [pendingOverride, setPendingOverride] = useState<
@@ -6389,28 +6560,13 @@ function AmexView({
   dashboard,
   rows,
   dateRange,
-  hasMoreTransactions,
-  isLoadingTransactions,
-  transactionLoadError,
-  periodActivity,
-  periodMetricsError,
-  periodMetricsLoading,
-  periodMetricsReady,
+  isLoadingDateRange,
   onLoadDateRange,
-  onLoadMoreTransactions
-}: {
-  dashboard: DashboardSnapshot;
-  rows: Transaction[];
+  ...reconciliationProps
+}: ConnectedBankViewProps & {
   dateRange: BankTransactionDateRange;
-  hasMoreTransactions: boolean;
-  isLoadingTransactions: boolean;
-  transactionLoadError: string | null;
-  periodActivity: BankPeriodActivityMetrics | null;
-  periodMetricsError: string | null;
-  periodMetricsLoading: boolean;
-  periodMetricsReady: boolean;
+  isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: BankTransactionDateRange) => Promise<void>;
-  onLoadMoreTransactions: () => Promise<void>;
 }) {
   const amexAccounts = dashboard.accounts.filter((account) =>
     account.source === "amex" && hasNonZeroAccountBalance(account)
@@ -6418,10 +6574,29 @@ function AmexView({
   const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
   const balance = sumCurrencyTotals(amexAccounts, (account) => account.balance);
   const balanceTone = Object.values(balance).some((amount) => amount < 0) ? "warning" : "";
-  const resolvedPeriod = resolvedBankPeriodActivity(periodActivity, periodMetricsReady);
-  const periodMetricPlaceholder = periodMetricsError || (!periodMetricsLoading && periodMetricsReady)
+  const resolvedPeriod = resolvedBankPeriodActivity(
+    reconciliationProps.periodActivity,
+    reconciliationProps.periodMetricsReady
+  );
+  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
+    || (!reconciliationProps.periodMetricsLoading && reconciliationProps.periodMetricsReady)
     ? "Unavailable"
     : "Calculating…";
+  const rangeControls = (
+    <BankDateRangeControls
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+      windowDays={revolutDefaultActivityWindowDays}
+    />
+  );
+  const tableFooter = (
+    <BankDateRangeFooter
+      dateRange={dateRange}
+      isLoading={isLoadingDateRange}
+      onLoad={onLoadDateRange}
+    />
+  );
 
   return (
     <div className="split-view">
@@ -6469,107 +6644,23 @@ function AmexView({
             ))}
           </div>
         )}
-        {periodMetricsError && (
+        {reconciliationProps.periodMetricsError && (
           <div className="integration-alert">
             <CircleAlert size={16} />
-            <span>Period totals could not be calculated: {periodMetricsError}</span>
+            <span>Period totals could not be calculated: {reconciliationProps.periodMetricsError}</span>
           </div>
         )}
       </section>
 
-      <section className="panel wide-panel">
-        <div className="panel-header compact">
-          <h2>Amex activity</h2>
-          <div className="row-actions">
-            <span className="total-pill">{rows.length} loaded</span>
-            <Button
-              className="icon-text-button"
-              type="button"
-              disabled={rows.length === 0}
-              title={`Export ${rows.length} loaded Amex transaction${rows.length === 1 ? "" : "s"}`}
-              onClick={() => exportBankTransactionsCsv({
-                providersById: new Map(dashboard.providers.map((provider) => [provider.id, provider])),
-                rows,
-                scope: "amex",
-                teamsById: new Map(dashboard.teams.map((team) => [team.id, team]))
-              })}
-            >
-              <Download size={15} />
-              Export loaded CSV
-            </Button>
-          </div>
-        </div>
-        <BankDateRangeControls
-          dateRange={dateRange}
-          isLoading={isLoadingTransactions}
-          onLoad={onLoadDateRange}
-          windowDays={revolutDefaultActivityWindowDays}
-        />
-        <BasicTransactionsTable rows={rows} isLoading={isLoadingTransactions} />
-        {(hasMoreTransactions || isLoadingTransactions || transactionLoadError) && (
-          <div className="bank-table-pagination">
-            <span className={transactionLoadError ? "danger-text" : undefined}>
-              {transactionLoadError ?? `${rows.length} loaded transactions shown`}
-            </span>
-            <Button
-              className="secondary-button"
-              type="button"
-              disabled={isLoadingTransactions}
-              onClick={() => void onLoadMoreTransactions()}
-            >
-              {isLoadingTransactions
-                ? <Loader2 className="spin" size={15} />
-                : transactionLoadError
-                  ? <RefreshCw size={15} />
-                  : <ChevronDown size={15} />}
-              {isLoadingTransactions ? "Loading" : transactionLoadError ? "Retry" : `Show ${transactionTablePageSize} more`}
-            </Button>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function BasicTransactionsTable({ rows, isLoading = false }: { rows: Transaction[]; isLoading?: boolean }) {
-  return (
-    <div className="table-wrap">
-      <table className="data-table activity-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Counterparty</th>
-            <th>Direction</th>
-            <th>Category</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length > 0 ? (
-            rows.map((transaction) => (
-              <tr key={transaction.id}>
-                <td>{dateLabel(transaction.date)}</td>
-                <td className="counterparty-cell">
-                  <strong>{transaction.counterparty}</strong>
-                  <small>{transaction.description}</small>
-                </td>
-                <td>
-                  <span className={`direction-label ${transaction.direction}`}>
-                    {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                    {transaction.direction === "in" ? "In" : "Out"}
-                  </span>
-                </td>
-                <td>{transaction.category}</td>
-                <td className="amount">{money(transaction.amount, transaction.currency)}</td>
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan={5}>{isLoading ? "Loading transactions…" : "No loaded transactions"}</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <BankReconciliationView
+        {...reconciliationProps}
+        dashboard={dashboard}
+        rows={rows}
+        source="amex"
+        wide
+        rangeControls={rangeControls}
+        tableFooter={tableFooter}
+      />
     </div>
   );
 }

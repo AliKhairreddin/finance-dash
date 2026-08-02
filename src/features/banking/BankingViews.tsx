@@ -96,6 +96,7 @@ export function AllBankTransactionsView({
   });
   const [account, setAccount] = useUrlState("allBankAccount", "all");
   const [category, setCategory] = useUrlState("allBankCategory", "all");
+  const [owner, setOwner] = useUrlState("allBankOwner", "all");
   const [sortKey, setSortKey] = useUrlState<BankTransactionSortKey>("allBankSort", "date", {
     allowedValues: ["account", "amount", "category", "counterparty", "date", "direction", "source"]
   });
@@ -137,6 +138,7 @@ export function AllBankTransactionsView({
         if (account !== "all" && transaction.accountId !== account) return false;
         if (direction !== "all" && transaction.direction !== direction) return false;
         if (category !== "all" && transactionBusinessCategory(transaction.category) !== category) return false;
+        if (owner !== "all" && (owner === "unassigned" ? Boolean(transaction.teamId) : transaction.teamId !== owner)) return false;
         const categorized = isRequiredTransactionCategory(transaction.category, transaction.direction, dashboard.transactionCategories);
         if (match === "matched" && !categorized) return false;
         if (match === "unmatched" && categorized) return false;
@@ -149,7 +151,7 @@ export function AllBankTransactionsView({
         || compareTableValues(left.date, right.date, "desc")
         || left.id.localeCompare(right.id)
       );
-  }, [account, category, dashboard.transactionCategories, direction, match, providersById, query, sortDirection, sortKey, source, transactions]);
+  }, [account, category, dashboard.transactionCategories, direction, match, owner, providersById, query, sortDirection, sortKey, source, transactions]);
 
   function requestSort(nextSortKey: BankTransactionSortKey) {
     if (nextSortKey === sortKey) {
@@ -185,6 +187,11 @@ export function AllBankTransactionsView({
       key: "match",
       label: match === "matched" ? "Status: Categorized" : "Status: Needs category",
       onRemove: () => setMatch("all")
+    }]),
+    ...(owner === "all" ? [] : [{
+      key: "owner",
+      label: `Owner: ${owner === "unassigned" ? "Unassigned" : dashboard.teams.find((item) => item.id === owner)?.name ?? owner}`,
+      onRemove: () => setOwner("all")
     }])
   ];
 
@@ -260,6 +267,14 @@ export function AllBankTransactionsView({
                       .map((item) => <NativeSelectOption key={item.id} value={item.name}>{item.name}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
+                <label>
+                  Owner
+                  <NativeSelect aria-label="Filter bank transactions by owner" value={owner} onValueChange={setOwner}>
+                    <NativeSelectOption value="all">All owners</NativeSelectOption>
+                    <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
+                    {dashboard.teams.map((team) => <NativeSelectOption key={team.id} value={team.id}>{team.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
               </FilterFieldGroup>
             </FilterPopover>
           </div>
@@ -292,6 +307,7 @@ export function AllBankTransactionsView({
           setDirection("all");
           setCategory("all");
           setMatch("all");
+          setOwner("all");
         }}
       />
       <div className="table-wrap">

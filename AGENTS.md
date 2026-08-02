@@ -8,6 +8,8 @@ We are creating this dashboard now, so backwards compatibility and fallback path
 
 Treat vertical and horizontal interface space as valuable. Do not add persistent explanatory or helper copy when the interface is understandable without it. Put nonessential explanations in an accessible `i` information control with a tooltip or popover, while keeping essential labels, values, validation, errors, and actionable state visible.
 
+Whenever you create or modify a data-bearing table or columnar data list, make each meaningful data column sortable in both ascending and descending order. Use the shared accessible sort-header control, keep the active column and direction visibly indicated, and preserve sort state in the URL. New data columns must ship with their sort behavior; action-only columns are exempt.
+
 When finishing any repo task with file changes, always verify the change, commit the code, push the branch, deploy Convex, and deploy Cloudflare before reporting completion. If a commit, push, or deploy cannot be completed, report the blocker clearly.
 
 When multiple chats are working in this repository, they may coordinate so one
