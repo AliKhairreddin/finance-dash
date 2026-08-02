@@ -183,6 +183,25 @@ test("valid login creates a secure cookie that authenticates the next request", 
   assert.equal(authenticatedResponse, null);
 });
 
+test("logout clears the secure session cookie and returns to sign in", async () => {
+  const token = await createAuthSessionToken(testSessionSecret);
+  const response = await enforceSiteAuthentication(
+    new Request("https://finance.example/logout", {
+      headers: { Cookie: `__Host-finance_session=${token}` }
+    }),
+    testEnv as never
+  );
+
+  assert.equal(response?.status, 303);
+  assert.equal(response?.headers.get("Location"), "/login");
+  const setCookie = response?.headers.get("Set-Cookie") ?? "";
+  assert.match(setCookie, /^__Host-finance_session=;/);
+  assert.match(setCookie, /Max-Age=0/);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /Secure/);
+  assert.match(setCookie, /SameSite=Strict/);
+});
+
 test("invalid credentials return the generic login error without setting a cookie", async () => {
   const response = await enforceSiteAuthentication(
     new Request("https://finance.example/login", {

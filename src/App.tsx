@@ -21,6 +21,7 @@ import {
   Info,
   KeyRound,
   Loader2,
+  LogOut,
   Moon,
   Pencil,
   PieChart,
@@ -36,6 +37,7 @@ import {
   Tags,
   Trash2,
   Upload,
+  UserRound,
   WalletCards,
   X
 } from "lucide-react";
@@ -1215,13 +1217,13 @@ function App() {
     try {
       const response = await fetch(`${apiBase}/sync`, { method: "POST" });
       if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Refresh failed"));
+        throw new Error(await apiErrorMessage(response, "Refresh and sync failed"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       await refreshCurrentTransactionPage();
-      setNotice("Refresh complete. New bank transactions were imported and categorized automatically.");
+      setNotice("Refresh and sync complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Refresh failed");
+      setError(err instanceof Error ? err.message : "Refresh and sync failed");
     } finally {
       setIsSyncing(false);
     }
@@ -1893,8 +1895,6 @@ function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
-        dataAsOf={maybeDate(dashboard.asOf)}
-        lastSync={maybeDate(dashboard.lastSync)}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
         onSync={syncNow}
@@ -2246,12 +2246,78 @@ function ThemeToggle({ themeMode, onToggle }: { themeMode: ThemeMode; onToggle: 
   );
 }
 
+function SidebarActions({
+  id,
+  open,
+  themeMode,
+  onToggleOpen,
+  onToggleTheme,
+  onSync,
+  isSyncing,
+  mobile = false
+}: {
+  id: string;
+  open: boolean;
+  themeMode: ThemeMode;
+  onToggleOpen: () => void;
+  onToggleTheme: () => void;
+  onSync: () => Promise<void>;
+  isSyncing: boolean;
+  mobile?: boolean;
+}) {
+  const nextTheme = themeMode === "dark" ? "light" : "dark";
+  const menuId = `${id}-menu`;
+  return (
+    <div className={`sidebar-actions-group ${mobile ? "mobile-sidebar-actions" : ""}`}>
+      <Button
+        aria-controls={menuId}
+        aria-expanded={open}
+        className="sidebar-actions-trigger"
+        data-testid={`${id}-trigger`}
+        onClick={onToggleOpen}
+        type="button"
+      >
+        <UserRound aria-hidden="true" size={16} />
+        <span>Account</span>
+        <ChevronDown aria-hidden="true" className={open ? "open" : ""} size={15} />
+      </Button>
+      {open && (
+        <div className="sidebar-actions-list" data-testid={`${id}-menu`} id={menuId}>
+          <Button
+            aria-label={`Switch to ${nextTheme} mode`}
+            className="sidebar-action-item"
+            onClick={onToggleTheme}
+            title={`Switch to ${nextTheme} mode`}
+            type="button"
+          >
+            {themeMode === "dark" ? <Sun aria-hidden="true" size={15} /> : <Moon aria-hidden="true" size={15} />}
+            <span>{nextTheme === "dark" ? "Dark mode" : "Light mode"}</span>
+          </Button>
+          <Button
+            aria-label="Refresh and sync dashboard data"
+            className="sidebar-action-item"
+            disabled={isSyncing}
+            onClick={() => void onSync()}
+            title="Import current bank activity and refresh dashboard data"
+            type="button"
+          >
+            {isSyncing ? <Loader2 aria-hidden="true" className="spin" size={15} /> : <RefreshCw aria-hidden="true" size={15} />}
+            <span>{isSyncing ? "Syncing" : "Sync data"}</span>
+          </Button>
+          <a className="sidebar-action-item sidebar-logout-action" href="/logout">
+            <LogOut aria-hidden="true" size={15} />
+            <span>Log out</span>
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Sidebar({
   activeTab,
   setActiveTab,
   incomeAutomationUnreadCount,
-  dataAsOf,
-  lastSync,
   themeMode,
   onToggleTheme,
   onSync,
@@ -2260,15 +2326,14 @@ function Sidebar({
   activeTab: ActiveTab;
   setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
   incomeAutomationUnreadCount: number;
-  dataAsOf: string;
-  lastSync: string;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
-  onSync: () => void;
+  onSync: () => Promise<void>;
   isSyncing: boolean;
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const mobileNavRef = useRef<HTMLDivElement>(null);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
   type SidebarItem = { id: ActiveTab; label: string; icon: React.ReactNode };
   const primaryItems: SidebarItem[] = [
     { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
@@ -2292,14 +2357,20 @@ function Sidebar({
     .find((item) => item.id === activeTab) ?? primaryItems[0];
 
   useEffect(() => {
-    if (!mobileMenuOpen) return;
+    if (!mobileMenuOpen && !actionsMenuOpen) return;
 
     function closeOnOutsidePress(event: PointerEvent) {
-      if (!mobileNavRef.current?.contains(event.target as Node)) setMobileMenuOpen(false);
+      if (!sidebarRef.current?.contains(event.target as Node)) {
+        setMobileMenuOpen(false);
+        setActionsMenuOpen(false);
+      }
     }
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setMobileMenuOpen(false);
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        setActionsMenuOpen(false);
+      }
     }
 
     document.addEventListener("pointerdown", closeOnOutsidePress);
@@ -2308,11 +2379,12 @@ function Sidebar({
       document.removeEventListener("pointerdown", closeOnOutsidePress);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [mobileMenuOpen]);
+  }, [actionsMenuOpen, mobileMenuOpen]);
 
   function selectTab(id: ActiveTab) {
     setActiveTab(id);
     setMobileMenuOpen(false);
+    setActionsMenuOpen(false);
   }
 
   function navigationButton(item: SidebarItem, nested = false, mobile = false) {
@@ -2340,16 +2412,19 @@ function Sidebar({
   }
 
   return (
-    <aside className="sidebar" aria-label="Finance dashboard navigation">
+    <aside className="sidebar" aria-label="Finance dashboard navigation" ref={sidebarRef}>
       <div className="mobile-command-bar">
-        <div className="mobile-nav-shell" ref={mobileNavRef}>
+        <div className="mobile-nav-shell">
           <Button
             aria-controls="mobile-navigation-menu"
             aria-expanded={mobileMenuOpen}
             aria-haspopup="menu"
             className="mobile-nav-trigger"
             data-testid="mobile-nav-trigger"
-            onClick={() => setMobileMenuOpen((current) => !current)}
+            onClick={() => {
+              setMobileMenuOpen((current) => !current);
+              setActionsMenuOpen(false);
+            }}
             type="button"
           >
             <span className="mobile-nav-current">{activeItem.icon}<span>{activeItem.label}</span></span>
@@ -2370,15 +2445,19 @@ function Sidebar({
             </div>
           )}
         </div>
-        <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-        <Button className="mobile-command-button" onClick={onSync} disabled={isSyncing} type="button" aria-label="Refresh dashboard now" title="Refresh dashboard now">
-          {isSyncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-        </Button>
-        <div className="mobile-freshness" aria-label={`Data as of ${dataAsOf}; last sync ${lastSync}`}>
-          <span>Data {dataAsOf}</span>
-          <span aria-hidden="true">·</span>
-          <span>Synced {lastSync}</span>
-        </div>
+        <SidebarActions
+          id="mobile-account-actions"
+          isSyncing={isSyncing}
+          mobile
+          onSync={onSync}
+          onToggleOpen={() => {
+            setActionsMenuOpen((current) => !current);
+            setMobileMenuOpen(false);
+          }}
+          onToggleTheme={onToggleTheme}
+          open={actionsMenuOpen}
+          themeMode={themeMode}
+        />
       </div>
       <div className="sidebar-brand">
         <Banknote size={19} />
@@ -2403,24 +2482,16 @@ function Sidebar({
         </div>
       </nav>
       <div className="sidebar-footer">
-        <div className="sidebar-freshness">
-          <span>
-            <small>Data as of</small>
-            <strong>{dataAsOf}</strong>
-          </span>
-          <span>
-            <small>Last sync</small>
-            <strong>{lastSync}</strong>
-          </span>
-        </div>
         {activeTab === "management" && <p>Live operations · report imported separately</p>}
-        <div className="sidebar-utilities">
-          <ThemeToggle themeMode={themeMode} onToggle={onToggleTheme} />
-          <Button className="primary-button sidebar-sync-button" onClick={onSync} disabled={isSyncing} type="button" title="Bank activity refreshes automatically every 15 minutes">
-            {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            Refresh
-          </Button>
-        </div>
+        <SidebarActions
+          id="desktop-account-actions"
+          isSyncing={isSyncing}
+          onSync={onSync}
+          onToggleOpen={() => setActionsMenuOpen((current) => !current)}
+          onToggleTheme={onToggleTheme}
+          open={actionsMenuOpen}
+          themeMode={themeMode}
+        />
       </div>
     </aside>
   );

@@ -1,3 +1,107 @@
+# Sidebar account actions design QA
+
+## Scope
+
+This pass verifies the new expandable account group at the bottom of the Finance dashboard sidebar. The group adapts the supplied Slash accordion pattern to the dashboard's existing component, icon, typography, color, and spacing system.
+
+## Evidence
+
+- Interaction-pattern source: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-5dd0e2b4-25e0-499e-b1c8-10813ef23452.png`.
+- Clipping problem-state source: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-6ecd1a94-781a-4b21-bc05-7372dc9b6155.png`.
+- Browser-rendered desktop implementation: `design-audit/sidebar-account-menu-desktop.jpg`.
+- Browser-rendered mobile implementation: `design-audit/sidebar-account-menu-mobile.jpg`.
+- Focused implementation crop: `design-audit/sidebar-account-menu-focused.jpg`.
+- Same-input focused comparison, reference on the left and implementation on the right: `design-audit/sidebar-account-menu-comparison.jpg`.
+- Pattern source: 201 × 120 px; problem-state source: 362 × 362 px.
+- Desktop capture: 1265 × 712 encoded pixels from a 1280 × 720 CSS viewport at device pixel ratio 1.
+- Desktop focused crop: 166 × 154 px from the visible 166 × 155 CSS account group.
+- Mobile capture: 375 × 812 encoded pixels from a 390 × 844 CSS viewport at device pixel ratio 1.
+- Focused comparison: 560 × 280 px. The problem state and corrected implementation preserved their aspect ratios, were scaled inside 260 × 260 px regions, and were centered on 280 × 280 px dark canvases before horizontal composition.
+- State: dark theme, account group expanded, overview selected.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+### Fonts and typography
+
+- The implementation retains the dashboard's existing Geist variable font, compact sidebar type scale, optical weights, and truncation behavior.
+- `Account` is visually stronger than the three nested actions, matching the reference hierarchy.
+- All action labels remain complete at the 192 px desktop sidebar width and the 390 px mobile viewport.
+
+### Spacing and layout rhythm
+
+- The trigger is a single full-width row with an icon, title, and rotating chevron.
+- Appearance, refresh-and-sync, and logout are three separate rows with consistent 37 px desktop and 42 px mobile targets.
+- The mobile action rows share the same x position and are vertically stacked at y = 72, 116, and 160; no requested actions share a row.
+- The desktop sidebar uses a fixed footer and an independently scrollable navigation region, so the expanded bottom group remains visible within a 720 px-tall viewport.
+
+### Colors and visual tokens
+
+- The group reuses existing sidebar background, hover, border, focus, muted-text, and dark-theme tokens.
+- Logout uses the established destructive color only on hover, keeping the resting menu calm while preserving clear feedback.
+- No new palette, gradient, or elevation language was introduced.
+
+### Image quality and asset fidelity
+
+- The target contains standard interface icons only; the implementation uses the project's existing Lucide icon set.
+- No raster substitutions, placeholders, inline drawings, custom SVGs, or generated image assets were introduced.
+
+### Copy and content
+
+- The group title is `Account`.
+- Appearance is expressed compactly as the next action (`Dark mode` or `Light mode`) instead of showing two competing controls.
+- Refresh and data synchronization are consolidated into the compact visible label `Sync data` because the existing endpoint already performs both operations; its accessible label and tooltip retain the fuller meaning.
+- `Log out` links to the existing `/logout` route.
+- The redundant `Data as of` and `Last sync` sidebar timestamps were removed from both desktop and mobile.
+
+## Full-view comparison evidence
+
+- `design-audit/sidebar-account-menu-desktop.jpg` confirms the group is anchored at the bottom of the full sidebar, remains visually subordinate to primary navigation, and does not overlap dashboard content.
+- `design-audit/sidebar-account-menu-mobile.jpg` confirms the same actions are available in a compact account dropdown at the responsive breakpoint.
+- The desktop sidebar fits entirely inside the 720 px viewport with its expanded group visible; the menu bottom is 689 px and the sidebar bottom is 702 px.
+
+## Focused comparison evidence
+
+- `design-audit/sidebar-account-menu-comparison.jpg` places the reported clipping problem on the left and the corrected implementation on the right.
+- The comparison shows the same bordered Account heading and vertically indented list, with the corrected `Light mode`, `Sync data`, and `Log out` labels fully contained.
+- The original Slash reference separately confirms the intended accordion structure: one clickable heading, an open chevron, and vertically stacked nested actions.
+- Focused comparisons are sufficient because both visual sources concern only the sidebar group and contain no broader page layout.
+
+## Interaction and runtime checks
+
+- Account trigger: toggles the list and updates `aria-expanded`.
+- Keyboard: Escape closes the expanded list and returns `aria-expanded` to `false`.
+- Appearance: switching to dark mode updates the document theme and changes the visible action to `Light mode` without closing the group.
+- Refresh and sync: the local API completed successfully, re-enabled the action, and displayed `Refresh and sync complete. New bank transactions were imported and categorized automatically.`
+- Logout: the rendered link resolves to `/logout`; the existing worker route clears the authenticated session cookie and redirects to `/login`.
+- Responsive behavior: desktop and mobile triggers are mutually exclusive at the 760 px breakpoint, while all three requested actions remain available.
+- Browser console warnings/errors: none.
+- Automated verification: TypeScript lint passed, 283 tests passed, 1 intentionally skipped, and the production build passed with only the existing chunk-size advisory.
+- `git diff --check`: passed.
+
+## Comparison history
+
+1. [P2] The first desktop capture let the expanded group extend below a 720 px viewport, hiding two actions.
+   - Constrained the sidebar to the viewport, fixed the footer to the bottom grid row, and made only the navigation region independently scrollable.
+   - Post-fix evidence: all three action rows are visible, the menu bottom is 689 px, and the sidebar bottom is 702 px in the final desktop capture.
+2. [P2] The previous responsive sidebar placed appearance and refresh beside each other and repeated both freshness timestamps below them.
+   - Replaced the paired controls and timestamp row with the same expandable account list used on desktop.
+   - Post-fix evidence: the mobile action rectangles have identical widths and x positions with strictly increasing y positions.
+3. [P2] The first action labels (`Switch to light mode` and `Refresh & sync data`) overflowed at the user's narrow sidebar width.
+   - Shortened the visible labels to `Light mode`, `Sync data`, and `Log out` while preserving full accessible names and tooltips.
+   - Post-fix evidence: desktop action items report equal 151 px client and scroll widths, and mobile action items report equal 222 px client and scroll widths; every overflow check is false.
+
+## Follow-up polish
+
+No P3 follow-up is required for this pass.
+
+final result: passed
+
+---
+
+# Historical design QA
+
 # Single-row bank reconciliation toolbar design QA
 
 ## Scope
