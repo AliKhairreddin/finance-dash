@@ -1,6 +1,6 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { Select } from "@base-ui/react/select";
-import { ChevronDown, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type SearchableSelectOption = {
@@ -59,9 +59,6 @@ export function SearchableSelect({
             title={selectedOption?.label}
           >
             <Select.Value className="searchable-select-input simple-select-value" placeholder={placeholder} />
-            <Select.Icon className="searchable-select-action">
-              <ChevronDown size={15} aria-hidden="true" />
-            </Select.Icon>
           </Select.Trigger>
 
           <Select.Portal>
@@ -118,16 +115,13 @@ export function SearchableSelect({
             title={selectedOption?.label}
             onFocus={(event) => event.currentTarget.select()}
           />
-          <div className="searchable-select-actions">
-            {clearable && (
+          {clearable && (
+            <div className="searchable-select-actions">
               <Combobox.Clear className="searchable-select-action searchable-select-clear" aria-label={`Clear ${normalizedLabel}`}>
                 <X size={14} aria-hidden="true" />
               </Combobox.Clear>
-            )}
-            <Combobox.Trigger className="searchable-select-action" aria-label={`Open ${normalizedLabel}`}>
-              <ChevronDown size={15} aria-hidden="true" />
-            </Combobox.Trigger>
-          </div>
+            </div>
+          )}
         </Combobox.InputGroup>
 
         <Combobox.Portal>

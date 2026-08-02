@@ -4714,7 +4714,6 @@ function CategorySearchSelect({
         ref={triggerRef}
       >
         <span title={value}>{value}</span>
-        <ChevronDown aria-hidden="true" size={14} />
       </button>
       {isOpen && menuPosition && createPortal(
         <div

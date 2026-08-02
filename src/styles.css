@@ -1536,9 +1536,7 @@ th.amount .sortable-table-heading {
 }
 
 .category-combobox-trigger {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 16px;
-  gap: 8px;
+  display: block;
   align-items: center;
   width: 100%;
   min-height: 36px;
@@ -1557,10 +1555,6 @@ th.amount .sortable-table-heading {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.category-combobox-trigger svg {
-  color: var(--app-muted);
 }
 
 .category-combobox-trigger:hover,
@@ -1733,8 +1727,8 @@ th.amount .sortable-table-heading {
 }
 
 .simple-select-control {
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding-left: 11px;
+  grid-template-columns: minmax(0, 1fr);
+  padding-inline: 11px;
   font: inherit;
   text-align: left;
 }
@@ -3215,15 +3209,15 @@ th.amount .sortable-table-heading {
 }
 
 .analytics-global-filters > .analytics-year-filter {
-  width: 88px;
+  width: 72px;
 }
 
 .analytics-global-filters > .analytics-month-filter {
-  width: 116px;
+  width: 108px;
 }
 
 .analytics-global-filters > .analytics-quarter-filter {
-  width: 68px;
+  width: 56px;
 }
 
 .analytics-custom-period {
