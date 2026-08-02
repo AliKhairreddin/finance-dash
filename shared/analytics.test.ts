@@ -58,6 +58,7 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
   accumulator.addPage([
     transaction("review-eur", {
       source: "wise",
+      wiseEntity: "dn",
       amount: 25,
       currency: "EUR",
       category: "Uncategorized",
@@ -71,6 +72,7 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
     }),
     transaction("revenue-eur", {
       source: "wise",
+      wiseEntity: "lmd",
       amount: 75,
       currency: "EUR",
       direction: "in",
@@ -131,6 +133,84 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
   assert.equal(snapshot.unmatchedMerchants.rows.length, 1);
   assert.equal(snapshot.unmatchedMerchants.rows[0]?.transactionCount, 1);
   assert.equal(snapshot.unmatchedMerchants.other, null);
+  assert.deepEqual(
+    snapshot.bankPeriod.sources.map((row) => [
+      row.source,
+      row.moneyIn.transactionCount,
+      row.moneyOut.transactionCount
+    ]),
+    [
+      ["amex", 0, 1],
+      ["revolut", 1, 0],
+      ["slash", 0, 1],
+      ["wise", 1, 1]
+    ]
+  );
+  assert.deepEqual(
+    snapshot.bankPeriod.wiseEntities.map((row) => [
+      row.wiseEntity,
+      row.moneyIn.transactionCount,
+      row.moneyOut.transactionCount
+    ]),
+    [["dn", 0, 1], ["lmd", 1, 0]]
+  );
+});
+
+test("bank period metrics remain exact beyond the first 200 table rows", () => {
+  const accumulator = createBankAnalyticsAccumulator({
+    fromDate: "2026-07-01",
+    toDate: "2026-07-31",
+    providers: [],
+    teams: [{ id: "ops", name: "Operations" }]
+  });
+  const purchases = Array.from({ length: 205 }, (_, index) => transaction(`slash-purchase-${index}`, {
+    source: "slash",
+    amount: index < 200 ? 10 : 20,
+    category: index === 204 ? "Uncategorized" : "Software",
+    cashback: { amount: index < 200 ? 0.5 : 1, rate: 0.05 },
+    ...(index < 200 ? { teamId: "ops" } : {})
+  }));
+
+  accumulator.addPage(purchases.slice(0, 200));
+  accumulator.addPage([
+    ...purchases.slice(200),
+    transaction("slash-cashback-credit", {
+      source: "slash",
+      amount: 41,
+      direction: "in",
+      description: "Monthly cashback credit",
+      counterparty: "Slash cashback",
+      category: "Revenue"
+    }),
+    transaction("slash-voided-cashback", {
+      source: "slash",
+      amount: 99_999,
+      status: "voided",
+      cashback: { amount: 999, rate: 0.01 }
+    })
+  ]);
+
+  const snapshot = accumulator.finish("2026-07-31T20:00:00.000Z");
+  const slash = snapshot.bankPeriod.sources.find((row) => row.source === "slash");
+  assert.ok(slash);
+  assert.deepEqual(slash.moneyOut, {
+    transactionCount: 205,
+    categorizedTransactionCount: 204,
+    unassignedOwnerTransactionCount: 5,
+    volume: { USD: 2_100 }
+  });
+  assert.deepEqual(slash.moneyIn, {
+    transactionCount: 1,
+    categorizedTransactionCount: 1,
+    unassignedOwnerTransactionCount: 1,
+    volume: { USD: 41 }
+  });
+  assert.deepEqual(snapshot.bankPeriod.slashCashback, {
+    eligiblePurchaseCount: 205,
+    earned: { USD: 105 },
+    eligibleSpend: { USD: 2_100 },
+    credited: { USD: 41 }
+  });
 });
 
 test("streaming bank Analytics excludes voided tombstones from every aggregate", () => {

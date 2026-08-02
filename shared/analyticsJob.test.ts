@@ -58,7 +58,7 @@ test("Analytics job identity includes only requested month revisions and the sta
   assert.equal(identity.version, reordered.version);
   assert.notEqual(identity.version, changedRevision.version);
   assert.notEqual(identity.version, changedDirectory.version);
-  assert.match(identity.version, /^bank-analytics-v2:2026-07:17:fnv1a32-[a-f0-9]{8}$/);
+  assert.match(identity.version, /^bank-analytics-v3:2026-07:17:fnv1a32-[a-f0-9]{8}$/);
   assert.throws(
     () => createBankAnalyticsJobIdentity([{ month: "2026-07", revision: -1 }], directory),
     /non-negative integer/
@@ -160,7 +160,7 @@ test("Analytics build rejects a repeated opaque cursor", async () => {
 });
 
 test("Analytics snapshots have a hard serialized byte ceiling before persistence", () => {
-  assert.doesNotThrow(() => assertBankAnalyticsSnapshotSize({ version: 1, summary: {} }));
+  assert.doesNotThrow(() => assertBankAnalyticsSnapshotSize({ version: 2, summary: {} }));
   assert.throws(
     () => assertBankAnalyticsSnapshotSize({ payload: "x".repeat(bankAnalyticsSnapshotByteLimit) }),
     /exceeds 250000 bytes/

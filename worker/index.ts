@@ -1721,7 +1721,7 @@ function requireBankAnalyticsSnapshot(
 ): BankAnalyticsSnapshot {
   if (
     !isRecord(value)
-    || value.version !== 1
+    || value.version !== 2
     || value.fromDate !== range.fromDate
     || value.toDate !== range.toDate
     || !isRecord(value.summary)
@@ -1732,6 +1732,10 @@ function requireBankAnalyticsSnapshot(
     || !Array.isArray(value.relationships)
     || !Array.isArray(value.reviewSamples)
     || !isRecord(value.unmatchedMerchants)
+    || !isRecord(value.bankPeriod)
+    || !Array.isArray(value.bankPeriod.sources)
+    || !Array.isArray(value.bankPeriod.wiseEntities)
+    || !isRecord(value.bankPeriod.slashCashback)
   ) {
     throw new Error("Stored Analytics snapshot is invalid");
   }

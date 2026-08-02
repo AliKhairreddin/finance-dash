@@ -11,11 +11,14 @@ import type {
   BankAnalyticsSnapshot,
   BankAnalyticsSourceBreakdown,
   BankAnalyticsTeamBreakdown,
+  BankPeriodDirectionMetrics,
+  BankPeriodMetrics,
   BankTransactionSource,
   CurrencyTotals,
   Provider,
   Team,
-  Transaction
+  Transaction,
+  WiseEntity
 } from "./types";
 
 export const bankAnalyticsLimits = Object.freeze({
@@ -43,8 +46,27 @@ export type BankAnalyticsAggregateState = [
   moneyOutTransactionCounts: [string, number][]
 ];
 
+export type BankPeriodDirectionState = [
+  transactionCount: number,
+  categorizedTransactionCount: number,
+  unassignedOwnerTransactionCount: number,
+  volume: [string, number][]
+];
+
+export type BankPeriodActivityState = [
+  moneyIn: BankPeriodDirectionState,
+  moneyOut: BankPeriodDirectionState
+];
+
+export type BankPeriodSlashCashbackState = [
+  eligiblePurchaseCount: number,
+  earned: [string, number][],
+  eligibleSpend: [string, number][],
+  credited: [string, number][]
+];
+
 export interface BankAnalyticsAccumulatorState {
-  version: 1;
+  version: 2;
   fromDate: string;
   toDate: string;
   configurationFingerprint: string;
@@ -68,6 +90,9 @@ export interface BankAnalyticsAccumulatorState {
     aggregate: BankAnalyticsAggregateState
   ][];
   merchantOther: BankAnalyticsAggregateState;
+  bankPeriodSources: [BankTransactionSource, BankPeriodActivityState][];
+  bankPeriodWiseEntities: [WiseEntity, BankPeriodActivityState][];
+  bankPeriodSlashCashback: BankPeriodSlashCashbackState;
   reviewSamples: BankAnalyticsReviewSample[];
   activeTeams: string[];
   activeSources: BankTransactionSource[];
@@ -112,7 +137,27 @@ type MerchantCandidate = {
   aggregate: MutableAggregate;
 };
 
+type MutableBankPeriodDirection = {
+  transactionCount: number;
+  categorizedTransactionCount: number;
+  unassignedOwnerTransactionCount: number;
+  volume: Map<string, number>;
+};
+
+type MutableBankPeriodActivity = {
+  moneyIn: MutableBankPeriodDirection;
+  moneyOut: MutableBankPeriodDirection;
+};
+
+type MutableBankPeriodSlashCashback = {
+  eligiblePurchaseCount: number;
+  earned: Map<string, number>;
+  eligibleSpend: Map<string, number>;
+  credited: Map<string, number>;
+};
+
 const bankSources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex"]);
+const wiseEntities = new Set<WiseEntity>(["dn", "lmd"]);
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 function assertIsoDate(value: string, label: string): string {
@@ -192,6 +237,31 @@ function emptyMutableAggregate(): MutableAggregate {
   };
 }
 
+function emptyBankPeriodDirection(): MutableBankPeriodDirection {
+  return {
+    transactionCount: 0,
+    categorizedTransactionCount: 0,
+    unassignedOwnerTransactionCount: 0,
+    volume: new Map()
+  };
+}
+
+function emptyBankPeriodActivity(): MutableBankPeriodActivity {
+  return {
+    moneyIn: emptyBankPeriodDirection(),
+    moneyOut: emptyBankPeriodDirection()
+  };
+}
+
+function emptyBankPeriodSlashCashback(): MutableBankPeriodSlashCashback {
+  return {
+    eligiblePurchaseCount: 0,
+    earned: new Map(),
+    eligibleSpend: new Map(),
+    credited: new Map()
+  };
+}
+
 function incrementMoney(totals: Map<string, number>, currency: string, amount: number): void {
   totals.set(currency, (totals.get(currency) ?? 0) + amount);
 }
@@ -261,6 +331,32 @@ function aggregateState(aggregate: MutableAggregate): BankAnalyticsAggregateStat
     entries(aggregate.moneyOut),
     entries(aggregate.moneyInTransactionCounts),
     entries(aggregate.moneyOutTransactionCounts)
+  ];
+}
+
+function bankPeriodDirectionState(direction: MutableBankPeriodDirection): BankPeriodDirectionState {
+  return [
+    direction.transactionCount,
+    direction.categorizedTransactionCount,
+    direction.unassignedOwnerTransactionCount,
+    [...direction.volume].sort(([left], [right]) => left.localeCompare(right))
+  ];
+}
+
+function bankPeriodActivityState(activity: MutableBankPeriodActivity): BankPeriodActivityState {
+  return [bankPeriodDirectionState(activity.moneyIn), bankPeriodDirectionState(activity.moneyOut)];
+}
+
+function bankPeriodSlashCashbackState(
+  cashback: MutableBankPeriodSlashCashback
+): BankPeriodSlashCashbackState {
+  const entries = (totals: Map<string, number>): [string, number][] =>
+    [...totals].sort(([left], [right]) => left.localeCompare(right));
+  return [
+    cashback.eligiblePurchaseCount,
+    entries(cashback.earned),
+    entries(cashback.eligibleSpend),
+    entries(cashback.credited)
   ];
 }
 
@@ -343,6 +439,56 @@ function restoreAggregateState(
   };
 }
 
+function restoreBankPeriodDirectionState(
+  state: BankPeriodDirectionState,
+  knownCurrencies: ReadonlySet<string>,
+  label: string
+): MutableBankPeriodDirection {
+  if (!Array.isArray(state) || state.length !== 4) throw new Error(`${label} has an invalid period direction`);
+  const transactionCount = nonNegativeInteger(state[0], `${label} transaction count`);
+  const categorizedTransactionCount = nonNegativeInteger(state[1], `${label} categorized count`);
+  const unassignedOwnerTransactionCount = nonNegativeInteger(state[2], `${label} unassigned-owner count`);
+  if (
+    categorizedTransactionCount > transactionCount
+    || unassignedOwnerTransactionCount > transactionCount
+  ) {
+    throw new Error(`${label} contains an impossible period count`);
+  }
+  return {
+    transactionCount,
+    categorizedTransactionCount,
+    unassignedOwnerTransactionCount,
+    volume: restoreCurrencyEntries(state[3], knownCurrencies, `${label} volume`, false)
+  };
+}
+
+function restoreBankPeriodActivityState(
+  state: BankPeriodActivityState,
+  knownCurrencies: ReadonlySet<string>,
+  label: string
+): MutableBankPeriodActivity {
+  if (!Array.isArray(state) || state.length !== 2) throw new Error(`${label} has invalid period activity`);
+  return {
+    moneyIn: restoreBankPeriodDirectionState(state[0], knownCurrencies, `${label} money in`),
+    moneyOut: restoreBankPeriodDirectionState(state[1], knownCurrencies, `${label} money out`)
+  };
+}
+
+function restoreBankPeriodSlashCashbackState(
+  state: BankPeriodSlashCashbackState,
+  knownCurrencies: ReadonlySet<string>
+): MutableBankPeriodSlashCashback {
+  if (!Array.isArray(state) || state.length !== 4) {
+    throw new Error("Analytics Slash cashback state is invalid");
+  }
+  return {
+    eligiblePurchaseCount: nonNegativeInteger(state[0], "Analytics Slash cashback purchase count"),
+    earned: restoreCurrencyEntries(state[1], knownCurrencies, "Analytics Slash cashback earned", false),
+    eligibleSpend: restoreCurrencyEntries(state[2], knownCurrencies, "Analytics Slash cashback spend", false),
+    credited: restoreCurrencyEntries(state[3], knownCurrencies, "Analytics Slash cashback credited", false)
+  };
+}
+
 function serializedByteLength(value: unknown): number {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -385,6 +531,22 @@ function compareAggregateRows(
   rightLabel: string
 ): number {
   return right.transactionCount - left.transactionCount || leftLabel.localeCompare(rightLabel);
+}
+
+function finalizeBankPeriodDirection(direction: MutableBankPeriodDirection): BankPeriodDirectionMetrics {
+  return {
+    transactionCount: direction.transactionCount,
+    categorizedTransactionCount: direction.categorizedTransactionCount,
+    unassignedOwnerTransactionCount: direction.unassignedOwnerTransactionCount,
+    volume: currencyTotals(direction.volume)
+  };
+}
+
+function finalizeBankPeriodActivity(activity: MutableBankPeriodActivity) {
+  return {
+    moneyIn: finalizeBankPeriodDirection(activity.moneyIn),
+    moneyOut: finalizeBankPeriodDirection(activity.moneyOut)
+  };
 }
 
 function addBoundedDimension<T>(map: Map<string, T>, key: string, maximum: number, label: string, create: () => T): T {
@@ -456,6 +618,9 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   const sourceAggregates = new Map<BankTransactionSource, MutableAggregate>();
   const providerAggregates = new Map<string, MutableAggregate>();
   const relationshipAggregates = new Map<BankAnalyticsRelationship, MutableAggregate>();
+  const bankPeriodSources = new Map<BankTransactionSource, MutableBankPeriodActivity>();
+  const bankPeriodWiseEntities = new Map<WiseEntity, MutableBankPeriodActivity>();
+  let bankPeriodSlashCashback = emptyBankPeriodSlashCashback();
   const merchantCandidates = new Map<string, MerchantCandidate>();
   let merchantOther = emptyMutableAggregate();
   const reviewSamples: BankAnalyticsReviewSample[] = [];
@@ -494,7 +659,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       throw new Error(`Analytics accumulator state exceeds ${bankAnalyticsLimits.serializedStateBytes} bytes`);
     }
     if (
-      state.version !== 1
+      state.version !== 2
       || state.fromDate !== fromDate
       || state.toDate !== toDate
       || state.unmatchedMerchantRowLimit !== merchantRowLimit
@@ -534,6 +699,42 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       if (sourceAggregates.has(row[0])) throw new Error("Analytics source state contains a duplicate source");
       sourceAggregates.set(row[0], restoreAggregateState(row[1], knownCurrencies, `Analytics source ${row[0]}`));
     }
+
+    if (!Array.isArray(state.bankPeriodSources) || state.bankPeriodSources.length > bankSources.size) {
+      throw new Error("Analytics bank-period source state exceeds its hard cardinality limit");
+    }
+    for (const row of state.bankPeriodSources) {
+      if (!Array.isArray(row) || row.length !== 2 || !bankSources.has(row[0])) {
+        throw new Error("Analytics bank-period source state contains an invalid row");
+      }
+      if (bankPeriodSources.has(row[0])) {
+        throw new Error("Analytics bank-period source state contains a duplicate source");
+      }
+      bankPeriodSources.set(
+        row[0],
+        restoreBankPeriodActivityState(row[1], knownCurrencies, `Analytics bank-period source ${row[0]}`)
+      );
+    }
+
+    if (!Array.isArray(state.bankPeriodWiseEntities) || state.bankPeriodWiseEntities.length > wiseEntities.size) {
+      throw new Error("Analytics bank-period Wise entity state exceeds its hard cardinality limit");
+    }
+    for (const row of state.bankPeriodWiseEntities) {
+      if (!Array.isArray(row) || row.length !== 2 || !wiseEntities.has(row[0])) {
+        throw new Error("Analytics bank-period Wise entity state contains an invalid row");
+      }
+      if (bankPeriodWiseEntities.has(row[0])) {
+        throw new Error("Analytics bank-period Wise entity state contains a duplicate entity");
+      }
+      bankPeriodWiseEntities.set(
+        row[0],
+        restoreBankPeriodActivityState(row[1], knownCurrencies, `Analytics bank-period Wise entity ${row[0]}`)
+      );
+    }
+    bankPeriodSlashCashback = restoreBankPeriodSlashCashbackState(
+      state.bankPeriodSlashCashback,
+      knownCurrencies
+    );
 
     if (!Array.isArray(state.relationships) || state.relationships.length > 3) {
       throw new Error("Analytics relationship state exceeds its hard cardinality limit");
@@ -650,6 +851,11 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
     }
     const sumTransactions = (values: Iterable<MutableAggregate>) =>
       [...values].reduce((sum, aggregate) => sum + aggregate.transactionCount, 0);
+    const sumPeriodTransactions = (values: Iterable<MutableBankPeriodActivity>) =>
+      [...values].reduce(
+        (sum, activity) => sum + activity.moneyIn.transactionCount + activity.moneyOut.transactionCount,
+        0
+      );
     if (
       sumTransactions(categoryAggregates.values()) !== summaryAggregate.transactionCount
       || sumTransactions(teamAggregates.values()) !== summaryAggregate.transactionCount
@@ -661,6 +867,17 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         !== summaryAggregate.transactionCount - summaryAggregate.matchedTransactionCount
     ) {
       throw new Error("Analytics accumulator state contains inconsistent dimension counts");
+    }
+    if (
+      sumPeriodTransactions(bankPeriodSources.values()) !== transactionCount
+      || sumPeriodTransactions(bankPeriodWiseEntities.values())
+        > (bankPeriodSources.get("wise")?.moneyIn.transactionCount ?? 0)
+          + (bankPeriodSources.get("wise")?.moneyOut.transactionCount ?? 0)
+      || bankPeriodSlashCashback.eligiblePurchaseCount
+        > (bankPeriodSources.get("slash")?.moneyOut.transactionCount ?? 0)
+          + (bankPeriodSources.get("slash")?.moneyIn.transactionCount ?? 0)
+    ) {
+      throw new Error("Analytics accumulator state contains inconsistent bank-period counts");
     }
   }
 
@@ -728,6 +945,45 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
     });
   }
 
+  function addBankPeriodTransaction(transaction: Transaction, source: BankTransactionSource, needsReview: boolean) {
+    const activity = bankPeriodSources.get(source) ?? emptyBankPeriodActivity();
+    const direction = transaction.direction === "in" ? activity.moneyIn : activity.moneyOut;
+    direction.transactionCount += 1;
+    if (!needsReview) direction.categorizedTransactionCount += 1;
+    if (!transaction.teamId) direction.unassignedOwnerTransactionCount += 1;
+    incrementMoney(direction.volume, transaction.currency, transaction.amount);
+    bankPeriodSources.set(source, activity);
+
+    if (source === "wise" && transaction.wiseEntity) {
+      if (!wiseEntities.has(transaction.wiseEntity)) {
+        throw new Error(`Transaction ${transaction.id} has unsupported Wise entity ${transaction.wiseEntity}`);
+      }
+      const entityActivity = bankPeriodWiseEntities.get(transaction.wiseEntity) ?? emptyBankPeriodActivity();
+      const entityDirection = transaction.direction === "in" ? entityActivity.moneyIn : entityActivity.moneyOut;
+      entityDirection.transactionCount += 1;
+      if (!needsReview) entityDirection.categorizedTransactionCount += 1;
+      if (!transaction.teamId) entityDirection.unassignedOwnerTransactionCount += 1;
+      incrementMoney(entityDirection.volume, transaction.currency, transaction.amount);
+      bankPeriodWiseEntities.set(transaction.wiseEntity, entityActivity);
+    }
+
+    if (source !== "slash") return;
+    if (transaction.cashback) {
+      if (!Number.isFinite(transaction.cashback.amount) || transaction.cashback.amount < 0) {
+        throw new Error(`Transaction ${transaction.id} has an invalid cashback amount`);
+      }
+      bankPeriodSlashCashback.eligiblePurchaseCount += 1;
+      incrementMoney(bankPeriodSlashCashback.earned, transaction.currency, transaction.cashback.amount);
+      incrementMoney(bankPeriodSlashCashback.eligibleSpend, transaction.currency, transaction.amount);
+    }
+    if (
+      transaction.direction === "in"
+      && `${transaction.counterparty} ${transaction.description}`.toLowerCase().includes("cashback")
+    ) {
+      incrementMoney(bankPeriodSlashCashback.credited, transaction.currency, transaction.amount);
+    }
+  }
+
   function addPage(transactions: readonly Transaction[]): void {
     if (finished) throw new Error("Analytics accumulator has already been finalized");
 
@@ -751,6 +1007,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
 
       transactionCount += 1;
       activeSources.add(source);
+      addBankPeriodTransaction(transaction, source, needsReview);
       if (needsReview) {
         needsReviewCount += 1;
         if (reviewSamples.length < reviewSampleLimit) {
@@ -842,7 +1099,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, aggregate]) => [key, aggregateState(aggregate)]);
     const state: BankAnalyticsAccumulatorState = {
-      version: 1,
+      version: 2,
       fromDate,
       toDate,
       configurationFingerprint: expectedConfigurationFingerprint,
@@ -872,6 +1129,13 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
           aggregateState(candidate.aggregate)
         ]),
       merchantOther: aggregateState(merchantOther),
+      bankPeriodSources: [...bankPeriodSources]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([source, activity]) => [source, bankPeriodActivityState(activity)]),
+      bankPeriodWiseEntities: [...bankPeriodWiseEntities]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([wiseEntity, activity]) => [wiseEntity, bankPeriodActivityState(activity)]),
+      bankPeriodSlashCashback: bankPeriodSlashCashbackState(bankPeriodSlashCashback),
       reviewSamples: reviewSamples.map((sample) => ({ ...sample })),
       activeTeams: [...activeTeams].sort((left, right) => left.localeCompare(right)),
       activeSources: [...activeSources].sort((left, right) => left.localeCompare(right)),
@@ -937,8 +1201,25 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         || left.merchantName.localeCompare(right.merchantName)
     );
 
+    const bankPeriod: BankPeriodMetrics = {
+      sources: [...bankPeriodSources].map(([source, activity]) => ({
+        source,
+        ...finalizeBankPeriodActivity(activity)
+      })).sort((left, right) => left.source.localeCompare(right.source)),
+      wiseEntities: [...bankPeriodWiseEntities].map(([wiseEntity, activity]) => ({
+        wiseEntity,
+        ...finalizeBankPeriodActivity(activity)
+      })).sort((left, right) => left.wiseEntity.localeCompare(right.wiseEntity)),
+      slashCashback: {
+        eligiblePurchaseCount: bankPeriodSlashCashback.eligiblePurchaseCount,
+        earned: currencyTotals(bankPeriodSlashCashback.earned),
+        eligibleSpend: currencyTotals(bankPeriodSlashCashback.eligibleSpend),
+        credited: currencyTotals(bankPeriodSlashCashback.credited)
+      }
+    };
+
     return {
-      version: 1,
+      version: 2,
       fromDate,
       toDate,
       generatedAt,
@@ -966,7 +1247,8 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         evictedCandidateCount,
         rows: merchantRows,
         other: merchantOther.transactionCount > 0 ? finalizeAggregate(merchantOther) : null
-      }
+      },
+      bankPeriod
     };
   }
 

@@ -749,9 +749,41 @@ export interface BankAnalyticsSummary {
   moneyOut: CurrencyTotals;
 }
 
+export interface BankPeriodDirectionMetrics {
+  transactionCount: number;
+  categorizedTransactionCount: number;
+  unassignedOwnerTransactionCount: number;
+  volume: CurrencyTotals;
+}
+
+export interface BankPeriodSourceMetrics {
+  source: BankTransactionSource;
+  moneyIn: BankPeriodDirectionMetrics;
+  moneyOut: BankPeriodDirectionMetrics;
+}
+
+export interface BankPeriodWiseEntityMetrics {
+  wiseEntity: WiseEntity;
+  moneyIn: BankPeriodDirectionMetrics;
+  moneyOut: BankPeriodDirectionMetrics;
+}
+
+export interface BankPeriodSlashCashbackMetrics {
+  eligiblePurchaseCount: number;
+  earned: CurrencyTotals;
+  eligibleSpend: CurrencyTotals;
+  credited: CurrencyTotals;
+}
+
+export interface BankPeriodMetrics {
+  sources: BankPeriodSourceMetrics[];
+  wiseEntities: BankPeriodWiseEntityMetrics[];
+  slashCashback: BankPeriodSlashCashbackMetrics;
+}
+
 /** Compact response returned by GET /analytics?fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD. */
 export interface BankAnalyticsSnapshot {
-  version: 1;
+  version: 2;
   fromDate: string;
   toDate: string;
   generatedAt: string;
@@ -763,6 +795,7 @@ export interface BankAnalyticsSnapshot {
   relationships: BankAnalyticsRelationshipBreakdown[];
   reviewSamples: BankAnalyticsReviewSample[];
   unmatchedMerchants: BankAnalyticsMerchantRollup;
+  bankPeriod: BankPeriodMetrics;
 }
 
 export interface ImportWiseStatementResult {

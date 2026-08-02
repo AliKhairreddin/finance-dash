@@ -73,6 +73,9 @@ import type {
   BankAnalyticsCategoryCompany,
   BankAnalyticsRelationship,
   BankAnalyticsSnapshot,
+  BankPeriodDirectionMetrics,
+  BankPeriodMetrics,
+  BankPeriodSourceMetrics,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -210,6 +213,7 @@ type TransactionPageRequest = {
   direction?: "in" | "out";
   order: SortDirection;
 };
+type BankPeriodActivityMetrics = Pick<BankPeriodSourceMetrics, "moneyIn" | "moneyOut">;
 type TransactionPageState = {
   requestKey: string;
   transactions: Transaction[];
@@ -409,7 +413,7 @@ async function fetchAnalyticsSnapshotRange(
     }
     const snapshot = (await response.json()) as BankAnalyticsSnapshot;
     if (
-      snapshot.version !== 1
+      snapshot.version !== 2
       || snapshot.fromDate !== range.fromDate
       || snapshot.toDate !== range.toDate
     ) {
@@ -577,6 +581,27 @@ function revenueTeamLabel(teamId: string | undefined, teamName: string | undefin
 function groupedTransactionMoney(rows: Transaction[], direction?: Transaction["direction"]): string {
   const visibleRows = direction ? rows.filter((row) => row.direction === direction) : rows;
   return formatCurrencyTotals(sumCurrencyTotals(visibleRows, (row) => row.amount));
+}
+
+function emptyBankPeriodDirectionMetrics(): BankPeriodDirectionMetrics {
+  return {
+    transactionCount: 0,
+    categorizedTransactionCount: 0,
+    unassignedOwnerTransactionCount: 0,
+    volume: {}
+  };
+}
+
+function resolvedBankPeriodActivity(
+  activity: BankPeriodActivityMetrics | null,
+  ready: boolean
+): BankPeriodActivityMetrics | null {
+  if (activity) return activity;
+  if (!ready) return null;
+  return {
+    moneyIn: emptyBankPeriodDirectionMetrics(),
+    moneyOut: emptyBankPeriodDirectionMetrics()
+  };
 }
 
 function groupedAccountMoney(rows: DashboardSnapshot["accounts"]): string {
@@ -820,6 +845,11 @@ function App() {
   const [analyticsDataRevision, setAnalyticsDataRevision] = useState(0);
   const analyticsSnapshotRequestsRef = useRef(new Map<string, Promise<BankAnalyticsSnapshot>>());
 
+  function invalidateAnalyticsData(): void {
+    setAnalyticsSnapshots({});
+    setAnalyticsDataRevision((revision) => revision + 1);
+  }
+
   const ensureAnalyticsSnapshot = useCallback((range: AnalyticsDateRange): Promise<BankAnalyticsSnapshot> => {
     const key = analyticsSnapshotKey(range);
     const existing = analyticsSnapshotRequestsRef.current.get(key);
@@ -849,6 +879,44 @@ function App() {
     analyticsSnapshotRequestsRef.current.set(key, request);
     return request;
   }, []);
+
+  const bankPeriodRange = activeTab === "banks" && bankTab !== "holdings"
+    ? transactionPageRequest?.dateRange ?? null
+    : null;
+  const bankPeriodRangeKey = bankPeriodRange ? analyticsSnapshotKey(bankPeriodRange) : null;
+  const bankPeriodMetrics = bankPeriodRangeKey
+    ? analyticsSnapshots[bankPeriodRangeKey]?.bankPeriod ?? null
+    : null;
+  const [isLoadingBankPeriodMetrics, setIsLoadingBankPeriodMetrics] = useState(false);
+  const [bankPeriodMetricsError, setBankPeriodMetricsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!bankPeriodRange) {
+      setIsLoadingBankPeriodMetrics(false);
+      setBankPeriodMetricsError(null);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingBankPeriodMetrics(!analyticsSnapshots[analyticsSnapshotKey(bankPeriodRange)]);
+    setBankPeriodMetricsError(null);
+    void ensureAnalyticsSnapshot(bankPeriodRange)
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setBankPeriodMetricsError(error instanceof Error ? error.message : "Period totals could not be calculated");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingBankPeriodMetrics(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    analyticsDataRevision,
+    bankPeriodRange?.fromDate,
+    bankPeriodRange?.toDate,
+    ensureAnalyticsSnapshot
+  ]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", themeMode === "dark");
@@ -1012,7 +1080,7 @@ function App() {
             await waitForHistoricalTransactionSync(queued.key, request.key);
           })).then(() => {
             for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
-            setAnalyticsDataRevision((revision) => revision + 1);
+            invalidateAnalyticsData();
             const latestRequest = transactionPageRequestRef.current;
             if (latestRequest?.key === request.key) {
               setNotice("Historical bank activity is up to date.");
@@ -1201,7 +1269,7 @@ function App() {
   );
 
   function applyTransactionUpdate(updated: Transaction) {
-    setAnalyticsDataRevision((revision) => revision + 1);
+    invalidateAnalyticsData();
     setDashboard((current) => {
       if (!current) return current;
       return {
@@ -1230,6 +1298,7 @@ function App() {
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       await refreshCurrentTransactionPage();
+      invalidateAnalyticsData();
       setNotice("Refresh and sync complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh and sync failed");
@@ -1311,6 +1380,7 @@ function App() {
       }
       if (nextDashboard) setDashboard(nextDashboard);
       await refreshCurrentTransactionPage();
+      invalidateAnalyticsData();
       const importedFiles = files.length;
       const entityLabel = [...importedEntities]
         .map(wiseEntityShortLabel)
@@ -1471,7 +1541,7 @@ function App() {
     renamedTo?: string
   ) {
     if (renamedFrom && renamedTo && renamedFrom !== renamedTo) {
-      setAnalyticsDataRevision((revision) => revision + 1);
+      invalidateAnalyticsData();
       setTransactionPageState((current) => ({
         ...current,
         transactions: current.transactions.map((transaction) =>
@@ -2038,6 +2108,9 @@ function App() {
           slashTransactions={slashTransactions}
           slashDateRange={slashDateRange}
           amexTransactions={amexTransactions}
+          bankPeriodMetrics={bankPeriodMetrics}
+          bankPeriodMetricsError={bankPeriodMetricsError}
+          isLoadingBankPeriodMetrics={isLoadingBankPeriodMetrics}
           providersById={providersById}
           isImportingWise={isImportingWise}
           isLoadingTransactions={isLoadingTransactionPage}
@@ -2791,6 +2864,9 @@ function BanksView({
   slashTransactions,
   slashDateRange,
   amexTransactions,
+  bankPeriodMetrics,
+  bankPeriodMetricsError,
+  isLoadingBankPeriodMetrics,
   providersById,
   isImportingWise,
   isLoadingTransactions,
@@ -2839,6 +2915,9 @@ function BanksView({
   slashTransactions: Transaction[];
   slashDateRange: SlashTransactionDateRange;
   amexTransactions: Transaction[];
+  bankPeriodMetrics: BankPeriodMetrics | null;
+  bankPeriodMetricsError: string | null;
+  isLoadingBankPeriodMetrics: boolean;
   providersById: Map<string, Provider>;
   isImportingWise: boolean;
   isLoadingTransactions: boolean;
@@ -2859,15 +2938,8 @@ function BanksView({
   onDeleteHolding: (holdingId: string) => Promise<void>;
   onRefreshRates: () => Promise<void>;
 }) {
-  const rowsBySource = new Map<BankSource, Transaction[]>();
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
-  const displayedBankTransactions = activeBank === "all" ? allBankTransactions : [];
-  for (const source of bankSources) rowsBySource.set(source.id, []);
-  for (const transaction of displayedBankTransactions) {
-    if (!isBankSource(transaction.source)) continue;
-    rowsBySource.get(transaction.source)?.push(transaction);
-  }
   for (const status of dashboard.integrationStatus) {
     const source = status.id as DataSource;
     if (status.id !== "openrouter" && status.id !== "coinbase" && isBankSource(source)) {
@@ -2895,6 +2967,20 @@ function BanksView({
     : activeSourceAccounts;
   const activeSourceBalance = sumCurrencyTotals(activeSourceDisplayAccounts, (account) => account.balance);
   const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
+  const periodMetricsReady = bankPeriodMetrics !== null && bankPeriodMetricsError === null;
+  const periodSourceById = new Map(
+    periodMetricsReady ? bankPeriodMetrics.sources.map((item) => [item.source, item]) : []
+  );
+  const wisePeriodActivity = wiseEntityView === "all"
+    ? periodSourceById.get("wise") ?? null
+    : periodMetricsReady
+      ? bankPeriodMetrics.wiseEntities.find((item) => item.wiseEntity === wiseEntityView) ?? null
+      : null;
+  const periodMetricPlaceholder = bankPeriodMetricsError
+    ? "Unavailable"
+    : isLoadingBankPeriodMetrics || !bankPeriodMetrics
+      ? "Calculating…"
+      : "0";
 
   return (
     <div className="banks-layout">
@@ -2999,14 +3085,21 @@ function BanksView({
               const summaryAccounts = source.id === "slash"
                 ? accounts.filter((account) => account.slashAccountSubtype === "cash")
                 : accounts;
-              const rows = rowsBySource.get(source.id) ?? [];
               const status = statusBySource.get(source.id);
               const accountTotals = sumCurrencyTotals(summaryAccounts, (account) => account.balance);
+              const periodActivity = periodSourceById.get(source.id);
+              const periodTransactionCount = periodActivity
+                ? periodActivity.moneyIn.transactionCount + periodActivity.moneyOut.transactionCount
+                : null;
               return (
                 <SummaryTile
                   key={source.id}
                   label={`${source.label} ${status?.mode ?? "partial"}`}
-                  value={summaryAccounts.length > 0 ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates) : `${rows.length} loaded`}
+                  value={summaryAccounts.length > 0
+                    ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates)
+                    : periodTransactionCount === null
+                      ? periodMetricPlaceholder
+                      : `${periodTransactionCount} transactions`}
                   detail={summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
                 />
               );
@@ -3061,6 +3154,10 @@ function BanksView({
           onImportWiseStatements={onImportWiseStatements}
           onLoadMoreTransactions={onLoadMoreTransactions}
           wiseEntityView={wiseEntityView}
+          periodActivity={wisePeriodActivity}
+          periodMetricsError={bankPeriodMetricsError}
+          periodMetricsLoading={isLoadingBankPeriodMetrics}
+          periodMetricsReady={periodMetricsReady}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -3098,6 +3195,10 @@ function BanksView({
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          periodActivity={periodSourceById.get("revolut") ?? null}
+          periodMetricsError={bankPeriodMetricsError}
+          periodMetricsLoading={isLoadingBankPeriodMetrics}
+          periodMetricsReady={periodMetricsReady}
           onLoadMoreTransactions={onLoadMoreTransactions}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
@@ -3128,6 +3229,11 @@ function BanksView({
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          periodActivity={periodSourceById.get("slash") ?? null}
+          periodMetricsError={bankPeriodMetricsError}
+          periodMetricsLoading={isLoadingBankPeriodMetrics}
+          periodMetricsReady={periodMetricsReady}
+          periodSlashCashback={periodMetricsReady ? bankPeriodMetrics.slashCashback : null}
           onLoadMoreTransactions={onLoadMoreTransactions}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
@@ -3143,6 +3249,10 @@ function BanksView({
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          periodActivity={periodSourceById.get("amex") ?? null}
+          periodMetricsError={bankPeriodMetricsError}
+          periodMetricsLoading={isLoadingBankPeriodMetrics}
+          periodMetricsReady={periodMetricsReady}
           onLoadDateRange={onLoadAllBankTransactions}
           onLoadMoreTransactions={onLoadMoreTransactions}
         />
@@ -3180,6 +3290,10 @@ type BankReconciliationViewProps = {
   hasMoreTransactions: boolean;
   isLoadingTransactions: boolean;
   transactionLoadError: string | null;
+  periodActivity: BankPeriodActivityMetrics | null;
+  periodMetricsError: string | null;
+  periodMetricsLoading: boolean;
+  periodMetricsReady: boolean;
   onLoadMoreTransactions: () => Promise<void>;
   isImportingWise?: boolean;
   onImportWiseStatements?: (files: FileList | null) => Promise<void>;
@@ -3213,6 +3327,10 @@ function BankReconciliationView({
   hasMoreTransactions,
   isLoadingTransactions,
   transactionLoadError,
+  periodActivity,
+  periodMetricsError,
+  periodMetricsLoading,
+  periodMetricsReady,
   onLoadMoreTransactions,
   isImportingWise,
   onImportWiseStatements,
@@ -3229,14 +3347,13 @@ function BankReconciliationView({
   const wiseFileInputRef = useRef<HTMLInputElement>(null);
   const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
-  const summary = useMemo(() => {
-    const settledRows = rows.filter(
-      (transaction) => transaction.status === "posted" || transaction.status === "settled"
-    );
-    const volume = sumCurrencyTotals(settledRows, (transaction) => transaction.amount);
-    const unassigned = settledRows.filter((transaction) => !transaction.teamId).length;
-    return { volume, count: settledRows.length, unassigned };
-  }, [rows]);
+  const resolvedPeriodActivity = resolvedBankPeriodActivity(periodActivity, periodMetricsReady);
+  const periodDirection = resolvedPeriodActivity?.[bankDirection === "in" ? "moneyIn" : "moneyOut"] ?? null;
+  const periodMetricPlaceholder = periodMetricsError
+    ? "Unavailable"
+    : periodMetricsLoading || !periodMetricsReady
+      ? "Calculating…"
+      : "0";
   const directionLabel = bankDirection === "in"
     ? (source === "slash" ? "Added" : "Money in")
     : (source === "slash" ? "Spent / sent" : "Money out");
@@ -3387,14 +3504,22 @@ function BankReconciliationView({
       </span>
       <div className="wise-summary-grid">
         <SummaryTile
-          label="Loaded volume"
-          value={formatUsdCurrencyTotal(summary.volume, dashboard.fxRates)}
-          detail={nativeCurrencyBreakdown(summary.volume)}
+          label="Period volume"
+          value={periodDirection
+            ? formatUsdCurrencyTotal(periodDirection.volume, dashboard.fxRates, money(0))
+            : periodMetricPlaceholder}
+          detail={periodDirection ? nativeCurrencyBreakdown(periodDirection.volume) : undefined}
         />
-        <SummaryTile label="Loaded transactions" value={String(summary.count)} />
-        <SummaryTile label="Loaded categorized" value={String(rows.length - rows.filter(categoryNeedsReview).length)} />
-        <SummaryTile label="Loaded without owner" value={String(summary.unassigned)} />
+        <SummaryTile label="Period transactions" value={periodDirection ? String(periodDirection.transactionCount) : periodMetricPlaceholder} />
+        <SummaryTile label="Period categorized" value={periodDirection ? String(periodDirection.categorizedTransactionCount) : periodMetricPlaceholder} />
+        <SummaryTile label="Period without owner" value={periodDirection ? String(periodDirection.unassignedOwnerTransactionCount) : periodMetricPlaceholder} />
       </div>
+      {periodMetricsError && (
+        <div className="integration-alert">
+          <CircleAlert size={16} />
+          <span>Period totals could not be calculated: {periodMetricsError}</span>
+        </div>
+      )}
       {integrationStatus?.issue && (
         <div className="integration-alert">
           <CircleAlert size={16} />
@@ -6037,7 +6162,16 @@ function RevolutView({
   const revolutAccounts = dashboard.accounts.filter((account) =>
     account.source === "revolut" && hasNonZeroAccountBalance(account)
   );
-  const allRevolutRows = rows;
+  const periodActivity = resolvedBankPeriodActivity(
+    reconciliationProps.periodActivity,
+    reconciliationProps.periodMetricsReady
+  );
+  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
+    ? "Unavailable"
+    : "Calculating…";
+  const periodTransactionCount = periodActivity
+    ? periodActivity.moneyIn.transactionCount + periodActivity.moneyOut.transactionCount
+    : null;
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -6075,17 +6209,23 @@ function RevolutView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Loaded Revolut movement</h2>
-          <span className="total-pill">{allRevolutRows.length} loaded</span>
+          <h2>Revolut movement</h2>
+          <span className="total-pill">
+            {periodTransactionCount === null ? periodMetricPlaceholder : `${periodTransactionCount} transactions`}
+          </span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
             <span>Money in</span>
-            <strong className="good-text">{groupedTransactionMoney(allRevolutRows, "in")}</strong>
+            <strong className="good-text">
+              {periodActivity ? formatCurrencyTotals(periodActivity.moneyIn.volume) : periodMetricPlaceholder}
+            </strong>
           </div>
           <div className="bridge-row">
             <span>Money out</span>
-            <strong className="danger-text">{groupedTransactionMoney(allRevolutRows, "out")}</strong>
+            <strong className="danger-text">
+              {periodActivity ? formatCurrencyTotals(periodActivity.moneyOut.volume) : periodMetricPlaceholder}
+            </strong>
           </div>
         </div>
       </section>
@@ -6109,26 +6249,30 @@ function SlashView({
   dateRange,
   isLoadingDateRange,
   onLoadDateRange,
+  periodSlashCashback,
   ...reconciliationProps
 }: ConnectedBankViewProps & {
   dateRange: SlashTransactionDateRange;
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
+  periodSlashCashback: BankPeriodMetrics["slashCashback"] | null;
 }) {
   const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
-  const allSlashRows = rows;
-  const cashbackPurchaseRows = allSlashRows.filter((row) => row.cashback);
-  const cashbackEarned = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.cashback?.amount ?? 0);
-  const cashbackEligibleSpend = sumCurrencyTotals(cashbackPurchaseRows, (row) => row.amount);
-  const cashbackCreditRows = allSlashRows.filter((row) =>
-    row.direction === "in"
-    && `${row.counterparty} ${row.description}`.toLowerCase().includes("cashback")
-  );
-  const cashbackCredited = sumCurrencyTotals(cashbackCreditRows, (row) => row.amount);
-  const cashbackEarnedUsd = cashbackEarned.USD ?? 0;
-  const cashbackEligibleSpendUsd = cashbackEligibleSpend.USD ?? 0;
-  const effectiveCashbackRate = cashbackEligibleSpendUsd > 0
-    ? (cashbackEarnedUsd / cashbackEligibleSpendUsd) * 100
+  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
+    ? "Unavailable"
+    : "Calculating…";
+  const cashbackEarnedUsd = periodSlashCashback
+    ? convertCurrencyTotalsToUsd(periodSlashCashback.earned, dashboard.fxRates)
+    : null;
+  const cashbackEligibleSpendUsd = periodSlashCashback
+    ? convertCurrencyTotalsToUsd(periodSlashCashback.eligibleSpend, dashboard.fxRates)
+    : null;
+  const effectiveCashbackRate = cashbackEarnedUsd
+    && cashbackEligibleSpendUsd
+    && cashbackEarnedUsd.excludedCurrencies.length === 0
+    && cashbackEligibleSpendUsd.excludedCurrencies.length === 0
+    && cashbackEligibleSpendUsd.totalUsd > 0
+    ? (cashbackEarnedUsd.totalUsd / cashbackEligibleSpendUsd.totalUsd) * 100
     : undefined;
   const cashBalance = sumCurrencyTotals(
     slashAccounts.filter((account) => account.slashAccountSubtype === "cash"),
@@ -6187,27 +6331,43 @@ function SlashView({
 
       <section className="panel">
         <div className="panel-header compact">
-          <h2>Loaded Slash cashback</h2>
-          <span className="total-pill good" title={nativeCurrencyBreakdown(cashbackEarned)}>
-            {formatUsdCurrencyTotal(cashbackEarned, dashboard.fxRates)}
+          <h2>Slash cashback</h2>
+          <span className="total-pill good" title={periodSlashCashback ? nativeCurrencyBreakdown(periodSlashCashback.earned) : undefined}>
+            {periodSlashCashback
+              ? formatUsdCurrencyTotal(periodSlashCashback.earned, dashboard.fxRates, money(0))
+              : periodMetricPlaceholder}
           </span>
         </div>
         <div className="bridge">
           <div className="bridge-row">
             <span>Eligible purchases</span>
-            <strong>{cashbackPurchaseRows.length}</strong>
+            <strong>{periodSlashCashback ? periodSlashCashback.eligiblePurchaseCount : periodMetricPlaceholder}</strong>
           </div>
           <div className="bridge-row">
             <span>Eligible spend</span>
-            <strong>{formatUsdCurrencyTotal(cashbackEligibleSpend, dashboard.fxRates)}</strong>
+            <strong>
+              {periodSlashCashback
+                ? formatUsdCurrencyTotal(periodSlashCashback.eligibleSpend, dashboard.fxRates, money(0))
+                : periodMetricPlaceholder}
+            </strong>
           </div>
           <div className="bridge-row">
             <span>Effective cashback rate</span>
-            <strong>{effectiveCashbackRate === undefined ? "—" : `${effectiveCashbackRate.toFixed(2)}%`}</strong>
+            <strong>
+              {!periodSlashCashback
+                ? periodMetricPlaceholder
+                : effectiveCashbackRate === undefined
+                  ? "—"
+                  : `${effectiveCashbackRate.toFixed(2)}%`}
+            </strong>
           </div>
           <div className="bridge-row">
             <span>Cashback credited</span>
-            <strong>{formatUsdCurrencyTotal(cashbackCredited, dashboard.fxRates)}</strong>
+            <strong>
+              {periodSlashCashback
+                ? formatUsdCurrencyTotal(periodSlashCashback.credited, dashboard.fxRates, money(0))
+                : periodMetricPlaceholder}
+            </strong>
           </div>
         </div>
       </section>
@@ -6232,6 +6392,10 @@ function AmexView({
   hasMoreTransactions,
   isLoadingTransactions,
   transactionLoadError,
+  periodActivity,
+  periodMetricsError,
+  periodMetricsLoading,
+  periodMetricsReady,
   onLoadDateRange,
   onLoadMoreTransactions
 }: {
@@ -6241,6 +6405,10 @@ function AmexView({
   hasMoreTransactions: boolean;
   isLoadingTransactions: boolean;
   transactionLoadError: string | null;
+  periodActivity: BankPeriodActivityMetrics | null;
+  periodMetricsError: string | null;
+  periodMetricsLoading: boolean;
+  periodMetricsReady: boolean;
   onLoadDateRange: (dateRange: BankTransactionDateRange) => Promise<void>;
   onLoadMoreTransactions: () => Promise<void>;
 }) {
@@ -6250,6 +6418,10 @@ function AmexView({
   const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
   const balance = sumCurrencyTotals(amexAccounts, (account) => account.balance);
   const balanceTone = Object.values(balance).some((amount) => amount < 0) ? "warning" : "";
+  const resolvedPeriod = resolvedBankPeriodActivity(periodActivity, periodMetricsReady);
+  const periodMetricPlaceholder = periodMetricsError || (!periodMetricsLoading && periodMetricsReady)
+    ? "Unavailable"
+    : "Calculating…";
 
   return (
     <div className="split-view">
@@ -6279,11 +6451,15 @@ function AmexView({
         <div className="bridge">
           <div className="bridge-row">
             <span>Money out</span>
-            <strong className="danger-text">{groupedTransactionMoney(rows, "out")}</strong>
+            <strong className="danger-text">
+              {resolvedPeriod ? formatCurrencyTotals(resolvedPeriod.moneyOut.volume) : periodMetricPlaceholder}
+            </strong>
           </div>
           <div className="bridge-row">
             <span>Credits</span>
-            <strong className="good-text">{groupedTransactionMoney(rows, "in")}</strong>
+            <strong className="good-text">
+              {resolvedPeriod ? formatCurrencyTotals(resolvedPeriod.moneyIn.volume) : periodMetricPlaceholder}
+            </strong>
           </div>
         </div>
         {amexStatus && amexStatus.needs.length > 0 && (
@@ -6291,6 +6467,12 @@ function AmexView({
             {amexStatus.needs.map((need) => (
               <code key={need}>{need}</code>
             ))}
+          </div>
+        )}
+        {periodMetricsError && (
+          <div className="integration-alert">
+            <CircleAlert size={16} />
+            <span>Period totals could not be calculated: {periodMetricsError}</span>
           </div>
         )}
       </section>
