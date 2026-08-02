@@ -42,6 +42,7 @@
   --sidebar-border-hover: #d4d4d8;
   --sidebar-shadow-hover: 0 16px 42px rgba(9, 9, 11, 0.09);
   --hover-bg: #f4f4f5;
+  --selected-option-bg: #e4e4e7;
   --row-hover: #fafafa;
   --active-bg: #f4f4f5;
   --active-border: #d4d4d8;
@@ -156,6 +157,7 @@
   --sidebar-border-hover: #3f3f46;
   --sidebar-shadow-hover: 0 18px 46px rgba(0, 0, 0, 0.36);
   --hover-bg: #111111;
+  --selected-option-bg: #27272a;
   --row-hover: #0f0f10;
   --active-bg: #18181b;
   --active-border: #3f3f46;
@@ -1643,9 +1645,7 @@ th.amount .sortable-table-heading {
 }
 
 .category-combobox-option {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 16px;
-  gap: 8px;
+  display: block;
   align-items: center;
   width: 100%;
   min-height: 32px;
@@ -1663,12 +1663,9 @@ th.amount .sortable-table-heading {
 }
 
 .category-combobox-option[aria-selected="true"] {
-  color: var(--blue);
+  color: var(--ink);
+  background: var(--selected-option-bg);
   font-weight: 720;
-}
-
-.category-combobox-option svg {
-  justify-self: end;
 }
 
 .category-combobox-empty {
@@ -1815,8 +1812,9 @@ th.amount .sortable-table-heading {
 
 .searchable-select-positioner {
   z-index: 230;
-  width: var(--anchor-width);
-  max-width: var(--available-width);
+  width: max-content;
+  min-width: min(var(--anchor-width), var(--available-width));
+  max-width: min(480px, var(--available-width));
   outline: none;
 }
 
@@ -1846,7 +1844,7 @@ th.amount .sortable-table-heading {
 .searchable-select-list {
   width: 100%;
   min-width: 0;
-  max-height: min(300px, calc(var(--available-height) - 26px));
+  max-height: min(420px, calc(var(--available-height) - 26px));
   padding: 5px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -1860,9 +1858,7 @@ th.amount .sortable-table-heading {
 }
 
 .searchable-select-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 7px;
+  display: block;
   align-items: center;
   width: 100%;
   min-width: 0;
@@ -1873,6 +1869,7 @@ th.amount .sortable-table-heading {
   cursor: default;
   outline: 0;
   line-height: 1.3;
+  white-space: nowrap;
 }
 
 .searchable-select-option[data-highlighted] {
@@ -1880,7 +1877,8 @@ th.amount .sortable-table-heading {
 }
 
 .searchable-select-option[data-selected] {
-  color: var(--blue);
+  color: var(--ink);
+  background: var(--selected-option-bg);
   font-weight: 680;
 }
 
@@ -1888,17 +1886,12 @@ th.amount .sortable-table-heading {
   opacity: 0.48;
 }
 
-.searchable-select-option-indicator {
-  display: inline-grid;
-  grid-column: 1;
-  place-items: center;
-}
-
 .searchable-select-option-label {
-  grid-column: 2;
+  display: block;
   min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .searchable-select-empty {
@@ -1949,6 +1942,15 @@ th.amount .sortable-table-heading {
     border-color 0.16s ease,
     box-shadow 0.16s ease,
     background-color 0.16s ease;
+}
+
+.filters .searchable-select-input {
+  min-height: 34px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .category-select select:hover,
@@ -3203,15 +3205,43 @@ th.amount .sortable-table-heading {
 }
 
 .analytics-global-filters > .searchable-select {
-  flex: 0 0 108px;
-  min-width: 108px;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.analytics-global-filters .analytics-period-filter {
   width: 108px;
 }
 
-.analytics-global-filters > .analytics-detail-filter {
-  flex-basis: 118px;
-  min-width: 118px;
-  width: 118px;
+.analytics-global-filters > .analytics-year-filter {
+  width: 88px;
+}
+
+.analytics-global-filters > .analytics-month-filter {
+  width: 116px;
+}
+
+.analytics-global-filters > .analytics-quarter-filter {
+  width: 68px;
+}
+
+.analytics-custom-period {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--app-muted);
+}
+
+.filters .analytics-custom-period input {
+  width: 132px;
+  min-height: 36px;
+  padding-inline: 9px 6px;
+  color: var(--ink);
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 1px 1px rgba(20, 32, 51, 0.03);
 }
 
 .categorization-layout > .wide-panel:first-child > .panel-header {

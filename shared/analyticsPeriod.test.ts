@@ -61,6 +61,42 @@ test("analytics full-year periods include January through December", () => {
   assert.equal(analyticsPeriodLabel(selection("year", { year: 2023 }), today), "2023");
 });
 
+test("analytics relative periods align to calendar days, Monday weeks, and months", () => {
+  assert.deepEqual(analyticsDateRange(selection("today"), today), {
+    fromDate: "2026-07-30",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("yesterday"), today), {
+    fromDate: "2026-07-29",
+    toDate: "2026-07-29"
+  });
+  assert.deepEqual(analyticsDateRange(selection("this_week"), today), {
+    fromDate: "2026-07-27",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("last_week"), today), {
+    fromDate: "2026-07-20",
+    toDate: "2026-07-26"
+  });
+  assert.deepEqual(analyticsDateRange(selection("this_month"), today), {
+    fromDate: "2026-07-01",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("last_month"), today), {
+    fromDate: "2026-06-01",
+    toDate: "2026-06-30"
+  });
+});
+
+test("analytics custom periods use the selected inclusive dates", () => {
+  const custom = selection("custom", { fromDate: "2026-05-03", toDate: "2026-05-19" });
+  assert.deepEqual(analyticsDateRange(custom, today), {
+    fromDate: "2026-05-03",
+    toDate: "2026-05-19"
+  });
+  assert.equal(analyticsPeriodLabel(custom, today), "2026-05-03 – 2026-05-19");
+});
+
 test("current month, quarter, and year periods stop at today", () => {
   assert.deepEqual(
     analyticsDateRange(selection("month", { year: 2026, month: 7 }), today),

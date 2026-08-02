@@ -1,6 +1,6 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { Select } from "@base-ui/react/select";
-import { Check, ChevronDown, Search, X } from "lucide-react";
+import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type SearchableSelectOption = {
@@ -56,6 +56,7 @@ export function SearchableSelect({
             id={id}
             className="searchable-select-control simple-select-control"
             aria-label={ariaLabel}
+            title={selectedOption?.label}
           >
             <Select.Value className="searchable-select-input simple-select-value" placeholder={placeholder} />
             <Select.Icon className="searchable-select-action">
@@ -64,7 +65,12 @@ export function SearchableSelect({
           </Select.Trigger>
 
           <Select.Portal>
-            <Select.Positioner className="searchable-select-positioner" sideOffset={5} align="start">
+            <Select.Positioner
+              align="start"
+              alignItemWithTrigger={false}
+              className="searchable-select-positioner"
+              sideOffset={5}
+            >
               <Select.Popup className="searchable-select-popup">
                 <Select.List className="searchable-select-list">
                   {options.map((option) => (
@@ -74,9 +80,6 @@ export function SearchableSelect({
                       className="searchable-select-option"
                       disabled={option.disabled}
                     >
-                      <Select.ItemIndicator className="searchable-select-option-indicator">
-                        <Check size={14} aria-hidden="true" />
-                      </Select.ItemIndicator>
                       <Select.ItemText className="searchable-select-option-label">{option.label}</Select.ItemText>
                     </Select.Item>
                   ))}
@@ -112,6 +115,7 @@ export function SearchableSelect({
             className="searchable-select-input"
             placeholder={placeholder}
             aria-label={ariaLabel}
+            title={selectedOption?.label}
             onFocus={(event) => event.currentTarget.select()}
           />
           <div className="searchable-select-actions">
@@ -138,9 +142,6 @@ export function SearchableSelect({
                     className="searchable-select-option"
                     disabled={option.disabled}
                   >
-                    <Combobox.ItemIndicator className="searchable-select-option-indicator">
-                      <Check size={14} aria-hidden="true" />
-                    </Combobox.ItemIndicator>
                     <span className="searchable-select-option-label">{option.label}</span>
                   </Combobox.Item>
                 )}

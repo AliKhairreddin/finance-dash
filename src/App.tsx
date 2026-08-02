@@ -3473,6 +3473,11 @@ function AnalyticsView({
   const [periodQuarter, setPeriodQuarter] = useUrlState<string>("analyticsQuarter", String(currentAnalyticsQuarter), {
     allowedValues: ["1", "2", "3", "4"]
   });
+  const [customPeriod, setCustomPeriod] = useUrlDateRangeState(
+    "analyticsFrom",
+    "analyticsTo",
+    { fromDate: analyticsToday, toDate: analyticsToday }
+  );
   const [categoryViewValue, setCategoryViewValue] = useUrlState("analyticsCategoryView", "", {
     isValid: (value) => parseAnalyticsCategoryView(value) !== null
   });
@@ -3494,7 +3499,9 @@ function AnalyticsView({
     mode: periodMode,
     year: selectedAnalyticsYear,
     month: selectedAnalyticsMonth,
-    quarter: selectedAnalyticsQuarter
+    quarter: selectedAnalyticsQuarter,
+    fromDate: customPeriod.fromDate,
+    toDate: customPeriod.toDate
   };
   const selectedAnalyticsRange = analyticsDateRange(periodSelection, analyticsToday);
   const selectedAnalyticsRangeKey = `${selectedAnalyticsRange.fromDate}:${selectedAnalyticsRange.toDate}`;
@@ -3801,19 +3808,29 @@ function AnalyticsView({
               <CalendarRange size={15} />
               <NativeSelect
                 aria-label="Analytics period"
+                className="analytics-period-filter"
+                searchable={false}
                 value={periodMode}
                 onValueChange={(value) => setPeriodMode(value as AnalyticsPeriodMode)}
               >
-                <NativeSelectOption value="month">Monthly</NativeSelectOption>
-                <NativeSelectOption value="quarter">Quarterly</NativeSelectOption>
-                <NativeSelectOption value="ytd">Year to date</NativeSelectOption>
-                <NativeSelectOption value="year">Full year</NativeSelectOption>
+                <NativeSelectOption value="today">Today</NativeSelectOption>
+                <NativeSelectOption value="yesterday">Yesterday</NativeSelectOption>
+                <NativeSelectOption value="this_week">This week</NativeSelectOption>
+                <NativeSelectOption value="last_week">Last week</NativeSelectOption>
+                <NativeSelectOption value="this_month">This month</NativeSelectOption>
+                <NativeSelectOption value="last_month">Last month</NativeSelectOption>
+                <NativeSelectOption value="month">Month</NativeSelectOption>
+                <NativeSelectOption value="quarter">Quarter</NativeSelectOption>
+                <NativeSelectOption value="ytd">YTD</NativeSelectOption>
+                <NativeSelectOption value="year">Year</NativeSelectOption>
+                <NativeSelectOption value="custom">Custom</NativeSelectOption>
               </NativeSelect>
             </label>
-            {periodMode !== "ytd" && (
+            {(["month", "quarter", "year"] as AnalyticsPeriodMode[]).includes(periodMode) && (
               <NativeSelect
                 aria-label="Analytics year"
                 className="analytics-year-filter"
+                searchable={false}
                 value={String(selectedAnalyticsYear)}
                 onValueChange={setPeriodYear}
               >
@@ -3825,7 +3842,8 @@ function AnalyticsView({
             {periodMode === "month" && (
               <NativeSelect
                 aria-label="Analytics month"
-                className="analytics-detail-filter"
+                className="analytics-detail-filter analytics-month-filter"
+                searchable={false}
                 value={String(selectedAnalyticsMonth)}
                 onValueChange={setPeriodMonth}
               >
@@ -3843,7 +3861,8 @@ function AnalyticsView({
             {periodMode === "quarter" && (
               <NativeSelect
                 aria-label="Analytics quarter"
-                className="analytics-detail-filter"
+                className="analytics-detail-filter analytics-quarter-filter"
+                searchable={false}
                 value={String(selectedAnalyticsQuarter)}
                 onValueChange={setPeriodQuarter}
               >
@@ -3857,6 +3876,37 @@ function AnalyticsView({
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
+            )}
+            {periodMode === "custom" && (
+              <div className="analytics-custom-period" role="group" aria-label="Custom analytics period">
+                <Input
+                  aria-label="Analytics period start"
+                  max={analyticsToday}
+                  type="date"
+                  value={customPeriod.fromDate}
+                  onChange={(event) => {
+                    const fromDate = event.target.value;
+                    setCustomPeriod((current) => ({
+                      fromDate,
+                      toDate: current.toDate < fromDate ? fromDate : current.toDate
+                    }));
+                  }}
+                />
+                <span aria-hidden="true">–</span>
+                <Input
+                  aria-label="Analytics period end"
+                  max={analyticsToday}
+                  type="date"
+                  value={customPeriod.toDate}
+                  onChange={(event) => {
+                    const toDate = event.target.value;
+                    setCustomPeriod((current) => ({
+                      fromDate: current.fromDate > toDate ? toDate : current.fromDate,
+                      toDate
+                    }));
+                  }}
+                />
+              </div>
             )}
             <span className="analytics-period-status" aria-live="polite">
               <span className={`analytics-period-value ${analyticsPeriodBusy ? "loading" : ""}`}>
@@ -4710,7 +4760,6 @@ function CategorySearchSelect({
                   onMouseEnter={() => setActiveIndex(index)}
                 >
                   <span>{category}</span>
-                  {category === value && <Check size={14} />}
                 </button>
               ))
             ) : (

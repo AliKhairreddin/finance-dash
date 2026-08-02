@@ -1,3 +1,102 @@
+# Dropdown and Analytics period controls design QA
+
+## Scope
+
+This pass verifies the shared dropdown treatment and the Analytics period selector requested from the supplied broken-menu screenshot. The screenshot is a problem-state source rather than a visual target: the corrected implementation must remove the checkmark gutter, prevent option wrapping, use a contrasting selected background, unify the period/year/month controls, and add compact relative and custom ranges.
+
+## Evidence
+
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-78b68a5e-59d7-4b9a-a3be-2c5e0ca7b792.png`.
+- Browser-rendered light desktop implementation: `/tmp/finance-dash-dropdown-qa-20260802/analytics-period-menu-final.png`.
+- Browser-rendered dark desktop implementation: `/tmp/finance-dash-dropdown-qa-20260802/analytics-period-menu-dark.png`.
+- Browser-rendered mobile implementation: `/tmp/finance-dash-dropdown-qa-20260802/analytics-period-menu-mobile.png`.
+- Same-input focused comparison, problem state on the left and corrected implementation on the right: `/tmp/finance-dash-dropdown-qa-20260802/dropdown-before-after-comparison.png`.
+- Source: 186 × 210 px at its supplied density.
+- Desktop captures: 1280 × 720 encoded pixels from a 1280 × 720 CSS viewport at device pixel ratio 1.
+- Mobile capture: 390 × 844 encoded pixels from a 390 × 844 CSS viewport at device pixel ratio 1.
+- Focused comparison: 486 × 502 px. The 186 × 210 source was proportionally enlarged to 279 × 315 px; the implementation side is a 147 × 462 px crop of the rendered trigger and popup. No density mismatch was used to judge type or spacing.
+- State: Analytics, Month selected, period menu open; light, dark, and 390 px responsive variants checked.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+### Fonts and typography
+
+- The implementation retains the dashboard's Geist variable font and existing control weights.
+- Every period option is a single line. The compact copy is `Month`, `Quarter`, `YTD`, and `Year`; the relative options are `Today`, `Yesterday`, `This week`, `Last week`, `This month`, and `Last month`.
+- Trigger values are complete at the tested widths: `2026` and `August` are both fully visible.
+
+### Spacing and layout rhythm
+
+- Period, year, month, and quarter use the same trigger, chevron, radius, border, padding, popup, and row treatment.
+- The year trigger is 88 px wide, the month trigger is 116 px, and the quarter trigger is 68 px; each is sized for its actual content instead of sharing a wasteful generic width.
+- The popup opens below its trigger and has enough height to show all eleven Analytics period options without wrapping or offscreen clipping.
+- At 390 px, the filter controls stack cleanly and the open menu remains within the viewport.
+
+### Colors and visual tokens
+
+- Selected options use the new shared `--selected-option-bg` token: a darker neutral surface in light mode and a lighter neutral surface in dark mode.
+- Selected text remains the normal high-contrast foreground; selection is no longer communicated by a blue label or checkmark alone.
+- Hover, focus, border, panel, and shadow treatments continue to use the dashboard's existing tokens.
+
+### Image quality and asset fidelity
+
+- The affected controls contain only the existing Lucide calendar and chevron interface icons.
+- No raster substitutions, generated assets, inline drawings, custom SVGs, gradients, emoji, or placeholder imagery were introduced.
+
+### Copy and content
+
+- The single period selector contains 11 concise options: Today, Yesterday, This week, Last week, This month, Last month, Month, Quarter, YTD, Year, and Custom.
+- Choosing Month reveals only year and month; Quarter reveals only year and quarter; Year reveals only year; relative presets need no extra controls; Custom reveals an inclusive start/end range.
+- Custom range status uses the exact selected ISO dates, keeping the result unambiguous and compact.
+
+## Full-view comparison evidence
+
+- The light desktop capture shows the selected Month row with a neutral filled background, no checkmark gutter, all eleven options visible, and the compact year and month triggers aligned as one control family.
+- The dark capture confirms the selected row becomes lighter than the popup surface while retaining readable foreground contrast.
+- The mobile capture confirms the same one-line labels and selected treatment at the 390 px breakpoint; no persistent control is hidden by viewport overflow.
+
+## Focused comparison evidence
+
+- The combined comparison places the supplied broken menu and corrected rendered menu in one image.
+- The source visibly wraps `Quarterly` and `Year to date`, clips words across rows, and spends a full column on the checkmark.
+- The corrected crop shows concise one-line labels, no indicator column, a selected-row surface, a fully visible trigger value, and the full relative/custom period set.
+- A focused comparison is sufficient because the source visual truth concerns only the dropdown trigger and popup.
+
+## Interaction and runtime checks
+
+- Period trigger: opens and closes through the accessible combobox control.
+- Period menu: exposes exactly 11 options, each with the expected accessible option label.
+- Month selection: reveals the compact 2026 year trigger and August month trigger.
+- Year trigger: uses the same popup and selected-background behavior as the period trigger and keeps all four digits visible.
+- Custom selection: reveals accessible start and end date inputs; a URL-backed July 20–25 range renders and requests the exact inclusive range.
+- Theme: switching between light and dark preserves menu placement, option visibility, and contrast.
+- Responsive behavior: verified at 1280 × 720 and 390 × 844.
+- Browser console errors: none.
+- Automated verification: TypeScript lint passed, 285 tests passed, 1 intentionally skipped, and the production build passed with only the existing chunk-size advisory.
+- `git diff --check`: passed.
+
+## Comparison history
+
+1. [P2] The first desktop render clipped the final digit of `2026` in the 78 px year trigger.
+   - Increased the compact year width to 88 px.
+   - Post-fix evidence: the light, dark, and year-menu captures all show `2026` in full.
+2. [P2] The first popup aligned its selected row over the trigger, pushing the earlier relative options above the viewport.
+   - Disabled selected-item/trigger overlap so shared select popups consistently open below their trigger.
+   - Post-fix evidence: Today is the first visible row and the popup begins directly below the Month trigger.
+3. [P2] The first below-trigger popup retained a 300 px list cap, requiring hidden-scroll access to Year and Custom.
+   - Increased the responsive list ceiling to 420 px while keeping the available-height guard.
+   - Post-fix evidence: all eleven option labels are visible in the final desktop and mobile captures.
+
+## Follow-up polish
+
+No P3 follow-up is required for this pass.
+
+final result: passed
+
+---
+
 # Sidebar account actions design QA
 
 ## Scope

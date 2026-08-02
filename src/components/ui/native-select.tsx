@@ -8,6 +8,7 @@ type NativeSelectProps = {
   disabled?: boolean;
   id?: string;
   onValueChange: (value: string) => void;
+  searchable?: boolean;
   size?: "sm" | "default";
   value: string;
 };
@@ -35,6 +36,7 @@ function NativeSelect({
   disabled = false,
   id,
   onValueChange,
+  searchable,
   size = "default",
   value
 }: NativeSelectProps) {
@@ -60,7 +62,7 @@ function NativeSelect({
       ariaLabel={ariaLabel}
       clearable={false}
       disabled={disabled}
-      searchable={options.length > 8}
+      searchable={searchable ?? options.length > 8}
       showLeadingIcon={false}
     />
   );

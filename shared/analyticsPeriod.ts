@@ -1,4 +1,16 @@
-export const analyticsPeriodModes = ["month", "quarter", "ytd", "year"] as const;
+export const analyticsPeriodModes = [
+  "today",
+  "yesterday",
+  "this_week",
+  "last_week",
+  "this_month",
+  "last_month",
+  "month",
+  "quarter",
+  "ytd",
+  "year",
+  "custom"
+] as const;
 
 export type AnalyticsPeriodMode = (typeof analyticsPeriodModes)[number];
 
@@ -7,6 +19,8 @@ export interface AnalyticsPeriodSelection {
   year: number;
   month: number;
   quarter: number;
+  fromDate?: string;
+  toDate?: string;
 }
 
 export interface AnalyticsDateRange {
@@ -38,6 +52,17 @@ function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+function addUtcDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function isoWeekStart(value: string): string {
+  const day = new Date(`${value}T00:00:00Z`).getUTCDay();
+  return addUtcDays(value, -(day === 0 ? 6 : day - 1));
+}
+
 function throughToday(fromDate: string, toDate: string, today: string): AnalyticsDateRange {
   return {
     fromDate,
@@ -52,6 +77,52 @@ export function analyticsDateRange(
   assertIsoDate(today);
   const currentYear = Number(today.slice(0, 4));
   const year = Math.trunc(selection.year);
+
+  if (selection.mode === "today") {
+    return { fromDate: today, toDate: today };
+  }
+
+  if (selection.mode === "yesterday") {
+    const yesterday = addUtcDays(today, -1);
+    return { fromDate: yesterday, toDate: yesterday };
+  }
+
+  if (selection.mode === "this_week") {
+    return { fromDate: isoWeekStart(today), toDate: today };
+  }
+
+  if (selection.mode === "last_week") {
+    const thisWeekStart = isoWeekStart(today);
+    return {
+      fromDate: addUtcDays(thisWeekStart, -7),
+      toDate: addUtcDays(thisWeekStart, -1)
+    };
+  }
+
+  if (selection.mode === "this_month") {
+    return { fromDate: `${today.slice(0, 7)}-01`, toDate: today };
+  }
+
+  if (selection.mode === "last_month") {
+    const thisMonthStart = `${today.slice(0, 7)}-01`;
+    const previousMonthEnd = addUtcDays(thisMonthStart, -1);
+    return {
+      fromDate: `${previousMonthEnd.slice(0, 7)}-01`,
+      toDate: previousMonthEnd
+    };
+  }
+
+  if (selection.mode === "custom") {
+    if (!selection.fromDate || !selection.toDate) {
+      throw new Error("Custom analytics periods require a start and end date");
+    }
+    assertIsoDate(selection.fromDate);
+    assertIsoDate(selection.toDate);
+    if (selection.fromDate > selection.toDate) {
+      throw new Error("Custom analytics period start must be on or before its end");
+    }
+    return { fromDate: selection.fromDate, toDate: selection.toDate };
+  }
 
   if (selection.mode === "ytd") {
     return {
@@ -88,6 +159,13 @@ export function analyticsPeriodLabel(
   today: string
 ): string {
   const range = analyticsDateRange(selection, today);
+  if (selection.mode === "today") return "Today";
+  if (selection.mode === "yesterday") return "Yesterday";
+  if (selection.mode === "this_week") return "This week";
+  if (selection.mode === "last_week") return "Last week";
+  if (selection.mode === "this_month") return "This month";
+  if (selection.mode === "last_month") return "Last month";
+  if (selection.mode === "custom") return `${range.fromDate} – ${range.toDate}`;
   if (selection.mode === "ytd") return `${range.fromDate.slice(0, 4)} YTD`;
   if (selection.mode === "year") return String(selection.year);
   if (selection.mode === "quarter") return `Q${Math.min(4, Math.max(1, Math.trunc(selection.quarter)))} ${selection.year}`;
