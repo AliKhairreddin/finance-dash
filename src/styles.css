@@ -3193,49 +3193,10 @@ th.amount .sortable-table-heading {
   row-gap: 6px;
 }
 
-.analytics-global-filters > label {
-  flex: 0 0 136px;
-  min-width: 136px;
-}
-
-.analytics-global-filters > .searchable-select {
-  flex: 0 0 auto;
+.analytics-global-filters > .analytics-period-calendar-trigger {
+  flex: 0 1 auto;
+  max-width: min(250px, 44vw);
   min-width: 0;
-  width: auto;
-}
-
-.analytics-global-filters .analytics-period-filter {
-  width: 108px;
-}
-
-.analytics-global-filters > .analytics-year-filter {
-  width: 72px;
-}
-
-.analytics-global-filters > .analytics-month-filter {
-  width: 108px;
-}
-
-.analytics-global-filters > .analytics-quarter-filter {
-  width: 56px;
-}
-
-.analytics-custom-period {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--app-muted);
-}
-
-.filters .analytics-custom-period input {
-  width: 132px;
-  min-height: 36px;
-  padding-inline: 9px 6px;
-  color: var(--ink);
-  background: var(--control-bg);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  box-shadow: 0 1px 1px rgba(20, 32, 51, 0.03);
 }
 
 .categorization-layout > .wide-panel:first-child > .panel-header {

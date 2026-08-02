@@ -1,3 +1,86 @@
+# Unified Analytics calendar design QA
+
+## Scope
+
+This pass verifies that Analytics now uses the same single-calendar period control already established in the Banks ledger. The intended result is one compact calendar trigger in the Analytics header, with quick presets and custom date-range selection contained inside the shared calendar popover.
+
+## Evidence
+
+- Source visual truth, existing Banks calendar open: `/tmp/finance-analytics-calendar-qa-20260802/banks-calendar-reference.png`.
+- Browser-rendered Analytics calendar open: `/tmp/finance-analytics-calendar-qa-20260802/analytics-calendar-implementation.png`.
+- Browser-rendered Analytics calendar closed: `/tmp/finance-analytics-calendar-qa-20260802/analytics-calendar-closed.png`.
+- Same-input focused comparison, Banks source on the left and Analytics implementation on the right: `/tmp/finance-analytics-calendar-qa-20260802/banks-analytics-calendar-comparison.png`.
+- Source and implementation captures: 1265 × 712 encoded pixels from the same 1265 × 712 CSS viewport at device pixel ratio 1.
+- Focused comparison: 780 × 550 px. Each calendar region was cropped from its full-view capture, proportionally contained in a 360 × 510 px region, and placed on the same neutral canvas. No density mismatch was used to judge typography, spacing, or control sizing.
+- State: light theme, calendar open to August 2026, selected range ready, quick-period control closed.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+### Fonts and typography
+
+- Both source and implementation use the dashboard's Geist variable font, weights, sizes, and line heights because they render the same shared calendar component.
+- The Analytics trigger presents the complete compact label `Q3 2026`; the adjacent status pill now contains only `4 transactions`, avoiding duplicate period copy.
+- Preset names remain on one line and do not reserve space for a checkmark or chevron.
+
+### Spacing and layout rhythm
+
+- The Analytics header now contains one calendar trigger instead of a period selector plus separate year, month, quarter, or date inputs.
+- Trigger height, icon spacing, popover width, 14 px radius, calendar grid, navigation buttons, selection summary, and action-row spacing are identical to the Banks source.
+- The shared popover remains constrained to the viewport and repositions above or below the trigger according to available height.
+
+### Colors and visual tokens
+
+- Both instances use the same panel, border, muted text, selected date, in-range date, focus, and shadow tokens.
+- Selected dates use the existing high-contrast dark surface; inactive and future dates retain the same muted treatment as Banks.
+
+### Image quality and asset fidelity
+
+- Both triggers use the same existing Lucide `CalendarRange` interface icon at 16 px.
+- No raster substitutions, generated assets, inline drawings, custom SVGs, gradients, emoji, or placeholder imagery were introduced.
+
+### Copy and content
+
+- The quick-period menu retains Today, Yesterday, This week, Last week, This month, Last month, Month, Quarter, YTD, and Year.
+- Custom ranges are selected directly on the calendar and confirmed with Apply, so a separate `Custom` menu item and two persistent date fields are unnecessary.
+- The closed trigger always reflects the active period while the adjacent pill reports only transaction count or loading state.
+
+## Full-view comparison evidence
+
+- The Banks source shows one bordered calendar trigger in the unified-ledger toolbar; the Analytics implementation shows the same one-trigger pattern in its header.
+- The Analytics title, summary tiles, charts, tables, and information control remain unchanged around the scoped period-control edit.
+- The closed Analytics capture shows `Q3 2026` and `4 transactions` as two compact, non-duplicative pieces of information with no clipped text.
+
+## Focused comparison evidence
+
+- The combined comparison places the open Banks and Analytics calendars together at the same density and interaction state.
+- Calendar header, weekday row, selected date, range summary, Cancel, and Apply align visually because both routes now render the same component.
+- The only visible content difference is intentional data: Banks shows Jun 18–Aug 1, while Analytics shows Jul 1–Aug 1 for Q3-to-date.
+
+## Interaction and runtime checks
+
+- Analytics trigger opens and closes the shared dialog and exposes the current period in its accessible name.
+- Quick-period control exposes the placeholder plus ten complete preset options.
+- Choosing Last month closes the popover and updates the trigger to `Last month`.
+- Selecting July 20 and July 25, then Apply, switches Analytics to `custom` and writes the exact inclusive `analyticsFrom=2026-07-20&analyticsTo=2026-07-25` URL state.
+- Escape, outside pointer, resize, and scroll behavior are inherited from the shared picker used by Banks.
+- Browser console errors: none.
+- Automated verification: TypeScript lint passed, 287 tests passed, 1 intentionally skipped, and the production build passed with only the existing chunk-size advisory.
+- `git diff --check`: passed.
+
+## Comparison history
+
+1. Initial same-input comparison found no actionable P0, P1, or P2 mismatch. The two routes use the same shared picker component, and the visible differences are data-specific rather than design drift.
+
+## Follow-up polish
+
+No P3 follow-up is required for this pass.
+
+final result: passed
+
+---
+
 # Dropdown and Analytics period controls design QA
 
 ## Scope

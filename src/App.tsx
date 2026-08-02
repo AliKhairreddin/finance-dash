@@ -3804,117 +3804,38 @@ function AnalyticsView({
             <h2>Money flow, owners, sources, companies, and review load</h2>
           </div>
           <div className="filters analytics-global-filters">
-            <label>
-              <CalendarRange size={15} />
-              <NativeSelect
-                aria-label="Analytics period"
-                className="analytics-period-filter"
-                searchable={false}
-                value={periodMode}
-                onValueChange={(value) => setPeriodMode(value as AnalyticsPeriodMode)}
-              >
-                <NativeSelectOption value="today">Today</NativeSelectOption>
-                <NativeSelectOption value="yesterday">Yesterday</NativeSelectOption>
-                <NativeSelectOption value="this_week">This week</NativeSelectOption>
-                <NativeSelectOption value="last_week">Last week</NativeSelectOption>
-                <NativeSelectOption value="this_month">This month</NativeSelectOption>
-                <NativeSelectOption value="last_month">Last month</NativeSelectOption>
-                <NativeSelectOption value="month">Month</NativeSelectOption>
-                <NativeSelectOption value="quarter">Quarter</NativeSelectOption>
-                <NativeSelectOption value="ytd">YTD</NativeSelectOption>
-                <NativeSelectOption value="year">Year</NativeSelectOption>
-                <NativeSelectOption value="custom">Custom</NativeSelectOption>
-              </NativeSelect>
-            </label>
-            {(["month", "quarter", "year"] as AnalyticsPeriodMode[]).includes(periodMode) && (
-              <NativeSelect
-                aria-label="Analytics year"
-                className="analytics-year-filter"
-                searchable={false}
-                value={String(selectedAnalyticsYear)}
-                onValueChange={setPeriodYear}
-              >
-                {analyticsYearOptions.map((year) => (
-                  <NativeSelectOption key={year} value={year}>{year}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-            )}
-            {periodMode === "month" && (
-              <NativeSelect
-                aria-label="Analytics month"
-                className="analytics-detail-filter analytics-month-filter"
-                searchable={false}
-                value={String(selectedAnalyticsMonth)}
-                onValueChange={setPeriodMonth}
-              >
-                {analyticsMonthOptions.map((month, index) => (
-                  <NativeSelectOption
-                    key={month}
-                    value={String(index + 1)}
-                    disabled={selectedAnalyticsYear === currentAnalyticsYear && index + 1 > currentAnalyticsMonth}
-                  >
-                    {month}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            )}
-            {periodMode === "quarter" && (
-              <NativeSelect
-                aria-label="Analytics quarter"
-                className="analytics-detail-filter analytics-quarter-filter"
-                searchable={false}
-                value={String(selectedAnalyticsQuarter)}
-                onValueChange={setPeriodQuarter}
-              >
-                {[1, 2, 3, 4].map((quarter) => (
-                  <NativeSelectOption
-                    key={quarter}
-                    value={String(quarter)}
-                    disabled={selectedAnalyticsYear === currentAnalyticsYear && quarter > currentAnalyticsQuarter}
-                  >
-                    Q{quarter}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            )}
-            {periodMode === "custom" && (
-              <div className="analytics-custom-period" role="group" aria-label="Custom analytics period">
-                <Input
-                  aria-label="Analytics period start"
-                  max={analyticsToday}
-                  type="date"
-                  value={customPeriod.fromDate}
-                  onChange={(event) => {
-                    const fromDate = event.target.value;
-                    setCustomPeriod((current) => ({
-                      fromDate,
-                      toDate: current.toDate < fromDate ? fromDate : current.toDate
-                    }));
-                  }}
-                />
-                <span aria-hidden="true">–</span>
-                <Input
-                  aria-label="Analytics period end"
-                  max={analyticsToday}
-                  type="date"
-                  value={customPeriod.toDate}
-                  onChange={(event) => {
-                    const toDate = event.target.value;
-                    setCustomPeriod((current) => ({
-                      fromDate: current.fromDate > toDate ? toDate : current.fromDate,
-                      toDate
-                    }));
-                  }}
-                />
-              </div>
-            )}
+            <CalendarPeriodPicker
+              ariaLabel="Choose analytics period"
+              dateRange={selectedAnalyticsRange}
+              onApply={(dateRange) => {
+                setCustomPeriod(dateRange);
+                setPeriodMode("custom");
+              }}
+              onSelectPreset={(value) => setPeriodMode(value as AnalyticsPeriodMode)}
+              presetAriaLabel="Analytics period presets"
+              presetOptions={[
+                { value: "today", label: "Today" },
+                { value: "yesterday", label: "Yesterday" },
+                { value: "this_week", label: "This week" },
+                { value: "last_week", label: "Last week" },
+                { value: "this_month", label: "This month" },
+                { value: "last_month", label: "Last month" },
+                { value: "month", label: "Month" },
+                { value: "quarter", label: "Quarter" },
+                { value: "ytd", label: "YTD" },
+                { value: "year", label: "Year" }
+              ]}
+              triggerClassName="analytics-period-calendar-trigger"
+              triggerLabel={analyticsPeriodLabel(periodSelection, analyticsToday)}
+            />
             <span className="analytics-period-status" aria-live="polite">
               <span className={`analytics-period-value ${analyticsPeriodBusy ? "loading" : ""}`}>
                 {analyticsPeriodBusy && <Loader2 className="spin" aria-hidden="true" size={13} />}
                 {analyticsPeriodBusy
-                  ? `${analyticsBuildReason === "historical-coverage" ? "Syncing" : "Building"} ${analyticsPeriodLabel(periodSelection, analyticsToday)}…`
-                  : analyticsPeriodLabel(periodSelection, analyticsToday)}
-                {analytics && <> · {analytics.summary.transactionCount.toLocaleString()} transactions</>}
+                  ? `${analyticsBuildReason === "historical-coverage" ? "Syncing" : "Building"} period…`
+                  : analytics
+                    ? `${analytics.summary.transactionCount.toLocaleString()} transactions`
+                    : "No snapshot"}
               </span>
               <InfoPopover label="analytics period data">
                 <span>Every Analytics card and rollup uses this calendar period.</span>
@@ -5764,16 +5685,33 @@ function bankCalendarDays(value: string): Array<string | null> {
   ];
 }
 
-function BankDateRangePicker({
+type CalendarPeriodPickerOption = {
+  value: string;
+  label: string;
+};
+
+function CalendarPeriodPicker({
+  ariaLabel,
   dateRange,
-  isLoading,
-  onLoad,
-  windowDays
+  disabled = false,
+  isLoading = false,
+  onApply,
+  onSelectPreset,
+  presetAriaLabel,
+  presetOptions,
+  triggerClassName,
+  triggerLabel
 }: {
+  ariaLabel: string;
   dateRange: BankTransactionDateRange;
-  isLoading: boolean;
-  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
-  windowDays: number;
+  disabled?: boolean;
+  isLoading?: boolean;
+  onApply: (dateRange: BankTransactionDateRange) => void | Promise<void>;
+  onSelectPreset: (value: string) => void | Promise<void>;
+  presetAriaLabel: string;
+  presetOptions: CalendarPeriodPickerOption[];
+  triggerClassName?: string;
+  triggerLabel: string;
 }) {
   const today = localIsoDate();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -5857,17 +5795,16 @@ function BankDateRangePicker({
   }, [isOpen]);
 
   const visibleMonthIsCurrentOrFuture = visibleMonth >= bankCalendarMonth(today);
-  const triggerLabel = bankDateRangeLabel(dateRange);
-
   return (
     <>
       <Button
         ref={triggerRef}
-        className="secondary-button bank-date-range-trigger"
+        className={`secondary-button bank-date-range-trigger ${triggerClassName ?? ""}`.trim()}
         type="button"
+        aria-label={`${ariaLabel}: ${triggerLabel}`}
         aria-expanded={isOpen}
         aria-haspopup="dialog"
-        disabled={isLoading}
+        disabled={disabled}
         onClick={() => (isOpen ? setIsOpen(false) : openPicker())}
       >
         {isLoading ? <Loader2 className="spin" size={16} /> : <CalendarRange size={16} />}
@@ -5878,30 +5815,28 @@ function BankDateRangePicker({
           ref={panelRef}
           className="bank-date-range-popover"
           role="dialog"
-          aria-label="Choose transaction period"
+          aria-label={ariaLabel}
           style={{ top: panelPosition.top, left: panelPosition.left }}
         >
           <div className="bank-calendar-shortcuts">
             <span>Quick period</span>
             <NativeSelect
               className="bank-calendar-preset-select"
-              aria-label="Transaction period presets"
+              aria-label={presetAriaLabel}
               size="sm"
               value={preset}
-              disabled={isLoading}
+              disabled={disabled || isLoading}
               onValueChange={(value) => {
                 if (!value) return;
-                const nextPreset = value as BankPeriodPreset;
-                setPreset(nextPreset);
+                setPreset(value);
                 setIsOpen(false);
-                void onLoad(bankPeriodPresetRange(nextPreset, localIsoDate(), windowDays))
-                  .finally(() => setPreset(""));
+                void Promise.resolve(onSelectPreset(value)).finally(() => setPreset(""));
               }}
             >
               <NativeSelectOption value="" disabled>Presets</NativeSelectOption>
-              {bankPeriodPresets.map((option) => (
-                <NativeSelectOption key={option} value={option}>
-                  {bankPeriodPresetLabel(option, windowDays)}
+              {presetOptions.map((option) => (
+                <NativeSelectOption key={option.value} value={option.value}>
+                  {option.label}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
@@ -5964,10 +5899,10 @@ function BankDateRangePicker({
             <Button
               className="primary-button"
               type="button"
-              disabled={isLoading || !draftFromDate || !draftToDate || draftToDate > today}
+              disabled={disabled || isLoading || !draftFromDate || !draftToDate || draftToDate > today}
               onClick={() => {
                 setIsOpen(false);
-                void onLoad({ fromDate: draftFromDate, toDate: draftToDate });
+                void onApply({ fromDate: draftFromDate, toDate: draftToDate });
               }}
             >
               Apply
@@ -5977,6 +5912,39 @@ function BankDateRangePicker({
         document.body
       )}
     </>
+  );
+}
+
+function BankDateRangePicker({
+  dateRange,
+  isLoading,
+  onLoad,
+  windowDays
+}: {
+  dateRange: BankTransactionDateRange;
+  isLoading: boolean;
+  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
+  windowDays: number;
+}) {
+  return (
+    <CalendarPeriodPicker
+      ariaLabel="Choose transaction period"
+      dateRange={dateRange}
+      disabled={isLoading}
+      isLoading={isLoading}
+      onApply={onLoad}
+      onSelectPreset={(value) => onLoad(bankPeriodPresetRange(
+        value as BankPeriodPreset,
+        localIsoDate(),
+        windowDays
+      ))}
+      presetAriaLabel="Transaction period presets"
+      presetOptions={bankPeriodPresets.map((option) => ({
+        value: option,
+        label: bankPeriodPresetLabel(option, windowDays)
+      }))}
+      triggerLabel={bankDateRangeLabel(dateRange)}
+    />
   );
 }
 
