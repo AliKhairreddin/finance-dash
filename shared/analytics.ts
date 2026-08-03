@@ -1,5 +1,5 @@
 import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "./categories";
-import { isInternalTransferTransaction } from "./transactionPresentation";
+import { isInternalTransferTransaction, isNonOperatingMovementTransaction } from "./transactionPresentation";
 import type {
   BankAnalyticsAggregate,
   BankAnalyticsCategoryBreakdown,
@@ -66,7 +66,7 @@ export type BankPeriodSlashCashbackState = [
 ];
 
 export interface BankAnalyticsAccumulatorState {
-  version: 2;
+  version: 3;
   fromDate: string;
   toDate: string;
   configurationFingerprint: string;
@@ -74,6 +74,7 @@ export interface BankAnalyticsAccumulatorState {
   reviewSampleLimit: number;
   transactionCount: number;
   internalTransferCount: number;
+  bankPeriodTransactionCount: number;
   needsReviewCount: number;
   evictedCandidateCount: number;
   summary: BankAnalyticsAggregateState;
@@ -629,6 +630,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   const knownCurrencies = new Set<string>();
   let transactionCount = 0;
   let internalTransferCount = 0;
+  let bankPeriodTransactionCount = 0;
   let needsReviewCount = 0;
   let evictedCandidateCount = 0;
   let finished = false;
@@ -659,7 +661,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       throw new Error(`Analytics accumulator state exceeds ${bankAnalyticsLimits.serializedStateBytes} bytes`);
     }
     if (
-      state.version !== 2
+      state.version !== 3
       || state.fromDate !== fromDate
       || state.toDate !== toDate
       || state.unmatchedMerchantRowLimit !== merchantRowLimit
@@ -838,6 +840,10 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
 
     transactionCount = nonNegativeInteger(state.transactionCount, "Analytics transaction count");
     internalTransferCount = nonNegativeInteger(state.internalTransferCount, "Analytics internal-transfer count");
+    bankPeriodTransactionCount = nonNegativeInteger(
+      state.bankPeriodTransactionCount,
+      "Analytics bank-period transaction count"
+    );
     needsReviewCount = nonNegativeInteger(state.needsReviewCount, "Analytics review count");
     evictedCandidateCount = nonNegativeInteger(state.evictedCandidateCount, "Analytics merchant eviction count");
     if (
@@ -869,7 +875,8 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       throw new Error("Analytics accumulator state contains inconsistent dimension counts");
     }
     if (
-      sumPeriodTransactions(bankPeriodSources.values()) !== transactionCount
+      sumPeriodTransactions(bankPeriodSources.values()) !== bankPeriodTransactionCount
+      || bankPeriodTransactionCount > summaryAggregate.transactionCount
       || sumPeriodTransactions(bankPeriodWiseEntities.values())
         > (bankPeriodSources.get("wise")?.moneyIn.transactionCount ?? 0)
           + (bankPeriodSources.get("wise")?.moneyOut.transactionCount ?? 0)
@@ -946,6 +953,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   }
 
   function addBankPeriodTransaction(transaction: Transaction, source: BankTransactionSource, needsReview: boolean) {
+    bankPeriodTransactionCount += 1;
     const activity = bankPeriodSources.get(source) ?? emptyBankPeriodActivity();
     const direction = transaction.direction === "in" ? activity.moneyIn : activity.moneyOut;
     direction.transactionCount += 1;
@@ -1007,7 +1015,9 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
 
       transactionCount += 1;
       activeSources.add(source);
-      addBankPeriodTransaction(transaction, source, needsReview);
+      if (!isNonOperatingMovementTransaction(transaction)) {
+        addBankPeriodTransaction(transaction, source, needsReview);
+      }
       if (needsReview) {
         needsReviewCount += 1;
         if (reviewSamples.length < reviewSampleLimit) {
@@ -1099,7 +1109,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, aggregate]) => [key, aggregateState(aggregate)]);
     const state: BankAnalyticsAccumulatorState = {
-      version: 2,
+      version: 3,
       fromDate,
       toDate,
       configurationFingerprint: expectedConfigurationFingerprint,
@@ -1107,6 +1117,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       reviewSampleLimit,
       transactionCount,
       internalTransferCount,
+      bankPeriodTransactionCount,
       needsReviewCount,
       evictedCandidateCount,
       summary: aggregateState(summaryAggregate),

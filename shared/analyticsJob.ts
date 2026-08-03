@@ -94,7 +94,7 @@ export function createBankAnalyticsJobIdentity(
 ): BankAnalyticsJobIdentity {
   const initialState = createBankAnalyticsAccumulator(options).serialize();
   return {
-    version: `bank-analytics-v3:${monthRevisionFingerprint(monthRevisions, options)}:${initialState.configurationFingerprint}`,
+    version: `bank-analytics-v4:${monthRevisionFingerprint(monthRevisions, options)}:${initialState.configurationFingerprint}`,
     initialState
   };
 }

@@ -140,7 +140,6 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
       row.moneyOut.transactionCount
     ]),
     [
-      ["amex", 0, 1],
       ["revolut", 1, 0],
       ["slash", 0, 1],
       ["wise", 1, 1]
@@ -154,6 +153,38 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
     ]),
     [["dn", 0, 1], ["lmd", 1, 0]]
   );
+});
+
+test("bank period totals exclude internal transfers and capital movements", () => {
+  const accumulator = createBankAnalyticsAccumulator({
+    fromDate: "2026-07-01",
+    toDate: "2026-07-31",
+    providers: [],
+    teams: []
+  });
+  accumulator.addPage([
+    transaction("operating-in", { amount: 125, direction: "in", category: "Revenue" }),
+    transaction("operating-out", { amount: 40, category: "Software" }),
+    transaction("internal-in", { amount: 10_000, direction: "in", category: "Internal transfer" }),
+    transaction("capital-out", { amount: 20_000, category: "Capital movement" })
+  ]);
+
+  const snapshot = accumulator.finish("2026-07-31T20:00:00.000Z");
+  assert.deepEqual(snapshot.bankPeriod.sources, [{
+    source: "revolut",
+    moneyIn: {
+      transactionCount: 1,
+      categorizedTransactionCount: 1,
+      unassignedOwnerTransactionCount: 1,
+      volume: { USD: 125 }
+    },
+    moneyOut: {
+      transactionCount: 1,
+      categorizedTransactionCount: 1,
+      unassignedOwnerTransactionCount: 1,
+      volume: { USD: 40 }
+    }
+  }]);
 });
 
 test("bank period metrics remain exact beyond the first 200 table rows", () => {

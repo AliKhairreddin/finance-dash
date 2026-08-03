@@ -776,6 +776,7 @@ export interface BankPeriodSlashCashbackMetrics {
 }
 
 export interface BankPeriodMetrics {
+  /** Operating activity only; internal transfers and capital movements are excluded. */
   sources: BankPeriodSourceMetrics[];
   wiseEntities: BankPeriodWiseEntityMetrics[];
   slashCashback: BankPeriodSlashCashbackMetrics;
