@@ -122,6 +122,223 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* Focused Slash workspace */
+.slash-app-shell {
+  min-height: 100vh;
+}
+
+.slash-sidebar {
+  min-height: min(420px, calc(100vh - 36px));
+}
+
+.slash-sidebar-footer {
+  align-content: end;
+}
+
+.slash-theme-row {
+  display: flex;
+  padding: 3px 8px 7px;
+}
+
+.slash-theme-row .theme-toggle {
+  box-shadow: none;
+}
+
+.slash-topbar {
+  align-items: center;
+}
+
+.slash-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.slash-groups-panel {
+  overflow: visible;
+}
+
+.slash-groups-header {
+  align-items: center;
+}
+
+.slash-heading-with-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.slash-heading-with-info .eyebrow {
+  margin: 0;
+}
+
+.slash-heading-with-info .note-popover {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 12;
+}
+
+.slash-heading-with-info .note-popover-trigger {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.slash-groups-toolbar {
+  min-width: 0;
+}
+
+.slash-period-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.slash-period-controls > span {
+  color: var(--app-muted);
+  font-size: 0.75rem;
+}
+
+.slash-date-input {
+  width: 156px;
+  min-height: 34px;
+  color: var(--ink);
+  border-color: var(--line);
+  border-radius: 7px;
+  background: var(--control-bg);
+}
+
+.slash-group-table-wrap {
+  max-height: min(72vh, 790px);
+}
+
+.slash-group-table {
+  min-width: 1180px;
+}
+
+.slash-group-table .counterparty-cell {
+  min-width: 190px;
+}
+
+.slash-group-table th.action-column,
+.slash-group-table td.action-column {
+  width: 48px;
+  text-align: center;
+}
+
+.slash-cell-detail {
+  display: block;
+  max-width: 150px;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--app-muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-credit-amount {
+  color: var(--green);
+}
+
+.slash-net-spend {
+  color: var(--red);
+}
+
+.slash-mobile-command-bar {
+  display: none;
+}
+
+.slash-mobile-title {
+  justify-content: flex-start;
+  gap: 9px;
+  font-size: 0.9rem;
+  font-weight: 690;
+}
+
+.slash-mobile-logout {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+@media (max-width: 1100px) {
+  .slash-groups-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 760px) {
+  .slash-sidebar {
+    min-height: 0;
+  }
+
+  .slash-mobile-command-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, 42px);
+  }
+
+  .slash-mobile-command-bar .icon-button,
+  .slash-mobile-logout {
+    width: 42px;
+    height: 42px;
+  }
+
+  .slash-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .slash-summary-grid .summary-tile:nth-child(2) {
+    border-right: 0;
+  }
+
+  .slash-summary-grid .summary-tile:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .slash-groups-toolbar {
+    display: flex;
+  }
+
+  .slash-period-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    width: 100%;
+  }
+
+  .slash-date-input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .slash-mobile-command-bar {
+    grid-template-columns: minmax(0, 1fr) repeat(3, 38px);
+  }
+
+  .slash-mobile-command-bar .icon-button,
+  .slash-mobile-logout {
+    width: 38px;
+    height: 40px;
+  }
+
+  .slash-period-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .slash-period-controls > span {
+    display: none;
+  }
+
+  .slash-period-controls .secondary-button {
+    grid-column: 1 / -1;
+  }
+}
+
 .dark {
   color-scheme: dark;
   background: #000000;
@@ -6159,6 +6376,55 @@ th.amount .sortable-table-heading {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
+/* Keep the focused Slash layouts authoritative after the shared responsive rules. */
+@media (max-width: 760px) {
+  .slash-app-shell .slash-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+  }
+
+  .slash-app-shell .slash-summary-grid .summary-tile {
+    min-width: 0;
+    flex: none;
+    border-right: 1px solid var(--line);
+    scroll-snap-align: none;
+  }
+
+  .slash-app-shell .slash-summary-grid .summary-tile:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .slash-app-shell .slash-summary-grid .summary-tile:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .slash-app-shell .slash-groups-toolbar {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .slash-app-shell .slash-period-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .slash-app-shell .slash-period-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .slash-app-shell .slash-period-controls > span {
+    display: none;
+  }
+
+  .slash-app-shell .slash-period-controls .secondary-button {
+    grid-column: 1 / -1;
   }
 }
 
