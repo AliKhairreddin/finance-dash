@@ -157,6 +157,14 @@
   overflow: visible;
 }
 
+.slash-secondary-groups-panel {
+  margin-top: 12px;
+}
+
+.slash-secondary-groups-header {
+  align-items: center;
+}
+
 .slash-groups-header {
   align-items: center;
 }

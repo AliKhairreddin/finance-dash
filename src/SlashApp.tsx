@@ -35,6 +35,7 @@ import {
 } from "../shared/slashExpensePdf";
 import {
   groupSlashTransactions,
+  isSlashSocialMediaGroup,
   slashGroupAmountTotal,
   type SlashMerchantGroup,
   type SlashMerchantProvider
@@ -233,6 +234,79 @@ function SlashSidebar({
   );
 }
 
+function SlashMerchantGroupTable({
+  emptyLabel,
+  generatingPdfKey,
+  groups,
+  isLoading,
+  loadedCount,
+  onDownloadPdf,
+  onRequestSort,
+  sortDirection,
+  sortKey
+}: {
+  emptyLabel: string;
+  generatingPdfKey: string | null;
+  groups: readonly SlashMerchantGroup[];
+  isLoading: boolean;
+  loadedCount: number;
+  onDownloadPdf: (group: SlashMerchantGroup) => void;
+  onRequestSort: (sortKey: SlashGroupSortKey) => void;
+  sortDirection: TableSortDirection;
+  sortKey: SlashGroupSortKey;
+}) {
+  return (
+    <div className="table-wrap slash-group-table-wrap">
+      <table className="data-table modern-income-table slash-group-table">
+        <thead><tr>
+          <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onRequestSort} sortKey="merchant">Merchant</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onRequestSort} sortKey="transactions">Transactions</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onRequestSort} sortKey="accounts">Accounts</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onRequestSort} sortKey="firstDate">First activity</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onRequestSort} sortKey="lastDate">Latest activity</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={onRequestSort} sortKey="spend">Spend</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={onRequestSort} sortKey="credits">Credits</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={onRequestSort} sortKey="net">Net</SortableTableHead>
+          <th aria-label="Expense PDF" className="action-column" scope="col" />
+        </tr></thead>
+        <tbody>
+          {groups.map((group) => {
+            const aliases = group.aliases.filter((alias) => alias.toLowerCase() !== group.name.toLowerCase());
+            const netTotal = slashGroupAmountTotal(group.net);
+            return (
+              <tr key={group.key}>
+                <td className="counterparty-cell"><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></td>
+                <td>{group.transactionCount.toLocaleString("en-US")}</td>
+                <td><strong>{group.accountNames.length.toLocaleString("en-US")}</strong><small className="slash-cell-detail">{group.accountNames[0]}</small></td>
+                <td>{dateLabel(group.firstDate)}</td>
+                <td>{dateLabel(group.lastDate)}</td>
+                <td className="amount">{currencySummary(group.spend)}</td>
+                <td className="amount slash-credit-amount">{currencySummary(group.credits)}</td>
+                <td className={`amount ${netTotal < 0 ? "slash-net-spend" : netTotal > 0 ? "slash-credit-amount" : ""}`}>{currencySummary(group.net)}</td>
+                <td className="action-column">
+                  <Button
+                    aria-label={`Download ${group.name} expense PDF`}
+                    className="icon-button"
+                    disabled={generatingPdfKey !== null}
+                    onClick={() => onDownloadPdf(group)}
+                    title={`Generate expense PDF for ${group.name}`}
+                    type="button"
+                  >
+                    {generatingPdfKey === group.key ? <Loader2 className="spin" size={15} /> : <FileDown size={15} />}
+                  </Button>
+                </td>
+              </tr>
+            );
+          })}
+          {groups.length === 0 && (
+            <tr><td colSpan={9}>{isLoading ? `Loading Slash activity${loadedCount > 0 ? ` · ${loadedCount.toLocaleString("en-US")} transactions` : ""}…` : emptyLabel}</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function SlashApp() {
   const defaultPeriod = useMemo(defaultSlashPeriod, []);
   const [period, setPeriod] = useUrlDateRangeState("from", "to", defaultPeriod);
@@ -356,6 +430,10 @@ export default function SlashApp() {
       );
   }, [allGroups, query, sortDirection, sortKey]);
 
+  const socialMediaGroups = useMemo(() => allGroups.filter(isSlashSocialMediaGroup), [allGroups]);
+  const socialMediaRows = useMemo(() => rows.filter(isSlashSocialMediaGroup), [rows]);
+  const otherRows = useMemo(() => rows.filter((group) => !isSlashSocialMediaGroup(group)), [rows]);
+
   function requestSort(nextSortKey: SlashGroupSortKey): void {
     if (nextSortKey === sortKey) {
       setSortDirection((current) => current === "asc" ? "desc" : "asc");
@@ -418,9 +496,9 @@ export default function SlashApp() {
     }])
   ];
 
-  const spend = groupTotals(allGroups, "spend");
-  const credits = groupTotals(allGroups, "credits");
-  const settledTransactionCount = allGroups.reduce((sum, group) => sum + group.transactionCount, 0);
+  const spend = groupTotals(socialMediaGroups, "spend");
+  const credits = groupTotals(socialMediaGroups, "credits");
+  const settledTransactionCount = socialMediaGroups.reduce((sum, group) => sum + group.transactionCount, 0);
 
   return (
     <main className="app-shell slash-app-shell">
@@ -451,24 +529,24 @@ export default function SlashApp() {
           </Button>
         </header>
 
-        <section className="wise-summary-grid slash-summary-grid" aria-label="Slash period summary">
-          <article className="summary-tile"><span>Total spend</span><strong>{currencySummary(spend)}</strong></article>
-          <article className="summary-tile"><span>Credits</span><strong>{currencySummary(credits)}</strong></article>
-          <article className="summary-tile"><span>Merchant groups</span><strong>{allGroups.length.toLocaleString("en-US")}</strong></article>
+        <section className="wise-summary-grid slash-summary-grid" aria-label="Social media period summary">
+          <article className="summary-tile"><span>Ad spend</span><strong>{currencySummary(spend)}</strong></article>
+          <article className="summary-tile"><span>Ad credits</span><strong>{currencySummary(credits)}</strong></article>
+          <article className="summary-tile"><span>Platforms</span><strong>{socialMediaGroups.length.toLocaleString("en-US")}</strong></article>
           <article className="summary-tile"><span>Transactions</span><strong>{settledTransactionCount.toLocaleString("en-US")}</strong></article>
         </section>
 
-        <section className="panel wide-panel slash-groups-panel">
+        <section className="panel wide-panel slash-groups-panel slash-priority-groups-panel">
           <div className="panel-header compact unified-bank-header slash-groups-header">
             <div className="unified-bank-title">
               <div>
                 <div className="slash-heading-with-info">
-                  <p className="eyebrow">Grouped ledger</p>
-                  <InfoPopover label="merchant grouping">Uses company aliases plus common merchant families. Meta, Facebook, Facebk, Instagram, Oculus, and WhatsApp are one Meta group.</InfoPopover>
+                  <p className="eyebrow">Priority activity</p>
+                  <InfoPopover label="social media grouping">Meta includes Facebook, Facebk, Instagram, Oculus, and WhatsApp. TikTok includes ByteDance. NewsBreak descriptors are grouped as NewsBreak.</InfoPopover>
                 </div>
-                <h2>Slash merchants</h2>
+                <h2>Social media</h2>
               </div>
-              <span className="total-pill">{rows.length} groups</span>
+              <span className="total-pill">{socialMediaRows.length} groups</span>
             </div>
             <div className="list-toolbar unified-bank-toolbar slash-groups-toolbar">
               <div className="list-toolbar-main">
@@ -476,7 +554,7 @@ export default function SlashApp() {
                   ariaLabel="Search grouped Slash merchants"
                   className="bank-toolbar-search"
                   onChange={setQuery}
-                  placeholder="Search merchants"
+                  placeholder="Search all merchants"
                   value={query}
                 />
                 <FilterPopover activeCount={activeFilters.length} title="Slash activity filters">
@@ -511,57 +589,41 @@ export default function SlashApp() {
           </div>
           <ActiveFilterBar
             filters={activeFilters}
-            resultLabel={`${rows.length} grouped Slash merchants shown`}
+            resultLabel={`${socialMediaRows.length} social groups · ${otherRows.length} other groups shown`}
             onClearAll={() => { setDirection("all"); setAccount("all"); }}
           />
-          <div className="table-wrap slash-group-table-wrap">
-            <table className="data-table modern-income-table slash-group-table">
-              <thead><tr>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="merchant">Merchant</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="accounts">Accounts</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="lastDate">Latest activity</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spend</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="credits">Credits</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="net">Net</SortableTableHead>
-                <th aria-label="Expense PDF" className="action-column" scope="col" />
-              </tr></thead>
-              <tbody>
-                {rows.map((group) => {
-                  const aliases = group.aliases.filter((alias) => alias.toLowerCase() !== group.name.toLowerCase());
-                  const netTotal = slashGroupAmountTotal(group.net);
-                  return (
-                    <tr key={group.key}>
-                      <td className="counterparty-cell"><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></td>
-                      <td>{group.transactionCount.toLocaleString("en-US")}</td>
-                      <td><strong>{group.accountNames.length.toLocaleString("en-US")}</strong><small className="slash-cell-detail">{group.accountNames[0]}</small></td>
-                      <td>{dateLabel(group.firstDate)}</td>
-                      <td>{dateLabel(group.lastDate)}</td>
-                      <td className="amount">{currencySummary(group.spend)}</td>
-                      <td className="amount slash-credit-amount">{currencySummary(group.credits)}</td>
-                      <td className={`amount ${netTotal < 0 ? "slash-net-spend" : netTotal > 0 ? "slash-credit-amount" : ""}`}>{currencySummary(group.net)}</td>
-                      <td className="action-column">
-                        <Button
-                          aria-label={`Download ${group.name} expense PDF`}
-                          className="icon-button"
-                          disabled={generatingPdfKey !== null}
-                          onClick={() => void downloadExpensePdf(group)}
-                          title={`Generate expense PDF for ${group.name}`}
-                          type="button"
-                        >
-                          {generatingPdfKey === group.key ? <Loader2 className="spin" size={15} /> : <FileDown size={15} />}
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {rows.length === 0 && (
-                  <tr><td colSpan={9}>{isLoading ? `Loading Slash activity${loadedCount > 0 ? ` · ${loadedCount.toLocaleString("en-US")} transactions` : ""}…` : "No settled Slash activity matches this view"}</td></tr>
-                )}
-              </tbody>
-            </table>
+          <SlashMerchantGroupTable
+            emptyLabel="No Meta, TikTok, or NewsBreak activity matches this view"
+            generatingPdfKey={generatingPdfKey}
+            groups={socialMediaRows}
+            isLoading={isLoading}
+            loadedCount={loadedCount}
+            onDownloadPdf={(group) => void downloadExpensePdf(group)}
+            onRequestSort={requestSort}
+            sortDirection={sortDirection}
+            sortKey={sortKey}
+          />
+        </section>
+
+        <section className="panel wide-panel slash-groups-panel slash-secondary-groups-panel">
+          <div className="panel-header compact slash-secondary-groups-header">
+            <div>
+              <p className="eyebrow">Remaining ledger</p>
+              <h2>Other Slash merchants</h2>
+            </div>
+            <span className="total-pill">{otherRows.length} groups</span>
           </div>
+          <SlashMerchantGroupTable
+            emptyLabel="No other Slash activity matches this view"
+            generatingPdfKey={generatingPdfKey}
+            groups={otherRows}
+            isLoading={isLoading}
+            loadedCount={loadedCount}
+            onDownloadPdf={(group) => void downloadExpensePdf(group)}
+            onRequestSort={requestSort}
+            sortDirection={sortDirection}
+            sortKey={sortKey}
+          />
         </section>
       </div>
     </main>

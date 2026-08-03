@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupSlashTransactions } from "./slashMerchantGroups";
+import { groupSlashTransactions, isSlashSocialMediaGroup } from "./slashMerchantGroups";
 import type { Provider, Transaction } from "./types";
 
 function slashTransaction(
@@ -41,6 +41,29 @@ test("Meta, Facebook, Facebk, and Instagram activity is one merchant group", () 
   assert.deepEqual(groups[0].spend, { USD: 120 });
   assert.deepEqual(groups[0].credits, { USD: 20 });
   assert.deepEqual(groups[0].net, { USD: -100 });
+});
+
+test("Meta, TikTok, and NewsBreak are the canonical social-media groups", () => {
+  const providers: Array<Pick<Provider, "id" | "name" | "legalName" | "aliases">> = [{
+    id: "provider-tiktok",
+    name: "TikTok",
+    legalName: "TikTok Pte. Ltd.",
+    aliases: ["TTADS"]
+  }];
+  const groups = groupSlashTransactions([
+    slashTransaction("meta", "Facebook Ads", 40),
+    slashTransaction("tiktok", "TTADS 90832", 50, { matchedProviderId: "provider-tiktok" }),
+    slashTransaction("bytedance", "ByteDance campaign", 60),
+    slashTransaction("newsbreak", "NEWS BREAK MEDIA", 70),
+    slashTransaction("other", "Google Workspace", 80)
+  ], providers);
+
+  assert.equal(groups.find((group) => group.name === "TikTok")?.transactionCount, 2);
+  assert.deepEqual(
+    groups.filter(isSlashSocialMediaGroup).map((group) => group.name).sort(),
+    ["Meta", "NewsBreak", "TikTok"]
+  );
+  assert.equal(isSlashSocialMediaGroup(groups.find((group) => group.name === "Google")!), false);
 });
 
 test("company directory aliases group otherwise different Slash descriptors", () => {

@@ -36,6 +36,16 @@ const merchantFamilies: ReadonlyArray<{
     pattern: /\b(?:meta(?: platforms)?|facebook|facebk|fb ads?|instagram|oculus|whatsapp)\b/
   },
   {
+    key: "family:tiktok",
+    name: "TikTok",
+    pattern: /\b(?:tiktok|tik tok|bytedance|byte dance)\b/
+  },
+  {
+    key: "family:newsbreak",
+    name: "NewsBreak",
+    pattern: /\b(?:newsbreak|news break)\b/
+  },
+  {
     key: "family:google",
     name: "Google",
     pattern: /\b(?:google|googleads|youtube|alphabet)\b/
@@ -137,6 +147,12 @@ function providerAliasDirectory(providers: readonly SlashMerchantProvider[]): Al
   }).sort((left, right) => (right.aliases[0]?.length ?? 0) - (left.aliases[0]?.length ?? 0));
 }
 
+function merchantFamilyIdentity(descriptors: readonly string[]): MerchantIdentity | undefined {
+  const descriptorSearch = descriptors.join(" ");
+  const family = merchantFamilies.find((candidate) => candidate.pattern.test(descriptorSearch));
+  return family ? { key: family.key, name: family.name } : undefined;
+}
+
 function merchantIdentity(
   transaction: Transaction,
   providersById: ReadonlyMap<string, SlashMerchantProvider>,
@@ -144,21 +160,33 @@ function merchantIdentity(
 ): MerchantIdentity {
   const labels = merchantLabels(transaction);
   const descriptors = labels.map(normalizeSlashMerchantText).filter(Boolean);
-  const descriptorSearch = descriptors.join(" ");
-  const family = merchantFamilies.find((candidate) => candidate.pattern.test(descriptorSearch));
+  const family = merchantFamilyIdentity(descriptors);
   if (family) return { key: family.key, name: family.name };
 
   const matchedProvider = transaction.matchedProviderId
     ? providersById.get(transaction.matchedProviderId)
     : undefined;
   if (matchedProvider) {
+    const providerFamily = merchantFamilyIdentity([
+      matchedProvider.name,
+      matchedProvider.legalName ?? "",
+      ...matchedProvider.aliases
+    ].map(normalizeSlashMerchantText));
+    if (providerFamily) return providerFamily;
     return { key: `provider:${matchedProvider.id}`, name: matchedProvider.name };
   }
 
   const aliasedProvider = providerAliases.find((provider) =>
     provider.aliases.some((alias) => descriptors.some((descriptor) => containsAlias(descriptor, alias)))
   );
-  if (aliasedProvider) return { key: aliasedProvider.key, name: aliasedProvider.name };
+  if (aliasedProvider) {
+    const providerFamily = merchantFamilyIdentity([
+      normalizeSlashMerchantText(aliasedProvider.name),
+      ...aliasedProvider.aliases
+    ]);
+    if (providerFamily) return providerFamily;
+    return { key: aliasedProvider.key, name: aliasedProvider.name };
+  }
 
   const preferredLabel = compactText(transaction.merchantName)
     || compactText(transaction.counterparty)
@@ -240,4 +268,16 @@ export function groupSlashTransactions(
 
 export function slashGroupAmountTotal(totals: CurrencyTotals): number {
   return Object.values(totals).reduce((sum, amount) => sum + amount, 0);
+}
+
+const slashSocialMediaGroupKeys = new Set([
+  "family:meta",
+  "family:tiktok",
+  "family:newsbreak"
+]);
+
+export function isSlashSocialMediaGroup(group: Pick<SlashMerchantGroup, "key" | "name">): boolean {
+  if (slashSocialMediaGroupKeys.has(group.key)) return true;
+  const normalizedName = normalizeSlashMerchantText(group.name).replace(/\s+/g, "");
+  return normalizedName === "meta" || normalizedName === "tiktok" || normalizedName === "newsbreak";
 }
