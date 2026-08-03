@@ -3011,6 +3011,22 @@ function BanksView({
     : isLoadingBankPeriodMetrics || !bankPeriodMetrics
       ? "Calculating…"
       : "0";
+  const allTabPeriodActivity = periodMetricsReady
+    ? (
+      allBankSource === "all"
+        ? bankPeriodMetrics.sources
+        : bankPeriodMetrics.sources.filter((item) => item.source === allBankSource)
+    ).reduce<BankPeriodActivityMetrics>((total, activity) => ({
+      moneyIn: combineBankPeriodDirectionMetrics(total.moneyIn, activity.moneyIn),
+      moneyOut: combineBankPeriodDirectionMetrics(total.moneyOut, activity.moneyOut)
+    }), {
+      moneyIn: emptyBankPeriodDirectionMetrics(),
+      moneyOut: emptyBankPeriodDirectionMetrics()
+    })
+    : null;
+  const allTabPeriodTransactionCount = allTabPeriodActivity
+    ? allTabPeriodActivity.moneyIn.transactionCount + allTabPeriodActivity.moneyOut.transactionCount
+    : null;
 
   return (
     <div className="banks-layout">
@@ -3139,25 +3155,49 @@ function BanksView({
       </section>
 
       {activeBank === "all" && (
-        <AllBankTransactionsView
-          dashboard={dashboard}
-          providersById={providersById}
-          source={allBankSource}
-          setSource={setAllBankSource}
-          transactions={allBankTransactions}
-          hasMore={hasMoreTransactions}
-          isLoading={isLoadingTransactions}
-          loadError={transactionLoadError}
-          onLoadMore={onLoadMoreTransactions}
-          rangeControls={(
-            <BankDateRangeControls
-              dateRange={allBankDateRange}
-              isLoading={isLoadingTransactions}
-              onLoad={onLoadAllBankTransactions}
-              windowDays={revolutDefaultActivityWindowDays}
+        <>
+          <div className="wise-summary-grid" aria-label="Selected period bank totals">
+            <SummaryTile
+              label="Period money in"
+              value={allTabPeriodActivity
+                ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
+                : periodMetricPlaceholder}
+              detail={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyIn.volume) : undefined}
             />
-          )}
-        />
+            <SummaryTile
+              label="Period spent"
+              value={allTabPeriodActivity
+                ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
+                : periodMetricPlaceholder}
+              detail={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyOut.volume) : undefined}
+            />
+            <SummaryTile
+              label="Period transactions"
+              value={allTabPeriodTransactionCount === null
+                ? periodMetricPlaceholder
+                : String(allTabPeriodTransactionCount)}
+            />
+          </div>
+          <AllBankTransactionsView
+            dashboard={dashboard}
+            providersById={providersById}
+            source={allBankSource}
+            setSource={setAllBankSource}
+            transactions={allBankTransactions}
+            hasMore={hasMoreTransactions}
+            isLoading={isLoadingTransactions}
+            loadError={transactionLoadError}
+            onLoadMore={onLoadMoreTransactions}
+            rangeControls={(
+              <BankDateRangeControls
+                dateRange={allBankDateRange}
+                isLoading={isLoadingTransactions}
+                onLoad={onLoadAllBankTransactions}
+                windowDays={revolutDefaultActivityWindowDays}
+              />
+            )}
+          />
+        </>
       )}
       {activeBank === "wise" && (
         <BankReconciliationView
