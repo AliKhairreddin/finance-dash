@@ -11,8 +11,9 @@ import {
   Sun,
   X
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { BankPeriodPicker } from "@/components/ui/calendar-period-picker";
 import {
   ActiveFilterBar,
   type ActiveFilter,
@@ -21,7 +22,6 @@ import {
   ToolbarSearchField
 } from "@/components/ui/filter-toolbar";
 import { InfoPopover } from "@/components/ui/finance-visuals";
-import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   compareTableValues,
@@ -40,6 +40,7 @@ import {
   type SlashMerchantProvider
 } from "../shared/slashMerchantGroups";
 import type { CurrencyTotals, DashboardSnapshot, Transaction, TransactionPage } from "../shared/types";
+import { slashDefaultActivityWindowDays } from "../shared/slashApi";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const themeStorageKey = "finance-dash-theme";
@@ -233,10 +234,8 @@ function SlashSidebar({
 }
 
 export default function SlashApp() {
-  const today = useMemo(() => localIsoDate(), []);
   const defaultPeriod = useMemo(defaultSlashPeriod, []);
   const [period, setPeriod] = useUrlDateRangeState("from", "to", defaultPeriod);
-  const [draftPeriod, setDraftPeriod] = useState(period);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() =>
     window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light"
   );
@@ -269,8 +268,6 @@ export default function SlashApp() {
   useEffect(() => {
     document.title = "Slash · Finance";
   }, []);
-
-  useEffect(() => setDraftPeriod(period), [period.fromDate, period.toDate]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -366,15 +363,6 @@ export default function SlashApp() {
     }
     setSortKey(nextSortKey);
     setSortDirection(nextSortKey === "merchant" || nextSortKey === "firstDate" || nextSortKey === "lastDate" ? "asc" : "desc");
-  }
-
-  function applyPeriod(event: FormEvent): void {
-    event.preventDefault();
-    if (!draftPeriod.fromDate || !draftPeriod.toDate || draftPeriod.fromDate > draftPeriod.toDate) {
-      setError("Choose a valid Slash activity period");
-      return;
-    }
-    setPeriod(draftPeriod);
   }
 
   async function manualSync(): Promise<void> {
@@ -511,29 +499,14 @@ export default function SlashApp() {
                   </FilterFieldGroup>
                 </FilterPopover>
               </div>
-              <form className="slash-period-controls" onSubmit={applyPeriod}>
-                <Input
-                  aria-label="Slash period start date"
-                  className="slash-date-input"
-                  max={draftPeriod.toDate || today}
-                  onChange={(event) => setDraftPeriod((current) => ({ ...current, fromDate: event.target.value }))}
-                  required
-                  type="date"
-                  value={draftPeriod.fromDate}
+              <div className="slash-period-picker">
+                <BankPeriodPicker
+                  dateRange={period}
+                  isLoading={isLoading || isSyncing}
+                  onLoad={setPeriod}
+                  windowDays={slashDefaultActivityWindowDays}
                 />
-                <span aria-hidden="true">–</span>
-                <Input
-                  aria-label="Slash period end date"
-                  className="slash-date-input"
-                  max={today}
-                  min={draftPeriod.fromDate}
-                  onChange={(event) => setDraftPeriod((current) => ({ ...current, toDate: event.target.value }))}
-                  required
-                  type="date"
-                  value={draftPeriod.toDate}
-                />
-                <Button className="secondary-button" type="submit">Apply</Button>
-              </form>
+              </div>
             </div>
           </div>
           <ActiveFilterBar

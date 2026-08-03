@@ -190,25 +190,13 @@
   min-width: 0;
 }
 
-.slash-period-controls {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
+.slash-period-picker {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.slash-period-controls > span {
-  color: var(--app-muted);
-  font-size: 0.75rem;
-}
-
-.slash-date-input {
-  width: 156px;
-  min-height: 34px;
-  color: var(--ink);
-  border-color: var(--line);
-  border-radius: 7px;
-  background: var(--control-bg);
+.slash-period-picker .bank-date-range-trigger {
+  max-width: 230px;
 }
 
 .slash-group-table-wrap {
@@ -304,14 +292,10 @@
     display: flex;
   }
 
-  .slash-period-controls {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  .slash-period-picker,
+  .slash-period-picker .bank-date-range-trigger {
     width: 100%;
-  }
-
-  .slash-date-input {
-    width: 100%;
+    max-width: none;
   }
 }
 
@@ -326,17 +310,6 @@
     height: 40px;
   }
 
-  .slash-period-controls {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .slash-period-controls > span {
-    display: none;
-  }
-
-  .slash-period-controls .secondary-button {
-    grid-column: 1 / -1;
-  }
 }
 
 .dark {
@@ -6407,24 +6380,10 @@ th.amount .sortable-table-heading {
     flex-direction: column;
   }
 
-  .slash-app-shell .slash-period-controls {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  .slash-app-shell .slash-period-picker,
+  .slash-app-shell .slash-period-picker .bank-date-range-trigger {
     width: 100%;
-  }
-}
-
-@media (max-width: 520px) {
-  .slash-app-shell .slash-period-controls {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .slash-app-shell .slash-period-controls > span {
-    display: none;
-  }
-
-  .slash-app-shell .slash-period-controls .secondary-button {
-    grid-column: 1 / -1;
+    max-width: none;
   }
 }
 
