@@ -53,7 +53,10 @@ const workerTestAuth = {
 };
 
 async function authenticatedRequest(url: string, init: RequestInit = {}): Promise<Request> {
-  const token = await createAuthSessionToken(workerTestAuth.AUTH_SESSION_SECRET);
+  const token = await createAuthSessionToken(
+    workerTestAuth.AUTH_SESSION_SECRET,
+    new URL(url).hostname
+  );
   const headers = new Headers(init.headers);
   headers.set("Cookie", `__Host-finance_session=${token}`);
   return new Request(url, {

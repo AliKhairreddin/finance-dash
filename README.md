@@ -111,6 +111,14 @@ npm run auth:configure
 
 The password prompt is hidden. The setup command sends the derived verifier and generated signing key directly to Cloudflare without printing them or writing them to disk. Missing or malformed authentication secrets lock the site and API closed.
 
+Configure or rotate the additional credential accepted only by `slash.thatcanadian.dev`:
+
+```bash
+npm run auth:configure:slash
+```
+
+Sessions are signed for the hostname that issued them, so a Slash session cannot be replayed against `finance.thatcanadian.dev`.
+
 ### Regression Coverage
 
 The current test suite covers currency math, empty-state behavior, service-token enforcement, stale writes, atomic invoice reservations, company deletion, secret scrubbing, and API fail-closed behavior.

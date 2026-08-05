@@ -6,6 +6,7 @@ const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
+const SLASH_APP_HOSTNAME = "slash.thatcanadian.dev";
 const textEncoder = new TextEncoder();
 const PUBLIC_APP_ASSET_PATHS = new Set([
   "/apple-touch-icon.png",
@@ -16,11 +17,22 @@ const PUBLIC_APP_ASSET_PATHS = new Set([
   "/site.webmanifest"
 ]);
 
-type AuthEnv = Pick<Env, "AUTH_USERNAME" | "AUTH_PASSWORD_HASH" | "AUTH_SESSION_SECRET">;
+type AuthEnv = Pick<
+  Env,
+  | "AUTH_USERNAME"
+  | "AUTH_PASSWORD_HASH"
+  | "AUTH_SESSION_SECRET"
+  | "SLASH_AUTH_USERNAME"
+  | "SLASH_AUTH_PASSWORD_HASH"
+>;
 
-interface AuthConfig {
+interface AuthCredential {
   username: string;
   passwordHash: string;
+}
+
+interface AuthConfig {
+  credentials: AuthCredential[];
   sessionSecret: string;
 }
 
@@ -70,12 +82,21 @@ function parsePasswordVerifier(value: string): PasswordVerifier | null {
   return { iterations, salt, hash };
 }
 
-function authConfig(env: AuthEnv): AuthConfig | null {
+function authConfig(env: AuthEnv, hostname: string): AuthConfig | null {
   const username = env.AUTH_USERNAME?.trim();
   const passwordHash = env.AUTH_PASSWORD_HASH?.trim();
   const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
   if (!username || !passwordHash || !sessionSecret || !parsePasswordVerifier(passwordHash)) return null;
-  return { username, passwordHash, sessionSecret };
+
+  const credentials = [{ username, passwordHash }];
+  if (hostname === SLASH_APP_HOSTNAME) {
+    const slashUsername = env.SLASH_AUTH_USERNAME?.trim();
+    const slashPasswordHash = env.SLASH_AUTH_PASSWORD_HASH?.trim();
+    if (!slashUsername || !slashPasswordHash || !parsePasswordVerifier(slashPasswordHash)) return null;
+    credentials.push({ username: slashUsername, passwordHash: slashPasswordHash });
+  }
+
+  return { credentials, sessionSecret };
 }
 
 async function derivePasswordHash(
@@ -107,7 +128,7 @@ async function timingSafeStringEqual(left: string, right: string): Promise<boole
 export async function verifyLoginCredentials(
   username: string,
   password: string,
-  config: Pick<AuthConfig, "username" | "passwordHash">
+  config: AuthCredential
 ): Promise<boolean> {
   const verifier = parsePasswordVerifier(config.passwordHash);
   if (!verifier || username.length > 256 || password.length > 1024) return false;
@@ -117,6 +138,17 @@ export async function verifyLoginCredentials(
     derivePasswordHash(password, verifier)
   ]);
   return usernameMatches && timingSafeEqual(candidateHash, verifier.hash);
+}
+
+async function verifyAnyLoginCredential(
+  username: string,
+  password: string,
+  credentials: AuthCredential[]
+): Promise<boolean> {
+  const matches = await Promise.all(
+    credentials.map((credential) => verifyLoginCredentials(username, password, credential))
+  );
+  return matches.some(Boolean);
 }
 
 async function sessionKey(secret: string): Promise<CryptoKey> {
@@ -131,12 +163,14 @@ async function sessionKey(secret: string): Promise<CryptoKey> {
 
 export async function createAuthSessionToken(
   secret: string,
+  audience: string,
   nowMilliseconds = Date.now()
 ): Promise<string> {
   const issuedAt = Math.floor(nowMilliseconds / 1000);
   const expiresAt = issuedAt + AUTH_SESSION_SECONDS;
+  const encodedAudience = base64UrlEncode(textEncoder.encode(audience));
   const nonce = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)));
-  const payload = `v1.${issuedAt}.${expiresAt}.${nonce}`;
+  const payload = `v2.${issuedAt}.${expiresAt}.${encodedAudience}.${nonce}`;
   const signature = await crypto.subtle.sign("HMAC", await sessionKey(secret), textEncoder.encode(payload));
   return `${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
@@ -144,18 +178,21 @@ export async function createAuthSessionToken(
 export async function verifyAuthSessionToken(
   token: string,
   secret: string,
+  expectedAudience: string,
   nowMilliseconds = Date.now()
 ): Promise<boolean> {
-  const [version, issuedAtValue, expiresAtValue, nonce, signatureValue, extra] = token.split(".");
+  const [version, issuedAtValue, expiresAtValue, audienceValue, nonce, signatureValue, extra] = token.split(".");
   const issuedAt = Number(issuedAtValue);
   const expiresAt = Number(expiresAtValue);
+  const audienceBytes = base64UrlDecode(audienceValue ?? "");
   const signature = base64UrlDecode(signatureValue ?? "");
   const now = Math.floor(nowMilliseconds / 1000);
   if (
-    version !== "v1" ||
+    version !== "v2" ||
     extra !== undefined ||
     !Number.isSafeInteger(issuedAt) ||
     !Number.isSafeInteger(expiresAt) ||
+    !audienceBytes ||
     !nonce ||
     !signature ||
     signature.byteLength !== 32 ||
@@ -167,13 +204,15 @@ export async function verifyAuthSessionToken(
     return false;
   }
 
-  const payload = `${version}.${issuedAt}.${expiresAt}.${nonce}`;
-  return crypto.subtle.verify(
+  const payload = `${version}.${issuedAt}.${expiresAt}.${audienceValue}.${nonce}`;
+  const signatureMatches = await crypto.subtle.verify(
     "HMAC",
     await sessionKey(secret),
     signature,
     textEncoder.encode(payload)
   );
+  if (!signatureMatches) return false;
+  return new TextDecoder().decode(audienceBytes) === expectedAudience;
 }
 
 function cookieValue(request: Request): string | null {
@@ -610,9 +649,9 @@ function authUnavailable(pathname: string): Response {
   );
 }
 
-async function hasValidSession(request: Request, secret: string): Promise<boolean> {
+async function hasValidSession(request: Request, secret: string, audience: string): Promise<boolean> {
   const token = cookieValue(request);
-  return token ? verifyAuthSessionToken(token, secret) : false;
+  return token ? verifyAuthSessionToken(token, secret, audience) : false;
 }
 
 export async function enforceSiteAuthentication(request: Request, env: AuthEnv): Promise<Response | null> {
@@ -624,7 +663,7 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
     return null;
   }
 
-  const config = authConfig(env);
+  const config = authConfig(env, url.hostname);
   if (!config) return authUnavailable(url.pathname);
 
   if (url.pathname === "/logout") {
@@ -636,7 +675,7 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
       request.method === "GET" ? url.searchParams.get("returnTo") : null
     );
     if (request.method === "GET") {
-      return (await hasValidSession(request, config.sessionSecret))
+      return (await hasValidSession(request, config.sessionSecret, url.hostname))
         ? redirect(returnTo)
         : loginHtmlResponse(returnTo);
     }
@@ -649,8 +688,8 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
       const formReturnTo = safeReturnTo(form.get("returnTo"));
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";
-      if (await verifyLoginCredentials(username, password, config)) {
-        const token = await createAuthSessionToken(config.sessionSecret);
+      if (await verifyAnyLoginCredential(username, password, config.credentials)) {
+        const token = await createAuthSessionToken(config.sessionSecret, url.hostname);
         return redirect(formReturnTo, sessionCookie(token));
       }
       return loginHtmlResponse(formReturnTo, "Invalid username or password.", { status: 401 });
@@ -660,7 +699,7 @@ export async function enforceSiteAuthentication(request: Request, env: AuthEnv):
     }
   }
 
-  if (await hasValidSession(request, config.sessionSecret)) return null;
+  if (await hasValidSession(request, config.sessionSecret, url.hostname)) return null;
   if (url.pathname.startsWith("/api/")) {
     return Response.json(
       { message: "Authentication required" },

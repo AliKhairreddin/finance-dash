@@ -17,10 +17,22 @@ const testPasswordHash = [
   testSalt.toString("base64url"),
   pbkdf2Sync(testPassword, testSalt, 100_000, 32, "sha256").toString("base64url")
 ].join("$");
+const testSlashPassword = "slash-testing-password-456!";
+const testSlashPasswordHash = [
+  "pbkdf2-sha256",
+  100_000,
+  testSalt.toString("base64url"),
+  pbkdf2Sync(testSlashPassword, testSalt, 100_000, 32, "sha256").toString("base64url")
+].join("$");
 const testEnv = {
   AUTH_USERNAME: "finance-test",
   AUTH_PASSWORD_HASH: testPasswordHash,
   AUTH_SESSION_SECRET: testSessionSecret
+};
+const testSlashEnv = {
+  ...testEnv,
+  SLASH_AUTH_USERNAME: "slash-test",
+  SLASH_AUTH_PASSWORD_HASH: testSlashPasswordHash
 };
 
 test("login credential verification accepts only the configured username and password", async () => {
@@ -47,12 +59,30 @@ test("login credential verification accepts only the configured username and pas
   );
 });
 
-test("signed sessions expire and reject tampering", async () => {
+test("signed sessions expire and reject tampering or a different hostname", async () => {
   const now = Date.parse("2026-07-28T12:00:00.000Z");
-  const token = await createAuthSessionToken(testSessionSecret, now);
-  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, now), true);
-  assert.equal(await verifyAuthSessionToken(`${token}tampered`, testSessionSecret, now), false);
-  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, now + 12 * 60 * 60 * 1000), false);
+  const token = await createAuthSessionToken(testSessionSecret, "slash.thatcanadian.dev", now);
+  assert.equal(
+    await verifyAuthSessionToken(token, testSessionSecret, "slash.thatcanadian.dev", now),
+    true
+  );
+  assert.equal(
+    await verifyAuthSessionToken(token, testSessionSecret, "finance.thatcanadian.dev", now),
+    false
+  );
+  assert.equal(
+    await verifyAuthSessionToken(`${token}tampered`, testSessionSecret, "slash.thatcanadian.dev", now),
+    false
+  );
+  assert.equal(
+    await verifyAuthSessionToken(
+      token,
+      testSessionSecret,
+      "slash.thatcanadian.dev",
+      now + 12 * 60 * 60 * 1000
+    ),
+    false
+  );
 });
 
 test("authentication fails closed when required secrets are missing", async () => {
@@ -183,8 +213,59 @@ test("valid login creates a secure cookie that authenticates the next request", 
   assert.equal(authenticatedResponse, null);
 });
 
+test("Slash-only credentials authenticate Slash and are rejected by Finance", async () => {
+  const slashLoginResponse = await enforceSiteAuthentication(
+    new Request("https://slash.thatcanadian.dev/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        username: "slash-test",
+        password: testSlashPassword,
+        returnTo: "/"
+      })
+    }),
+    testSlashEnv as never
+  );
+  assert.equal(slashLoginResponse?.status, 303);
+
+  const cookie = slashLoginResponse?.headers.get("Set-Cookie")?.split(";", 1)[0] ?? "";
+  assert.match(cookie, /^__Host-finance_session=/);
+  assert.equal(
+    await enforceSiteAuthentication(
+      new Request("https://slash.thatcanadian.dev/", { headers: { Cookie: cookie } }),
+      testSlashEnv as never
+    ),
+    null
+  );
+
+  const financeLoginResponse = await enforceSiteAuthentication(
+    new Request("https://finance.thatcanadian.dev/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ username: "slash-test", password: testSlashPassword })
+    }),
+    testSlashEnv as never
+  );
+  assert.equal(financeLoginResponse?.status, 401);
+
+  const financeSessionResponse = await enforceSiteAuthentication(
+    new Request("https://finance.thatcanadian.dev/", { headers: { Cookie: cookie } }),
+    testSlashEnv as never
+  );
+  assert.equal(financeSessionResponse?.status, 303);
+  assert.equal(financeSessionResponse?.headers.get("Location"), "/login?returnTo=%2F");
+});
+
+test("Slash fails closed when its additional credential is not configured", async () => {
+  const response = await enforceSiteAuthentication(
+    new Request("https://slash.thatcanadian.dev/login"),
+    testEnv as never
+  );
+  assert.equal(response?.status, 503);
+});
+
 test("logout clears the secure session cookie and returns to sign in", async () => {
-  const token = await createAuthSessionToken(testSessionSecret);
+  const token = await createAuthSessionToken(testSessionSecret, "finance.example");
   const response = await enforceSiteAuthentication(
     new Request("https://finance.example/logout", {
       headers: { Cookie: `__Host-finance_session=${token}` }

@@ -19,6 +19,8 @@ interface __BaseEnv_Env {
 	AUTH_USERNAME: string;
 	AUTH_PASSWORD_HASH: string;
 	AUTH_SESSION_SECRET: string;
+	SLASH_AUTH_USERNAME: string;
+	SLASH_AUTH_PASSWORD_HASH: string;
 	OPENROUTER_API_KEY: string;
 	WISE_API_TOKEN: string;
 	WISE_CONNECTION_ID: string;
