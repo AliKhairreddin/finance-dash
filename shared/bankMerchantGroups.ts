@@ -1,4 +1,5 @@
 import type { CurrencyTotals, Provider, Transaction } from "./types";
+import { isSlashDailyCardPayment } from "./transactionPresentation";
 
 export type BankMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | "aliases">;
 
@@ -245,7 +246,7 @@ export function transactionCardLastFour(transaction: Transaction): string | unde
 export function groupBankTransactionsByCard(transactions: readonly Transaction[]): BankCardGroup[] {
   const groups = new Map<string, BankCardGroup>();
   for (const transaction of transactions) {
-    if (!settledBankTransaction(transaction)) continue;
+    if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) continue;
     const cardLastFour = transactionCardLastFour(transaction);
     if (!cardLastFour) continue;
     const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
@@ -342,7 +343,7 @@ export function groupBankTransactions(
   const groups = new Map<string, BankMerchantGroup>();
 
   for (const transaction of transactions) {
-    if (!settledBankTransaction(transaction)) continue;
+    if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) continue;
 
     const identity = merchantIdentity(transaction, providersById, providerAliases);
     const label = merchantLabels(transaction)[0] ?? identity.name;

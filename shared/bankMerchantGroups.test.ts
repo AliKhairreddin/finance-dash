@@ -110,6 +110,31 @@ test("provider matches and merchant keys collapse classified variants", () => {
   assert.equal(groups.find((group) => group.key === "merchant:cursor")?.transactionCount, 2);
 });
 
+test("Slash daily card payments are excluded from merchant and card summaries", () => {
+  const transactions = [
+    bankTransaction("cash-side", "Daily Credit Card Payment", 39_050.49, {
+      slashAccountSubtype: "cash",
+      direction: "out",
+      cardLastFour: "1947",
+      matchedProviderId: "provider-namecheap"
+    }),
+    bankTransaction("card-side", "Daily Credit Card Payment", 39_050.49, {
+      slashAccountSubtype: "credit",
+      direction: "in",
+      cardLastFour: "1947",
+      matchedProviderId: "provider-namecheap"
+    })
+  ];
+  const providers: Array<Pick<Provider, "id" | "name" | "legalName" | "aliases">> = [{
+    id: "provider-namecheap",
+    name: "Namecheap Inc.",
+    aliases: []
+  }];
+
+  assert.deepEqual(groupBankTransactions(transactions, providers), []);
+  assert.deepEqual(groupBankTransactionsByCard(transactions), []);
+});
+
 test("card view uses verified card identity, separates last-four collisions, and totals cashback", () => {
   const cards = groupBankTransactionsByCard([
     bankTransaction("explicit", "Meta", 100, {

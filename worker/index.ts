@@ -2769,7 +2769,8 @@ async function withBankSyncLease(
 async function syncRevolutActivity(
   env: Env,
   requestedRange?: SlashTransactionDateRange,
-  laneKey = "live"
+  laneKey = "live",
+  pageBudget = 10
 ): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "revolut");
   return withBankSyncLease(env, "revolut", connectionKey, async (lease) => {
@@ -2789,7 +2790,7 @@ async function syncRevolutActivity(
       privateKeyPem: env.REVOLUT_PRIVATE_KEY_PEM,
       refreshToken: env.REVOLUT_REFRESH_TOKEN,
       ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
-      pageBudget: 10,
+      pageBudget,
       collectTransactions: false,
       onAccountsDiscovered: async (accounts) => {
         await registerDiscoveredBankAccountSet(
@@ -2815,13 +2816,15 @@ async function syncRevolutActivity(
       lease,
       activity
     );
+    return activity.complete;
   });
 }
 
 async function syncSlashActivity(
   env: Env,
   requestedRange?: SlashTransactionDateRange,
-  laneKey = "live"
+  laneKey = "live",
+  pageBudget = 10
 ): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "slash");
   return withBankSyncLease(env, "slash", connectionKey, async (lease) => {
@@ -2839,7 +2842,7 @@ async function syncSlashActivity(
       apiKey: env.SLASH_API_KEY,
       legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
       ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
-      pageBudget: 10,
+      pageBudget,
       collectTransactions: false,
       onAccountsDiscovered: async (accounts) => {
         await registerDiscoveredBankAccountSet(
@@ -2865,6 +2868,7 @@ async function syncSlashActivity(
       lease,
       activity
     );
+    return activity.complete;
   });
 }
 
@@ -2888,7 +2892,8 @@ async function syncWiseActivity(env: Env): Promise<boolean> {
 async function syncAmexActivity(
   env: Env,
   requestedRange?: SlashTransactionDateRange,
-  laneKey = "live"
+  laneKey = "live",
+  pageBudget = 10
 ): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "amex");
   return withBankSyncLease(env, "amex", connectionKey, async (lease) => {
@@ -2905,7 +2910,7 @@ async function syncAmexActivity(
     try {
       activity = await fetchAmexActivityBatch(env, {
         ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
-        pageBudget: 10,
+        pageBudget,
         onAccountsDiscovered: async (accounts) => {
           await registerDiscoveredBankAccountSet(
             env,
@@ -2947,6 +2952,7 @@ async function syncAmexActivity(
       lease,
       activity
     );
+    return activity.complete;
   });
 }
 
@@ -3022,9 +3028,9 @@ async function syncBankSourceRange(
   laneKey: string
 ): Promise<boolean> {
   if (source === "wise") throw new Error("Wise transaction history is imported manually from CSV");
-  if (source === "revolut") return syncRevolutActivity(env, range, laneKey);
-  if (source === "slash") return syncSlashActivity(env, range, laneKey);
-  return syncAmexActivity(env, range, laneKey);
+  if (source === "revolut") return syncRevolutActivity(env, range, laneKey, 1);
+  if (source === "slash") return syncSlashActivity(env, range, laneKey, 1);
+  return syncAmexActivity(env, range, laneKey, 1);
 }
 
 async function enqueueBankBackfill(
@@ -5481,6 +5487,20 @@ async function handleApi(
           { ...job, message: job.lastError ?? "Historical transaction sync failed" },
           { status: 409 }
         );
+      }
+      if (job.status !== "complete") {
+        const run = runBankBackfillJob(env, job.key).catch((error: unknown) => {
+          console.error(JSON.stringify({
+            event: "historical_bank_sync_failed",
+            source: job.source,
+            fromDate: job.fromDate,
+            toDate: job.toDate,
+            error: error instanceof Error ? error.message : String(error)
+          }));
+          throw error;
+        });
+        if (executionContext) executionContext.waitUntil(run);
+        else void run.catch(() => undefined);
       }
       return json(job, job.status === "complete"
         ? undefined

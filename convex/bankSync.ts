@@ -29,7 +29,7 @@ const minimumLeaseMs = 60_000;
 const maximumLeaseMs = 15 * 60_000;
 const maximumBackfillJobsPerRun = 4;
 const maximumBackfillAttempts = 8;
-const staleBackfillAttemptMs = 20 * 60_000;
+const staleBackfillAttemptMs = 12 * 60_000;
 const checkpointContinuationDelayMs = 1_000;
 const backfillJobValue = v.object({
   key: v.string(),
