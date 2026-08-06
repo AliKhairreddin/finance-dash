@@ -126,7 +126,8 @@ const columnAliases = {
   ],
   category: ["type", "transactiontype", "category"],
   accountName: ["account", "accountname", "balancename"],
-  cardHolderName: ["cardholderfullname", "cardholdername", "cardholder", "cardholderfull"]
+  cardHolderName: ["cardholderfullname", "cardholdername", "cardholder", "cardholderfull"],
+  cardLastFour: ["cardlastfourdigits", "cardlastfour", "cardlast4", "lastfour", "last4", "carddigits"]
 };
 
 function stableHash(value: string): string {
@@ -406,6 +407,10 @@ function transactionFromRow(row: CsvRow, fallbackCurrency?: string): Transaction
     maximumWiseImportTextLength
   );
   const cardHolderName = cell(row, columnAliases.cardHolderName);
+  const cardLastFourValue = cell(row, columnAliases.cardLastFour)?.replace(/\D/g, "");
+  const cardLastFour = cardLastFourValue && cardLastFourValue.length >= 4
+    ? cardLastFourValue.slice(-4)
+    : undefined;
   if (!sourceId) {
     throw new Error("Wise CSV row is missing a stable provider transaction ID");
   }
@@ -453,7 +458,8 @@ function transactionFromRow(row: CsvRow, fallbackCurrency?: string): Transaction
             512
           )
         }
-      : {})
+      : {}),
+    ...(cardLastFour ? { cardLastFour } : {})
   };
 }
 
@@ -576,6 +582,9 @@ function assertWiseImportTransaction(
   if (transaction.cardHolderName !== undefined) {
     requiredBoundedText(transaction.cardHolderName, `${field}.cardHolderName`, 512);
   }
+  if (transaction.cardLastFour !== undefined && !/^\d{4}$/.test(transaction.cardLastFour)) {
+    throw new Error(`${field}.cardLastFour must contain exactly four digits`);
+  }
 }
 
 export function validateWiseStatementImportPayload(
@@ -669,7 +678,8 @@ export function normalizeImportedWiseTransactions(
         : {}),
       ...(transaction.cardHolderName
         ? { cardHolderName: transaction.cardHolderName.trim() }
-        : {})
+        : {}),
+      ...(transaction.cardLastFour ? { cardLastFour: transaction.cardLastFour } : {})
     };
   });
 }

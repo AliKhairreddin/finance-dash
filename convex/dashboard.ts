@@ -223,6 +223,7 @@ const transaction = v.object({
   rawName: v.string(),
   counterparty: v.string(),
   cardHolderName: v.optional(v.string()),
+  cardLastFour: v.optional(v.string()),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({

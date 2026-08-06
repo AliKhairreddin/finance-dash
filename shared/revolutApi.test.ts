@@ -153,6 +153,7 @@ test("Revolut activity signs a fresh assertion and retains terminal transactions
         created_at: "2026-07-28T16:00:00.000Z",
         completed_at: "2026-07-28T16:01:00.000Z",
         merchant: { name: `Example Merchant ${index + 1}`, category_code: "5734" },
+        card: { card_number: "**** **** **** 8744" },
         legs: [
           {
             leg_id: `leg-${index + 1}`,
@@ -203,7 +204,8 @@ test("Revolut activity signs a fresh assertion and retains terminal transactions
       currency: "GBP",
       direction: "out",
       status: "posted",
-      category: "Revolut"
+      category: "Revolut",
+      cardLastFour: "8744"
     }
   ]);
   assert.deepEqual(

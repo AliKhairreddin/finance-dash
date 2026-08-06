@@ -30,16 +30,16 @@ import {
 } from "@/components/ui/sortable-table-head";
 import { useUrlDateRangeState, useUrlState, type UrlDateRange } from "@/lib/url-state";
 import {
-  generateSlashExpenseActivityPdf,
-  slashExpensePdfFileName
-} from "../shared/slashExpensePdf";
+  bankExpenseReportFileName,
+  generateBankExpenseReportPdf
+} from "../shared/bankExpenseReport";
 import {
-  groupSlashTransactions,
-  isSlashSocialMediaGroup,
-  slashGroupAmountTotal,
-  type SlashMerchantGroup,
-  type SlashMerchantProvider
-} from "../shared/slashMerchantGroups";
+  bankGroupAmountTotal,
+  groupBankTransactions,
+  isSocialMediaGroup,
+  type BankMerchantGroup,
+  type BankMerchantProvider
+} from "../shared/bankMerchantGroups";
 import type { CurrencyTotals, DashboardSnapshot, Transaction, TransactionPage } from "../shared/types";
 import { slashDefaultActivityWindowDays } from "../shared/slashApi";
 
@@ -76,7 +76,7 @@ function currencySummary(totals: CurrencyTotals): string {
   return values.length > 0 ? values.join(" · ") : "—";
 }
 
-function groupTotals(groups: readonly SlashMerchantGroup[], field: "credits" | "net" | "spend"): CurrencyTotals {
+function groupTotals(groups: readonly BankMerchantGroup[], field: "credits" | "net" | "spend"): CurrencyTotals {
   const totals: CurrencyTotals = {};
   for (const group of groups) {
     for (const [currency, amount] of Object.entries(group[field])) {
@@ -247,10 +247,10 @@ function SlashMerchantGroupTable({
 }: {
   emptyLabel: string;
   generatingPdfKey: string | null;
-  groups: readonly SlashMerchantGroup[];
+  groups: readonly BankMerchantGroup[];
   isLoading: boolean;
   loadedCount: number;
-  onDownloadPdf: (group: SlashMerchantGroup) => void;
+  onDownloadPdf: (group: BankMerchantGroup) => void;
   onRequestSort: (sortKey: SlashGroupSortKey) => void;
   sortDirection: TableSortDirection;
   sortKey: SlashGroupSortKey;
@@ -272,7 +272,7 @@ function SlashMerchantGroupTable({
         <tbody>
           {groups.map((group) => {
             const aliases = group.aliases.filter((alias) => alias.toLowerCase() !== group.name.toLowerCase());
-            const netTotal = slashGroupAmountTotal(group.net);
+            const netTotal = bankGroupAmountTotal(group.net);
             return (
               <tr key={group.key}>
                 <td className="counterparty-cell"><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></td>
@@ -314,7 +314,7 @@ export default function SlashApp() {
     window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light"
   );
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [providers, setProviders] = useState<SlashMerchantProvider[]>([]);
+  const [providers, setProviders] = useState<BankMerchantProvider[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -402,7 +402,7 @@ export default function SlashApp() {
     if (account !== "all" && !accountOptions.includes(account)) setAccount("all");
   }, [account, accountOptions, setAccount]);
 
-  const allGroups = useMemo(() => groupSlashTransactions(
+  const allGroups = useMemo(() => groupBankTransactions(
     transactions.filter((transaction) =>
       (direction === "all" || transaction.direction === direction)
       && (account === "all" || transaction.accountName === account)
@@ -412,15 +412,15 @@ export default function SlashApp() {
 
   const rows = useMemo(() => {
     const search = query.trim().toLowerCase();
-    function sortValue(group: SlashMerchantGroup): number | string {
+    function sortValue(group: BankMerchantGroup): number | string {
       if (sortKey === "accounts") return group.accountNames.length;
-      if (sortKey === "credits") return slashGroupAmountTotal(group.credits);
+      if (sortKey === "credits") return bankGroupAmountTotal(group.credits);
       if (sortKey === "firstDate") return group.firstDate;
       if (sortKey === "lastDate") return group.lastDate;
       if (sortKey === "merchant") return group.name;
-      if (sortKey === "net") return slashGroupAmountTotal(group.net);
+      if (sortKey === "net") return bankGroupAmountTotal(group.net);
       if (sortKey === "transactions") return group.transactionCount;
-      return slashGroupAmountTotal(group.spend);
+      return bankGroupAmountTotal(group.spend);
     }
     return allGroups
       .filter((group) => !search || `${group.name} ${group.aliases.join(" ")} ${group.accountNames.join(" ")}`.toLowerCase().includes(search))
@@ -430,9 +430,9 @@ export default function SlashApp() {
       );
   }, [allGroups, query, sortDirection, sortKey]);
 
-  const socialMediaGroups = useMemo(() => allGroups.filter(isSlashSocialMediaGroup), [allGroups]);
-  const socialMediaRows = useMemo(() => rows.filter(isSlashSocialMediaGroup), [rows]);
-  const otherRows = useMemo(() => rows.filter((group) => !isSlashSocialMediaGroup(group)), [rows]);
+  const socialMediaGroups = useMemo(() => allGroups.filter(isSocialMediaGroup), [allGroups]);
+  const socialMediaRows = useMemo(() => rows.filter(isSocialMediaGroup), [rows]);
+  const otherRows = useMemo(() => rows.filter((group) => !isSocialMediaGroup(group)), [rows]);
 
   function requestSort(nextSortKey: SlashGroupSortKey): void {
     if (nextSortKey === sortKey) {
@@ -461,17 +461,17 @@ export default function SlashApp() {
     }
   }
 
-  async function downloadExpensePdf(group: SlashMerchantGroup): Promise<void> {
+  async function downloadExpensePdf(group: BankMerchantGroup): Promise<void> {
     setGeneratingPdfKey(group.key);
     setError(null);
     try {
-      const bytes = await generateSlashExpenseActivityPdf(group, period);
+      const bytes = await generateBankExpenseReportPdf(group, period);
       const blobBytes = new Uint8Array(bytes.byteLength);
       blobBytes.set(bytes);
       const url = URL.createObjectURL(new Blob([blobBytes], { type: "application/pdf" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = slashExpensePdfFileName(group, period);
+      link.download = bankExpenseReportFileName(group, period);
       document.body.append(link);
       link.click();
       link.remove();

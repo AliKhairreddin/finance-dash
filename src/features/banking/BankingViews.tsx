@@ -34,6 +34,12 @@ import {
   wiseEntityShortLabel
 } from "../../../shared/wiseEntities";
 import { exportBankTransactionsCsv } from "./exportTransactions";
+import {
+  BankActivityViewToggle,
+  BankCardActivityView,
+  BankMerchantGroupView,
+  type BankActivityViewMode
+} from "./BankActivityViews";
 
 const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "wise", label: "Wise" },
@@ -68,6 +74,9 @@ export function AllBankTransactionsView({
   dashboard,
   providersById,
   rangeControls,
+  activityView,
+  setActivityView,
+  period,
   source,
   setSource,
   transactions,
@@ -79,6 +88,9 @@ export function AllBankTransactionsView({
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   rangeControls: ReactNode;
+  activityView: BankActivityViewMode;
+  setActivityView: (view: BankActivityViewMode) => void;
+  period: { fromDate: string; toDate: string };
   source: "all" | BankSource;
   setSource: (source: "all" | BankSource) => void;
   transactions: Transaction[];
@@ -277,6 +289,7 @@ export function AllBankTransactionsView({
                 </label>
               </FilterFieldGroup>
             </FilterPopover>
+            <BankActivityViewToggle value={activityView} onChange={setActivityView} />
           </div>
           <div className="list-toolbar-actions">
             {rangeControls}
@@ -310,7 +323,7 @@ export function AllBankTransactionsView({
           setOwner("all");
         }}
       />
-      <div className="table-wrap">
+      {activityView === "transactions" ? <><div className="table-wrap">
         <table className="data-table modern-income-table unified-bank-table">
           <thead><tr>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="date">Date</SortableTableHead>
@@ -347,6 +360,24 @@ export function AllBankTransactionsView({
             {isLoading ? "Loading" : loadError ? "Retry" : "Show 200 more"}
           </Button>
         </div>
+      )}</> : activityView === "groups" ? (
+        <BankMerchantGroupView
+          hasMore={hasMore}
+          isLoading={isLoading}
+          loadError={loadError}
+          onRetry={onLoadMore}
+          period={period}
+          providers={dashboard.providers}
+          transactions={rows}
+        />
+      ) : (
+        <BankCardActivityView
+          hasMore={hasMore}
+          isLoading={isLoading}
+          loadError={loadError}
+          onRetry={onLoadMore}
+          transactions={rows}
+        />
       )}
     </section>
   );

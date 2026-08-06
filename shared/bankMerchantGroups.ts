@@ -1,19 +1,37 @@
 import type { CurrencyTotals, Provider, Transaction } from "./types";
 
-export type SlashMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | "aliases">;
+export type BankMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | "aliases">;
 
-export interface SlashMerchantGroup {
+export interface BankCardGroup {
+  key: string;
+  label: string;
+  cardLastFour?: string;
+  source: Transaction["source"];
+  accountName: string;
+  transactions: Transaction[];
+  transactionCount: number;
+  firstDate: string;
+  lastDate: string;
+  spend: CurrencyTotals;
+  credits: CurrencyTotals;
+  cashback: CurrencyTotals;
+}
+
+export interface BankMerchantGroup {
   key: string;
   name: string;
   aliases: string[];
   transactions: Transaction[];
   transactionCount: number;
   accountNames: string[];
+  sources: Transaction["source"][];
+  cardGroups: BankCardGroup[];
   firstDate: string;
   lastDate: string;
   spend: CurrencyTotals;
   credits: CurrencyTotals;
   net: CurrencyTotals;
+  cashback: CurrencyTotals;
 }
 
 type MerchantIdentity = {
@@ -101,7 +119,7 @@ function compactText(value: string | undefined): string {
   return (value ?? "").trim().replace(/\s+/g, " ");
 }
 
-export function normalizeSlashMerchantText(value: string): string {
+export function normalizeBankMerchantText(value: string): string {
   return value
     .toLowerCase()
     .normalize("NFKD")
@@ -135,10 +153,10 @@ function containsAlias(descriptor: string, alias: string): boolean {
     || descriptor.includes(` ${alias} `);
 }
 
-function providerAliasDirectory(providers: readonly SlashMerchantProvider[]): AliasEntry[] {
+function providerAliasDirectory(providers: readonly BankMerchantProvider[]): AliasEntry[] {
   return providers.flatMap((provider) => {
     const aliases = [provider.name, provider.legalName, ...provider.aliases]
-      .map((value) => normalizeSlashMerchantText(value ?? ""))
+      .map((value) => normalizeBankMerchantText(value ?? ""))
       .filter((value) => value.length >= 3)
       .sort((left, right) => right.length - left.length);
     return aliases.length === 0
@@ -155,13 +173,13 @@ function merchantFamilyIdentity(descriptors: readonly string[]): MerchantIdentit
 
 function merchantIdentity(
   transaction: Transaction,
-  providersById: ReadonlyMap<string, SlashMerchantProvider>,
+  providersById: ReadonlyMap<string, BankMerchantProvider>,
   providerAliases: readonly AliasEntry[]
 ): MerchantIdentity {
   const labels = merchantLabels(transaction);
-  const descriptors = labels.map(normalizeSlashMerchantText).filter(Boolean);
+  const descriptors = labels.map(normalizeBankMerchantText).filter(Boolean);
   const family = merchantFamilyIdentity(descriptors);
-  if (family) return { key: family.key, name: family.name };
+  if (family) return family;
 
   const matchedProvider = transaction.matchedProviderId
     ? providersById.get(transaction.matchedProviderId)
@@ -171,7 +189,7 @@ function merchantIdentity(
       matchedProvider.name,
       matchedProvider.legalName ?? "",
       ...matchedProvider.aliases
-    ].map(normalizeSlashMerchantText));
+    ].map(normalizeBankMerchantText));
     if (providerFamily) return providerFamily;
     return { key: `provider:${matchedProvider.id}`, name: matchedProvider.name };
   }
@@ -181,7 +199,7 @@ function merchantIdentity(
   );
   if (aliasedProvider) {
     const providerFamily = merchantFamilyIdentity([
-      normalizeSlashMerchantText(aliasedProvider.name),
+      normalizeBankMerchantText(aliasedProvider.name),
       ...aliasedProvider.aliases
     ]);
     if (providerFamily) return providerFamily;
@@ -193,8 +211,8 @@ function merchantIdentity(
     || compactText(transaction.rawName)
     || compactText(transaction.description)
     || "Unknown merchant";
-  const suppliedKey = normalizeSlashMerchantText(transaction.merchantKey ?? "").replace(/\s+/g, "");
-  const normalizedKey = suppliedKey || normalizeSlashMerchantText(preferredLabel) || "unknown-merchant";
+  const suppliedKey = normalizeBankMerchantText(transaction.merchantKey ?? "").replace(/\s+/g, "");
+  const normalizedKey = suppliedKey || normalizeBankMerchantText(preferredLabel) || "unknown-merchant";
   return {
     key: `merchant:${normalizedKey.slice(0, 160)}`,
     name: readableMerchantName(preferredLabel).slice(0, 160)
@@ -205,44 +223,113 @@ function addCurrency(total: CurrencyTotals, currency: string, amount: number): v
   total[currency] = Math.round(((total[currency] ?? 0) + amount) * 100) / 100;
 }
 
-export function groupSlashTransactions(
+function settledBankTransaction(transaction: Transaction): boolean {
+  return (
+    (transaction.status === "posted" || transaction.status === "settled")
+    && Number.isFinite(transaction.amount)
+    && transaction.amount >= 0
+  );
+}
+
+function normalizedCardLastFour(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 4 ? digits.slice(-4) : undefined;
+}
+
+export function transactionCardLastFour(transaction: Transaction): string | undefined {
+  const explicit = normalizedCardLastFour(transaction.cardLastFour);
+  if (explicit) return explicit;
+  const values = [transaction.accountName, transaction.description, transaction.rawName, transaction.counterparty];
+  for (const value of values) {
+    const masked = value.match(/(?:[xX*\u2022\u00b7]{2,}|ending(?:\s+in)?|last\s*4|card)\s*[:#-]?\s*(\d{4})\b/i);
+    if (masked?.[1]) return masked[1];
+    const branded = value.match(/\b(?:visa|mastercard|master\s*card|amex|american\s+express)\b[^0-9]{0,18}(\d{4})\b/i);
+    if (branded?.[1]) return branded[1];
+  }
+  return undefined;
+}
+
+export function groupBankTransactionsByCard(transactions: readonly Transaction[]): BankCardGroup[] {
+  const groups = new Map<string, BankCardGroup>();
+  for (const transaction of transactions) {
+    if (!settledBankTransaction(transaction)) continue;
+    const cardLastFour = transactionCardLastFour(transaction);
+    const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
+    const key = `${transaction.source}:${accountIdentity}:${cardLastFour ?? "account"}`;
+    const existing = groups.get(key);
+    const group: BankCardGroup = existing ?? {
+      key,
+      label: cardLastFour ? `Card ending ${cardLastFour}` : transaction.accountName,
+      ...(cardLastFour ? { cardLastFour } : {}),
+      source: transaction.source,
+      accountName: transaction.accountName,
+      transactions: [],
+      transactionCount: 0,
+      firstDate: transaction.date,
+      lastDate: transaction.date,
+      spend: {},
+      credits: {},
+      cashback: {}
+    };
+    group.transactions.push(transaction);
+    group.transactionCount += 1;
+    if (transaction.date < group.firstDate) group.firstDate = transaction.date;
+    if (transaction.date > group.lastDate) group.lastDate = transaction.date;
+    const currency = transaction.currency.trim().toUpperCase();
+    if (transaction.direction === "out") addCurrency(group.spend, currency, transaction.amount);
+    else addCurrency(group.credits, currency, transaction.amount);
+    if (transaction.cashback && transaction.cashback.amount > 0) {
+      addCurrency(group.cashback, currency, transaction.cashback.amount);
+    }
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      transactions: group.transactions.sort((left, right) =>
+        left.date.localeCompare(right.date) || left.id.localeCompare(right.id)
+      )
+    }))
+    .sort((left, right) => right.transactionCount - left.transactionCount || left.label.localeCompare(right.label));
+}
+
+export function groupBankTransactions(
   transactions: readonly Transaction[],
-  providers: readonly SlashMerchantProvider[] = []
-): SlashMerchantGroup[] {
+  providers: readonly BankMerchantProvider[] = []
+): BankMerchantGroup[] {
   const providersById = new Map(providers.map((provider) => [provider.id, provider]));
   const providerAliases = providerAliasDirectory(providers);
-  const groups = new Map<string, SlashMerchantGroup>();
+  const groups = new Map<string, BankMerchantGroup>();
 
   for (const transaction of transactions) {
-    if (
-      transaction.source !== "slash"
-      || (transaction.status !== "posted" && transaction.status !== "settled")
-      || !Number.isFinite(transaction.amount)
-      || transaction.amount < 0
-    ) {
-      continue;
-    }
+    if (!settledBankTransaction(transaction)) continue;
 
     const identity = merchantIdentity(transaction, providersById, providerAliases);
     const label = merchantLabels(transaction)[0] ?? identity.name;
     const existing = groups.get(identity.key);
-    const group: SlashMerchantGroup = existing ?? {
+    const group: BankMerchantGroup = existing ?? {
       ...identity,
       aliases: [],
       transactions: [],
       transactionCount: 0,
       accountNames: [],
+      sources: [],
+      cardGroups: [],
       firstDate: transaction.date,
       lastDate: transaction.date,
       spend: {},
       credits: {},
-      net: {}
+      net: {},
+      cashback: {}
     };
 
-    if (!group.aliases.some((alias) => normalizeSlashMerchantText(alias) === normalizeSlashMerchantText(label))) {
+    if (!group.aliases.some((alias) => normalizeBankMerchantText(alias) === normalizeBankMerchantText(label))) {
       group.aliases.push(label);
     }
     if (!group.accountNames.includes(transaction.accountName)) group.accountNames.push(transaction.accountName);
+    if (!group.sources.includes(transaction.source)) group.sources.push(transaction.source);
     group.transactions.push(transaction);
     group.transactionCount += 1;
     if (transaction.date < group.firstDate) group.firstDate = transaction.date;
@@ -251,6 +338,9 @@ export function groupSlashTransactions(
     if (transaction.direction === "out") addCurrency(group.spend, currency, transaction.amount);
     else addCurrency(group.credits, currency, transaction.amount);
     addCurrency(group.net, currency, transaction.direction === "in" ? transaction.amount : -transaction.amount);
+    if (transaction.cashback && transaction.cashback.amount > 0) {
+      addCurrency(group.cashback, currency, transaction.cashback.amount);
+    }
     groups.set(identity.key, group);
   }
 
@@ -259,25 +349,32 @@ export function groupSlashTransactions(
       ...group,
       aliases: group.aliases.sort((left, right) => left.localeCompare(right)),
       accountNames: group.accountNames.sort((left, right) => left.localeCompare(right)),
+      sources: group.sources.sort((left, right) => left.localeCompare(right)),
       transactions: group.transactions.sort((left, right) =>
         left.date.localeCompare(right.date) || left.id.localeCompare(right.id)
-      )
+      ),
+      cardGroups: groupBankTransactionsByCard(group.transactions)
     }))
     .sort((left, right) => right.transactionCount - left.transactionCount || left.name.localeCompare(right.name));
 }
 
-export function slashGroupAmountTotal(totals: CurrencyTotals): number {
+export function bankGroupAmountTotal(totals: CurrencyTotals): number {
   return Object.values(totals).reduce((sum, amount) => sum + amount, 0);
 }
 
-const slashSocialMediaGroupKeys = new Set([
+export function bankCardCashbackRate(group: Pick<BankCardGroup, "cashback" | "spend">): number {
+  const spend = bankGroupAmountTotal(group.spend);
+  return spend > 0 ? bankGroupAmountTotal(group.cashback) / spend : 0;
+}
+
+const socialMediaGroupKeys = new Set([
   "family:meta",
   "family:tiktok",
   "family:newsbreak"
 ]);
 
-export function isSlashSocialMediaGroup(group: Pick<SlashMerchantGroup, "key" | "name">): boolean {
-  if (slashSocialMediaGroupKeys.has(group.key)) return true;
-  const normalizedName = normalizeSlashMerchantText(group.name).replace(/\s+/g, "");
+export function isSocialMediaGroup(group: Pick<BankMerchantGroup, "key" | "name">): boolean {
+  if (socialMediaGroupKeys.has(group.key)) return true;
+  const normalizedName = normalizeBankMerchantText(group.name).replace(/\s+/g, "");
   return normalizedName === "meta" || normalizedName === "tiktok" || normalizedName === "newsbreak";
 }

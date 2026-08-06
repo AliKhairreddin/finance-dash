@@ -149,6 +149,14 @@ test("Amex transactions normalize exact values and carry their persisted account
   assert.equal(credit.status, "settled");
 });
 
+test("Amex transactions retain only the final four card digits", () => {
+  const [normalized] = normalizeAmexTransactions([
+    transaction({ card: { cardNumber: "3714 496353 98431" } })
+  ], accountConfig);
+
+  assert.equal(normalized.cardLastFour, "8431");
+});
+
 test("Amex transaction pages reject malformed rows atomically", () => {
   const valid = transaction({ transactionId: "valid" });
   const invalidCases: Array<[Record<string, unknown>, RegExp]> = [

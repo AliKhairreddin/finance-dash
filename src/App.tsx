@@ -186,6 +186,13 @@ import {
   type WiseEntityView
 } from "../shared/wiseEntities";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
+import {
+  BankActivityViewToggle,
+  BankCardActivityView,
+  BankMerchantGroupView,
+  bankActivityViewModes,
+  type BankActivityViewMode
+} from "@/features/banking/BankActivityViews";
 import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
@@ -731,6 +738,9 @@ function App() {
     allowedValues: bankTabs,
     history: "push"
   });
+  const [bankActivityView, setBankActivityView] = useUrlState<BankActivityViewMode>("bankMode", "transactions", {
+    allowedValues: bankActivityViewModes
+  });
   const [allBankSource, setAllBankSource] = useUrlState<"all" | BankSource>("allBankSource", "all", {
     allowedValues: ["all", ...bankSources.map((source) => source.id)]
   });
@@ -786,6 +796,7 @@ function App() {
     error: null
   });
   const transactionPageAbortRef = useRef<AbortController | null>(null);
+  const loadingAllTransactionPagesRef = useRef(false);
   const transactionPageRequestVersionRef = useRef(0);
   const transactionPageRequestRef = useRef<TransactionPageRequest | null>(null);
   const historicalSyncRequestKeysRef = useRef(new Set<string>());
@@ -1145,6 +1156,67 @@ function App() {
     );
   }
 
+  async function loadAllRemainingTransactionPages(): Promise<void> {
+    const request = transactionPageRequestRef.current;
+    if (
+      !request
+      || loadingAllTransactionPagesRef.current
+      || transactionPageState.isLoading
+      || transactionPageState.error
+      || transactionPageState.requestKey !== request.key
+      || transactionPageState.isDone
+    ) return;
+
+    loadingAllTransactionPagesRef.current = true;
+    transactionPageAbortRef.current?.abort();
+    const controller = new AbortController();
+    transactionPageAbortRef.current = controller;
+    const version = transactionPageRequestVersionRef.current + 1;
+    transactionPageRequestVersionRef.current = version;
+    let transactions = [...transactionPageState.transactions];
+    let cursor = transactionPageState.continueCursor;
+    let isDone: boolean = transactionPageState.isDone;
+    setTransactionPageState((current) => ({ ...current, isLoading: true, error: null }));
+
+    try {
+      while (!isDone) {
+        const page = await requestTransactionPage(request, cursor, controller.signal);
+        if (
+          controller.signal.aborted
+          || version !== transactionPageRequestVersionRef.current
+          || transactionPageRequestRef.current?.key !== request.key
+        ) return;
+        transactions = appendTransactionPage(transactions, page.transactions);
+        cursor = page.continueCursor;
+        isDone = page.isDone;
+        setTransactionPageState({
+          requestKey: request.key,
+          transactions,
+          continueCursor: cursor,
+          isDone,
+          isLoading: !isDone,
+          error: null
+        });
+      }
+    } catch (caught) {
+      if (
+        controller.signal.aborted
+        || version !== transactionPageRequestVersionRef.current
+        || transactionPageRequestRef.current?.key !== request.key
+      ) return;
+      setTransactionPageState({
+        requestKey: request.key,
+        transactions,
+        continueCursor: cursor,
+        isDone: false,
+        isLoading: false,
+        error: caught instanceof Error ? caught.message : "Complete transaction period could not be loaded"
+      });
+    } finally {
+      loadingAllTransactionPagesRef.current = false;
+    }
+  }
+
   async function refreshCurrentTransactionPage(): Promise<void> {
     const latestRequest = transactionPageRequestRef.current;
     if (!latestRequest) return;
@@ -1161,6 +1233,26 @@ function App() {
     transactionPageRequest
     && (!transactionPageIsCurrent || !transactionPageState.isDone || transactionPageState.error)
   );
+
+  useEffect(() => {
+    if (
+      bankActivityView === "transactions"
+      || !transactionPageRequest
+      || transactionPageState.requestKey !== transactionPageRequest.key
+      || transactionPageState.isLoading
+      || transactionPageState.isDone
+      || transactionPageState.error
+    ) return;
+    void loadAllRemainingTransactionPages();
+  }, [
+    bankActivityView,
+    transactionPageRequest?.key,
+    transactionPageState.continueCursor,
+    transactionPageState.error,
+    transactionPageState.isDone,
+    transactionPageState.isLoading,
+    transactionPageState.requestKey
+  ]);
 
   const latestIncomeAutomation = useMemo(
     () => latestIncomeAutomationTimestamp(dashboard?.automationRuns ?? []),
@@ -2089,6 +2181,8 @@ function App() {
           dashboard={dashboard}
           activeBank={bankTab}
           setActiveBank={setBankTab}
+          activityView={bankActivityView}
+          setActivityView={setBankActivityView}
           wiseEntityView={wiseEntityView}
           setWiseEntityView={setWiseEntityView}
           bankDirection={bankDirection}
@@ -2849,6 +2943,8 @@ function BanksView({
   dashboard,
   activeBank,
   setActiveBank,
+  activityView,
+  setActivityView,
   wiseEntityView,
   setWiseEntityView,
   bankDirection,
@@ -2904,6 +3000,8 @@ function BanksView({
   dashboard: DashboardSnapshot;
   activeBank: BankTab;
   setActiveBank: (source: BankTab) => void;
+  activityView: BankActivityViewMode;
+  setActivityView: (view: BankActivityViewMode) => void;
   wiseEntityView: WiseEntityView;
   setWiseEntityView: (entity: WiseEntityView) => void;
   bankDirection: "all" | "in" | "out";
@@ -3187,10 +3285,13 @@ function BanksView({
             />
           </div>
           <AllBankTransactionsView
+            activityView={activityView}
             dashboard={dashboard}
+            period={allBankDateRange}
             providersById={providersById}
             source={allBankSource}
             setSource={setAllBankSource}
+            setActivityView={setActivityView}
             transactions={allBankTransactions}
             hasMore={hasMoreTransactions}
             isLoading={isLoadingTransactions}
@@ -3209,7 +3310,9 @@ function BanksView({
       )}
       {activeBank === "wise" && (
         <BankReconciliationView
+          activityView={activityView}
           dashboard={dashboard}
+          period={wiseDateRange}
           rows={wiseTransactions}
           source="wise"
           providersById={providersById}
@@ -3229,6 +3332,7 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          setActivityView={setActivityView}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
@@ -3256,7 +3360,9 @@ function BanksView({
       )}
       {activeBank === "revolut" && (
         <RevolutView
+          activityView={activityView}
           dashboard={dashboard}
+          period={revolutDateRange}
           rows={revolutTransactions}
           dateRange={revolutDateRange}
           isLoadingDateRange={isLoadingTransactions}
@@ -3278,6 +3384,7 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          setActivityView={setActivityView}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
@@ -3294,7 +3401,9 @@ function BanksView({
       )}
       {activeBank === "slash" && (
         <SlashView
+          activityView={activityView}
           dashboard={dashboard}
+          period={slashDateRange}
           rows={slashTransactions}
           dateRange={slashDateRange}
           isLoadingDateRange={isLoadingTransactions}
@@ -3316,6 +3425,7 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          setActivityView={setActivityView}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
@@ -3333,7 +3443,9 @@ function BanksView({
       )}
       {activeBank === "amex" && (
         <AmexView
+          activityView={activityView}
           dashboard={dashboard}
+          period={allBankDateRange}
           rows={amexTransactions}
           dateRange={allBankDateRange}
           isLoadingDateRange={isLoadingTransactions}
@@ -3354,6 +3466,7 @@ function BanksView({
           setTransactionSortKey={setTransactionSortKey}
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
+          setActivityView={setActivityView}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
@@ -3383,6 +3496,9 @@ function BanksView({
 }
 
 type BankReconciliationViewProps = {
+  activityView: BankActivityViewMode;
+  setActivityView: (view: BankActivityViewMode) => void;
+  period: BankTransactionDateRange;
   dashboard: DashboardSnapshot;
   rows: Transaction[];
   source: BankSource;
@@ -3424,6 +3540,9 @@ type BankReconciliationViewProps = {
 };
 
 function BankReconciliationView({
+  activityView,
+  setActivityView,
+  period,
   dashboard,
   rows,
   source,
@@ -3524,7 +3643,7 @@ function BankReconciliationView({
       <div className="panel-header bank-reconciliation-header">
         <div className="bank-reconciliation-title">
           <p className="eyebrow">{sourceLabel} reconciliation</p>
-          <h2>Match payments and spend</h2>
+          <h2>{activityView === "groups" ? "Merchant totals" : activityView === "cards" ? "Card totals and cashback" : "Match payments and spend"}</h2>
         </div>
         <div className="list-toolbar reconciliation-toolbar">
           <div className="list-toolbar-main">
@@ -3586,6 +3705,7 @@ function BankReconciliationView({
                 </label>
               </FilterFieldGroup>
             </FilterPopover>
+            <BankActivityViewToggle value={activityView} onChange={setActivityView} />
           </div>
           <div className="list-toolbar-actions">
             {rangeControls}
@@ -3700,7 +3820,7 @@ function BankReconciliationView({
           <span>{integrationStatus.issue}</span>
         </div>
       )}
-      <TransactionTable
+      {activityView === "transactions" ? <TransactionTable
         rows={rows}
         expenses={dashboard.expenses}
         categories={dashboard.transactionCategories}
@@ -3727,7 +3847,25 @@ function BankReconciliationView({
         onLoadMore={onLoadMoreTransactions}
         showWiseEntity={source === "wise" && wiseEntityView === "all"}
         source={source}
-      />
+      /> : activityView === "groups" ? (
+        <BankMerchantGroupView
+          hasMore={hasMoreTransactions}
+          isLoading={isLoadingTransactions}
+          loadError={transactionLoadError}
+          onRetry={onLoadMoreTransactions}
+          period={period}
+          providers={dashboard.providers}
+          transactions={rows}
+        />
+      ) : (
+        <BankCardActivityView
+          hasMore={hasMoreTransactions}
+          isLoading={isLoadingTransactions}
+          loadError={transactionLoadError}
+          onRetry={onLoadMoreTransactions}
+          transactions={rows}
+        />
+      )}
       {tableFooter}
     </section>
   );

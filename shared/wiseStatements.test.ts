@@ -38,12 +38,14 @@ const header = [
 
 function statementRow({
   amount,
+  cardLastFour = "",
   description,
   dateTime = "27-07-2026 11:42:43.898",
   payer = "",
   payee = ""
 }: {
   amount: string;
+  cardLastFour?: string;
   description: string;
   dateTime?: string;
   payer?: string;
@@ -65,7 +67,7 @@ function statementRow({
     payee,
     "",
     "",
-    "",
+    cardLastFour,
     "",
     "",
     "",
@@ -157,6 +159,24 @@ test("Wise CSV ownership is verified by balance ID instead of counterparty names
       ])
     )
   );
+});
+
+test("Wise CSV imports retain the card last four digits for card totals", () => {
+  const fileName = "statement_37067652_USD_2026-07-01_2026-07-30.csv";
+  const parsed = parseWiseStatementCsv(
+    `${header}\n${statementRow({
+      amount: "-125.50",
+      cardLastFour: "8744",
+      description: "Card transaction of 125.50 USD issued by Meta"
+    })}`,
+    fileName
+  )[0];
+  const payload = prepareWiseStatementImport(
+    parsed,
+    verifyWiseStatementAccount(parsed.metadata, accounts, "lmd")
+  );
+
+  assert.equal(payload.transactions[0].cardLastFour, "8744");
 });
 
 test("official Wise ledger rows may share a TransferWise ID without sharing an identity", () => {

@@ -99,6 +99,13 @@ function optionalText(
   return value === undefined ? undefined : boundedText(value, field, maximumLength);
 }
 
+function cardLastFour(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text = typeof value === "number" && Number.isFinite(value) ? String(value) : typeof value === "string" ? value : "";
+  const digits = text.replace(/\D/g, "");
+  return digits.length >= 4 ? digits.slice(-4) : undefined;
+}
+
 function requiredText(
   values: readonly unknown[],
   field: string,
@@ -385,6 +392,18 @@ export function normalizeAmexTransactions(payload: unknown, config: AmexAccountC
       "transaction card holder name",
       512
     );
+    const card = isRecord(item.card) ? item.card : {};
+    const transactionCardLastFour = cardLastFour(firstPresent([
+      item.cardLastFour,
+      item.cardLast4,
+      item.lastFour,
+      item.last4,
+      item.cardNumber,
+      card.lastFour,
+      card.last4,
+      card.cardNumber,
+      card.number
+    ]));
     const isCredit = rawAmount < 0 || /refund|rebate|cashback|credit|reversal/.test(type);
     return {
       id: amexStableTransactionId(configuredAccountId, item),
@@ -402,7 +421,8 @@ export function normalizeAmexTransactions(payload: unknown, config: AmexAccountC
       status,
       category,
       ...(status === "voided" ? { classificationComplete: true } : {}),
-      ...(cardHolderName ? { cardHolderName } : {})
+      ...(cardHolderName ? { cardHolderName } : {}),
+      ...(transactionCardLastFour ? { cardLastFour: transactionCardLastFour } : {})
     };
   });
   const ids = new Set<string>();

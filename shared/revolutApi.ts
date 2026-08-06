@@ -797,6 +797,11 @@ function revolutCounterparty(activity: RevolutTransaction, leg: RevolutTransacti
   );
 }
 
+function revolutCardLastFour(cardNumber: string | undefined): string | undefined {
+  const digits = cardNumber?.replace(/\D/g, "") ?? "";
+  return digits.length >= 4 ? digits.slice(-4) : undefined;
+}
+
 function normalizeRevolutTransaction(
   activity: RevolutTransaction,
   accountById: ReadonlyMap<string, RevolutAccount>
@@ -814,6 +819,7 @@ function normalizeRevolutTransaction(
     }
     const counterparty = revolutCounterparty(activity, leg);
     const status = revolutStatus(activity.state);
+    const cardLastFour = revolutCardLastFour(activity.card?.card_number);
     return {
       id: bankProviderTransactionId("revolut", [activity.id, legId, accountId]),
       providerLegacyId: `revolut-${activity.id}-${legId}-${index}`,
@@ -829,6 +835,7 @@ function normalizeRevolutTransaction(
       direction: leg.amount >= 0 ? "in" : "out",
       status,
       category: "Revolut",
+      ...(cardLastFour ? { cardLastFour } : {}),
       ...(status === "voided" ? { classificationComplete: true } : {})
     };
   });

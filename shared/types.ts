@@ -445,6 +445,7 @@ export interface Transaction {
   rawName: string;
   counterparty: string;
   cardHolderName?: string;
+  cardLastFour?: string;
   amount: number;
   currency: string;
   cashback?: {

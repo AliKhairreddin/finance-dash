@@ -236,6 +236,73 @@
   white-space: nowrap;
 }
 
+.bank-activity-view-toggle {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.bank-activity-view-toggle button {
+  min-height: 34px;
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 0.76rem;
+}
+
+.bank-group-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
+.bank-group-loading .secondary-button {
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0 9px;
+}
+
+.bank-group-table-wrap,
+.bank-card-table-wrap {
+  max-height: min(72vh, 790px);
+}
+
+.bank-group-table {
+  min-width: 1420px;
+}
+
+.bank-card-table {
+  min-width: 1120px;
+}
+
+.bank-group-table .counterparty-cell {
+  min-width: 190px;
+}
+
+.bank-group-table th.action-column,
+.bank-group-table td.action-column {
+  width: 48px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .bank-activity-view-toggle button {
+    padding-inline: 8px;
+  }
+
+  .bank-activity-view-toggle button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
 .slash-credit-amount {
   color: var(--green);
 }
@@ -8542,6 +8609,15 @@ body {
 }
 
 @media (max-width: 760px) {
+  .panel-header.bank-reconciliation-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bank-reconciliation-title,
+  .bank-reconciliation-header .list-toolbar {
+    width: 100%;
+  }
+
   .app-shell {
     width: min(100% - 20px, 1640px);
     grid-template-columns: 1fr;
@@ -8696,7 +8772,7 @@ body {
 
   .reconciliation-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: auto auto minmax(0, 1fr);
     align-items: center;
     gap: 6px;
   }
@@ -8718,6 +8794,12 @@ body {
     padding: 0;
   }
 
+  .reconciliation-toolbar .bank-activity-view-toggle {
+    grid-column: 1;
+    grid-row: 2;
+    width: fit-content;
+  }
+
   .reconciliation-toolbar .toolbar-popover-trigger > span:not(.toolbar-filter-count) {
     display: none;
   }
@@ -8734,8 +8816,15 @@ body {
   }
 
   .reconciliation-toolbar .list-toolbar-actions {
-    grid-column: 3;
-    grid-row: 2;
+    grid-column: 1 / -1;
+    grid-row: 3;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .reconciliation-toolbar .list-toolbar-actions .bank-date-controls {
+    flex: 1 1 auto;
+    width: auto;
   }
 
   .reconciliation-toolbar .bank-date-range-trigger {
