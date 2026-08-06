@@ -38,6 +38,7 @@ export function assertBankTransactionInput(transaction: Transaction): void {
   assertBoundedString(transaction.rawName, "transaction.rawName", 1_024, true);
   assertBoundedString(transaction.counterparty, "transaction.counterparty", 1_024, true);
   assertBoundedString(transaction.cardHolderName, "transaction.cardHolderName", 512);
+  assertBoundedString(transaction.cardId, "transaction.cardId", 1_024);
   assertBoundedString(transaction.cardLastFour, "transaction.cardLastFour", 4);
   if (transaction.cardLastFour !== undefined && !/^\d{4}$/.test(transaction.cardLastFour)) {
     throw new Error("transaction.cardLastFour must contain exactly four digits");

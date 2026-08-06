@@ -13,6 +13,7 @@ function transaction(index: number): Transaction {
     slashAccountSubtype: "credit",
     accountId: `slash-card-${cardLastFour}`,
     accountName: "Slash Platinum Credit",
+    cardId: `card-${cardLastFour}`,
     cardLastFour,
     date: `2026-07-${String((index % 28) + 1).padStart(2, "0")}`,
     description: `META ADS PAYMENT ${index}`,
@@ -44,5 +45,17 @@ test("internal billing report includes an overview and every card transaction ac
   assert.equal(
     bankExpenseReportFileName(group, { fromDate: "2026-07-01", toDate: "2026-07-31" }),
     "meta-internal-billing-report-2026-07-01-to-2026-07-31.pdf"
+  );
+});
+
+test("per-card report rejects merchant activity without verified card metadata", async () => {
+  const withoutCard = transaction(1);
+  delete withoutCard.cardId;
+  delete withoutCard.cardLastFour;
+  const group = groupBankTransactions([withoutCard])[0];
+
+  await assert.rejects(
+    generateBankExpenseReportPdf(group, { fromDate: "2026-07-01", toDate: "2026-07-31" }),
+    /missing verified card metadata/
   );
 });

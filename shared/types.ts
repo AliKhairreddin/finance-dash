@@ -445,6 +445,8 @@ export interface Transaction {
   rawName: string;
   counterparty: string;
   cardHolderName?: string;
+  /** Immutable provider card identity used to distinguish cards with the same last four digits. */
+  cardId?: string;
   cardLastFour?: string;
   amount: number;
   currency: string;

@@ -5,6 +5,7 @@ export type BankMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | 
 export interface BankCardGroup {
   key: string;
   label: string;
+  cardId?: string;
   cardLastFour?: string;
   source: Transaction["source"];
   accountName: string;
@@ -238,16 +239,7 @@ function normalizedCardLastFour(value: string | undefined): string | undefined {
 }
 
 export function transactionCardLastFour(transaction: Transaction): string | undefined {
-  const explicit = normalizedCardLastFour(transaction.cardLastFour);
-  if (explicit) return explicit;
-  const values = [transaction.accountName, transaction.description, transaction.rawName, transaction.counterparty];
-  for (const value of values) {
-    const masked = value.match(/(?:[xX*\u2022\u00b7]{2,}|ending(?:\s+in)?|last\s*4|card)\s*[:#-]?\s*(\d{4})\b/i);
-    if (masked?.[1]) return masked[1];
-    const branded = value.match(/\b(?:visa|mastercard|master\s*card|amex|american\s+express)\b[^0-9]{0,18}(\d{4})\b/i);
-    if (branded?.[1]) return branded[1];
-  }
-  return undefined;
+  return normalizedCardLastFour(transaction.cardLastFour);
 }
 
 export function groupBankTransactionsByCard(transactions: readonly Transaction[]): BankCardGroup[] {
@@ -255,13 +247,59 @@ export function groupBankTransactionsByCard(transactions: readonly Transaction[]
   for (const transaction of transactions) {
     if (!settledBankTransaction(transaction)) continue;
     const cardLastFour = transactionCardLastFour(transaction);
+    if (!cardLastFour) continue;
     const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
-    const key = `${transaction.source}:${accountIdentity}:${cardLastFour ?? "account"}`;
+    const cardId = transaction.cardId?.trim();
+    const key = `${transaction.source}:${cardId ? `card:${cardId}` : `account:${accountIdentity}:last4:${cardLastFour}`}`;
     const existing = groups.get(key);
     const group: BankCardGroup = existing ?? {
       key,
-      label: cardLastFour ? `Card ending ${cardLastFour}` : transaction.accountName,
-      ...(cardLastFour ? { cardLastFour } : {}),
+      label: `Card ending ${cardLastFour}`,
+      ...(cardId ? { cardId } : {}),
+      cardLastFour,
+      source: transaction.source,
+      accountName: transaction.accountName,
+      transactions: [],
+      transactionCount: 0,
+      firstDate: transaction.date,
+      lastDate: transaction.date,
+      spend: {},
+      credits: {},
+      cashback: {}
+    };
+    group.transactions.push(transaction);
+    group.transactionCount += 1;
+    if (transaction.date < group.firstDate) group.firstDate = transaction.date;
+    if (transaction.date > group.lastDate) group.lastDate = transaction.date;
+    const currency = transaction.currency.trim().toUpperCase();
+    if (transaction.direction === "out") addCurrency(group.spend, currency, transaction.amount);
+    else addCurrency(group.credits, currency, transaction.amount);
+    if (transaction.cashback && transaction.cashback.amount > 0) {
+      addCurrency(group.cashback, currency, transaction.cashback.amount);
+    }
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      transactions: group.transactions.sort((left, right) =>
+        left.date.localeCompare(right.date) || left.id.localeCompare(right.id)
+      )
+    }))
+    .sort((left, right) => right.transactionCount - left.transactionCount || left.label.localeCompare(right.label));
+}
+
+export function groupBankTransactionsByAccount(transactions: readonly Transaction[]): BankCardGroup[] {
+  const groups = new Map<string, BankCardGroup>();
+  for (const transaction of transactions) {
+    if (!settledBankTransaction(transaction)) continue;
+    const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
+    const key = `${transaction.source}:account:${accountIdentity}`;
+    const existing = groups.get(key);
+    const group: BankCardGroup = existing ?? {
+      key,
+      label: transaction.accountName,
       source: transaction.source,
       accountName: transaction.accountName,
       transactions: [],

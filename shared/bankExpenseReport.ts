@@ -90,6 +90,13 @@ export async function generateBankExpenseReportPdf(
   period: BankExpenseReportPeriod,
   generatedAt = new Date()
 ): Promise<Uint8Array> {
+  const groupedTransactionCount = totalTransactions(group.cardGroups);
+  if (groupedTransactionCount !== group.transactionCount) {
+    const missingCount = group.transactionCount - groupedTransactionCount;
+    throw new Error(
+      `${missingCount.toLocaleString("en-US")} merchant ${missingCount === 1 ? "transaction is" : "transactions are"} missing verified card metadata. Sync the bank source before generating this per-card report.`
+    );
+  }
   const pdf = await PDFDocument.create();
   const isMeta = group.key === "family:meta" || group.name.trim().toLowerCase() === "meta";
   const title = `${group.name} - internal billing report - ${period.fromDate} to ${period.toDate}`;
@@ -159,7 +166,7 @@ export async function generateBankExpenseReportPdf(
   function drawSummaryTableHeader(): void {
     page.drawRectangle({ x: margin, y: y - 6, width: pageWidth - margin * 2, height: 22, color: soft });
     const headers = [
-      { label: "Payment method", x: margin + 7 },
+      { label: "Card", x: margin + 7 },
       { label: "Source", x: margin + 198 },
       { label: "Transactions", x: margin + 273 },
       { label: "Spend", x: margin + 344 },
@@ -181,9 +188,9 @@ export async function generateBankExpenseReportPdf(
     page.drawLine({ start: { x: margin, y: y + 9 }, end: { x: pageWidth - margin, y: y + 9 }, thickness: 0.35, color: line });
   }
 
-  function addPaymentMethodSummaryContinuation(): void {
-    addPage("Payment method summary");
-    page.drawText("Payment method summary", { x: margin, y, size: 18, font: bold, color: ink });
+  function addCardSummaryContinuation(): void {
+    addPage("Card summary");
+    page.drawText("Card summary", { x: margin, y, size: 18, font: bold, color: ink });
     y -= 34;
     drawSummaryTableHeader();
   }
@@ -234,23 +241,23 @@ export async function generateBankExpenseReportPdf(
   });
   y -= 72;
   drawField("Transactions", group.transactionCount.toLocaleString("en-US"), margin, y, 100);
-  drawField("Payment methods", group.cardGroups.length.toLocaleString("en-US"), margin + 140, y, 100);
+  drawField("Cards", group.cardGroups.length.toLocaleString("en-US"), margin + 140, y, 100);
   drawField("Cashback", currencySummary(group.cashback), margin + 280, y, 215);
   y -= 58;
 
-  page.drawText("Payment method summary", { x: margin, y, size: 13, font: bold, color: ink });
+  page.drawText("Card summary", { x: margin, y, size: 13, font: bold, color: ink });
   y -= 27;
   drawSummaryTableHeader();
   for (const card of group.cardGroups) {
-    if (y < contentBottom + 35) addPaymentMethodSummaryContinuation();
+    if (y < contentBottom + 35) addCardSummaryContinuation();
     drawSummaryRow(card);
   }
 
   for (const card of group.cardGroups) {
     let continuation = false;
     function addCardPage(): void {
-      addPage(continuation ? "Payment method detail - continued" : "Payment method detail");
-      page.drawText(continuation ? "Payment method detail - continued" : "Payment method detail", {
+      addPage(continuation ? "Card detail - continued" : "Card detail");
+      page.drawText(continuation ? "Card detail - continued" : "Card detail", {
         x: margin,
         y,
         size: 18,
@@ -328,9 +335,6 @@ export async function generateBankExpenseReportPdf(
     });
   }
 
-  if (totalTransactions(group.cardGroups) !== group.transactionCount) {
-    throw new Error("Payment method report groups do not reconcile to the merchant transaction total");
-  }
   return pdf.save();
 }
 

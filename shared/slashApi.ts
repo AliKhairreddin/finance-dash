@@ -13,6 +13,8 @@ const maxSlashPages = 100;
 const maximumSlashPageItems = 500;
 const maximumSlashAccounts = 200;
 const maximumSlashAccountPages = 10;
+const maximumSlashCards = 5_000;
+const maximumSlashCardPages = 20;
 const maximumSlashAccountBalanceRows = 200;
 const maximumSlashBalancesPerAccount = 10;
 // Two provider IDs are hex-encoded into one ledger ID, which is capped at 2,048 characters.
@@ -47,6 +49,11 @@ interface SlashAccount {
   balances: SlashBalanceType[];
 }
 
+interface SlashCard {
+  id: string;
+  last4: string;
+}
+
 interface SlashTransaction {
   id: string;
   date: string;
@@ -54,6 +61,7 @@ interface SlashTransaction {
   amountCents: number;
   accountId: string;
   accountSubtype: SlashAccountSubtype;
+  cardId?: string;
   status: SlashTransactionStatus;
   cashbackInfo?: {
     amountCents: number;
@@ -303,6 +311,18 @@ function parseSlashAccount(value: unknown): SlashAccount {
   };
 }
 
+function parseSlashCard(value: unknown): SlashCard {
+  const payload = requiredRecord(value, "card");
+  const last4 = requiredString(payload.last4, "card.last4", 4);
+  if (!/^\d{4}$/.test(last4)) {
+    throw new Error("Slash API response card.last4 must contain exactly four digits");
+  }
+  return {
+    id: requiredString(payload.id, "card.id", maximumSlashProviderIdLength),
+    last4
+  };
+}
+
 function parseSlashTransaction(value: unknown): SlashTransaction {
   const payload = requiredRecord(value, "transaction");
   const status = requiredString(payload.status, "transaction.status");
@@ -326,6 +346,9 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
     amountCents: requiredCents(payload.amountCents, "transaction.amountCents"),
     accountId: requiredString(payload.accountId, "transaction.accountId", maximumSlashProviderIdLength),
     accountSubtype,
+    ...(payload.cardId === undefined || payload.cardId === null
+      ? {}
+      : { cardId: requiredString(payload.cardId, "transaction.cardId", maximumSlashProviderIdLength) }),
     status,
     ...(cashbackInfo
       ? {
@@ -466,11 +489,40 @@ async function fetchAllSlashPages<T>(
   throw new Error(`Slash API pagination exceeded ${maximumPages} pages`);
 }
 
+function createSlashCardDirectoryLoader(
+  fetcher: typeof fetch,
+  baseUrl: string,
+  headers: HeadersInit
+): () => Promise<ReadonlyMap<string, SlashCard>> {
+  let directoryPromise: Promise<ReadonlyMap<string, SlashCard>> | undefined;
+  return () => {
+    directoryPromise ??= fetchAllSlashPages(
+      fetcher,
+      new URL("/card", baseUrl),
+      headers,
+      parseSlashCard,
+      maximumSlashCards,
+      maximumSlashCardPages
+    ).then((cards) => {
+      const cardsById = new Map<string, SlashCard>();
+      for (const card of cards) {
+        if (cardsById.has(card.id)) {
+          throw new Error(`Slash API returned duplicate card ${card.id}`);
+        }
+        cardsById.set(card.id, card);
+      }
+      return cardsById;
+    });
+    return directoryPromise;
+  };
+}
+
 async function fetchSlashTransactionPages({
   fetcher,
   initialUrl,
   headers,
   accountIdentityByKey,
+  loadCardDirectory,
   onTransactionPage,
   collectTransactions
 }: {
@@ -478,6 +530,7 @@ async function fetchSlashTransactionPages({
   initialUrl: URL;
   headers: HeadersInit;
   accountIdentityByKey: ReadonlyMap<string, SlashAccountIdentity>;
+  loadCardDirectory: () => Promise<ReadonlyMap<string, SlashCard>>;
   onTransactionPage?: (transactions: Transaction[]) => void | Promise<void>;
   collectTransactions: boolean;
 }): Promise<Transaction[]> {
@@ -490,6 +543,9 @@ async function fetchSlashTransactionPages({
     const url = new URL(initialUrl);
     if (cursor) url.searchParams.set("cursor", cursor);
     const page = await fetchSlashPage(fetcher, url, headers, parseSlashTransaction);
+    const cardDirectory = page.items.some((item) => item.cardId)
+      ? await loadCardDirectory()
+      : undefined;
     const normalizedPage = page.items.flatMap((item) => {
       if (seenTransactionIds.has(item.id)) return [];
       seenTransactionIds.add(item.id);
@@ -497,7 +553,7 @@ async function fetchSlashTransactionPages({
       if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountIdentity)];
+      return [normalizeSlashTransaction(item, accountIdentity, cardDirectory)];
     });
 
     if (collectTransactions) transactions.push(...normalizedPage);
@@ -537,7 +593,8 @@ function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
 
 function normalizeSlashTransaction(
   transaction: SlashTransaction,
-  accountIdentity: SlashAccountIdentity
+  accountIdentity: SlashAccountIdentity,
+  cardDirectory?: ReadonlyMap<string, SlashCard>
 ): Transaction {
   const signedAmount = transaction.amountCents / 100;
   const counterparty = transaction.merchantData?.description?.trim() || transaction.description;
@@ -547,6 +604,10 @@ function normalizeSlashTransaction(
     : transaction.status === "failed"
       ? "voided"
       : "posted";
+  const card = transaction.cardId ? cardDirectory?.get(transaction.cardId) : undefined;
+  if (transaction.cardId && !card) {
+    throw new Error(`Slash transaction ${transaction.id} references unknown card ${transaction.cardId}`);
+  }
   return {
     id: bankProviderTransactionId("slash", [accountIdentity.accountId, transaction.id]),
     providerLegacyId: `slash-${transaction.id}`,
@@ -558,6 +619,7 @@ function normalizeSlashTransaction(
     description: transaction.description,
     rawName: counterparty,
     counterparty,
+    ...(card ? { cardId: card.id, cardLastFour: card.last4 } : {}),
     amount: Math.abs(signedAmount),
     currency: "USD",
     ...(transaction.cashbackInfo
@@ -679,6 +741,7 @@ export async function fetchSlashActivityBatch({
     : slashTransactionWindow(dateRange, now);
   const headers = slashHeaders(apiKey, legalEntityId);
   const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const loadCardDirectory = createSlashCardDirectoryLoader(fetcher, baseUrl, headers);
   if (onAccountsDiscovered) await onAccountsDiscovered(accounts);
   const initialUrl = new URL("/transaction", baseUrl);
   initialUrl.searchParams.set("filter:from_date", String(Date.parse(window.windowStart)));
@@ -695,6 +758,9 @@ export async function fetchSlashActivityBatch({
     const url = new URL(initialUrl);
     if (cursor) url.searchParams.set("cursor", cursor);
     const page = await fetchSlashPage(fetcher, url, headers, parseSlashTransaction);
+    const cardDirectory = page.items.some((item) => item.cardId)
+      ? await loadCardDirectory()
+      : undefined;
     pagesFetched += 1;
     providerTransactionsRead += page.items.length;
     const normalizedPage = page.items.flatMap((item) => {
@@ -704,7 +770,7 @@ export async function fetchSlashActivityBatch({
       if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountIdentity)];
+      return [normalizeSlashTransaction(item, accountIdentity, cardDirectory)];
     });
     if (collectTransactions) transactions.push(...normalizedPage);
     if (normalizedPage.length > 0 && onTransactionPage) {
@@ -766,10 +832,13 @@ export async function fetchSlashTransactionForLegalEntity({
     "account",
     parseSlashAccount
   );
+  const cardDirectory = transaction.cardId
+    ? await createSlashCardDirectoryLoader(fetcher, baseUrl, headers)()
+    : undefined;
   return normalizeSlashTransaction(transaction, {
     accountId: transaction.accountId,
     accountName: account.name
-  });
+  }, cardDirectory);
 }
 
 export async function fetchSlashActivityForLegalEntity({
@@ -799,12 +868,14 @@ export async function fetchSlashActivityForLegalEntity({
   }
 
   const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const loadCardDirectory = createSlashCardDirectoryLoader(fetcher, baseUrl, headers);
 
   const transactions = await fetchSlashTransactionPages({
     fetcher,
     initialUrl: transactionsUrl,
     headers,
     accountIdentityByKey,
+    loadCardDirectory,
     onTransactionPage,
     collectTransactions
   });

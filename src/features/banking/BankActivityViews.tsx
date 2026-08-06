@@ -1,4 +1,4 @@
-import { CreditCard, FileDown, Layers3, List, Loader2, RefreshCw } from "lucide-react";
+import { CreditCard, FileDown, Landmark, Layers3, List, Loader2, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
@@ -7,6 +7,7 @@ import {
   bankCardCashbackRate,
   bankGroupAmountTotal,
   groupBankTransactions,
+  groupBankTransactionsByAccount,
   groupBankTransactionsByCard,
   type BankCardGroup,
   type BankMerchantGroup,
@@ -19,11 +20,12 @@ import {
 } from "../../../shared/bankExpenseReport";
 import type { Transaction } from "../../../shared/types";
 
-export const bankActivityViewModes = ["transactions", "groups", "cards"] as const;
+export const bankActivityViewModes = ["transactions", "groups", "cards", "accounts"] as const;
 export type BankActivityViewMode = (typeof bankActivityViewModes)[number];
 
 type GroupSortKey = "cashback" | "credits" | "firstDate" | "lastDate" | "merchant" | "net" | "paymentMethods" | "sources" | "spend" | "transactions";
 type CardSortKey = "account" | "cashback" | "cashbackRate" | "card" | "firstDate" | "lastDate" | "source" | "spend" | "transactions";
+type AccountSortKey = "account" | "cashback" | "cashbackRate" | "credits" | "firstDate" | "lastDate" | "source" | "spend" | "transactions";
 
 function sourceLabel(source: Transaction["source"]): string {
   if (source === "wise") return "Wise";
@@ -74,7 +76,8 @@ export function BankActivityViewToggle({
   const options: Array<{ value: BankActivityViewMode; label: string; icon: typeof List }> = [
     { value: "transactions", label: "Transactions", icon: List },
     { value: "groups", label: "Group view", icon: Layers3 },
-    { value: "cards", label: "Card view", icon: CreditCard }
+    { value: "cards", label: "Card view", icon: CreditCard },
+    { value: "accounts", label: "Account view", icon: Landmark }
   ];
   return (
     <div className="segmented-control bank-activity-view-toggle" aria-label="Bank activity view">
@@ -201,7 +204,7 @@ export function BankMerchantGroupView({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="merchant">Merchant</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="sources">Sources</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="paymentMethods">Cards / accounts</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="paymentMethods">Cards</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="lastDate">Latest activity</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spend</SortableTableHead>
@@ -299,11 +302,11 @@ export function BankCardActivityView({
   return (
     <>
       <LoadingCompletePeriod hasMore={hasMore} isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
-      <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} cards or payment accounts shown.</span>
+      <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} cards shown.</span>
       <div className="table-wrap bank-card-table-wrap">
         <table className="data-table modern-income-table bank-card-table">
           <thead><tr>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="card">Card / payment account</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="card">Card</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">Account</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
@@ -328,6 +331,92 @@ export function BankCardActivityView({
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={9}>{isLoading ? "Loading card activity..." : "No settled card activity matches this view"}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+export function BankAccountActivityView({
+  transactions,
+  hasMore,
+  isLoading,
+  loadError,
+  onRetry
+}: {
+  transactions: readonly Transaction[];
+  hasMore: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  onRetry: () => Promise<void>;
+}) {
+  const [sortKey, setSortKey] = useUrlState<AccountSortKey>("bankAccountSort", "spend", {
+    allowedValues: ["account", "cashback", "cashbackRate", "credits", "firstDate", "lastDate", "source", "spend", "transactions"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("bankAccountOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const groups = useMemo(() => groupBankTransactionsByAccount(transactions), [transactions]);
+  const rows = useMemo(() => {
+    function sortValue(group: BankCardGroup): number | string {
+      if (sortKey === "account") return group.accountName;
+      if (sortKey === "cashback") return bankGroupAmountTotal(group.cashback);
+      if (sortKey === "cashbackRate") return bankCardCashbackRate(group);
+      if (sortKey === "credits") return bankGroupAmountTotal(group.credits);
+      if (sortKey === "firstDate") return group.firstDate;
+      if (sortKey === "lastDate") return group.lastDate;
+      if (sortKey === "source") return sourceLabel(group.source);
+      if (sortKey === "transactions") return group.transactionCount;
+      return bankGroupAmountTotal(group.spend);
+    }
+    return [...groups].sort((left, right) =>
+      compareTableValues(sortValue(left), sortValue(right), sortDirection)
+      || left.label.localeCompare(right.label)
+    );
+  }, [groups, sortDirection, sortKey]);
+
+  function requestSort(nextSortKey: AccountSortKey): void {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "account" || nextSortKey === "firstDate" || nextSortKey === "lastDate" ? "asc" : "desc");
+  }
+
+  return (
+    <>
+      <LoadingCompletePeriod hasMore={hasMore} isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
+      <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} accounts shown.</span>
+      <div className="table-wrap bank-card-table-wrap">
+        <table className="data-table modern-income-table bank-card-table">
+          <thead><tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">Account</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="lastDate">Latest activity</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spent</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="credits">Credits</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="cashback">Cashback</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="cashbackRate">Cashback %</SortableTableHead>
+          </tr></thead>
+          <tbody>
+            {rows.map((group) => (
+              <tr key={group.key}>
+                <td><strong>{group.accountName}</strong></td>
+                <td><span className={`bank-source-badge source-${group.source}`}>{sourceLabel(group.source)}</span></td>
+                <td>{group.transactionCount.toLocaleString("en-US")}</td>
+                <td>{dateLabel(group.firstDate)}</td>
+                <td>{dateLabel(group.lastDate)}</td>
+                <td className="amount">{currencySummary(group.spend)}</td>
+                <td className="amount good-text">{currencySummary(group.credits)}</td>
+                <td className="amount good-text">{currencySummary(group.cashback)}</td>
+                <td className="amount"><strong>{(bankCardCashbackRate(group) * 100).toFixed(2)}%</strong></td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={9}>{isLoading ? "Loading account activity..." : "No settled account activity matches this view"}</td></tr>}
           </tbody>
         </table>
       </div>

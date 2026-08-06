@@ -51,6 +51,12 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         }]
       });
     }
+    if (url.pathname === "/card") {
+      return Response.json({
+        items: [{ id: "card-primary", last4: "8744" }],
+        metadata: {}
+      });
+    }
     if (url.pathname === "/transaction" && !cursor) {
       return Response.json({
         items: [
@@ -61,6 +67,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             amountCents: -12_345,
             accountId: "underlying-debit",
             accountSubtype: "cash",
+            cardId: "card-primary",
             status: "posted",
             cashbackInfo: {
               amountCents: 185,
@@ -131,6 +138,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       description: "CARD PURCHASE",
       rawName: "Example Merchant",
       counterparty: "Example Merchant",
+      cardId: "card-primary",
+      cardLastFour: "8744",
       amount: 123.45,
       currency: "USD",
       cashback: {
@@ -189,6 +198,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     true
   );
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-debit/balance"), true);
+  assert.equal(requests.some((request) => request.url.pathname === "/card"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
 });
 
@@ -261,6 +271,62 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       status: "live"
     }
   ]);
+});
+
+test("Slash rejects card transactions whose card identity cannot be resolved", async () => {
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account") {
+      return Response.json({
+        items: [{
+          id: "account-debit",
+          name: "Operating",
+          status: "open",
+          type: "debit",
+          balances: ["debit"]
+        }],
+        metadata: {}
+      });
+    }
+    if (url.pathname === "/account/account-debit/balance") {
+      return Response.json({
+        balances: [{
+          accountId: "account-debit",
+          type: "debit",
+          available: { amountCents: 100_000 },
+          posted: { amountCents: 100_000 },
+          timestamp: "2026-07-28T12:00:00.000Z"
+        }]
+      });
+    }
+    if (url.pathname === "/card") {
+      return Response.json({ items: [], metadata: {} });
+    }
+    assert.equal(url.pathname, "/transaction");
+    return Response.json({
+      items: [{
+        id: "transaction-card",
+        date: "2026-07-27T17:00:00.000Z",
+        description: "CARD PURCHASE",
+        amountCents: -100,
+        accountId: "account-debit",
+        accountSubtype: "cash",
+        cardId: "card-missing",
+        status: "posted"
+      }],
+      metadata: {}
+    });
+  };
+
+  await assert.rejects(
+    fetchSlashActivityForLegalEntity({
+      baseUrl: "https://api.slash.test",
+      apiKey: "slash-key",
+      legalEntityId: "legal-entity-1",
+      fetcher
+    }),
+    /references unknown card card-missing/
+  );
 });
 
 test("Slash can load one transaction by ID without scanning the activity window", async () => {

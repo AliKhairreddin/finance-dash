@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   bankCardCashbackRate,
   groupBankTransactions,
+  groupBankTransactionsByAccount,
   groupBankTransactionsByCard,
   isSocialMediaGroup
 } from "./bankMerchantGroups";
@@ -109,31 +110,50 @@ test("provider matches and merchant keys collapse classified variants", () => {
   assert.equal(groups.find((group) => group.key === "merchant:cursor")?.transactionCount, 2);
 });
 
-test("card view uses explicit and masked last four digits and totals cashback", () => {
+test("card view uses verified card identity, separates last-four collisions, and totals cashback", () => {
   const cards = groupBankTransactionsByCard([
     bankTransaction("explicit", "Meta", 100, {
+      cardId: "card-primary",
       cardLastFour: "8744",
       cashback: { amount: 4, rate: 0.04 }
     }),
-    bankTransaction("masked", "Meta", 50, {
-      cardLastFour: undefined,
-      description: "Visa **** 8744",
+    bankTransaction("same-card", "Meta", 50, {
+      cardId: "card-primary",
+      cardLastFour: "8744",
       cashback: { amount: 2, rate: 0.04 }
     }),
-    bankTransaction("other", "Meta", 25, {
+    bankTransaction("same-last-four", "Meta", 25, {
+      cardId: "card-secondary",
+      cardLastFour: "8744",
       accountId: "slash-gold",
-      accountName: "Slash Gold Credit",
-      description: "Meta"
+      accountName: "Slash Gold Credit"
+    }),
+    bankTransaction("unverified", "Meta", 75, {
+      description: "Visa **** 8744"
     })
   ]);
 
   assert.equal(cards.length, 2);
-  const card = cards.find((item) => item.cardLastFour === "8744")!;
+  const card = cards.find((item) => item.cardId === "card-primary")!;
   assert.equal(card.transactionCount, 2);
   assert.deepEqual(card.spend, { USD: 150 });
   assert.deepEqual(card.cashback, { USD: 6 });
   assert.equal(bankCardCashbackRate(card), 0.04);
-  assert.equal(cards.find((item) => item.accountName === "Slash Gold Credit")?.label, "Slash Gold Credit");
+  assert.equal(cards.find((item) => item.cardId === "card-secondary")?.transactionCount, 1);
+});
+
+test("account view retains settled activity without verified card metadata", () => {
+  const accounts = groupBankTransactionsByAccount([
+    bankTransaction("platinum", "Meta", 100),
+    bankTransaction("gold", "Meta", 25, {
+      accountId: "slash-gold",
+      accountName: "Slash Gold Credit"
+    })
+  ]);
+
+  assert.equal(accounts.length, 2);
+  assert.equal(accounts.find((item) => item.accountName === "Slash Platinum Credit")?.transactionCount, 1);
+  assert.equal(accounts.find((item) => item.accountName === "Slash Gold Credit")?.transactionCount, 1);
 });
 
 test("pending, voided, and invalid records do not affect settled totals", () => {

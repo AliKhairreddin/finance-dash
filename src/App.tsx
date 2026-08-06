@@ -187,6 +187,7 @@ import {
 } from "../shared/wiseEntities";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
 import {
+  BankAccountActivityView,
   BankActivityViewToggle,
   BankCardActivityView,
   BankMerchantGroupView,
@@ -3857,8 +3858,16 @@ function BankReconciliationView({
           providers={dashboard.providers}
           transactions={rows}
         />
-      ) : (
+      ) : activityView === "cards" ? (
         <BankCardActivityView
+          hasMore={hasMoreTransactions}
+          isLoading={isLoadingTransactions}
+          loadError={transactionLoadError}
+          onRetry={onLoadMoreTransactions}
+          transactions={rows}
+        />
+      ) : (
+        <BankAccountActivityView
           hasMore={hasMoreTransactions}
           isLoading={isLoadingTransactions}
           loadError={transactionLoadError}
