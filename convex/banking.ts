@@ -2373,16 +2373,22 @@ export const getClassificationBacklog = query({
     const orderedBindings = [...bindings].sort((left, right) => (
       allBankSources.indexOf(left.source) - allBankSources.indexOf(right.source)
     ));
-    const rowsByConnection = await Promise.all(orderedBindings.map((binding) => ctx.db
-      .query("bankTransactions")
-      .withIndex("by_source_connection_classification_complete", (q) =>
-        q.eq("source", binding.source)
-          .eq("connectionKey", binding.connectionKey)
-          .eq("classificationComplete", undefined)
-      )
-      .filter((q) => q.eq(q.field("identityVersion"), 2))
-      .order("asc")
-      .take(limit + 1)));
+    const incompleteStates = [undefined, false] as const;
+    const rowsByConnection = await Promise.all(orderedBindings.map(async (binding) => (
+      (await Promise.all(incompleteStates.map((classificationComplete) => ctx.db
+        .query("bankTransactions")
+        .withIndex("by_source_connection_classification_complete", (q) =>
+          q.eq("source", binding.source)
+            .eq("connectionKey", binding.connectionKey)
+            .eq("classificationComplete", classificationComplete)
+        )
+        .filter((q) => q.eq(q.field("identityVersion"), 2))
+        .order("asc")
+        .take(limit + 1))))
+        .flat()
+        .sort((left, right) => left._creationTime - right._creationTime)
+        .slice(0, limit + 1)
+    )));
     const rows: BankTransactionDoc[] = [];
     for (let rowIndex = 0; rows.length < limit; rowIndex += 1) {
       let foundRow = false;

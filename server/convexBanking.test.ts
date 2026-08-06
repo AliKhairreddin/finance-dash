@@ -83,19 +83,14 @@ test("classification backlog fairly interleaves bank sources", async () => {
       currency: "USD",
       direction: "out" as const,
       status: "posted" as const,
-      category: "Uncategorized"
+      category: "Uncategorized",
+      classificationComplete: index === 1 ? false : undefined
     });
     const rowsBySource = {
       revolut: [makeRow("revolut", 0), makeRow("revolut", 1)],
       slash: Array.from({ length: 6 }, (_, index) => makeRow("slash", index))
     };
-    let activeSource: "revolut" | "slash" = "revolut";
-    const range = {
-      eq(field: string, value: unknown) {
-        if (field === "source") activeSource = value as typeof activeSource;
-        return range;
-      }
-    };
+    const queriedClassificationStates: unknown[] = [];
     const context = {
       db: {
         query(table: string) {
@@ -108,7 +103,19 @@ test("classification backlog fairly interleaves bank sources", async () => {
             };
           }
           return {
-            withIndex(_index: string, applyRange: (builder: typeof range) => unknown) {
+            withIndex(_index: string, applyRange: (builder: { eq(field: string, value: unknown): unknown }) => unknown) {
+              let activeSource: "revolut" | "slash" = "revolut";
+              let classificationComplete: boolean | undefined;
+              const range = {
+                eq(field: string, value: unknown) {
+                  if (field === "source") activeSource = value as typeof activeSource;
+                  if (field === "classificationComplete") {
+                    classificationComplete = value as typeof classificationComplete;
+                    queriedClassificationStates.push(value);
+                  }
+                  return range;
+                }
+              };
               applyRange(range);
               const terminal = {
                 filter() {
@@ -118,7 +125,9 @@ test("classification backlog fairly interleaves bank sources", async () => {
                   return terminal;
                 },
                 async take(limit: number) {
-                  return rowsBySource[activeSource].slice(0, limit);
+                  return rowsBySource[activeSource]
+                    .filter((row) => row.classificationComplete === classificationComplete)
+                    .slice(0, limit);
                 }
               };
               return terminal;
@@ -147,6 +156,8 @@ test("classification backlog fairly interleaves bank sources", async () => {
       "slash-1"
     ]);
     assert.equal(result.hasMore, true);
+    assert.equal(queriedClassificationStates.filter((value) => value === undefined).length, 2);
+    assert.equal(queriedClassificationStates.filter((value) => value === false).length, 2);
   });
 });
 
