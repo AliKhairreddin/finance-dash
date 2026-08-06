@@ -77,6 +77,7 @@ const transaction = v.object({
   cardHolderName: v.optional(v.string()),
   cardId: v.optional(v.string()),
   cardLastFour: v.optional(v.string()),
+  cardMetadataVersion: v.optional(v.number()),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({
@@ -286,6 +287,7 @@ function publicTransactionValue(value: object): Record<string, unknown> {
     _creationTime: _creationTime,
     syncedAt: _syncedAt,
     connectionKey: _connectionKey,
+    cardMetadataVersion: _cardMetadataVersion,
     profitContributionVersion: _profitContributionVersion,
     identityVersion: _identityVersion,
     ...transactionValue
@@ -1077,6 +1079,38 @@ export const getSyncState = query({
           lastSyncedAt: state.lastSyncedAt
         }
       : null;
+  }
+});
+
+export const getSlashCardMetadataRepairRange = query({
+  args: { serviceToken: v.string(), connectionKey: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      fromDate: v.string(),
+      toDate: v.string()
+    })
+  ),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    if (!/^[0-9a-f]{64}$/.test(args.connectionKey)) {
+      throw new ConvexError({ code: "INVALID_BANK_CONNECTION_KEY" });
+    }
+    await assertBankLedgerReady(ctx);
+    await assertBankConnectionBinding(ctx, "slash", args.connectionKey);
+    const unverifiedQuery = () => ctx.db
+      .query("bankTransactions")
+      .withIndex("by_source_connection_card_metadata_version_date_id", (q) =>
+        q.eq("source", "slash")
+          .eq("connectionKey", args.connectionKey)
+          .eq("cardMetadataVersion", undefined)
+      );
+    const [first, last] = await Promise.all([
+      unverifiedQuery().order("asc").first(),
+      unverifiedQuery().order("desc").first()
+    ]);
+    if (!first || !last) return null;
+    return { fromDate: first.date, toDate: last.date };
   }
 });
 

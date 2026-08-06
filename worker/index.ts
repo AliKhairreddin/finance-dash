@@ -3054,6 +3054,23 @@ async function enqueueBankBackfill(
   });
 }
 
+async function enqueueSlashCardMetadataRepair(env: Env): Promise<{
+  range: SlashTransactionDateRange;
+  job: BankBackfillJob;
+} | null> {
+  if (!bankSourceConfigured(env, "slash")) return null;
+  const connectionKey = await requireBankConnectionKey(env, "slash");
+  const range = await getConvexClient(env).query(api.banking.getSlashCardMetadataRepairRange, {
+    serviceToken: getConvexServiceToken(env),
+    connectionKey
+  });
+  if (!range) return null;
+  return {
+    range,
+    job: await enqueueBankBackfill(env, "slash", range)
+  };
+}
+
 async function runBankBackfillJob(env: Env, key: string): Promise<BankBackfillJob | null> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
@@ -5524,6 +5541,26 @@ async function handleApi(
         : { status: 202, headers: { "Retry-After": "5" } });
     }
 
+    if (url.pathname === "/api/transactions/card-metadata-repair" && request.method === "POST") {
+      const repair = await enqueueSlashCardMetadataRepair(env);
+      if (!repair) return json({ status: "complete" });
+      const run = runBankBackfillJob(env, repair.job.key).catch((error: unknown) => {
+        console.error(JSON.stringify({
+          event: "slash_card_metadata_repair_failed",
+          fromDate: repair.range.fromDate,
+          toDate: repair.range.toDate,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        throw error;
+      });
+      if (executionContext) executionContext.waitUntil(run);
+      else void run.catch(() => undefined);
+      return json(
+        { status: "repairing", key: repair.job.key, ...repair.range },
+        { status: 202, headers: { "Retry-After": "5" } }
+      );
+    }
+
     if (url.pathname === "/api/transactions/sync" && request.method === "POST") {
       const payload = (await request.json()) as Partial<{
         source: BankTransactionSource;
@@ -5822,6 +5859,7 @@ export default {
     const failures: unknown[] = [];
     if (controller.cron === "*/5 * * * *") {
       try {
+        await enqueueSlashCardMetadataRepair(env);
         await processPendingBankBackfills(env);
       } catch (error) {
         console.error(JSON.stringify({

@@ -630,6 +630,7 @@ function normalizeSlashTransaction(
     rawName: counterparty,
     counterparty,
     ...(card ? { cardId: card.id, cardLastFour: card.last4 } : {}),
+    cardMetadataVersion: 1,
     amount: Math.abs(signedAmount),
     currency: "USD",
     ...(transaction.cashbackInfo

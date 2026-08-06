@@ -225,6 +225,7 @@ const transaction = v.object({
   cardHolderName: v.optional(v.string()),
   cardId: v.optional(v.string()),
   cardLastFour: v.optional(v.string()),
+  cardMetadataVersion: v.optional(v.number()),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({

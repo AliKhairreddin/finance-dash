@@ -28,6 +28,10 @@ test("bank record validation rejects poison rows before Convex writes", () => {
   assert.throws(() => assertBankTransactionInput({ ...valid, amount: Number.NaN }), /finite/);
   assert.throws(() => assertBankTransactionInput({ ...valid, date: "2026-02-30" }), /ISO calendar/);
   assert.throws(() => assertBankTransactionInput({ ...valid, currency: "usd" }), /currency/);
+  assert.throws(
+    () => assertBankTransactionInput({ ...valid, cardMetadataVersion: 0 }),
+    /positive safe integer/
+  );
 });
 
 test("bank mutation payloads have an encoded byte ceiling", () => {

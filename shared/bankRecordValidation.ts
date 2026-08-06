@@ -43,6 +43,12 @@ export function assertBankTransactionInput(transaction: Transaction): void {
   if (transaction.cardLastFour !== undefined && !/^\d{4}$/.test(transaction.cardLastFour)) {
     throw new Error("transaction.cardLastFour must contain exactly four digits");
   }
+  if (
+    transaction.cardMetadataVersion !== undefined
+    && (!Number.isSafeInteger(transaction.cardMetadataVersion) || transaction.cardMetadataVersion < 1)
+  ) {
+    throw new Error("transaction.cardMetadataVersion must be a positive safe integer");
+  }
   assertBoundedString(transaction.category, "transaction.category", 256, true);
   assertBoundedString(transaction.merchantName, "transaction.merchantName", 1_024);
   assertBoundedString(transaction.merchantKey, "transaction.merchantKey", 1_024);

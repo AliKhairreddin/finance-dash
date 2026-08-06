@@ -448,6 +448,8 @@ export interface Transaction {
   /** Immutable provider card identity used to distinguish cards with the same last four digits. */
   cardId?: string;
   cardLastFour?: string;
+  /** Provider-specific enrichment version proving card metadata was checked, even for non-card activity. */
+  cardMetadataVersion?: number;
   amount: number;
   currency: string;
   cashback?: {

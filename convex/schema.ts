@@ -233,6 +233,7 @@ const transaction = v.object({
   cardHolderName: v.optional(v.string()),
   cardId: v.optional(v.string()),
   cardLastFour: v.optional(v.string()),
+  cardMetadataVersion: v.optional(v.number()),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({
@@ -569,6 +570,13 @@ export default defineSchema({
     .index("by_connection_key", ["connectionKey"])
     .index("by_source", ["source"])
     .index("by_source_connection", ["source", "connectionKey"])
+    .index("by_source_connection_card_metadata_version_date_id", [
+      "source",
+      "connectionKey",
+      "cardMetadataVersion",
+      "date",
+      "id"
+    ])
     .index("by_source_connection_date_id", ["source", "connectionKey", "date", "id"])
     .index("by_source_connection_direction_date_id", ["source", "connectionKey", "direction", "date", "id"])
     .index("by_source_connection_status_date_id", ["source", "connectionKey", "status", "date", "id"])

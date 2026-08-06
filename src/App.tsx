@@ -1027,6 +1027,21 @@ function App() {
     }
   }
 
+  async function repairAllSlashCardMetadata(): Promise<boolean> {
+    let repaired = false;
+    while (true) {
+      const response = await fetch(`${apiBase}/transactions/card-metadata-repair`, { method: "POST" });
+      if (!response.ok && response.status !== 202) {
+        throw new Error(await apiErrorMessage(response, "Historical Slash card metadata could not be repaired"));
+      }
+      const repair = (await response.json()) as { status?: string; key?: string };
+      if (repair.status === "complete") return repaired;
+      if (!repair.key) throw new Error("Historical Slash card metadata repair returned no job key");
+      repaired = true;
+      await waitForHistoricalTransactionSync(repair.key);
+    }
+  }
+
   async function loadTransactionPage(
     request: TransactionPageRequest,
     cursor: string | null,
@@ -1397,23 +1412,27 @@ function App() {
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       if (activeTab === "banks" && bankTab === "slash") {
-        setNotice("Refreshing the selected Slash period...");
-        const periodResponse = await fetch(`${apiBase}/transactions/sync`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source: "slash", ...slashDateRange })
-        });
-        if (!periodResponse.ok) {
-          throw new Error(await apiErrorMessage(periodResponse, "Selected Slash period could not be refreshed"));
+        setNotice("Repairing all historical Slash card metadata...");
+        const repairedHistory = await repairAllSlashCardMetadata();
+        if (!repairedHistory) {
+          setNotice("Refreshing the selected Slash period...");
+          const periodResponse = await fetch(`${apiBase}/transactions/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: "slash", ...slashDateRange })
+          });
+          if (!periodResponse.ok) {
+            throw new Error(await apiErrorMessage(periodResponse, "Selected Slash period could not be refreshed"));
+          }
+          const queued = (await periodResponse.json()) as { key?: string };
+          if (!queued.key) throw new Error("Selected Slash period refresh returned no job key");
+          await waitForHistoricalTransactionSync(queued.key);
         }
-        const queued = (await periodResponse.json()) as { key?: string };
-        if (!queued.key) throw new Error("Selected Slash period refresh returned no job key");
-        await waitForHistoricalTransactionSync(queued.key);
       }
       await refreshCurrentTransactionPage();
       invalidateAnalyticsData();
       setNotice(activeTab === "banks" && bankTab === "slash"
-        ? "Refresh and sync complete. The selected Slash period and its card metadata are up to date."
+        ? "Refresh and sync complete. All historical Slash card metadata is verified and up to date."
         : "Refresh and sync complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh and sync failed");
@@ -6181,7 +6200,7 @@ function BankDateRangeControls({
         windowDays={windowDays}
       />
       <InfoPopover label="automatic bank updates">
-        Revolut and Slash refresh every 15 minutes. New activity is saved in Convex and categorized automatically.
+        Revolut and Slash refresh automatically. Slash card metadata is verified on import, and any unchecked history is repaired in the background.
       </InfoPopover>
     </div>
   );
