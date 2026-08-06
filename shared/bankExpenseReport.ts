@@ -1,6 +1,5 @@
 import { PDFDocument, type PDFImage, type PDFFont, type PDFPage, rgb } from "pdf-lib";
 import type { BankCardGroup, BankMerchantGroup } from "./bankMerchantGroups";
-import { bankCardCashbackRate } from "./bankMerchantGroups";
 import { metaLogoPngBase64 } from "./metaLogo";
 import type { Transaction } from "./types";
 
@@ -101,11 +100,11 @@ export async function generateBankExpenseReportPdf(
   const isMeta = group.key === "family:meta" || group.name.trim().toLowerCase() === "meta";
   const title = `${group.name} - internal billing report - ${period.fromDate} to ${period.toDate}`;
   pdf.setTitle(title);
-  pdf.setSubject("Internal grouped bank activity report; not a supplier-issued invoice or receipt");
+  pdf.setSubject("Internal per-card bank activity summary; not a supplier-issued invoice or receipt");
   pdf.setCreator("Finance Operations Dashboard");
   pdf.setProducer("Finance Operations Dashboard");
   pdf.setCreationDate(generatedAt);
-  pdf.setKeywords(["internal report", "grouped bank activity", "expense review"]);
+  pdf.setKeywords(["internal report", "per-card summary", "expense review"]);
 
   const regular = await pdf.embedFont("Helvetica");
   const bold = await pdf.embedFont("Helvetica-Bold");
@@ -205,24 +204,7 @@ export async function generateBankExpenseReportPdf(
     font: bold,
     color: ink
   });
-  y -= 42;
-  page.drawRectangle({
-    x: margin,
-    y: y - 4,
-    width: pageWidth - margin * 2,
-    height: 35,
-    color: rgb(0.94, 0.97, 1),
-    borderColor: rgb(0.72, 0.84, 0.98),
-    borderWidth: 0.6
-  });
-  page.drawText(`Prepared from connected bank records. This is not a supplier-issued ${isMeta ? "Meta " : ""}invoice or receipt.`, {
-    x: margin + 10,
-    y: y + 8,
-    size: 8.2,
-    font: bold,
-    color: rgb(0.1, 0.28, 0.52)
-  });
-  y -= 62;
+  y -= 52;
 
   drawField("Period", `${period.fromDate} to ${period.toDate}`, margin, y, 180);
   drawField("Internal report ID", reportId(group, period), margin + 210, y, 285);
@@ -251,70 +233,6 @@ export async function generateBankExpenseReportPdf(
   for (const card of group.cardGroups) {
     if (y < contentBottom + 35) addCardSummaryContinuation();
     drawSummaryRow(card);
-  }
-
-  for (const card of group.cardGroups) {
-    let continuation = false;
-    function addCardPage(): void {
-      addPage(continuation ? "Card detail - continued" : "Card detail");
-      page.drawText(continuation ? "Card detail - continued" : "Card detail", {
-        x: margin,
-        y,
-        size: 18,
-        font: bold,
-        color: ink
-      });
-      y -= 31;
-      page.drawText(fitText(card.label, bold, 15, 290), { x: margin, y, size: 15, font: bold, color: ink });
-      page.drawText(fitText(currencySummary(card.spend), bold, 15, 190), {
-        x: pageWidth - margin - 190,
-        y,
-        size: 15,
-        font: bold,
-        color: ink
-      });
-      y -= 29;
-      drawField("Account", card.accountName, margin, y, 205);
-      drawField("Transactions", card.transactionCount.toLocaleString("en-US"), margin + 225, y, 70);
-      drawField("Cashback", currencySummary(card.cashback), margin + 325, y, 115);
-      const cashbackRate = `${(bankCardCashbackRate(card) * 100).toFixed(2)}%`;
-      drawField("Effective rate", cashbackRate, margin + 450, y, 45);
-      y -= 48;
-      page.drawRectangle({ x: margin, y: y - 6, width: pageWidth - margin * 2, height: 22, color: soft });
-      const headers = [
-        { label: "Date", x: margin + 7 },
-        { label: "Source", x: margin + 72 },
-        { label: "Description", x: margin + 132 },
-        { label: "Amount", x: margin + 363 },
-        { label: "Cashback", x: margin + 430 }
-      ];
-      for (const header of headers) {
-        page.drawText(header.label, { x: header.x, y, size: 7.2, font: bold, color: muted });
-      }
-      y -= 24;
-      continuation = true;
-    }
-
-    addCardPage();
-    for (const transaction of card.transactions) {
-      if (y < contentBottom + 25) addCardPage();
-      const description = transaction.merchantName
-        || transaction.counterparty
-        || transaction.rawName
-        || transaction.description;
-      const signedAmount = transaction.direction === "out" ? transaction.amount : -transaction.amount;
-      const amount = money(signedAmount, transaction.currency);
-      const cashback = transaction.cashback?.amount
-        ? money(transaction.cashback.amount, transaction.currency)
-        : "None";
-      page.drawText(transaction.date, { x: margin + 7, y, size: 7.3, font: regular, color: ink });
-      page.drawText(sourceLabel(transaction.source), { x: margin + 72, y, size: 7.3, font: regular, color: ink });
-      page.drawText(fitText(description, regular, 7.3, 220), { x: margin + 132, y, size: 7.3, font: regular, color: ink });
-      page.drawText(fitText(amount, regular, 7.3, 62), { x: margin + 363, y, size: 7.3, font: regular, color: ink });
-      page.drawText(fitText(cashback, regular, 7.3, 62), { x: margin + 430, y, size: 7.3, font: regular, color: ink });
-      y -= 19;
-      page.drawLine({ start: { x: margin, y: y + 8 }, end: { x: pageWidth - margin, y: y + 8 }, thickness: 0.3, color: line });
-    }
   }
 
   const pageCount = pdf.getPageCount();

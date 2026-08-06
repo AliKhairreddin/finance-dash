@@ -28,7 +28,7 @@ function transaction(index: number): Transaction {
   };
 }
 
-test("internal billing report includes an overview and every card transaction across pages", async () => {
+test("internal billing report includes only the overview and per-card summaries", async () => {
   const group = groupBankTransactions(Array.from({ length: 80 }, (_, index) => transaction(index)))[0];
   const bytes = await generateBankExpenseReportPdf(
     group,
@@ -38,7 +38,7 @@ test("internal billing report includes an overview and every card transaction ac
 
   assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-");
   const pdf = await PDFDocument.load(bytes);
-  assert.ok(pdf.getPageCount() >= 5);
+  assert.equal(pdf.getPageCount(), 1);
   assert.equal(pdf.getTitle(), "Meta - internal billing report - 2026-07-01 to 2026-07-31");
   assert.equal(group.cardGroups.length, 2);
   assert.equal(group.cardGroups.reduce((total, card) => total + card.transactionCount, 0), 80);
