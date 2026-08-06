@@ -1014,8 +1014,8 @@ function App() {
     return (await response.json()) as TransactionPage;
   }
 
-  async function waitForHistoricalTransactionSync(jobKey: string, requestKey: string): Promise<void> {
-    while (transactionPageRequestRef.current?.key === requestKey) {
+  async function waitForHistoricalTransactionSync(jobKey: string, requestKey?: string): Promise<void> {
+    while (requestKey === undefined || transactionPageRequestRef.current?.key === requestKey) {
       await new Promise((resolve) => window.setTimeout(resolve, 5_000));
       const query = new URLSearchParams({ key: jobKey });
       const response = await fetch(`${apiBase}/transactions/sync?${query.toString()}`);
@@ -1396,9 +1396,25 @@ function App() {
         throw new Error(await apiErrorMessage(response, "Refresh and sync failed"));
       }
       setDashboard((await response.json()) as DashboardSnapshot);
+      if (activeTab === "banks" && bankTab === "slash") {
+        setNotice("Refreshing the selected Slash period...");
+        const periodResponse = await fetch(`${apiBase}/transactions/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source: "slash", ...slashDateRange })
+        });
+        if (!periodResponse.ok) {
+          throw new Error(await apiErrorMessage(periodResponse, "Selected Slash period could not be refreshed"));
+        }
+        const queued = (await periodResponse.json()) as { key?: string };
+        if (!queued.key) throw new Error("Selected Slash period refresh returned no job key");
+        await waitForHistoricalTransactionSync(queued.key);
+      }
       await refreshCurrentTransactionPage();
       invalidateAnalyticsData();
-      setNotice("Refresh and sync complete. New bank transactions were imported and categorized automatically.");
+      setNotice(activeTab === "banks" && bankTab === "slash"
+        ? "Refresh and sync complete. The selected Slash period and its card metadata are up to date."
+        : "Refresh and sync complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh and sync failed");
     } finally {

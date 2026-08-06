@@ -23,7 +23,7 @@ import type { Transaction } from "../../../shared/types";
 export const bankActivityViewModes = ["transactions", "groups", "cards", "accounts"] as const;
 export type BankActivityViewMode = (typeof bankActivityViewModes)[number];
 
-type GroupSortKey = "cashback" | "credits" | "firstDate" | "lastDate" | "merchant" | "net" | "paymentMethods" | "sources" | "spend" | "transactions";
+type GroupSortKey = "cashback" | "credits" | "firstDate" | "lastDate" | "merchant" | "net" | "sources" | "spend" | "transactions";
 type CardSortKey = "account" | "cashback" | "cashbackRate" | "card" | "firstDate" | "lastDate" | "source" | "spend" | "transactions";
 type AccountSortKey = "account" | "cashback" | "cashbackRate" | "credits" | "firstDate" | "lastDate" | "source" | "spend" | "transactions";
 
@@ -143,7 +143,7 @@ export function BankMerchantGroupView({
   onRetry: () => Promise<void>;
 }) {
   const [sortKey, setSortKey] = useUrlState<GroupSortKey>("bankGroupSort", "spend", {
-    allowedValues: ["cashback", "credits", "firstDate", "lastDate", "merchant", "net", "paymentMethods", "sources", "spend", "transactions"]
+    allowedValues: ["cashback", "credits", "firstDate", "lastDate", "merchant", "net", "sources", "spend", "transactions"]
   });
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("bankGroupOrder", "desc", {
     allowedValues: ["asc", "desc"]
@@ -159,7 +159,6 @@ export function BankMerchantGroupView({
       if (sortKey === "lastDate") return group.lastDate;
       if (sortKey === "merchant") return group.name;
       if (sortKey === "net") return bankGroupAmountTotal(group.net);
-      if (sortKey === "paymentMethods") return group.cardGroups.length;
       if (sortKey === "sources") return group.sources.map(sourceLabel).join(" ");
       if (sortKey === "transactions") return group.transactionCount;
       return bankGroupAmountTotal(group.spend);
@@ -204,7 +203,6 @@ export function BankMerchantGroupView({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="merchant">Merchant</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="sources">Sources</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="paymentMethods">Cards</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="lastDate">Latest activity</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spend</SortableTableHead>
@@ -222,7 +220,6 @@ export function BankMerchantGroupView({
                   <td className="counterparty-cell"><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></td>
                   <td>{group.sources.map(sourceLabel).join(", ")}</td>
                   <td>{group.transactionCount.toLocaleString("en-US")}</td>
-                  <td><strong>{group.cardGroups.length.toLocaleString("en-US")}</strong><small>{group.cardGroups[0]?.label ?? "-"}</small></td>
                   <td>{dateLabel(group.firstDate)}</td>
                   <td>{dateLabel(group.lastDate)}</td>
                   <td className="amount">{currencySummary(group.spend)}</td>
@@ -244,7 +241,7 @@ export function BankMerchantGroupView({
                 </tr>
               );
             })}
-            {rows.length === 0 && <tr><td colSpan={11}>{isLoading ? "Loading grouped activity..." : "No settled activity matches this view"}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={10}>{isLoading ? "Loading grouped activity..." : "No settled activity matches this view"}</td></tr>}
           </tbody>
         </table>
       </div>
