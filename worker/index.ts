@@ -3791,15 +3791,32 @@ async function categorizeHistoricalBankBacklog(
     serviceToken: getConvexServiceToken(env),
     limit
   });
-  if (backlog.transactions.length > 0) {
-    await autoCategorizeBankTransactions(env, backlog.transactions, limit);
+  let processed = 0;
+  let failedBatches = 0;
+  const checkpointSize = 40;
+  for (let index = 0; index < backlog.transactions.length; index += checkpointSize) {
+    const transactions = backlog.transactions.slice(index, index + checkpointSize);
+    try {
+      await autoCategorizeBankTransactions(env, transactions, transactions.length);
+      processed += transactions.length;
+    } catch (error) {
+      failedBatches += 1;
+      console.error(JSON.stringify({
+        event: "transaction_classification_checkpoint_failed",
+        transactionCount: transactions.length,
+        firstTransactionId: transactions[0]?.id,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
   }
   console.log(JSON.stringify({
     event: "transaction_classification_backlog",
-    processed: backlog.transactions.length,
+    attempted: backlog.transactions.length,
+    processed,
+    failedBatches,
     hasMore: backlog.hasMore
   }));
-  return { processed: backlog.transactions.length, hasMore: backlog.hasMore };
+  return { processed, hasMore: backlog.hasMore };
 }
 
 async function runHistoricalClassificationBackfill(env: Env): Promise<void> {

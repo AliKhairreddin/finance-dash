@@ -364,9 +364,17 @@ export function transactionAiGroupKey(
   transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
 ): string {
   const genericTokens = new Set(["ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
+  const canonicalTokens = new Map([
+    ["facebk", "facebook"]
+  ]);
   const counterpartyTokens = normalizeName(transaction.counterparty)
     .split(" ")
-    .filter((token) => token && !/^\d+$/.test(token));
+    .filter((token) => {
+      if (!token || /^\d+$/.test(token)) return false;
+      const digitCount = [...token].filter((character) => /\d/.test(character)).length;
+      return !(token.length >= 8 && digitCount >= 2 && /[a-z]/.test(token));
+    })
+    .map((token) => canonicalTokens.get(token) ?? token);
   const meaningfulCounterparty = counterpartyTokens.some((token) => token.length >= 3 && !genericTokens.has(token));
   const basis = meaningfulCounterparty
     ? counterpartyTokens.filter((token) => !genericTokens.has(token)).join(" ")

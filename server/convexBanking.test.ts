@@ -10,6 +10,7 @@ import {
   deleteSourceBatch,
   getActivityPage,
   getAnalyticsPeriodRevision,
+  getClassificationBacklog,
   getInvoicePaymentCandidates,
   getLedgerRevision,
   getProfitFactsBackfillStatus,
@@ -60,6 +61,94 @@ async function withServiceToken(run: () => Promise<void>): Promise<void> {
     else process.env.CONVEX_SERVICE_TOKEN = previousToken;
   }
 }
+
+test("classification backlog fairly interleaves bank sources", async () => {
+  await withServiceToken(async () => {
+    const connectionKey = "a".repeat(64);
+    const makeRow = (source: "revolut" | "slash", index: number) => ({
+      _id: `${source}-row-${index}`,
+      _creationTime: source === "slash" ? index + 1 : 100 + index,
+      syncedAt: "2026-08-06T12:00:00.000Z",
+      connectionKey,
+      profitContributionVersion: 1,
+      identityVersion: 2,
+      id: `${source}-${index}`,
+      source,
+      accountName: `${source} account`,
+      date: "2026-08-04",
+      description: `${source} merchant ${index}`,
+      rawName: `${source} merchant ${index}`,
+      counterparty: `${source} merchant ${index}`,
+      amount: 10,
+      currency: "USD",
+      direction: "out" as const,
+      status: "posted" as const,
+      category: "Uncategorized"
+    });
+    const rowsBySource = {
+      revolut: [makeRow("revolut", 0), makeRow("revolut", 1)],
+      slash: Array.from({ length: 6 }, (_, index) => makeRow("slash", index))
+    };
+    let activeSource: "revolut" | "slash" = "revolut";
+    const range = {
+      eq(field: string, value: unknown) {
+        if (field === "source") activeSource = value as typeof activeSource;
+        return range;
+      }
+    };
+    const context = {
+      db: {
+        query(table: string) {
+          if (table === "bankConnectionBindings") {
+            return {
+              take: async () => [
+                { source: "slash", connectionKey },
+                { source: "revolut", connectionKey }
+              ]
+            };
+          }
+          return {
+            withIndex(_index: string, applyRange: (builder: typeof range) => unknown) {
+              applyRange(range);
+              const terminal = {
+                filter() {
+                  return terminal;
+                },
+                order() {
+                  return terminal;
+                },
+                async take(limit: number) {
+                  return rowsBySource[activeSource].slice(0, limit);
+                }
+              };
+              return terminal;
+            }
+          };
+        }
+      }
+    };
+    const getBacklog = handlerOf<{
+      serviceToken: string;
+      limit: number;
+    }, {
+      transactions: Array<{ id: string }>;
+      hasMore: boolean;
+    }>(getClassificationBacklog);
+
+    const result = await getBacklog(context, {
+      serviceToken: "expected-token",
+      limit: 4
+    });
+
+    assert.deepEqual(result.transactions.map((transaction) => transaction.id), [
+      "revolut-0",
+      "slash-0",
+      "revolut-1",
+      "slash-1"
+    ]);
+    assert.equal(result.hasMore, true);
+  });
+});
 
 type ActivityPageArgs = {
   serviceToken: string;

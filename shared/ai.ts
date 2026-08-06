@@ -180,6 +180,8 @@ export async function runOpenRouterPrompt(
   };
 }
 
+class AiCategorizationOutputError extends Error {}
+
 function jsonObjectFromText(text: string): unknown {
   const cleaned = text
     .trim()
@@ -189,9 +191,13 @@ function jsonObjectFromText(text: string): unknown {
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start < 0 || end <= start) {
-    throw new Error("AI categorization did not return JSON");
+    throw new AiCategorizationOutputError("AI categorization did not return JSON");
   }
-  return JSON.parse(cleaned.slice(start, end + 1));
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    throw new AiCategorizationOutputError("AI categorization did not return valid JSON");
+  }
 }
 
 function chunk<T>(rows: T[], size: number): T[][] {
@@ -308,7 +314,7 @@ export async function runOpenRouterTransactionCategorization(
           ? (parsed as { matches?: unknown }).matches
           : undefined;
         if (!Array.isArray(matches)) {
-          throw new Error("AI categorization JSON needs a matches array");
+          throw new AiCategorizationOutputError("AI categorization JSON needs a matches array");
         }
 
         const validBatchMatches: AiTransactionCategorization[] = [];
@@ -322,14 +328,14 @@ export async function runOpenRouterTransactionCategorization(
           || resultIds.size !== transactionBatch.length
           || transactionBatch.some((transaction) => !resultIds.has(transaction.id))
         ) {
-          throw new Error("AI categorization must return one valid category and merchant for every transaction");
+          throw new AiCategorizationOutputError("AI categorization must return one valid category and merchant for every transaction");
         }
         return validBatchMatches;
       } catch (error) {
         lastError = error;
       }
     }
-    if (transactionBatch.length > 1) {
+    if (transactionBatch.length > 1 && lastError instanceof AiCategorizationOutputError) {
       const midpoint = Math.ceil(transactionBatch.length / 2);
       const results = await Promise.all([
         categorizeBatch(transactionBatch.slice(0, midpoint)),
@@ -337,11 +343,18 @@ export async function runOpenRouterTransactionCategorization(
       ]);
       return results.flat();
     }
-    throw lastError instanceof Error ? lastError : new Error("AI categorization failed");
+    console.error(JSON.stringify({
+      event: "transaction_ai_categorization_batch_failed",
+      transactionCount: transactionBatch.length,
+      transactionIds: transactionBatch.map((transaction) => transaction.id),
+      failureType: lastError instanceof AiCategorizationOutputError ? "invalid_output" : "request_failed",
+      error: lastError instanceof Error ? lastError.message : String(lastError ?? "AI categorization failed")
+    }));
+    return [];
   };
 
   const allMatches: AiTransactionCategorization[] = [];
-  for (const wave of chunk(chunk(transactions, 10), 24)) {
+  for (const wave of chunk(chunk(transactions, 10), 4)) {
     const results = await Promise.all(wave.map(categorizeBatch));
     allMatches.push(...results.flat());
   }

@@ -100,8 +100,23 @@ test("AI groups repeated merchant descriptors while keeping generic transfers di
     rawName: "ACH TRANSFER REF 9921",
     description: "ACH TRANSFER REF 9921"
   };
+  const facebookChargeOne: Transaction = {
+    ...pizzaBase,
+    id: "facebook-1",
+    counterparty: "FACEBK *USAYZY9EJ2",
+    rawName: "FACEBK *USAYZY9EJ2",
+    description: "FACEBK *USAYZY9EJ2"
+  };
+  const facebookChargeTwo: Transaction = {
+    ...facebookChargeOne,
+    id: "facebook-2",
+    counterparty: "FACEBK *QPM47X2LNB",
+    rawName: "FACEBK *QPM47X2LNB",
+    description: "FACEBK *QPM47X2LNB"
+  };
 
   assert.equal(transactionAiGroupKey(pizzaBase), transactionAiGroupKey(pizzaVariant));
+  assert.equal(transactionAiGroupKey(facebookChargeOne), transactionAiGroupKey(facebookChargeTwo));
   assert.notEqual(transactionAiGroupKey(transferOne), transactionAiGroupKey(transferTwo));
 });
 

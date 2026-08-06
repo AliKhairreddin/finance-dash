@@ -2336,7 +2336,10 @@ export const getClassificationBacklog = query({
     if (bindings.length > allBankSources.length) {
       throw new ConvexError({ code: "BANK_CONNECTION_BINDING_LIMIT_EXCEEDED" });
     }
-    const rows = (await Promise.all(bindings.map((binding) => ctx.db
+    const orderedBindings = [...bindings].sort((left, right) => (
+      allBankSources.indexOf(left.source) - allBankSources.indexOf(right.source)
+    ));
+    const rowsByConnection = await Promise.all(orderedBindings.map((binding) => ctx.db
       .query("bankTransactions")
       .withIndex("by_source_connection_classification_complete", (q) =>
         q.eq("source", binding.source)
@@ -2344,11 +2347,23 @@ export const getClassificationBacklog = query({
           .eq("classificationComplete", undefined)
       )
       .filter((q) => q.eq(q.field("identityVersion"), 2))
-      .take(limit + 1))))
-      .flat()
-      .sort((left, right) => left._creationTime - right._creationTime);
+      .order("asc")
+      .take(limit + 1)));
+    const rows: BankTransactionDoc[] = [];
+    for (let rowIndex = 0; rows.length < limit; rowIndex += 1) {
+      let foundRow = false;
+      for (const connectionRows of rowsByConnection) {
+        const row = connectionRows[rowIndex];
+        if (!row) continue;
+        foundRow = true;
+        rows.push(row);
+        if (rows.length === limit) break;
+      }
+      if (!foundRow) break;
+    }
+    const fetchedRowCount = rowsByConnection.reduce((total, connectionRows) => total + connectionRows.length, 0);
     return {
-      transactions: rows.slice(0, limit).map(({
+      transactions: rows.map(({
         _creationTime: _creationTime,
         _id: _id,
         syncedAt: _syncedAt,
@@ -2357,7 +2372,7 @@ export const getClassificationBacklog = query({
         identityVersion: _identityVersion,
         ...item
       }) => item),
-      hasMore: rows.length > limit
+      hasMore: fetchedRowCount > rows.length
     };
   }
 });

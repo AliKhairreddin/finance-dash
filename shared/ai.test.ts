@@ -90,8 +90,11 @@ const aiTransaction: Transaction = {
   category: "Uncategorized"
 };
 
-test("transaction AI requires one category and normalized merchant for every row", async () => {
+test("transaction AI requires one category and normalized merchant for every successful row", async () => {
   const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  const errors: string[] = [];
+  console.error = (...values) => errors.push(values.map(String).join(" "));
   let output = JSON.stringify({
     matches: [{
       transactionId: aiTransaction.id,
@@ -128,8 +131,8 @@ test("transaction AI requires one category and normalized merchant for every row
     );
 
     output = JSON.stringify({ matches: [] });
-    await assert.rejects(
-      () => runOpenRouterTransactionCategorization(
+    assert.deepEqual(
+      await runOpenRouterTransactionCategorization(
         {
           provider: "openrouter",
           model: "openai/gpt-5.6-sol",
@@ -138,10 +141,12 @@ test("transaction AI requires one category and normalized merchant for every row
         [aiTransaction],
         []
       ),
-      /one valid category and merchant for every transaction/
+      []
     );
+    assert.match(errors.at(-1) ?? "", /transaction_ai_categorization_batch_failed/);
   } finally {
     globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
   }
 });
 
@@ -199,5 +204,62 @@ test("transaction AI isolates an invalid multi-row response and retries smaller 
     ].sort());
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("transaction AI preserves valid classifications when one isolated row keeps failing", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  const invalidTransaction: Transaction = {
+    ...aiTransaction,
+    id: "slash-invalid-1",
+    description: "UNKNOWN MERCHANT 4812",
+    rawName: "UNKNOWN MERCHANT 4812",
+    counterparty: "UNKNOWN MERCHANT"
+  };
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = JSON.parse(body.messages.at(-1)?.content ?? "{}") as {
+      transactions?: Array<{ id: string }>;
+    };
+    const transactions = prompt.transactions ?? [];
+    return Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            matches: transactions
+              .filter((transaction) => transaction.id !== invalidTransaction.id)
+              .map((transaction) => ({
+                transactionId: transaction.id,
+                providerId: null,
+                category: "Food and meals",
+                merchantName: "Pizza Hut",
+                confidence: 0.8,
+                reason: "Merchant evidence"
+              }))
+          })
+        }
+      }],
+      model: "openai/gpt-5.6-sol"
+    });
+  };
+
+  try {
+    const results = await runOpenRouterTransactionCategorization(
+      {
+        provider: "openrouter",
+        model: "openai/gpt-5.6-sol",
+        openRouterApiKey: "test-key"
+      },
+      [aiTransaction, invalidTransaction],
+      []
+    );
+    assert.deepEqual(results.map((result) => result.transactionId), [aiTransaction.id]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
   }
 });
