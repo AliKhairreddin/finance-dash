@@ -3762,9 +3762,6 @@ async function autoCategorizeState(
         upsertPersistedTransaction(state, updated);
         if (updated.matchedProviderId) {
           aiMatches += 1;
-          state.providers = state.providers.map((item) =>
-            item.id === updated.matchedProviderId ? learnAliases(item, bankAliasNames(transaction)) : item
-          );
         } else {
           categorizedOnly += 1;
         }
@@ -3796,7 +3793,7 @@ async function autoCategorizeBankTransactions(
     transactionIds: candidates.map((transaction) => transaction.id),
     useAi: true
   });
-  await savePersisted(env, state);
+  await saveBankTransactionUpdates(env, state);
   return summary;
 }
 

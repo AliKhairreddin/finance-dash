@@ -4,6 +4,7 @@ import type { Transaction } from "../shared/types";
 import {
   aiProviderDirectoryForTransactions,
   canonicalProviders,
+  learnAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
   mergeWiseCardHolderTeamAssignments,
@@ -19,6 +20,28 @@ test("mergeProviderDirectory does not restore deleted default companies", () => 
 test("mergeProviderDirectory keeps and normalizes companies that are actually stored", () => {
   const storedProvider = canonicalProviders[0];
   assert.deepEqual(mergeProviderDirectory([storedProvider]), [storedProvider]);
+});
+
+test("provider aliases stay bounded and exclude volatile bank references", () => {
+  const provider = canonicalProviders.find((item) => item.id === "platform-meta-facebook-ads");
+  if (!provider) throw new Error("Meta provider fixture is missing");
+  const polluted = {
+    ...provider,
+    aliases: [
+      ...provider.aliases,
+      ...Array.from({ length: 9_000 }, (_, index) => `FACEBK *REF${String(index).padStart(8, "0")}`)
+    ]
+  };
+
+  const normalized = mergeProviderDirectory([polluted])[0];
+  assert.deepEqual(normalized.aliases, provider.aliases);
+
+  const learned = learnAliases(
+    provider,
+    Array.from({ length: 200 }, (_, index) => `Stable merchant alias ${index}`)
+  );
+  assert.equal(learned.aliases.length, 128);
+  assert.deepEqual(learnAliases(provider, ["FACEBK *USAYZY9EJ2"]), provider);
 });
 
 test("card-holder metadata does not create a responsibility assignment", () => {

@@ -16,6 +16,7 @@ import {
 import { transactionBusinessCategory } from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
+const maximumProviderAliasCount = 128;
 
 type ProviderDraft = Omit<Provider, "source" | "createdAt">;
 type PersistedProviderShape = Omit<Provider, "type" | "tags"> & {
@@ -371,8 +372,7 @@ export function transactionAiGroupKey(
     .split(" ")
     .filter((token) => {
       if (!token || /^\d+$/.test(token)) return false;
-      const digitCount = [...token].filter((character) => /\d/.test(character)).length;
-      return !(token.length >= 8 && digitCount >= 2 && /[a-z]/.test(token));
+      return !isVolatileBankReferenceToken(token);
     })
     .map((token) => canonicalTokens.get(token) ?? token);
   const meaningfulCounterparty = counterpartyTokens.some((token) => token.length >= 3 && !genericTokens.has(token));
@@ -419,6 +419,17 @@ function uniqueAliases(values: string[]): string[] {
   return aliases;
 }
 
+function isVolatileBankReferenceToken(token: string): boolean {
+  const digitCount = [...token].filter((character) => /\d/.test(character)).length;
+  return token.length >= 8 && digitCount >= 2 && /[a-z]/.test(token);
+}
+
+function stableProviderAliases(values: string[]): string[] {
+  return uniqueAliases(values)
+    .filter((alias) => !normalizeName(alias).split(" ").some(isVolatileBankReferenceToken))
+    .slice(0, maximumProviderAliasCount);
+}
+
 export function uniqueProviderTags(values: string[]): string[] {
   const seen = new Set<string>();
   const tags: string[] = [];
@@ -455,7 +466,8 @@ function normalizeProvider(provider: Provider): Provider {
   return {
     ...provider,
     type: inferProviderType(persisted),
-    tags: uniqueProviderTags([...(persisted.tags ?? []), persisted.category ?? "", legacyTag ?? ""])
+    tags: uniqueProviderTags([...(persisted.tags ?? []), persisted.category ?? "", legacyTag ?? ""]),
+    aliases: stableProviderAliases(provider.aliases)
   };
 }
 
@@ -796,18 +808,9 @@ export function transactionAliasCandidates(transaction: Transaction): string[] {
 }
 
 export function learnAliases(provider: Provider, bankNames: string[]): Provider {
-  const existing = new Set([normalizeName(provider.name), ...provider.aliases.map(normalizeName)]);
-  const nextAliases = [...provider.aliases];
+  const nextAliases = stableProviderAliases([...provider.aliases, ...bankNames]);
 
-  for (const bankName of bankNames) {
-    const alias = bankName.trim().replace(/\s+/g, " ");
-    const normalized = normalizeName(alias);
-    if (!alias || !normalized || existing.has(normalized)) continue;
-    existing.add(normalized);
-    nextAliases.push(alias);
-  }
-
-  return nextAliases.length === provider.aliases.length
+  return JSON.stringify(nextAliases) === JSON.stringify(provider.aliases)
     ? provider
     : {
         ...provider,
