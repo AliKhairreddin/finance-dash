@@ -13,8 +13,7 @@ const maxSlashPages = 100;
 const maximumSlashPageItems = 500;
 const maximumSlashAccounts = 200;
 const maximumSlashAccountPages = 10;
-const maximumSlashCards = 5_000;
-const maximumSlashCardPages = 20;
+const maximumSlashCardsPerSync = 1_000;
 const maximumSlashAccountBalanceRows = 200;
 const maximumSlashBalancesPerAccount = 10;
 // Two provider IDs are hex-encoded into one ledger ID, which is capped at 2,048 characters.
@@ -22,6 +21,7 @@ const maximumSlashProviderIdLength = 500;
 const maximumSlashTextLength = 1_024;
 const maximumSlashCursorLength = 8 * 1024;
 const slashBalanceFetchConcurrency = 8;
+const slashCardFetchConcurrency = 8;
 export const slashDefaultSyncPageBudget = 5;
 export const slashMaximumSyncPageBudget = 10;
 
@@ -489,31 +489,43 @@ async function fetchAllSlashPages<T>(
   throw new Error(`Slash API pagination exceeded ${maximumPages} pages`);
 }
 
-function createSlashCardDirectoryLoader(
+function createSlashCardResolver(
   fetcher: typeof fetch,
   baseUrl: string,
   headers: HeadersInit
-): () => Promise<ReadonlyMap<string, SlashCard>> {
-  let directoryPromise: Promise<ReadonlyMap<string, SlashCard>> | undefined;
-  return () => {
-    directoryPromise ??= fetchAllSlashPages(
-      fetcher,
-      new URL("/card", baseUrl),
-      headers,
-      parseSlashCard,
-      maximumSlashCards,
-      maximumSlashCardPages
-    ).then((cards) => {
-      const cardsById = new Map<string, SlashCard>();
-      for (const card of cards) {
-        if (cardsById.has(card.id)) {
-          throw new Error(`Slash API returned duplicate card ${card.id}`);
+): (cardIds: readonly string[]) => Promise<ReadonlyMap<string, SlashCard>> {
+  const cardPromisesById = new Map<string, Promise<SlashCard>>();
+  return async (cardIds) => {
+    const requestedCardIds = [...new Set(cardIds)];
+    if (cardPromisesById.size + requestedCardIds.filter((cardId) => !cardPromisesById.has(cardId)).length > maximumSlashCardsPerSync) {
+      throw new Error(`Slash sync exceeded ${maximumSlashCardsPerSync} distinct cards`);
+    }
+    const resolved = new Map<string, SlashCard>();
+    for (let index = 0; index < requestedCardIds.length; index += slashCardFetchConcurrency) {
+      const batch = requestedCardIds.slice(index, index + slashCardFetchConcurrency);
+      const cards = await Promise.all(batch.map((cardId) => {
+        let cardPromise = cardPromisesById.get(cardId);
+        if (!cardPromise) {
+          cardPromise = fetchSlashResource(
+            fetcher,
+            new URL(`/card/${encodeURIComponent(cardId)}`, baseUrl),
+            headers,
+            "card",
+            parseSlashCard
+          );
+          cardPromisesById.set(cardId, cardPromise);
         }
-        cardsById.set(card.id, card);
+        return cardPromise;
+      }));
+      for (const [cardIndex, card] of cards.entries()) {
+        const requestedCardId = batch[cardIndex];
+        if (card.id !== requestedCardId) {
+          throw new Error(`Slash API returned card ${card.id} for requested card ${requestedCardId}`);
+        }
+        resolved.set(card.id, card);
       }
-      return cardsById;
-    });
-    return directoryPromise;
+    }
+    return resolved;
   };
 }
 
@@ -522,7 +534,7 @@ async function fetchSlashTransactionPages({
   initialUrl,
   headers,
   accountIdentityByKey,
-  loadCardDirectory,
+  resolveCards,
   onTransactionPage,
   collectTransactions
 }: {
@@ -530,7 +542,7 @@ async function fetchSlashTransactionPages({
   initialUrl: URL;
   headers: HeadersInit;
   accountIdentityByKey: ReadonlyMap<string, SlashAccountIdentity>;
-  loadCardDirectory: () => Promise<ReadonlyMap<string, SlashCard>>;
+  resolveCards: (cardIds: readonly string[]) => Promise<ReadonlyMap<string, SlashCard>>;
   onTransactionPage?: (transactions: Transaction[]) => void | Promise<void>;
   collectTransactions: boolean;
 }): Promise<Transaction[]> {
@@ -543,9 +555,7 @@ async function fetchSlashTransactionPages({
     const url = new URL(initialUrl);
     if (cursor) url.searchParams.set("cursor", cursor);
     const page = await fetchSlashPage(fetcher, url, headers, parseSlashTransaction);
-    const cardDirectory = page.items.some((item) => item.cardId)
-      ? await loadCardDirectory()
-      : undefined;
+    const cardDirectory = await resolveCards(page.items.flatMap((item) => item.cardId ? [item.cardId] : []));
     const normalizedPage = page.items.flatMap((item) => {
       if (seenTransactionIds.has(item.id)) return [];
       seenTransactionIds.add(item.id);
@@ -741,7 +751,7 @@ export async function fetchSlashActivityBatch({
     : slashTransactionWindow(dateRange, now);
   const headers = slashHeaders(apiKey, legalEntityId);
   const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
-  const loadCardDirectory = createSlashCardDirectoryLoader(fetcher, baseUrl, headers);
+  const resolveCards = createSlashCardResolver(fetcher, baseUrl, headers);
   if (onAccountsDiscovered) await onAccountsDiscovered(accounts);
   const initialUrl = new URL("/transaction", baseUrl);
   initialUrl.searchParams.set("filter:from_date", String(Date.parse(window.windowStart)));
@@ -758,9 +768,7 @@ export async function fetchSlashActivityBatch({
     const url = new URL(initialUrl);
     if (cursor) url.searchParams.set("cursor", cursor);
     const page = await fetchSlashPage(fetcher, url, headers, parseSlashTransaction);
-    const cardDirectory = page.items.some((item) => item.cardId)
-      ? await loadCardDirectory()
-      : undefined;
+    const cardDirectory = await resolveCards(page.items.flatMap((item) => item.cardId ? [item.cardId] : []));
     pagesFetched += 1;
     providerTransactionsRead += page.items.length;
     const normalizedPage = page.items.flatMap((item) => {
@@ -833,7 +841,7 @@ export async function fetchSlashTransactionForLegalEntity({
     parseSlashAccount
   );
   const cardDirectory = transaction.cardId
-    ? await createSlashCardDirectoryLoader(fetcher, baseUrl, headers)()
+    ? await createSlashCardResolver(fetcher, baseUrl, headers)([transaction.cardId])
     : undefined;
   return normalizeSlashTransaction(transaction, {
     accountId: transaction.accountId,
@@ -868,14 +876,14 @@ export async function fetchSlashActivityForLegalEntity({
   }
 
   const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
-  const loadCardDirectory = createSlashCardDirectoryLoader(fetcher, baseUrl, headers);
+  const resolveCards = createSlashCardResolver(fetcher, baseUrl, headers);
 
   const transactions = await fetchSlashTransactionPages({
     fetcher,
     initialUrl: transactionsUrl,
     headers,
     accountIdentityByKey,
-    loadCardDirectory,
+    resolveCards,
     onTransactionPage,
     collectTransactions
   });

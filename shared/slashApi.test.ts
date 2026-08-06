@@ -51,11 +51,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         }]
       });
     }
-    if (url.pathname === "/card") {
-      return Response.json({
-        items: [{ id: "card-primary", last4: "8744" }],
-        metadata: {}
-      });
+    if (url.pathname === "/card/card-primary") {
+      return Response.json({ id: "card-primary", last4: "8744" });
     }
     if (url.pathname === "/transaction" && !cursor) {
       return Response.json({
@@ -198,7 +195,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     true
   );
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-debit/balance"), true);
-  assert.equal(requests.some((request) => request.url.pathname === "/card"), true);
+  assert.equal(requests.some((request) => request.url.pathname === "/card/card-primary"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
 });
 
@@ -299,8 +296,8 @@ test("Slash rejects card transactions whose card identity cannot be resolved", a
         }]
       });
     }
-    if (url.pathname === "/card") {
-      return Response.json({ items: [], metadata: {} });
+    if (url.pathname === "/card/card-missing") {
+      return new Response("not found", { status: 404, statusText: "Not Found" });
     }
     assert.equal(url.pathname, "/transaction");
     return Response.json({
@@ -325,7 +322,7 @@ test("Slash rejects card transactions whose card identity cannot be resolved", a
       legalEntityId: "legal-entity-1",
       fetcher
     }),
-    /references unknown card card-missing/
+    /404 Not Found/
   );
 });
 
