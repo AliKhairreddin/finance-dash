@@ -1627,6 +1627,7 @@ const bankActivityWindowDays = 45;
 const bankSyncOverlapDays = 3;
 const bankMutationBatchSize = 200;
 const bankClassificationBatchSize = 240;
+const bankAiClassificationBatchSize = 40;
 
 function isoDateShift(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -4021,7 +4022,8 @@ async function autoCategorizeState(
 async function autoCategorizeBankTransactions(
   env: Env,
   transactions: Transaction[],
-  limit = 240
+  limit = bankClassificationBatchSize,
+  useAi = true
 ): Promise<Omit<AutoCategorizeTransactionsResult, "dashboard"> | undefined> {
   const state = await loadPersisted(env);
   const candidates = transactions
@@ -4037,7 +4039,7 @@ async function autoCategorizeBankTransactions(
   }
   const summary = await autoCategorizeState(env, state, {
     transactionIds: candidates.map((transaction) => transaction.id),
-    useAi: true
+    useAi
   });
   await saveBankTransactionUpdates(env, state);
   return summary;
@@ -4053,11 +4055,11 @@ async function categorizeHistoricalBankBacklog(
   });
   let processed = 0;
   let failedBatches = 0;
-  const checkpointSize = 40;
+  const checkpointSize = bankAiClassificationBatchSize;
   for (let index = 0; index < backlog.transactions.length; index += checkpointSize) {
     const transactions = backlog.transactions.slice(index, index + checkpointSize);
     try {
-      await autoCategorizeBankTransactions(env, transactions, transactions.length);
+      await autoCategorizeBankTransactions(env, transactions, transactions.length, false);
       processed += transactions.length;
     } catch (error) {
       failedBatches += 1;
@@ -4069,14 +4071,37 @@ async function categorizeHistoricalBankBacklog(
       }));
     }
   }
+  const aiBacklog = await getConvexClient(env).query(api.banking.getClassificationBacklog, {
+    serviceToken: getConvexServiceToken(env),
+    limit: bankAiClassificationBatchSize
+  });
+  if (aiBacklog.transactions.length > 0) {
+    try {
+      await autoCategorizeBankTransactions(
+        env,
+        aiBacklog.transactions,
+        aiBacklog.transactions.length,
+        true
+      );
+    } catch (error) {
+      failedBatches += 1;
+      console.error(JSON.stringify({
+        event: "transaction_classification_ai_batch_failed",
+        transactionCount: aiBacklog.transactions.length,
+        firstTransactionId: aiBacklog.transactions[0]?.id,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
   console.log(JSON.stringify({
     event: "transaction_classification_backlog",
     attempted: backlog.transactions.length,
     processed,
+    aiAttempted: aiBacklog.transactions.length,
     failedBatches,
-    hasMore: backlog.hasMore
+    hasMore: backlog.hasMore || aiBacklog.hasMore
   }));
-  return { processed, hasMore: backlog.hasMore };
+  return { processed, hasMore: backlog.hasMore || aiBacklog.hasMore };
 }
 
 async function runHistoricalClassificationBackfill(env: Env): Promise<void> {
