@@ -22,6 +22,7 @@ import {
   Loader2,
   LogOut,
   Moon,
+  PanelRightOpen,
   Pencil,
   PieChart,
   Plus,
@@ -40,6 +41,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
+import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
   type FormEvent,
@@ -2928,6 +2930,124 @@ function Overview({
   );
 }
 
+function BankHeadlineMetric({
+  label,
+  value,
+  tone,
+  title
+}: {
+  label: string;
+  value: string;
+  tone?: "good" | "warning";
+  title?: string;
+}) {
+  return (
+    <div className={`bank-headline-metric ${tone ?? ""}`} title={title}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function BankDetailsDrawer({
+  children,
+  label,
+  open,
+  onOpenChange
+}: {
+  children: ReactNode;
+  label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <BaseDialog.Root open={open} onOpenChange={(nextOpen) => onOpenChange(nextOpen)}>
+      {createPortal(
+        <BaseDialog.Trigger className="bank-details-nudge" aria-label={`Open ${label} details`}>
+          <PanelRightOpen aria-hidden="true" size={17} />
+          <span>Details</span>
+        </BaseDialog.Trigger>,
+        document.body
+      )}
+      <BaseDialog.Portal>
+        <BaseDialog.Backdrop className="bank-details-backdrop" />
+        <BaseDialog.Popup className="bank-details-drawer">
+          <div className="bank-details-drawer-header">
+            <div>
+              <p className="eyebrow">Bank details</p>
+              <BaseDialog.Title>{label}</BaseDialog.Title>
+            </div>
+            <BaseDialog.Close className="icon-button" aria-label="Close bank details">
+              <X aria-hidden="true" size={18} />
+            </BaseDialog.Close>
+          </div>
+          <BaseDialog.Description className="screen-reader-only">
+            Account, balance, and selected-period details for {label}.
+          </BaseDialog.Description>
+          <div className="bank-details-drawer-body">{children}</div>
+        </BaseDialog.Popup>
+      </BaseDialog.Portal>
+    </BaseDialog.Root>
+  );
+}
+
+type BankDetailAccountSortKey = "balance" | "name" | "source";
+
+function BankDetailsAccountTable({
+  emptyLabel,
+  rows,
+  secondaryLabel
+}: {
+  emptyLabel: string;
+  rows: Array<{ id: string; name: string; title: string; amount: number; currency: string; source: string }>;
+  secondaryLabel: string;
+}) {
+  const [sortKey, setSortKey] = useUrlState<BankDetailAccountSortKey>("bankDetailSort", "name", {
+    allowedValues: ["balance", "name", "source"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<SortDirection>("bankDetailOrder", "asc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const sortedRows = useMemo(() => [...rows].sort((left, right) => {
+    const leftValue = sortKey === "balance" ? left.amount : sortKey === "source" ? left.source : left.name;
+    const rightValue = sortKey === "balance" ? right.amount : sortKey === "source" ? right.source : right.name;
+    return compareTableValues(leftValue, rightValue, sortDirection) || left.name.localeCompare(right.name);
+  }), [rows, sortDirection, sortKey]);
+
+  function requestSort(nextSortKey: BankDetailAccountSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "balance" ? "desc" : "asc");
+  }
+
+  return (
+    <div className="bank-details-account-table-wrap">
+      <table className="data-table bank-details-account-table">
+        <thead>
+          <tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Account</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">{secondaryLabel}</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="balance">Balance</SortableTableHead>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRows.map((row) => (
+            <tr key={row.id}>
+              <td title={row.title}><strong>{row.name}</strong></td>
+              <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
+              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
+            </tr>
+          ))}
+          {sortedRows.length === 0 && <tr><td colSpan={3}>{emptyLabel}</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function BanksView({
   dashboard,
   activeBank,
@@ -3057,6 +3177,7 @@ function BanksView({
   onDeleteHolding: (holdingId: string) => Promise<void>;
   onRefreshRates: () => Promise<void>;
 }) {
+  const [bankDetailsOpen, setBankDetailsOpen] = useState(false);
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
   for (const status of dashboard.integrationStatus) {
@@ -3122,172 +3243,278 @@ function BanksView({
   const allTabPeriodTransactionCount = allTabPeriodActivity
     ? allTabPeriodActivity.moneyIn.transactionCount + allTabPeriodActivity.moneyOut.transactionCount
     : null;
+  const activePeriodActivity = activeSource?.id === "wise"
+    ? wisePeriodActivity
+    : activeSource
+      ? periodSourceById.get(activeSource.id) ?? null
+      : null;
+  const activePeriodTransactionCount = activePeriodActivity
+    ? activePeriodActivity.moneyIn.transactionCount + activePeriodActivity.moneyOut.transactionCount
+    : null;
+  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
+  const slashCashBalance = sumCurrencyTotals(
+    slashAccounts.filter((account) => account.slashAccountSubtype === "cash"),
+    (account) => account.balance
+  );
+  const slashCardCredit = sumCurrencyTotals(
+    slashAccounts.filter((account) => account.slashAccountSubtype === "credit"),
+    (account) => account.balance
+  );
+  const periodSlashCashback = periodMetricsReady && bankPeriodMetrics
+    ? bankPeriodMetrics.slashCashback
+    : null;
+  const cashbackEarnedUsd = periodSlashCashback
+    ? convertCurrencyTotalsToUsd(periodSlashCashback.earned, dashboard.fxRates)
+    : null;
+  const cashbackEligibleSpendUsd = periodSlashCashback
+    ? convertCurrencyTotalsToUsd(periodSlashCashback.eligibleSpend, dashboard.fxRates)
+    : null;
+  const effectiveCashbackRate = cashbackEarnedUsd
+    && cashbackEligibleSpendUsd
+    && cashbackEarnedUsd.excludedCurrencies.length === 0
+    && cashbackEligibleSpendUsd.excludedCurrencies.length === 0
+    && cashbackEligibleSpendUsd.totalUsd > 0
+    ? (cashbackEarnedUsd.totalUsd / cashbackEligibleSpendUsd.totalUsd) * 100
+    : undefined;
+  const detailAccounts = activeSource
+    ? dashboard.accounts.filter((account) =>
+      account.source === activeSource.id
+      && (
+        activeSource.id !== "wise"
+        || wiseEntityView === "all"
+        || account.wiseEntity === wiseEntityView
+      )
+    )
+    : [];
+  const activeBankLabel = activeSource
+    ? activeSource.id === "wise" && wiseEntityView !== "all"
+      ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
+      : activeSource.label
+    : activeBank === "holdings"
+      ? "Cash & wallet holdings"
+      : "All bank activity";
+
+  useEffect(() => {
+    setBankDetailsOpen(false);
+  }, [activeBank, wiseEntityView]);
+
+  const headerMetrics = activeBank === "all" ? (
+    <>
+      <BankHeadlineMetric
+        label="Period money in"
+        value={allTabPeriodActivity
+          ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
+          : periodMetricPlaceholder}
+        title={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyIn.volume) : undefined}
+      />
+      <BankHeadlineMetric
+        label="Period spent"
+        value={allTabPeriodActivity
+          ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
+          : periodMetricPlaceholder}
+        title={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyOut.volume) : undefined}
+      />
+      <BankHeadlineMetric
+        label="Transactions"
+        value={allTabPeriodTransactionCount === null ? periodMetricPlaceholder : String(allTabPeriodTransactionCount)}
+      />
+    </>
+  ) : activeSource ? (
+    <>
+      <BankHeadlineMetric
+        label={activeSource.id === "slash" ? "Available card credit" : "Live balance"}
+        value={activeSource.id === "slash"
+          ? formatUsdCurrencyTotal(slashCardCredit, dashboard.fxRates)
+          : formatUsdCurrencyTotal(activeSourceBalance, dashboard.fxRates)}
+        title={activeSource.id === "slash"
+          ? nativeCurrencyBreakdown(slashCardCredit)
+          : activeSourceDisplayAccounts.length > 0
+            ? nativeCurrencyBreakdown(activeSourceBalance)
+            : "No live balance available"}
+      />
+      {activeSource.id === "slash" ? (
+        <>
+          <BankHeadlineMetric
+            label="Cash balance"
+            value={formatUsdCurrencyTotal(slashCashBalance, dashboard.fxRates)}
+            title={nativeCurrencyBreakdown(slashCashBalance)}
+          />
+          <BankHeadlineMetric
+            label="Period cashback"
+            value={periodSlashCashback
+              ? formatUsdCurrencyTotal(periodSlashCashback.earned, dashboard.fxRates, money(0))
+              : periodMetricPlaceholder}
+            tone="good"
+            title={periodSlashCashback ? nativeCurrencyBreakdown(periodSlashCashback.earned) : undefined}
+          />
+        </>
+      ) : (
+        <>
+          <BankHeadlineMetric
+            label="Period money in"
+            value={activePeriodActivity
+              ? formatUsdCurrencyTotal(activePeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
+              : periodMetricPlaceholder}
+            title={activePeriodActivity ? nativeCurrencyBreakdown(activePeriodActivity.moneyIn.volume) : undefined}
+          />
+          <BankHeadlineMetric
+            label="Period money out"
+            value={activePeriodActivity
+              ? formatUsdCurrencyTotal(activePeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
+              : periodMetricPlaceholder}
+            title={activePeriodActivity ? nativeCurrencyBreakdown(activePeriodActivity.moneyOut.volume) : undefined}
+          />
+        </>
+      )}
+    </>
+  ) : null;
+
+  const bankDetails = activeBank === "all" ? (
+    <>
+      <section className="bank-details-section">
+        <h3>Connected sources</h3>
+        <div className="bank-details-summary-grid">
+          {bankSources.map((source) => {
+            const accounts = accountsBySource.get(source.id) ?? [];
+            const status = statusBySource.get(source.id);
+            const sourceSlashAccounts = source.id === "slash" ? slashAccounts : [];
+            const slashCreditAccounts = sourceSlashAccounts.filter((account) => account.slashAccountSubtype === "credit");
+            const summaryAccounts = source.id === "slash"
+              ? slashCreditAccounts.length > 0
+                ? slashCreditAccounts
+                : sourceSlashAccounts.filter((account) => account.slashAccountSubtype === "cash")
+              : accounts;
+            const accountTotals = sumCurrencyTotals(summaryAccounts, (account) => account.balance);
+            const sourcePeriodActivity = periodSourceById.get(source.id);
+            const periodTransactionCount = sourcePeriodActivity
+              ? sourcePeriodActivity.moneyIn.transactionCount + sourcePeriodActivity.moneyOut.transactionCount
+              : null;
+            return (
+              <SummaryTile
+                key={source.id}
+                label={`${source.label} ${status?.mode ?? "partial"}${source.id === "slash" ? " · available credit" : ""}`}
+                value={summaryAccounts.length > 0 || (source.id === "slash" && status?.mode === "live")
+                  ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates)
+                  : periodTransactionCount === null
+                    ? periodMetricPlaceholder
+                    : `${periodTransactionCount} transactions`}
+                detail={summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
+              />
+            );
+          })}
+        </div>
+      </section>
+      <section className="bank-details-section">
+        <h3>Selected period</h3>
+        <div className="bridge">
+          <div className="bridge-row"><span>Money in</span><strong className="good-text">{allTabPeriodActivity ? formatCurrencyTotals(allTabPeriodActivity.moneyIn.volume) : periodMetricPlaceholder}</strong></div>
+          <div className="bridge-row"><span>Money out</span><strong className="danger-text">{allTabPeriodActivity ? formatCurrencyTotals(allTabPeriodActivity.moneyOut.volume) : periodMetricPlaceholder}</strong></div>
+          <div className="bridge-row"><span>Transactions</span><strong>{allTabPeriodTransactionCount === null ? periodMetricPlaceholder : allTabPeriodTransactionCount}</strong></div>
+        </div>
+      </section>
+    </>
+  ) : activeSource ? (
+    <>
+      <section className="bank-details-section">
+        <div className="bank-details-section-heading">
+          <h3>{activeSource.id === "amex" ? "Cards" : "Accounts"}</h3>
+          <span className={`status-pill ${activeSourceStatus?.mode === "live" ? "good" : "warning"}`}>{activeSourceStatus?.mode ?? "partial"}</span>
+        </div>
+        <BankDetailsAccountTable
+          secondaryLabel={activeSource.id === "slash" ? "Type" : "Source"}
+          rows={detailAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            title: account.name,
+            amount: account.balance,
+            currency: account.currency,
+            source: activeSource.id === "slash"
+              ? account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
+              : activeSource.label
+          }))}
+          emptyLabel={`No ${activeSource.label} accounts available`}
+        />
+      </section>
+      <section className="bank-details-section">
+        <h3>Selected period</h3>
+        <div className="bridge">
+          <div className="bridge-row"><span>Money in</span><strong className="good-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyIn.volume) : periodMetricPlaceholder}</strong></div>
+          <div className="bridge-row"><span>Money out</span><strong className="danger-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyOut.volume) : periodMetricPlaceholder}</strong></div>
+          <div className="bridge-row"><span>Transactions</span><strong>{activePeriodTransactionCount === null ? periodMetricPlaceholder : activePeriodTransactionCount}</strong></div>
+        </div>
+      </section>
+      {activeSource.id === "slash" && (
+        <section className="bank-details-section">
+          <div className="bank-details-section-heading">
+            <h3>Cashback</h3>
+            <span className="total-pill good" title={periodSlashCashback ? nativeCurrencyBreakdown(periodSlashCashback.earned) : undefined}>
+              {periodSlashCashback
+                ? formatUsdCurrencyTotal(periodSlashCashback.earned, dashboard.fxRates, money(0))
+                : periodMetricPlaceholder}
+            </span>
+          </div>
+          <div className="bridge">
+            <div className="bridge-row"><span>Eligible purchases</span><strong>{periodSlashCashback ? periodSlashCashback.eligiblePurchaseCount : periodMetricPlaceholder}</strong></div>
+            <div className="bridge-row"><span>Eligible spend</span><strong>{periodSlashCashback ? formatUsdCurrencyTotal(periodSlashCashback.eligibleSpend, dashboard.fxRates, money(0)) : periodMetricPlaceholder}</strong></div>
+            <div className="bridge-row"><span>Effective rate</span><strong>{!periodSlashCashback ? periodMetricPlaceholder : effectiveCashbackRate === undefined ? "—" : `${effectiveCashbackRate.toFixed(2)}%`}</strong></div>
+            <div className="bridge-row"><span>Cashback credited</span><strong>{periodSlashCashback ? formatUsdCurrencyTotal(periodSlashCashback.credited, dashboard.fxRates, money(0)) : periodMetricPlaceholder}</strong></div>
+          </div>
+        </section>
+      )}
+      {activeSourceStatus?.issue && (
+        <div className="integration-alert"><CircleAlert aria-hidden="true" size={16} /><span>{activeSourceStatus.issue}</span></div>
+      )}
+    </>
+  ) : null;
 
   return (
     <div className="banks-layout">
-      <section className="panel wide-panel">
-        <div className="panel-header">
-          <div>
+      <section className="panel wide-panel bank-overview-bar">
+        <div className="panel-header bank-overview-header">
+          <div className="bank-overview-title">
             <p className="eyebrow">Banks</p>
-            <div className="bank-heading-line">
-              <h2>
-                {activeSource
-                  ? `${
-                    activeSource.id === "wise" && wiseEntityView !== "all"
-                      ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
-                      : activeSource.label
-                  } account activity`
-                  : "Connected bank, card, and reconciliation activity"}
-              </h2>
-              {activeSource && (
-                <span
-                  className={`bank-inline-balance ${activeSourceStatus?.mode === "live" ? "is-live" : ""}`}
-                  title={activeSourceDisplayAccounts.length > 0 ? nativeCurrencyBreakdown(activeSourceBalance) : "No live balance available"}
-                >
-                  <span>{activeSource.id === "slash" ? "Available card credit" : "Live balance"}</span>
-                  <strong>{formatUsdCurrencyTotal(activeSourceBalance, dashboard.fxRates)}</strong>
-                </span>
-              )}
+            <h2>{activeBankLabel}</h2>
+          </div>
+          {headerMetrics && (
+            <div className="bank-headline-metrics" aria-label={`${activeBankLabel} key metrics`}>
+              {headerMetrics}
             </div>
-          </div>
-          <div className="segmented-control bank-tabs" aria-label="Bank source">
-            <button
-              className={activeBank === "all" ? "active" : ""}
-              onClick={() => setActiveBank("all")}
-              type="button"
-            >
-              <WalletCards size={15} />
-              All
-            </button>
-            {bankSources.map((source) => (
-              <button
-                className={activeBank === source.id ? "active" : ""}
-                key={source.id}
-                onClick={() => setActiveBank(source.id)}
-                type="button"
+          )}
+          <div className="bank-header-controls">
+            {activeBank === "wise" && (
+              <NativeSelect
+                aria-label="Wise entity"
+                className="wise-entity-select"
+                value={wiseEntityView}
+                onValueChange={(value) => setWiseEntityView(value as WiseEntityView)}
               >
-                {source.id === "amex" ? <CreditCard size={15} /> : <Banknote size={15} />}
-                {source.label}
-              </button>
-            ))}
-            <button
-              className={activeBank === "holdings" ? "active" : ""}
-              onClick={() => setActiveBank("holdings")}
-              type="button"
-            >
-              <CircleDollarSign size={15} />
-              Cash & wallets
-            </button>
-          </div>
-          <div className="bank-source-select">
-            <NativeSelect
-              aria-label="Bank source"
-              value={activeBank}
-              onValueChange={(value) => setActiveBank(value as BankTab)}
-            >
-              <NativeSelectOption value="all">All bank activity</NativeSelectOption>
-              {bankSources.map((source) => (
-                <NativeSelectOption key={source.id} value={source.id}>
-                  {source.label}
-                </NativeSelectOption>
-              ))}
-              <NativeSelectOption value="holdings">Cash & wallets</NativeSelectOption>
-            </NativeSelect>
+                <NativeSelectOption value="all">All entities</NativeSelectOption>
+                {wiseEntities.map((entity) => (
+                  <NativeSelectOption key={entity.id} value={entity.id}>{entity.shortLabel}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+            <div className="bank-source-select">
+              <NativeSelect
+                aria-label="Bank source"
+                value={activeBank}
+                onValueChange={(value) => setActiveBank(value as BankTab)}
+              >
+                <NativeSelectOption value="all">All</NativeSelectOption>
+                {bankSources.map((source) => (
+                  <NativeSelectOption key={source.id} value={source.id}>
+                    {source.label}
+                  </NativeSelectOption>
+                ))}
+                <NativeSelectOption value="holdings">Cash & wallets</NativeSelectOption>
+              </NativeSelect>
+            </div>
           </div>
         </div>
-        {activeBank === "wise" && (
-          <div className="wise-entity-nav">
-            <div className="segmented-control wise-entity-tabs" aria-label="Wise entity">
-              <button
-                className={wiseEntityView === "all" ? "active" : ""}
-                onClick={() => setWiseEntityView("all")}
-                type="button"
-              >
-                All
-              </button>
-              {wiseEntities.map((entity) => (
-                <button
-                  className={wiseEntityView === entity.id ? "active" : ""}
-                  key={entity.id}
-                  onClick={() => setWiseEntityView(entity.id)}
-                  title={entity.label}
-                  type="button"
-                >
-                  {entity.shortLabel}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {activeBank === "all" && (
-          <div className="wise-summary-grid bank-source-summary">
-            {bankSources.map((source) => {
-              const accounts = accountsBySource.get(source.id) ?? [];
-              const status = statusBySource.get(source.id);
-              const slashAccounts = source.id === "slash"
-                ? dashboard.accounts.filter((account) => account.source === "slash")
-                : [];
-              const slashCreditAccounts = slashAccounts.filter(
-                (account) => account.slashAccountSubtype === "credit"
-              );
-              const summaryAccounts = source.id === "slash"
-                ? slashCreditAccounts.length > 0
-                  ? slashCreditAccounts
-                  : slashAccounts.filter((account) => account.slashAccountSubtype === "cash")
-                : accounts;
-              const showsBalance = summaryAccounts.length > 0
-                || (source.id === "slash" && status?.mode === "live");
-              const accountTotals = sumCurrencyTotals(summaryAccounts, (account) => account.balance);
-              const periodActivity = periodSourceById.get(source.id);
-              const periodTransactionCount = periodActivity
-                ? periodActivity.moneyIn.transactionCount + periodActivity.moneyOut.transactionCount
-                : null;
-              return (
-                <SummaryTile
-                  key={source.id}
-                  label={`${source.label} ${status?.mode ?? "partial"}${
-                    source.id === "slash"
-                      ? slashCreditAccounts.length > 0 ? " · available credit" : " · cash"
-                      : ""
-                  }`}
-                  value={showsBalance
-                    ? formatUsdCurrencyTotal(accountTotals, dashboard.fxRates)
-                    : periodTransactionCount === null
-                      ? periodMetricPlaceholder
-                      : `${periodTransactionCount} transactions`}
-                  detail={showsBalance ? nativeCurrencyBreakdown(accountTotals) : undefined}
-                />
-              );
-            })}
-          </div>
-        )}
       </section>
 
       {activeBank === "all" && (
-        <>
-          <div className="wise-summary-grid" aria-label="Selected period bank totals">
-            <SummaryTile
-              label="Period money in"
-              value={allTabPeriodActivity
-                ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
-                : periodMetricPlaceholder}
-              detail={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyIn.volume) : undefined}
-            />
-            <SummaryTile
-              label="Period spent"
-              value={allTabPeriodActivity
-                ? formatUsdCurrencyTotal(allTabPeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
-                : periodMetricPlaceholder}
-              detail={allTabPeriodActivity ? nativeCurrencyBreakdown(allTabPeriodActivity.moneyOut.volume) : undefined}
-            />
-            <SummaryTile
-              label="Period transactions"
-              value={allTabPeriodTransactionCount === null
-                ? periodMetricPlaceholder
-                : String(allTabPeriodTransactionCount)}
-            />
-          </div>
-          <AllBankTransactionsView
+        <AllBankTransactionsView
             activityView={activityView}
             dashboard={dashboard}
             period={allBankDateRange}
@@ -3331,8 +3558,7 @@ function BanksView({
                 windowDays={revolutDefaultActivityWindowDays}
               />
             )}
-          />
-        </>
+        />
       )}
       {activeBank === "wise" && (
         <BankReconciliationView
@@ -3478,7 +3704,6 @@ function BanksView({
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
-          periodSlashCashback={periodMetricsReady ? bankPeriodMetrics.slashCashback : null}
           onLoadMoreTransactions={onLoadMoreTransactions}
           onLoadPreviousTransactions={onLoadPreviousTransactions}
           onRetryBankActivitySummary={onRetryBankActivitySummary}
@@ -3544,6 +3769,15 @@ function BanksView({
           onDelete={onDeleteHolding}
           onRefreshRates={onRefreshRates}
         />
+      )}
+      {bankDetails && (
+        <BankDetailsDrawer
+          label={activeBankLabel}
+          open={bankDetailsOpen}
+          onOpenChange={setBankDetailsOpen}
+        >
+          {bankDetails}
+        </BankDetailsDrawer>
       )}
     </div>
   );
@@ -3712,10 +3946,6 @@ function BankReconciliationView({
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
       <div className="panel-header bank-reconciliation-header">
-        <div className="bank-reconciliation-title">
-          <p className="eyebrow">{sourceLabel} reconciliation</p>
-          <h2>{activityView === "groups" ? "Merchant totals" : activityView === "cards" ? "Card totals and cashback" : "Match payments and spend"}</h2>
-        </div>
         <div className="list-toolbar reconciliation-toolbar">
           <div className="list-toolbar-main">
             <ToolbarSearchField
@@ -6280,19 +6510,6 @@ function RevolutView({
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: RevolutTransactionDateRange) => Promise<void>;
 }) {
-  const revolutAccounts = dashboard.accounts.filter((account) =>
-    account.source === "revolut" && hasNonZeroAccountBalance(account)
-  );
-  const periodActivity = resolvedBankPeriodActivity(
-    reconciliationProps.periodActivity,
-    reconciliationProps.periodMetricsReady
-  );
-  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
-    ? "Unavailable"
-    : "Calculating…";
-  const periodTransactionCount = periodActivity
-    ? periodActivity.moneyIn.transactionCount + periodActivity.moneyOut.transactionCount
-    : null;
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -6302,56 +6519,14 @@ function RevolutView({
     />
   );
   return (
-    <div className="split-view">
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Revolut balances</h2>
-          <span className="total-pill">{revolutAccounts.length > 0 ? `${revolutAccounts.length} accounts` : "—"}</span>
-        </div>
-        <SimpleMoneyTable
-          rows={revolutAccounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            title: account.name,
-            amount: account.balance,
-            currency: account.currency,
-            source: sourceLabel(account.source)
-          }))}
-        />
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Revolut movement</h2>
-          <span className="total-pill">
-            {periodTransactionCount === null ? periodMetricPlaceholder : `${periodTransactionCount} transactions`}
-          </span>
-        </div>
-        <div className="bridge">
-          <div className="bridge-row">
-            <span>Money in</span>
-            <strong className="good-text">
-              {periodActivity ? formatCurrencyTotals(periodActivity.moneyIn.volume) : periodMetricPlaceholder}
-            </strong>
-          </div>
-          <div className="bridge-row">
-            <span>Money out</span>
-            <strong className="danger-text">
-              {periodActivity ? formatCurrencyTotals(periodActivity.moneyOut.volume) : periodMetricPlaceholder}
-            </strong>
-          </div>
-        </div>
-      </section>
-
-      <BankReconciliationView
-        {...reconciliationProps}
-        dashboard={dashboard}
-        rows={rows}
-        source="revolut"
-        wide
-        rangeControls={rangeControls}
-      />
-    </div>
+    <BankReconciliationView
+      {...reconciliationProps}
+      dashboard={dashboard}
+      rows={rows}
+      source="revolut"
+      wide
+      rangeControls={rangeControls}
+    />
   );
 }
 
@@ -6361,39 +6536,12 @@ function SlashView({
   dateRange,
   isLoadingDateRange,
   onLoadDateRange,
-  periodSlashCashback,
   ...reconciliationProps
 }: ConnectedBankViewProps & {
   dateRange: SlashTransactionDateRange;
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: SlashTransactionDateRange) => Promise<void>;
-  periodSlashCashback: BankPeriodMetrics["slashCashback"] | null;
 }) {
-  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
-  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
-    ? "Unavailable"
-    : "Calculating…";
-  const cashbackEarnedUsd = periodSlashCashback
-    ? convertCurrencyTotalsToUsd(periodSlashCashback.earned, dashboard.fxRates)
-    : null;
-  const cashbackEligibleSpendUsd = periodSlashCashback
-    ? convertCurrencyTotalsToUsd(periodSlashCashback.eligibleSpend, dashboard.fxRates)
-    : null;
-  const effectiveCashbackRate = cashbackEarnedUsd
-    && cashbackEligibleSpendUsd
-    && cashbackEarnedUsd.excludedCurrencies.length === 0
-    && cashbackEligibleSpendUsd.excludedCurrencies.length === 0
-    && cashbackEligibleSpendUsd.totalUsd > 0
-    ? (cashbackEarnedUsd.totalUsd / cashbackEligibleSpendUsd.totalUsd) * 100
-    : undefined;
-  const cashBalance = sumCurrencyTotals(
-    slashAccounts.filter((account) => account.slashAccountSubtype === "cash"),
-    (account) => account.balance
-  );
-  const cardCredit = sumCurrencyTotals(
-    slashAccounts.filter((account) => account.slashAccountSubtype === "credit"),
-    (account) => account.balance
-  );
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -6403,88 +6551,14 @@ function SlashView({
     />
   );
   return (
-    <div className="split-view">
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Slash accounts</h2>
-          <div className="row-actions">
-            {Object.keys(cashBalance).length > 0 && (
-              <span className="total-pill" title={nativeCurrencyBreakdown(cashBalance)}>
-                Cash {formatUsdCurrencyTotal(cashBalance, dashboard.fxRates)}
-              </span>
-            )}
-            {Object.keys(cardCredit).length > 0 && (
-              <span className="total-pill" title={nativeCurrencyBreakdown(cardCredit)}>
-                Card credit {formatUsdCurrencyTotal(cardCredit, dashboard.fxRates)}
-              </span>
-            )}
-          </div>
-        </div>
-        <SimpleMoneyTable
-          secondaryLabel="Type"
-          rows={slashAccounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            title: account.name,
-            amount: account.balance,
-            currency: account.currency,
-            source: account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
-          }))}
-        />
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Slash cashback</h2>
-          <span className="total-pill good" title={periodSlashCashback ? nativeCurrencyBreakdown(periodSlashCashback.earned) : undefined}>
-            {periodSlashCashback
-              ? formatUsdCurrencyTotal(periodSlashCashback.earned, dashboard.fxRates, money(0))
-              : periodMetricPlaceholder}
-          </span>
-        </div>
-        <div className="bridge">
-          <div className="bridge-row">
-            <span>Eligible purchases</span>
-            <strong>{periodSlashCashback ? periodSlashCashback.eligiblePurchaseCount : periodMetricPlaceholder}</strong>
-          </div>
-          <div className="bridge-row">
-            <span>Eligible spend</span>
-            <strong>
-              {periodSlashCashback
-                ? formatUsdCurrencyTotal(periodSlashCashback.eligibleSpend, dashboard.fxRates, money(0))
-                : periodMetricPlaceholder}
-            </strong>
-          </div>
-          <div className="bridge-row">
-            <span>Effective cashback rate</span>
-            <strong>
-              {!periodSlashCashback
-                ? periodMetricPlaceholder
-                : effectiveCashbackRate === undefined
-                  ? "—"
-                  : `${effectiveCashbackRate.toFixed(2)}%`}
-            </strong>
-          </div>
-          <div className="bridge-row">
-            <span>Cashback credited</span>
-            <strong>
-              {periodSlashCashback
-                ? formatUsdCurrencyTotal(periodSlashCashback.credited, dashboard.fxRates, money(0))
-                : periodMetricPlaceholder}
-            </strong>
-          </div>
-        </div>
-      </section>
-
-      <BankReconciliationView
-        {...reconciliationProps}
-        dashboard={dashboard}
-        rows={rows}
-        source="slash"
-        wide
-        rangeControls={rangeControls}
-      />
-    </div>
+    <BankReconciliationView
+      {...reconciliationProps}
+      dashboard={dashboard}
+      rows={rows}
+      source="slash"
+      wide
+      rangeControls={rangeControls}
+    />
   );
 }
 
@@ -6500,20 +6574,6 @@ function AmexView({
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: BankTransactionDateRange) => Promise<void>;
 }) {
-  const amexAccounts = dashboard.accounts.filter((account) =>
-    account.source === "amex" && hasNonZeroAccountBalance(account)
-  );
-  const amexStatus = dashboard.integrationStatus.find((integration) => integration.id === "amex");
-  const balance = sumCurrencyTotals(amexAccounts, (account) => account.balance);
-  const balanceTone = Object.values(balance).some((amount) => amount < 0) ? "warning" : "";
-  const resolvedPeriod = resolvedBankPeriodActivity(
-    reconciliationProps.periodActivity,
-    reconciliationProps.periodMetricsReady
-  );
-  const periodMetricPlaceholder = reconciliationProps.periodMetricsError
-    || (!reconciliationProps.periodMetricsLoading && reconciliationProps.periodMetricsReady)
-    ? "Unavailable"
-    : "Calculating…";
   const rangeControls = (
     <BankDateRangeControls
       dateRange={dateRange}
@@ -6523,68 +6583,14 @@ function AmexView({
     />
   );
   return (
-    <div className="split-view">
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Amex cards</h2>
-          <span className={`total-pill ${balanceTone}`} title={nativeCurrencyBreakdown(balance)}>{formatUsdCurrencyTotal(balance, dashboard.fxRates)}</span>
-        </div>
-        <SimpleMoneyTable
-          rows={amexAccounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            title: account.name,
-            amount: account.balance,
-            currency: account.currency,
-            source: sourceLabel(account.source)
-          }))}
-          emptyLabel="No live Amex cards"
-        />
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h2>Amex readiness</h2>
-          <span className={`status-pill ${amexStatus?.mode === "live" ? "good" : "warning"}`}>{amexStatus?.mode ?? "partial"}</span>
-        </div>
-        <div className="bridge">
-          <div className="bridge-row">
-            <span>Money out</span>
-            <strong className="danger-text">
-              {resolvedPeriod ? formatCurrencyTotals(resolvedPeriod.moneyOut.volume) : periodMetricPlaceholder}
-            </strong>
-          </div>
-          <div className="bridge-row">
-            <span>Credits</span>
-            <strong className="good-text">
-              {resolvedPeriod ? formatCurrencyTotals(resolvedPeriod.moneyIn.volume) : periodMetricPlaceholder}
-            </strong>
-          </div>
-        </div>
-        {amexStatus && amexStatus.needs.length > 0 && (
-          <div className="need-list bank-need-list">
-            {amexStatus.needs.map((need) => (
-              <code key={need}>{need}</code>
-            ))}
-          </div>
-        )}
-        {reconciliationProps.periodMetricsError && (
-          <div className="integration-alert">
-            <CircleAlert size={16} />
-            <span>Period totals could not be calculated: {reconciliationProps.periodMetricsError}</span>
-          </div>
-        )}
-      </section>
-
-      <BankReconciliationView
-        {...reconciliationProps}
-        dashboard={dashboard}
-        rows={rows}
-        source="amex"
-        wide
-        rangeControls={rangeControls}
-      />
-    </div>
+    <BankReconciliationView
+      {...reconciliationProps}
+      dashboard={dashboard}
+      rows={rows}
+      source="amex"
+      wide
+      rangeControls={rangeControls}
+    />
   );
 }
 

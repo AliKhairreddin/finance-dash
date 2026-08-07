@@ -82,10 +82,12 @@ export function BankActivityViewToggle({
         const Icon = option.icon;
         return (
           <button
+            aria-label={option.label}
             aria-pressed={value === option.value}
             className={value === option.value ? "active" : ""}
             key={option.value}
             onClick={() => onChange(option.value)}
+            title={option.label}
             type="button"
           >
             <Icon aria-hidden="true" size={14} />

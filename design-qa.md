@@ -78,7 +78,6 @@ No actionable P0, P1, or P2 issues remain.
 No P3 follow-up is required for this pass.
 
 final result: passed
-
 ---
 
 # Dropdown and Analytics period controls design QA
@@ -756,5 +755,78 @@ This pass verifies the responsibility rename from Team to Owner and the addition
 - Rendered browser QA passed on Banks, Analytics, and Settings.
 - `npm run check`: passed (155 tests passed, 1 intentionally skipped, production build passed).
 - `git diff --check`: passed.
+
+final result: passed
+
+---
+
+# Banks compact workspace design QA
+
+## Evidence
+
+- Source visual truth: conversation attachment `Dia Appshot 2026-08-07T01-11-56.149Z.png` showing the production Slash bank view before this change.
+- Source pixels: 1228 × 768. The appshot includes Dia chrome; the comparable product-content region begins below the browser toolbar.
+- Primary implementation: `artifacts/design-qa/banks-slash-compact-desktop.png`.
+- Open drawer implementation: `artifacts/design-qa/banks-slash-details-drawer.png`.
+- Unified implementation: `artifacts/design-qa/banks-all-compact-desktop.png`.
+- Responsive implementation: `artifacts/design-qa/banks-all-compact-mobile.png`.
+- Implementation pixels / CSS viewport: 1228 × 768 desktop and 390 × 844 mobile at device scale factor 1. No density normalization was needed.
+- State: light theme; Banks route; Slash view for source comparison; All view for unified-table comparison; drawer tested closed and open.
+- Browser-rendered evidence: captured from the local Vite application in the Codex in-app browser.
+- Primary interactions tested: source dropdown (Slash → Wise → All), URL-backed source state, Wise entity selector visibility, right-edge drawer open/close, responsive mobile drawer, and sortable account-detail column headers.
+- Console errors checked: no warnings or errors.
+
+## Full-view comparison
+
+The source and implementation were reviewed together at the same 1228 × 768 desktop size. The source dedicates two persistent card rows to Slash accounts and cashback before reconciliation. The implementation intentionally replaces those cards with three provider-specific headline metrics and a closed-by-default right-edge drawer, moving the table toolbar and table several hundred pixels closer to the top. The source's multi-button bank switcher is replaced with one compact, URL-backed dropdown.
+
+The resulting composition keeps the established sidebar, Geist typography, borders, radii, semantic colors, table density, and control language. The redesign changes information hierarchy exactly where requested rather than restyling the surrounding product.
+
+## Focused-region comparison
+
+- Header: verified that Slash shows available card credit, cash balance, and selected-period cashback; Wise shows live balance and selected-period movement; All shows period money in, spend, and transaction count without cashback.
+- Table toolbar: verified that the redundant reconciliation and unified-ledger titles are gone and search is the leftmost control.
+- Drawer: verified the account table, selected-period movement, provider status, and Slash cashback breakdown at desktop and mobile sizes.
+- Images/assets: this screen has no raster imagery or brand artwork. Existing Lucide UI icons and product tokens remain appropriate and sharp.
+
+## Comparison history
+
+### Iteration 1
+
+- [P2] The Details nudge was positioned relative to the animated route container instead of the viewport, placing it beside the toolbar. Evidence: `artifacts/design-qa/banks-slash-iteration-1.png`.
+  - Fix: portaled the trigger to `document.body`, preserving dialog context while anchoring it to the viewport edge.
+  - Post-fix evidence: `artifacts/design-qa/banks-slash-compact-desktop.png`.
+- [P2] At 1228 px, the four activity-view labels compressed the date controls and clipped the final view option. Evidence: `artifacts/design-qa/banks-all-iteration-1.png`.
+  - Fix: kept the active Transactions label, compacted the three alternate views to titled icon buttons below 1280 px, and retained accessible names.
+  - Post-fix evidence: `artifacts/design-qa/banks-all-compact-desktop.png`.
+
+### Final pass
+
+- Fonts and typography: passed. Geist, weights, sizing, tabular numerals, truncation, and hierarchy match the existing product language.
+- Spacing and layout rhythm: passed. The table begins immediately after the compact header and toolbar; desktop and mobile layouts have no hidden persistent controls.
+- Colors and visual tokens: passed. Existing panel, line, muted, green, red, amber, and violet tokens are used consistently with sufficient contrast.
+- Image quality and asset fidelity: passed. No image assets are required on this screen; icons come from the existing icon library.
+- Copy and content: passed. Redundant reconciliation titles are removed, labels remain concise, and provider-specific metrics replace generic cashback treatment.
+- Accessibility: passed. Drawer focus/escape behavior comes from Base UI Dialog, controls retain accessible names, and drawer account columns use the shared sortable-header control with URL-persisted sort state.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+## Open questions
+
+None.
+
+## Implementation checklist
+
+- [x] Replace bank tabs with one source dropdown.
+- [x] Promote provider-specific headline metrics.
+- [x] Move account and supplemental information into a right-edge drawer.
+- [x] Remove reconciliation/unified titles before search.
+- [x] Verify desktop, drawer, provider switch, URL state, accessibility, and mobile behavior.
+
+## Follow-up polish
+
+No blocking or requested follow-up polish remains.
 
 final result: passed

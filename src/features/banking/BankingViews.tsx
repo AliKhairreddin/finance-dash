@@ -226,12 +226,6 @@ export function AllBankTransactionsView({
   return (
     <section className="panel wide-panel">
       <div className="panel-header compact unified-bank-header">
-        <div className="unified-bank-title">
-          <div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div>
-          <span className="total-pill">
-            {totalCount === undefined ? `${rows.length} on page` : `${rows.length} of ${totalCount.toLocaleString("en-US")}`}
-          </span>
-        </div>
         <div className="list-toolbar unified-bank-toolbar">
           <div className="list-toolbar-main">
             <ToolbarSearchField
