@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Transaction } from "../shared/types";
+import type { Transaction, TransactionCategoryRule } from "../shared/types";
 import {
   aiProviderDirectoryForTransactions,
   canonicalProviders,
+  finalizeDeterministicCategorization,
   learnAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
@@ -137,10 +138,55 @@ test("AI groups repeated merchant descriptors while keeping generic transfers di
     rawName: "FACEBK *QPM47X2LNB",
     description: "FACEBK *QPM47X2LNB"
   };
+  const facebookAdCharge: Transaction = {
+    ...facebookChargeOne,
+    id: "facebook-ad-1",
+    counterparty: "FACEBOOKAD* LJDQF2EUL4",
+    rawName: "FACEBOOKAD* LJDQF2EUL4",
+    description: "FACEBOOKAD* LJDQF2EUL4"
+  };
 
   assert.equal(transactionAiGroupKey(pizzaBase), transactionAiGroupKey(pizzaVariant));
   assert.equal(transactionAiGroupKey(facebookChargeOne), transactionAiGroupKey(facebookChargeTwo));
+  assert.equal(transactionAiGroupKey(facebookChargeOne), transactionAiGroupKey(facebookAdCharge));
   assert.notEqual(transactionAiGroupKey(transferOne), transactionAiGroupKey(transferTwo));
+});
+
+test("saved Facebook rules complete known charges without an AI request", () => {
+  const pending: Transaction = {
+    id: "facebook-pending-1",
+    source: "slash",
+    accountName: "Business Platinum Credit",
+    date: "2026-08-06",
+    description: "FACEBK *USAYZY9EJ2",
+    rawName: "FACEBK *USAYZY9EJ2",
+    counterparty: "FACEBK *USAYZY9EJ2",
+    amount: 9,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Slash"
+  };
+  const categoryRule: TransactionCategoryRule = {
+    id: "category-rule-out-ad-spend",
+    category: "Ad spend",
+    direction: "out",
+    aliases: ["facebook"],
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z"
+  };
+
+  const categorized = finalizeDeterministicCategorization(
+    pending,
+    canonicalProviders,
+    [categoryRule]
+  );
+
+  assert.equal(categorized.category, "Ad spend");
+  assert.equal(categorized.matchedProviderId, "platform-meta-facebook-ads");
+  assert.equal(categorized.merchantName, "Meta / Facebook Ads");
+  assert.equal(categorized.merchantKey, "metafacebookads");
+  assert.equal(categorized.classificationComplete, true);
 });
 
 test("AI receives only plausible company candidates for each transaction", () => {

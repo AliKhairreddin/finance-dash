@@ -1,4 +1,12 @@
-import type { Provider, ProviderType, Team, Transaction, TransactionCategoryRule, WiseCardHolderTeamAssignment } from "../shared/types";
+import type {
+  Provider,
+  ProviderType,
+  Team,
+  Transaction,
+  TransactionCategory,
+  TransactionCategoryRule,
+  WiseCardHolderTeamAssignment
+} from "../shared/types";
 import {
   atlanticOceanTeamId,
   atlanticOceanTeamName,
@@ -13,10 +21,18 @@ import {
   wagnerTeamId,
   wagnerTeamName
 } from "../shared/business";
-import { transactionBusinessCategory } from "../shared/categories";
+import {
+  initialTransactionCategories,
+  isRequiredTransactionCategory,
+  transactionBusinessCategory
+} from "../shared/categories";
 
 export const semanticMatchThreshold = 0.86;
 const maximumProviderAliasCount = 128;
+const canonicalMerchantTokens = new Map([
+  ["facebk", "facebook"],
+  ["facebookad", "facebook"]
+]);
 
 type ProviderDraft = Omit<Provider, "source" | "createdAt">;
 type PersistedProviderShape = Omit<Provider, "type" | "tags"> & {
@@ -345,6 +361,13 @@ export function normalizeName(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+function canonicalTransactionText(value: string): string {
+  return normalizeName(value)
+    .split(" ")
+    .map((token) => canonicalMerchantTokens.get(token) ?? token)
+    .join(" ");
+}
+
 export function normalizeCardHolderName(value: string): string {
   return normalizeName(value);
 }
@@ -365,16 +388,12 @@ export function transactionAiGroupKey(
   transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
 ): string {
   const genericTokens = new Set(["ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
-  const canonicalTokens = new Map([
-    ["facebk", "facebook"]
-  ]);
-  const counterpartyTokens = normalizeName(transaction.counterparty)
+  const counterpartyTokens = canonicalTransactionText(transaction.counterparty)
     .split(" ")
     .filter((token) => {
       if (!token || /^\d+$/.test(token)) return false;
       return !isVolatileBankReferenceToken(token);
-    })
-    .map((token) => canonicalTokens.get(token) ?? token);
+    });
   const meaningfulCounterparty = counterpartyTokens.some((token) => token.length >= 3 && !genericTokens.has(token));
   const basis = meaningfulCounterparty
     ? counterpartyTokens.filter((token) => !genericTokens.has(token)).join(" ")
@@ -532,7 +551,7 @@ export function providerMatchesTransactionDirection(transaction: Pick<Transactio
 }
 
 function transactionHaystack(transaction: Transaction): string {
-  return normalizeName([transaction.rawName, transaction.counterparty, transaction.description, transaction.category].join(" "));
+  return canonicalTransactionText([transaction.rawName, transaction.counterparty, transaction.description, transaction.category].join(" "));
 }
 
 function hasPhrase(haystack: string, phrase: string): boolean {
@@ -797,6 +816,39 @@ export function semanticCategorizeTransaction(
 ): Transaction {
   const enriched = enrichTransactions([transaction], providers, categoryMemory)[0];
   return enriched.matchedProviderId || enriched.category !== transaction.category ? enriched : transaction;
+}
+
+export function finalizeDeterministicCategorization(
+  transaction: Transaction,
+  providers: Provider[],
+  categoryMemory: TransactionCategoryRule[] = [],
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[] = initialTransactionCategories
+): Transaction {
+  const categorized = semanticCategorizeTransaction(transaction, providers, categoryMemory);
+  if (categorized.status === "voided") return categorized;
+
+  const provider = categorized.matchedProviderId
+    ? providers.find((item) => item.id === categorized.matchedProviderId)
+    : undefined;
+  const categoryIsEstablished = categorized.categorySource === "manual"
+    || (categorized.categorySource === "rule" && (categorized.categoryConfidence ?? 0) >= 0.86);
+  const companyConfidence = categorized.companyConfidence ?? categorized.confidence ?? 0;
+  if (
+    !provider
+    || !categoryIsEstablished
+    || companyConfidence < semanticMatchThreshold
+    || !isRequiredTransactionCategory(categorized.category, categorized.direction, categories)
+  ) {
+    return categorized;
+  }
+
+  const merchantName = categorized.merchantName?.trim() || provider.name;
+  return {
+    ...categorized,
+    merchantName,
+    merchantKey: transactionMerchantKey({ merchantName }),
+    classificationComplete: true
+  };
 }
 
 export function transactionAliasCandidates(transaction: Transaction): string[] {

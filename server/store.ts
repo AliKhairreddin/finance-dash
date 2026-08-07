@@ -50,8 +50,10 @@ import type {
   Transaction,
   TransactionCategory,
   TransactionCategoryRule,
+  TransactionMatchFilter,
   TransactionTeamAssignment,
   TransactionPage,
+  TransactionSortKey,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateProviderPayload,
@@ -61,6 +63,7 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import { summarizeBankActivity, type BankActivitySummary } from "../shared/bankMerchantGroups";
 import { createBankAnalyticsAccumulator } from "../shared/analytics";
 import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import {
@@ -80,7 +83,8 @@ import {
   isTransactionCategoryDirection,
   isTransactionCategoryForDirection,
   normalizeTransactionCategoryName,
-  transactionBusinessCategory
+  transactionBusinessCategory,
+  transactionNeedsCategoryReview
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import {
@@ -161,6 +165,7 @@ import {
 import {
   aiProviderDirectoryForTransactions,
   enrichTransactions,
+  finalizeDeterministicCategorization,
   learnAliases,
   learnCategoryAliases,
   mergeWiseCardHolderTeamAssignments,
@@ -169,7 +174,6 @@ import {
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
-  semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAiGroupKey,
   transactionAliasCandidates,
@@ -536,17 +540,25 @@ function reconcileStoredPayments(now = new Date()): number {
 }
 
 function transactionCategoryNeedsReview(transaction: Transaction): boolean {
-  return !isRequiredTransactionCategory(transaction.category, transaction.direction, transactionCategories);
+  return transactionNeedsCategoryReview(transaction, transactionCategories);
 }
 
 function transactionNeedsCategorization(transaction: Transaction): boolean {
-  return transaction.classificationComplete !== true
-    || transactionCategoryNeedsReview(transaction)
-    || !transaction.merchantName?.trim();
+  return transaction.status !== "voided"
+    && (
+      transaction.classificationComplete !== true
+      || transactionCategoryNeedsReview(transaction)
+      || !transaction.merchantName?.trim()
+    );
 }
 
 function applySemanticCategorization(transaction: Transaction): { transaction: Transaction; matched: boolean; categorizedOnly: boolean } {
-  const categorized = semanticCategorizeTransaction(transaction, providers, transactionCategoryRules);
+  const categorized = finalizeDeterministicCategorization(
+    transaction,
+    providers,
+    transactionCategoryRules,
+    transactionCategories
+  );
   return {
     transaction: categorized,
     matched: Boolean(categorized.matchedProviderId && categorized.matchedProviderId !== transaction.matchedProviderId),
@@ -2378,10 +2390,24 @@ type LocalTransactionPageOptions = {
   toDate: string;
   source?: BankTransactionSource;
   direction?: Transaction["direction"];
+  wiseEntity?: "dn" | "lmd";
+  accountId?: string;
+  category?: string;
+  team?: string;
+  match: TransactionMatchFilter;
+  search?: string;
+  sortKey: TransactionSortKey;
   order: "asc" | "desc";
   cursor: string | null;
   limit: number;
 };
+
+function localTransactionOffset(cursor: string | null): number {
+  if (!cursor) return 0;
+  const match = /^activity-offset:(\d+)$/.exec(cursor);
+  if (!match) throw new Error("Transaction cursor is stale");
+  return Number(match[1]);
+}
 
 function localTransactionCursor(transaction: Transaction): string {
   return Buffer.from(`${transaction.date}\0${transaction.id}`, "utf8").toString("base64url");
@@ -2389,13 +2415,35 @@ function localTransactionCursor(transaction: Transaction): string {
 
 function localTransactionPage(rows: Transaction[], options: LocalTransactionPageOptions): TransactionPage {
   const sorted = rows.sort((left, right) => {
-    const comparison = left.date.localeCompare(right.date) || left.id.localeCompare(right.id);
-    return options.order === "asc" ? comparison : -comparison;
+    function sortValue(transaction: Transaction): boolean | number | string | undefined {
+      if (options.sortKey === "account") return transaction.accountName;
+      if (options.sortKey === "amount") return transaction.amount;
+      if (options.sortKey === "category") return transactionBusinessCategory(transaction.category);
+      if (options.sortKey === "company") {
+        return transaction.matchedProviderId
+          ? providers.find((provider) => provider.id === transaction.matchedProviderId)?.name
+          : transaction.merchantName ?? transaction.counterparty;
+      }
+      if (options.sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
+      if (options.sortKey === "date") return transaction.date;
+      if (options.sortKey === "direction") return transaction.direction;
+      if (options.sortKey === "document") {
+        return Boolean(transaction.matchedInvoiceId || expenses.some((expense) => expense.transactionId === transaction.id));
+      }
+      if (options.sortKey === "match") return transaction.categoryConfidence ?? 0;
+      if (options.sortKey === "period") return transaction.date.slice(0, 7);
+      if (options.sortKey === "source") return transaction.source;
+      return transaction.teamId ? teams.find((team) => team.id === transaction.teamId)?.name : undefined;
+    }
+    const leftValue = sortValue(left);
+    const rightValue = sortValue(right);
+    const comparison = typeof leftValue === "number" && typeof rightValue === "number"
+      ? leftValue - rightValue
+      : String(leftValue ?? "").localeCompare(String(rightValue ?? ""), "en", { numeric: true, sensitivity: "base" });
+    const stableComparison = comparison || left.date.localeCompare(right.date) || left.id.localeCompare(right.id);
+    return options.order === "asc" ? stableComparison : -stableComparison;
   });
-  const start = options.cursor
-    ? sorted.findIndex((transaction) => localTransactionCursor(transaction) === options.cursor) + 1
-    : 0;
-  if (options.cursor && start === 0) throw new Error("Transaction cursor is stale");
+  const start = localTransactionOffset(options.cursor);
   const page = sorted.slice(start, start + options.limit);
   const isDone = start + page.length >= sorted.length;
   return {
@@ -2404,25 +2452,57 @@ function localTransactionPage(rows: Transaction[], options: LocalTransactionPage
     ...(options.source ? { source: options.source } : {}),
     ...(options.direction ? { direction: options.direction } : {}),
     transactions: page,
-    continueCursor: isDone || page.length === 0 ? null : localTransactionCursor(page.at(-1)!),
-    isDone
+    continueCursor: isDone || page.length === 0 ? null : `activity-offset:${start + page.length}`,
+    isDone,
+    totalCount: sorted.length
   };
 }
 
-export function getTransactionPage(options: LocalTransactionPageOptions): TransactionPage {
-  return localTransactionPage(
-    getMatchedTransactions().filter((transaction) =>
+function localScopedTransactions(options: LocalTransactionPageOptions): Transaction[] {
+  const normalizedSearch = options.search?.trim().toLowerCase();
+  return getMatchedTransactions().filter((transaction) => {
+      const categorized = !transactionNeedsCategoryReview(transaction, transactionCategories);
+      const provider = transaction.matchedProviderId
+        ? providers.find((item) => item.id === transaction.matchedProviderId)
+        : undefined;
+      const team = transaction.teamId ? teams.find((item) => item.id === transaction.teamId) : undefined;
+      const matchesSearch = !normalizedSearch || [
+        transaction.merchantName,
+        transaction.counterparty,
+        transaction.description,
+        transaction.rawName,
+        transaction.accountName,
+        transaction.category,
+        provider?.name,
+        provider?.legalName,
+        ...(provider?.aliases ?? []),
+        team?.name
+      ].filter(Boolean).join(" ").toLowerCase().includes(normalizedSearch);
+      return (
       (transaction.source === "wise"
         || transaction.source === "revolut"
         || transaction.source === "slash"
         || transaction.source === "amex")
       && (!options.source || transaction.source === options.source)
       && (!options.direction || transaction.direction === options.direction)
+      && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
+      && (!options.accountId || transaction.accountId === options.accountId)
+      && (!options.category || transactionBusinessCategory(transaction.category) === options.category)
+      && (!options.team || (options.team === "unassigned" ? !transaction.teamId : transaction.teamId === options.team))
+      && (options.match === "all" || (options.match === "matched" ? categorized : !categorized))
+      && matchesSearch
       && transaction.date >= options.fromDate
       && transaction.date <= options.toDate
-    ),
-    options
-  );
+      );
+    });
+}
+
+export function getTransactionPage(options: LocalTransactionPageOptions): TransactionPage {
+  return localTransactionPage(localScopedTransactions(options), options);
+}
+
+export function getBankActivitySummary(options: LocalTransactionPageOptions): BankActivitySummary {
+  return summarizeBankActivity(localScopedTransactions(options), providers);
 }
 
 export function getAnalyticsSnapshot(fromDate: string, toDate: string): BankAnalyticsSnapshot {
@@ -2507,6 +2587,8 @@ export function getInvoicePaymentCandidates(
       fromDate: "1900-01-01",
       toDate: "9999-12-31",
       direction: "in",
+      match: "all",
+      sortKey: "date",
       order: "desc",
       cursor,
       limit

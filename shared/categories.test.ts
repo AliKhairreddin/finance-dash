@@ -6,7 +6,8 @@ import {
   sanitizeStoredTransactionCategories,
   sanitizeStoredTransactionCategoryRules,
   transactionBusinessCategory,
-  transactionCategoryOptionsForDirection
+  transactionCategoryOptionsForDirection,
+  transactionNeedsCategoryReview
 } from "./categories";
 import type { Transaction, TransactionCategoryRule } from "./types";
 
@@ -83,4 +84,26 @@ test("capital movement supports money in and money out while Software remains an
   assert.ok(expenseOptions.includes("Software"));
   assert.ok(!expenseOptions.includes("Software subscription"));
   assert.equal(transactionBusinessCategory("subscription"), "Software");
+});
+
+test("voided transactions never require an accounting category", () => {
+  const transaction: Transaction = {
+    id: "slash-voided-1",
+    source: "slash",
+    accountName: "Business Platinum Credit",
+    date: "2026-07-30",
+    description: "FACEBK *VOIDED",
+    rawName: "FACEBK *VOIDED",
+    counterparty: "FACEBK *VOIDED",
+    amount: 10,
+    currency: "USD",
+    direction: "out",
+    status: "voided",
+    category: "Slash",
+    classificationComplete: true
+  };
+
+  assert.equal(transactionNeedsCategoryReview(transaction), false);
+  assert.equal(transactionNeedsCategoryReview({ ...transaction, status: "posted" }), true);
+  assert.equal(transactionNeedsCategoryReview({ ...transaction, status: "posted", category: "Ad spend" }), false);
 });

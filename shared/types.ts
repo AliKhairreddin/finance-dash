@@ -475,6 +475,22 @@ export interface Transaction {
   matchReason?: string;
 }
 
+export type TransactionSortKey =
+  | "account"
+  | "amount"
+  | "category"
+  | "company"
+  | "counterparty"
+  | "date"
+  | "direction"
+  | "document"
+  | "match"
+  | "period"
+  | "source"
+  | "team";
+
+export type TransactionMatchFilter = "all" | "matched" | "needs-review";
+
 export interface WiseStatementImport {
   id: string;
   balanceId: string;
@@ -644,6 +660,7 @@ export interface TransactionPage {
   transactions: Transaction[];
   continueCursor: string | null;
   isDone: boolean;
+  totalCount?: number;
   coverage?: Array<{
     source: BankTransactionSource;
     missingRanges: Array<{ fromDate: string; toDate: string }>;

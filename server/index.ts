@@ -25,6 +25,8 @@ import type {
   SaveAiSettingsPayload,
   SendInvoicesPayload,
   SyncRevenuePayload,
+  TransactionMatchFilter,
+  TransactionSortKey,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateTransactionCategoryDefinitionPayload,
@@ -50,6 +52,7 @@ import {
   deleteHolding,
   draftRevenueRun,
   getSnapshot,
+  getBankActivitySummary,
   getTransactionPage,
   getInvoicePaymentCandidates,
   getOpenRouterZdrModels,
@@ -85,6 +88,8 @@ import { loadManagementReportDashboard } from "./managementReportStore";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
+
+class ClientRequestError extends Error {}
 
 app.use(cors());
 app.post(
@@ -191,18 +196,15 @@ app.post("/api/sync", async (request, response, next) => {
   }
 });
 
-app.get("/api/transactions", (request, response, next) => {
-  try {
+function localTransactionPageOptions(request: express.Request): Parameters<typeof getTransactionPage>[0] {
     const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
     const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate) || fromDate > toDate) {
-      response.status(400).json({ message: "Transaction date range is invalid" });
-      return;
+      throw new ClientRequestError("Transaction date range is invalid");
     }
     const rawSource = typeof request.query.source === "string" ? request.query.source : undefined;
     if (rawSource && rawSource !== "wise" && rawSource !== "revolut" && rawSource !== "slash" && rawSource !== "amex") {
-      response.status(400).json({ message: "Transaction source is invalid" });
-      return;
+      throw new ClientRequestError("Transaction source is invalid");
     }
     const source: BankTransactionSource | undefined =
       rawSource === "wise" || rawSource === "revolut" || rawSource === "slash" || rawSource === "amex"
@@ -210,27 +212,60 @@ app.get("/api/transactions", (request, response, next) => {
         : undefined;
     const rawDirection = typeof request.query.direction === "string" ? request.query.direction : undefined;
     if (rawDirection && rawDirection !== "in" && rawDirection !== "out") {
-      response.status(400).json({ message: "Transaction direction is invalid" });
-      return;
+      throw new ClientRequestError("Transaction direction is invalid");
     }
     const direction: Direction | undefined = rawDirection === "in" || rawDirection === "out" ? rawDirection : undefined;
     const order = request.query.order === "asc" ? "asc" : "desc";
     const rawLimit = typeof request.query.limit === "string" ? request.query.limit : "200";
     const limit = /^\d+$/.test(rawLimit) ? Number(rawLimit) : 0;
     if (limit < 1 || limit > 200) {
-      response.status(400).json({ message: "Transaction limit must be between 1 and 200" });
-      return;
+      throw new ClientRequestError("Transaction limit must be between 1 and 200");
     }
     const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
-    response.json(getTransactionPage({
+    const wiseEntity = request.query.wiseEntity;
+    if (wiseEntity !== undefined && wiseEntity !== "dn" && wiseEntity !== "lmd") {
+      throw new ClientRequestError("Transaction Wise entity is invalid");
+    }
+    const match = typeof request.query.match === "string" ? request.query.match : "all";
+    if (match !== "all" && match !== "matched" && match !== "needs-review") {
+      throw new ClientRequestError("Transaction category status is invalid");
+    }
+    const sortKey = typeof request.query.sort === "string" ? request.query.sort : "date";
+    const sortKeys: readonly TransactionSortKey[] = ["account", "amount", "category", "company", "counterparty", "date", "direction", "document", "match", "period", "source", "team"];
+    if (!sortKeys.includes(sortKey as TransactionSortKey)) throw new ClientRequestError("Transaction sort is invalid");
+    const search = typeof request.query.search === "string" ? request.query.search.trim() : "";
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";
+    const category = typeof request.query.category === "string" ? request.query.category.trim() : "";
+    const team = typeof request.query.team === "string" ? request.query.team.trim() : "";
+    return {
       fromDate,
       toDate,
       ...(source ? { source } : {}),
       ...(direction ? { direction } : {}),
+      ...(wiseEntity ? { wiseEntity } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(category ? { category } : {}),
+      ...(team ? { team } : {}),
+      ...(search ? { search } : {}),
+      match: match as TransactionMatchFilter,
+      sortKey: sortKey as TransactionSortKey,
       order,
       cursor,
       limit
-    }));
+    };
+}
+
+app.get("/api/transactions", (request, response, next) => {
+  try {
+    response.json(getTransactionPage(localTransactionPageOptions(request)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/transactions/summary", (request, response, next) => {
+  try {
+    response.json(getBankActivitySummary(localTransactionPageOptions(request)));
   } catch (error) {
     next(error);
   }
@@ -627,7 +662,7 @@ app.post("/api/fx/refresh", async (_request, response, next) => {
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unknown server error";
-  response.status(500).json({ message });
+  response.status(error instanceof ClientRequestError ? 400 : 500).json({ message });
 });
 
 await initializeStore();

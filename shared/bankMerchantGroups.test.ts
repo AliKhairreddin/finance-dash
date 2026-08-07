@@ -5,7 +5,8 @@ import {
   groupBankTransactions,
   groupBankTransactionsByAccount,
   groupBankTransactionsByCard,
-  isSocialMediaGroup
+  isSocialMediaGroup,
+  summarizeBankActivity
 } from "./bankMerchantGroups";
 import type { Provider, Transaction } from "./types";
 
@@ -179,6 +180,32 @@ test("account view retains settled activity without verified card metadata", () 
   assert.equal(accounts.length, 2);
   assert.equal(accounts.find((item) => item.accountName === "Slash Platinum Credit")?.transactionCount, 1);
   assert.equal(accounts.find((item) => item.accountName === "Slash Gold Credit")?.transactionCount, 1);
+});
+
+test("bank activity summaries retain exact totals without raw transaction arrays", () => {
+  const transactions = [
+    bankTransaction("meta-one", "Meta", 100, {
+      cardId: "card-primary",
+      cardLastFour: "8744",
+      cashback: { amount: 4, rate: 0.04 }
+    }),
+    bankTransaction("meta-two", "Facebook Ads", 50, {
+      cardId: "card-primary",
+      cardLastFour: "8744",
+      cashback: { amount: 2, rate: 0.04 }
+    })
+  ];
+
+  const summary = summarizeBankActivity(transactions);
+
+  assert.equal(summary.transactionCount, 2);
+  assert.equal(summary.merchantGroups[0].transactionCount, 2);
+  assert.deepEqual(summary.merchantGroups[0].spend, { USD: 150 });
+  assert.deepEqual(summary.merchantGroups[0].cashback, { USD: 6 });
+  assert.equal("transactions" in summary.merchantGroups[0], false);
+  assert.equal("transactions" in summary.merchantGroups[0].cardGroups[0], false);
+  assert.equal("transactions" in summary.cardGroups[0], false);
+  assert.equal("transactions" in summary.accountGroups[0], false);
 });
 
 test("pending, voided, and invalid records do not affect settled totals", () => {

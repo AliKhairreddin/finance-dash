@@ -52,6 +52,14 @@ test("Slash card purchases remain spend instead of internal payments", () => {
   assert.equal(transactionCounterpartyLabel(purchase), "Amex");
   assert.equal(isInternalTransferTransaction(purchase), false);
   assert.equal(isNonOperatingMovementTransaction(purchase), false);
+  const voidedPurchase = {
+    ...purchase,
+    id: "voided-card-purchase",
+    status: "voided",
+    category: "Slash"
+  } satisfies Transaction;
+  assert.equal(isNonOperatingMovementTransaction(voidedPurchase), true);
+  assert.equal(transactionMovementLabel(voidedPurchase), "Voided");
 });
 
 test("capital movements are non-operating movements without being internal transfers", () => {

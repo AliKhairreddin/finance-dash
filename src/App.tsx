@@ -115,7 +115,9 @@ import type {
   Team,
   Transaction,
   TransactionCategory,
+  TransactionMatchFilter,
   TransactionPage,
+  TransactionSortKey,
   TransactionOverrideScope,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
@@ -124,6 +126,7 @@ import type {
   UpdateTransactionCategoryDefinitionPayload,
   WiseEntity
 } from "../shared/types";
+import type { BankActivitySummary } from "../shared/bankMerchantGroups";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
 import {
   isRequiredTransactionCategory,
@@ -214,28 +217,36 @@ type TransactionPageRequest = {
   dateRange: BankTransactionDateRange;
   source?: BankSource;
   direction?: "in" | "out";
+  wiseEntity?: WiseEntity;
+  accountId?: string;
+  category?: string;
+  team?: string;
+  match: TransactionMatchFilter;
+  search?: string;
+  sortKey: TransactionSortKey;
   order: SortDirection;
 };
 type BankPeriodActivityMetrics = Pick<BankPeriodSourceMetrics, "moneyIn" | "moneyOut">;
 type TransactionPageState = {
   requestKey: string;
   transactions: Transaction[];
+  cursor: string | null;
+  previousCursors: Array<string | null>;
   continueCursor: string | null;
   isDone: boolean;
+  totalCount?: number;
+  failedCursor?: string | null;
+  failedNavigation?: TransactionPageNavigation;
   isLoading: boolean;
   error: string | null;
 };
-type TransactionSortKey =
-  | "amount"
-  | "category"
-  | "company"
-  | "counterparty"
-  | "date"
-  | "direction"
-  | "document"
-  | "match"
-  | "period"
-  | "team";
+type TransactionPageNavigation = "reset" | "next" | "previous";
+type BankActivitySummaryState = {
+  requestKey: string;
+  summary: BankActivitySummary | null;
+  isLoading: boolean;
+  error: string | null;
+};
 type TransactionDetailPopover = {
   id: string;
   title: string;
@@ -257,6 +268,7 @@ const themeStorageKey = "finance-dash-theme";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
 const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "holdings"];
 const transactionSortKeys: readonly TransactionSortKey[] = [
+  "account",
   "amount",
   "category",
   "company",
@@ -266,10 +278,10 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
   "document",
   "match",
   "period",
+  "source",
   "team"
 ];
-const transactionTablePageSize = 200;
-const bankHistoryLoadIncrementDays = 30;
+const transactionTablePageSize = 100;
 const analyticsBuildDefaultRetryMs = 1_000;
 const analyticsLiveRefreshMs = 5 * 60_000;
 const analyticsMonthOptions = [
@@ -323,25 +335,6 @@ function localIsoDate(daysFromToday = 0): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function shiftIsoDate(value: string, days: number): string {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function transactionIsInDateRange(
-  transaction: Transaction,
-  dateRange: BankTransactionDateRange
-): boolean {
-  return transaction.date >= dateRange.fromDate && transaction.date <= dateRange.toDate;
-}
-
-function appendTransactionPage(current: Transaction[], incoming: Transaction[]): Transaction[] {
-  const byId = new Map(current.map((transaction) => [transaction.id, transaction]));
-  for (const transaction of incoming) byId.set(transaction.id, transaction);
-  return [...byId.values()];
 }
 
 function defaultBankTransactionDateRange(windowDays: number): BankTransactionDateRange {
@@ -646,51 +639,6 @@ function formatShare(amount: number, total: number): string {
   return share < 1 ? "<1%" : `${share.toFixed(0)}%`;
 }
 
-function transactionPeriod(transaction: Transaction): string {
-  return transaction.date.slice(0, 7);
-}
-
-function transactionSortValue(
-  transaction: Transaction,
-  sortKey: TransactionSortKey,
-  teamsById: Map<string, Team>,
-  providersById: Map<string, Provider>,
-  expenseTransactionIds: Set<string>
-): boolean | number | string | undefined {
-  if (sortKey === "amount") return transaction.amount;
-  if (sortKey === "category") return effectiveCategory(transaction);
-  if (sortKey === "company") {
-    return transaction.matchedProviderId
-      ? providersById.get(transaction.matchedProviderId)?.name
-      : transaction.merchantName;
-  }
-  if (sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
-  if (sortKey === "date") return transaction.date;
-  if (sortKey === "direction") return transaction.direction;
-  if (sortKey === "document") return Boolean(transaction.matchedInvoiceId || expenseTransactionIds.has(transaction.id));
-  if (sortKey === "match") return transaction.categoryConfidence ?? 0;
-  if (sortKey === "period") return transactionPeriod(transaction);
-  return transaction.teamId ? teamsById.get(transaction.teamId)?.name : undefined;
-}
-
-function sortTransactions(
-  rows: Transaction[],
-  sortKey: TransactionSortKey,
-  direction: SortDirection,
-  teamsById: Map<string, Team>,
-  providersById: Map<string, Provider>,
-  expenseTransactionIds: Set<string>
-): Transaction[] {
-  return [...rows].sort((left, right) => {
-    const result = compareTableValues(
-      transactionSortValue(left, sortKey, teamsById, providersById, expenseTransactionIds),
-      transactionSortValue(right, sortKey, teamsById, providersById, expenseTransactionIds),
-      direction
-    );
-    return result || compareTableValues(left.date, right.date, direction) || left.id.localeCompare(right.id);
-  });
-}
-
 function detailPopoverPosition(anchor: DOMRect): Pick<TransactionDetailPopover, "left" | "top" | "placement"> {
   const viewportPadding = 12;
   const gap = 8;
@@ -791,21 +739,31 @@ function App() {
   const [transactionPageState, setTransactionPageState] = useState<TransactionPageState>({
     requestKey: "",
     transactions: [],
+    cursor: null,
+    previousCursors: [],
     continueCursor: null,
     isDone: true,
     isLoading: false,
     error: null
   });
   const transactionPageAbortRef = useRef<AbortController | null>(null);
-  const loadingAllTransactionPagesRef = useRef(false);
   const transactionPageRequestVersionRef = useRef(0);
   const transactionPageRequestRef = useRef<TransactionPageRequest | null>(null);
+  const [bankActivitySummaryState, setBankActivitySummaryState] = useState<BankActivitySummaryState>({
+    requestKey: "",
+    summary: null,
+    isLoading: false,
+    error: null
+  });
+  const bankActivitySummaryAbortRef = useRef<AbortController | null>(null);
+  const [bankActivitySummaryRetry, setBankActivitySummaryRetry] = useState(0);
   const historicalSyncRequestKeysRef = useRef(new Set<string>());
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useUrlState("bankQuery", "");
-  const [matchFilter, setMatchFilter] = useUrlState<string>("bankMatch", "all", {
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
+  const [matchFilter, setMatchFilter] = useUrlState<TransactionMatchFilter>("bankMatch", "all", {
     allowedValues: ["needs-review", "matched", "all"]
   });
   const [transactionSortKey, setTransactionSortKey] = useUrlState<TransactionSortKey>("bankSort", "date", {
@@ -814,12 +772,18 @@ function App() {
   const [transactionSortDirection, setTransactionSortDirection] = useUrlState<SortDirection>("bankOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
+    return () => window.clearTimeout(timeout);
+  }, [searchTerm]);
+
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
     if (activeTab !== "banks" || bankTab === "holdings") return null;
     const source = bankTab === "all"
       ? allBankSource === "all" ? undefined : allBankSource
       : bankTab;
-    const direction = bankTab !== "all" && source && bankDirection !== "all" ? bankDirection : undefined;
+    const direction = bankDirection !== "all" ? bankDirection : undefined;
     const dateRange = bankTab === "all"
       ? allBankDateRange
       : source === "wise"
@@ -829,25 +793,42 @@ function App() {
           : source === "slash"
             ? slashDateRange
             : allBankDateRange;
-    const order = bankTab !== "all" && source && transactionSortKey === "date" ? transactionSortDirection : "desc";
-    return {
-      key: [source ?? "all", direction ?? "all", dateRange.fromDate, dateRange.toDate, order].join(":"),
+    const wiseEntity = source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
+    const accountId = bankAccountFilter === "all" ? undefined : bankAccountFilter;
+    const category = bankCategoryFilter === "all" ? undefined : bankCategoryFilter;
+    const team = teamFilter === "all" ? undefined : teamFilter;
+    const search = debouncedSearchTerm.trim() || undefined;
+    const request = {
       dateRange,
       ...(source ? { source } : {}),
       ...(direction ? { direction } : {}),
-      order
+      ...(wiseEntity ? { wiseEntity } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(category ? { category } : {}),
+      ...(team ? { team } : {}),
+      ...(search ? { search } : {}),
+      match: matchFilter,
+      sortKey: transactionSortKey,
+      order: transactionSortDirection
     };
+    return { ...request, key: JSON.stringify(request) };
   }, [
     activeTab,
     allBankSource,
     allBankDateRange,
+    bankAccountFilter,
+    bankCategoryFilter,
     bankDirection,
     bankTab,
+    debouncedSearchTerm,
+    matchFilter,
     revolutDateRange,
     slashDateRange,
+    teamFilter,
     transactionSortDirection,
     transactionSortKey,
-    wiseDateRange
+    wiseDateRange,
+    wiseEntityView
   ]);
   transactionPageRequestRef.current = transactionPageRequest;
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
@@ -998,20 +979,32 @@ function App() {
     cursor: string | null,
     signal: AbortSignal
   ): Promise<TransactionPage> {
-    const query = new URLSearchParams({
-      fromDate: request.dateRange.fromDate,
-      toDate: request.dateRange.toDate,
-      order: request.order,
-      limit: String(transactionTablePageSize)
-    });
-    if (request.source) query.set("source", request.source);
-    if (request.direction) query.set("direction", request.direction);
+    const query = transactionRequestQuery(request);
     if (cursor) query.set("cursor", cursor);
     const response = await fetch(`${apiBase}/transactions?${query.toString()}`, { signal });
     if (!response.ok) {
       throw new Error(await apiErrorMessage(response, "Transactions could not be loaded"));
     }
     return (await response.json()) as TransactionPage;
+  }
+
+  function transactionRequestQuery(request: TransactionPageRequest): URLSearchParams {
+    const query = new URLSearchParams({
+      fromDate: request.dateRange.fromDate,
+      toDate: request.dateRange.toDate,
+      order: request.order,
+      sort: request.sortKey,
+      match: request.match,
+      limit: String(transactionTablePageSize)
+    });
+    if (request.source) query.set("source", request.source);
+    if (request.direction) query.set("direction", request.direction);
+    if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
+    if (request.accountId) query.set("accountId", request.accountId);
+    if (request.category) query.set("category", request.category);
+    if (request.team) query.set("team", request.team);
+    if (request.search) query.set("search", request.search);
+    return query;
   }
 
   async function waitForHistoricalTransactionSync(jobKey: string, requestKey?: string): Promise<void> {
@@ -1045,7 +1038,7 @@ function App() {
   async function loadTransactionPage(
     request: TransactionPageRequest,
     cursor: string | null,
-    append: boolean
+    navigation: TransactionPageNavigation
   ): Promise<void> {
     if (transactionPageRequestRef.current?.key !== request.key) return;
     transactionPageAbortRef.current?.abort();
@@ -1053,11 +1046,20 @@ function App() {
     transactionPageAbortRef.current = controller;
     const version = transactionPageRequestVersionRef.current + 1;
     transactionPageRequestVersionRef.current = version;
+    const currentRequest = transactionPageState.requestKey === request.key;
+    const previousCursors = navigation === "next"
+      ? [...(currentRequest ? transactionPageState.previousCursors : []), currentRequest ? transactionPageState.cursor : null]
+      : navigation === "previous"
+        ? (currentRequest ? transactionPageState.previousCursors.slice(0, -1) : [])
+        : [];
     setTransactionPageState((current) => ({
       requestKey: request.key,
-      transactions: append && current.requestKey === request.key ? current.transactions : [],
-      continueCursor: append && current.requestKey === request.key ? current.continueCursor : null,
-      isDone: false,
+      transactions: current.requestKey === request.key ? current.transactions : [],
+      cursor: current.requestKey === request.key ? current.cursor : null,
+      previousCursors: current.requestKey === request.key ? current.previousCursors : [],
+      continueCursor: current.requestKey === request.key ? current.continueCursor : null,
+      isDone: current.requestKey === request.key ? current.isDone : false,
+      totalCount: current.requestKey === request.key ? current.totalCount : undefined,
       isLoading: true,
       error: null
     }));
@@ -1069,18 +1071,18 @@ function App() {
         || controller.signal.aborted
         || transactionPageRequestRef.current?.key !== request.key
       ) return;
-      setTransactionPageState((current) => ({
+      setTransactionPageState({
         requestKey: request.key,
-        transactions:
-          append && current.requestKey === request.key
-            ? appendTransactionPage(current.transactions, page.transactions)
-            : page.transactions,
+        transactions: page.transactions,
+        cursor,
+        previousCursors,
         continueCursor: page.continueCursor,
         isDone: page.isDone,
+        totalCount: page.totalCount,
         isLoading: false,
         error: null
-      }));
-      if (!append && page.coverage?.some((item) => item.missingRanges.length > 0)) {
+      });
+      if (navigation === "reset" && page.coverage?.some((item) => item.missingRanges.length > 0)) {
         const requests = page.coverage.flatMap((item) => {
           if (item.missingRanges.length === 0) return [];
           const fromDate = item.missingRanges.reduce(
@@ -1116,7 +1118,7 @@ function App() {
             const latestRequest = transactionPageRequestRef.current;
             if (latestRequest?.key === request.key) {
               setNotice("Historical bank activity is up to date.");
-              void loadTransactionPage(latestRequest, null, false);
+              void loadTransactionPage(latestRequest, null, "reset");
             }
           }).catch((syncError: unknown) => {
             for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
@@ -1135,6 +1137,8 @@ function App() {
       setTransactionPageState((current) => ({
         ...current,
         requestKey: request.key,
+        failedCursor: cursor,
+        failedNavigation: navigation,
         isDone: false,
         isLoading: false,
         error: caught instanceof Error ? caught.message : "Transactions could not be loaded"
@@ -1149,6 +1153,8 @@ function App() {
       setTransactionPageState({
         requestKey: "",
         transactions: [],
+        cursor: null,
+        previousCursors: [],
         continueCursor: null,
         isDone: true,
         isLoading: false,
@@ -1156,87 +1162,53 @@ function App() {
       });
       return;
     }
-    void loadTransactionPage(transactionPageRequest, null, false);
+    void loadTransactionPage(transactionPageRequest, null, "reset");
     return () => transactionPageAbortRef.current?.abort();
   }, [transactionPageRequest?.key]);
 
-  async function loadMoreTransactions(): Promise<void> {
+  async function loadNextTransactionPage(): Promise<void> {
     const latestRequest = transactionPageRequestRef.current;
     if (!latestRequest || transactionPageState.isLoading) return;
     const currentRequest = transactionPageState.requestKey === latestRequest.key;
+    if (
+      currentRequest
+      && transactionPageState.error
+      && transactionPageState.failedNavigation
+    ) {
+      await loadTransactionPage(
+        latestRequest,
+        transactionPageState.failedCursor ?? null,
+        transactionPageState.failedNavigation
+      );
+      return;
+    }
     if (currentRequest && transactionPageState.isDone && !transactionPageState.error) return;
     await loadTransactionPage(
       latestRequest,
       currentRequest ? transactionPageState.continueCursor : null,
-      currentRequest && transactionPageState.transactions.length > 0
+      currentRequest ? "next" : "reset"
     );
   }
 
-  async function loadAllRemainingTransactionPages(): Promise<void> {
-    const request = transactionPageRequestRef.current;
+  async function loadPreviousTransactionPage(): Promise<void> {
+    const latestRequest = transactionPageRequestRef.current;
     if (
-      !request
-      || loadingAllTransactionPagesRef.current
+      !latestRequest
       || transactionPageState.isLoading
-      || transactionPageState.error
-      || transactionPageState.requestKey !== request.key
-      || transactionPageState.isDone
+      || transactionPageState.requestKey !== latestRequest.key
+      || transactionPageState.previousCursors.length === 0
     ) return;
-
-    loadingAllTransactionPagesRef.current = true;
-    transactionPageAbortRef.current?.abort();
-    const controller = new AbortController();
-    transactionPageAbortRef.current = controller;
-    const version = transactionPageRequestVersionRef.current + 1;
-    transactionPageRequestVersionRef.current = version;
-    let transactions = [...transactionPageState.transactions];
-    let cursor = transactionPageState.continueCursor;
-    let isDone: boolean = transactionPageState.isDone;
-    setTransactionPageState((current) => ({ ...current, isLoading: true, error: null }));
-
-    try {
-      while (!isDone) {
-        const page = await requestTransactionPage(request, cursor, controller.signal);
-        if (
-          controller.signal.aborted
-          || version !== transactionPageRequestVersionRef.current
-          || transactionPageRequestRef.current?.key !== request.key
-        ) return;
-        transactions = appendTransactionPage(transactions, page.transactions);
-        cursor = page.continueCursor;
-        isDone = page.isDone;
-        setTransactionPageState({
-          requestKey: request.key,
-          transactions,
-          continueCursor: cursor,
-          isDone,
-          isLoading: !isDone,
-          error: null
-        });
-      }
-    } catch (caught) {
-      if (
-        controller.signal.aborted
-        || version !== transactionPageRequestVersionRef.current
-        || transactionPageRequestRef.current?.key !== request.key
-      ) return;
-      setTransactionPageState({
-        requestKey: request.key,
-        transactions,
-        continueCursor: cursor,
-        isDone: false,
-        isLoading: false,
-        error: caught instanceof Error ? caught.message : "Complete transaction period could not be loaded"
-      });
-    } finally {
-      loadingAllTransactionPagesRef.current = false;
-    }
+    await loadTransactionPage(
+      latestRequest,
+      transactionPageState.previousCursors.at(-1) ?? null,
+      "previous"
+    );
   }
 
   async function refreshCurrentTransactionPage(): Promise<void> {
     const latestRequest = transactionPageRequestRef.current;
     if (!latestRequest) return;
-    await loadTransactionPage(latestRequest, null, false);
+    await loadTransactionPage(latestRequest, null, "reset");
   }
 
   const transactionPageIsCurrent = transactionPageState.requestKey === transactionPageRequest?.key;
@@ -1245,30 +1217,64 @@ function App() {
     ? transactionPageState.isLoading
     : transactionPageRequest !== null;
   const transactionPageError = transactionPageIsCurrent ? transactionPageState.error : null;
+  const hasPreviousTransactions = Boolean(
+    transactionPageIsCurrent && transactionPageState.previousCursors.length > 0
+  );
   const hasMoreTransactions = Boolean(
     transactionPageRequest
     && (!transactionPageIsCurrent || !transactionPageState.isDone || transactionPageState.error)
   );
 
   useEffect(() => {
-    if (
-      bankActivityView === "transactions"
-      || !transactionPageRequest
-      || transactionPageState.requestKey !== transactionPageRequest.key
-      || transactionPageState.isLoading
-      || transactionPageState.isDone
-      || transactionPageState.error
-    ) return;
-    void loadAllRemainingTransactionPages();
-  }, [
-    bankActivityView,
-    transactionPageRequest?.key,
-    transactionPageState.continueCursor,
-    transactionPageState.error,
-    transactionPageState.isDone,
-    transactionPageState.isLoading,
-    transactionPageState.requestKey
-  ]);
+    if (bankActivityView === "transactions" || !transactionPageRequest) {
+      bankActivitySummaryAbortRef.current?.abort();
+      if (!transactionPageRequest) {
+        setBankActivitySummaryState({ requestKey: "", summary: null, isLoading: false, error: null });
+      }
+      return;
+    }
+    const request = transactionPageRequest;
+    const controller = new AbortController();
+    bankActivitySummaryAbortRef.current?.abort();
+    bankActivitySummaryAbortRef.current = controller;
+    setBankActivitySummaryState({ requestKey: request.key, summary: null, isLoading: true, error: null });
+    const query = transactionRequestQuery(request);
+    void fetch(`${apiBase}/transactions/summary?${query.toString()}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await apiErrorMessage(response, "Bank activity summary could not be loaded"));
+        return (await response.json()) as BankActivitySummary;
+      })
+      .then((summary) => {
+        if (!controller.signal.aborted && transactionPageRequestRef.current?.key === request.key) {
+          setBankActivitySummaryState({ requestKey: request.key, summary, isLoading: false, error: null });
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted && transactionPageRequestRef.current?.key === request.key) {
+          setBankActivitySummaryState({
+            requestKey: request.key,
+            summary: null,
+            isLoading: false,
+            error: caught instanceof Error ? caught.message : "Bank activity summary could not be loaded"
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [bankActivitySummaryRetry, bankActivityView !== "transactions", transactionPageRequest?.key]);
+
+  const bankActivitySummary = bankActivitySummaryState.requestKey === transactionPageRequest?.key
+    ? bankActivitySummaryState.summary
+    : null;
+  const isLoadingBankActivitySummary = bankActivitySummaryState.requestKey === transactionPageRequest?.key
+    ? bankActivitySummaryState.isLoading
+    : bankActivityView !== "transactions";
+  const bankActivitySummaryError = bankActivitySummaryState.requestKey === transactionPageRequest?.key
+    ? bankActivitySummaryState.error
+    : null;
+
+  async function retryBankActivitySummary(): Promise<void> {
+    setBankActivitySummaryRetry((value) => value + 1);
+  }
 
   const latestIncomeAutomation = useMemo(
     () => latestIncomeAutomationTimestamp(dashboard?.automationRuns ?? []),
@@ -1297,89 +1303,29 @@ function App() {
     return map;
   }, [dashboard?.teams]);
 
-  const filteredTransactions = useMemo(() => {
-    const activeSource: BankSource | undefined =
-      bankTab === "all" || bankTab === "holdings" ? undefined : bankTab;
-    const rows = activeTab === "banks" && activeSource
-      ? loadedBankTransactions.filter((transaction) => transaction.source === activeSource)
-      : [];
-    const query = searchTerm.trim().toLowerCase();
-    const matchingRows = rows.filter((transaction) => {
-      const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-      const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
-      const matchesQuery =
-        !query ||
-        [
-          transaction.merchantName ?? "",
-          transaction.counterparty,
-          transaction.description,
-          transaction.rawName,
-          transaction.wiseEntity ? wiseEntityShortLabel(transaction.wiseEntity) : "",
-          provider?.name ?? "",
-          team?.name ?? ""
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(query);
-      const categorized = isRequiredTransactionCategory(
-        transaction.category,
-        transaction.direction,
-        dashboard?.transactionCategories ?? []
-      );
-      const matchesStatus =
-        matchFilter === "all" ||
-        (matchFilter === "needs-review" && !categorized) ||
-        (matchFilter === "matched" && categorized);
-      const matchesAccount = bankAccountFilter === "all" || transaction.accountId === bankAccountFilter;
-      const matchesCategory = bankCategoryFilter === "all" || transactionBusinessCategory(transaction.category) === bankCategoryFilter;
-      const matchesOwner = teamFilter === "all"
-        || (teamFilter === "unassigned" && !transaction.teamId)
-        || transaction.teamId === teamFilter;
-      const matchesDirection = bankDirection === "all" || transaction.direction === bankDirection;
-      return matchesQuery && matchesStatus && matchesAccount && matchesCategory && matchesOwner && matchesDirection;
-    });
-    const expenseTransactionIds = new Set((dashboard?.expenses ?? []).flatMap((expense) => expense.transactionId ? [expense.transactionId] : []));
-    return sortTransactions(matchingRows, transactionSortKey, transactionSortDirection, teamsById, providersById, expenseTransactionIds);
-  }, [activeTab, bankAccountFilter, bankCategoryFilter, bankDirection, bankTab, dashboard?.expenses, loadedBankTransactions, matchFilter, providersById, searchTerm, teamFilter, teamsById, transactionSortDirection, transactionSortKey]);
-
   const allBankTransactions = useMemo(() => {
     if (activeTab !== "banks" || bankTab !== "all") return [];
     return loadedBankTransactions;
   }, [activeTab, bankTab, loadedBankTransactions]);
 
   const wiseTransactions = useMemo(
-    () =>
-      filteredTransactions.filter((transaction) => {
-        const matchesDirection =
-          transaction.source === "wise"
-          && (bankDirection === "all" || transaction.direction === bankDirection)
-          && transactionIsInDateRange(transaction, wiseDateRange);
-        const matchesWiseEntity =
-          wiseEntityView === "all" || transaction.wiseEntity === wiseEntityView;
-        return matchesDirection && matchesWiseEntity;
-      }),
-    [bankDirection, filteredTransactions, wiseDateRange, wiseEntityView]
+    () => bankTab === "wise" ? loadedBankTransactions : [],
+    [bankTab, loadedBankTransactions]
   );
 
   const slashTransactions = useMemo(
-    () =>
-      filteredTransactions.filter((transaction) => {
-        return transaction.source === "slash" && (bankDirection === "all" || transaction.direction === bankDirection);
-      }),
-    [bankDirection, filteredTransactions]
+    () => bankTab === "slash" ? loadedBankTransactions : [],
+    [bankTab, loadedBankTransactions]
   );
 
   const revolutTransactions = useMemo(
-    () =>
-      filteredTransactions.filter((transaction) => {
-        return transaction.source === "revolut" && (bankDirection === "all" || transaction.direction === bankDirection);
-      }),
-    [bankDirection, filteredTransactions]
+    () => bankTab === "revolut" ? loadedBankTransactions : [],
+    [bankTab, loadedBankTransactions]
   );
 
   const amexTransactions = useMemo(
-    () => filteredTransactions.filter((transaction) => transaction.source === "amex"),
-    [filteredTransactions]
+    () => bankTab === "amex" ? loadedBankTransactions : [],
+    [bankTab, loadedBankTransactions]
   );
 
   function applyTransactionUpdate(updated: Transaction) {
@@ -2255,9 +2201,16 @@ function App() {
           isImportingWise={isImportingWise}
           isLoadingTransactions={isLoadingTransactionPage}
           transactionLoadError={transactionPageError}
+          hasPreviousTransactions={hasPreviousTransactions}
           hasMoreTransactions={hasMoreTransactions}
+          transactionPageTotalCount={transactionPageIsCurrent ? transactionPageState.totalCount : undefined}
+          bankActivitySummary={bankActivitySummary}
+          isLoadingBankActivitySummary={isLoadingBankActivitySummary}
+          bankActivitySummaryError={bankActivitySummaryError}
           onImportWiseStatements={importWiseStatements}
-          onLoadMoreTransactions={loadMoreTransactions}
+          onLoadPreviousTransactions={loadPreviousTransactionPage}
+          onLoadMoreTransactions={loadNextTransactionPage}
+          onRetryBankActivitySummary={retryBankActivitySummary}
           onLoadAllBankTransactions={loadAllBankTransactions}
           onFilterWiseTransactions={filterWiseTransactions}
           onLoadRevolutTransactions={loadRevolutTransactions}
@@ -3017,9 +2970,16 @@ function BanksView({
   isImportingWise,
   isLoadingTransactions,
   transactionLoadError,
+  hasPreviousTransactions,
   hasMoreTransactions,
+  transactionPageTotalCount,
+  bankActivitySummary,
+  isLoadingBankActivitySummary,
+  bankActivitySummaryError,
   onImportWiseStatements,
+  onLoadPreviousTransactions,
   onLoadMoreTransactions,
+  onRetryBankActivitySummary,
   onLoadAllBankTransactions,
   onFilterWiseTransactions,
   onLoadRevolutTransactions,
@@ -3050,8 +3010,8 @@ function BanksView({
   setTeamFilter: (teamId: string) => void;
   searchTerm: string;
   setSearchTerm: (value: string) => void;
-  matchFilter: string;
-  setMatchFilter: (value: string) => void;
+  matchFilter: TransactionMatchFilter;
+  setMatchFilter: (value: TransactionMatchFilter) => void;
   transactionSortKey: TransactionSortKey;
   setTransactionSortKey: (value: TransactionSortKey) => void;
   transactionSortDirection: SortDirection;
@@ -3074,9 +3034,16 @@ function BanksView({
   isImportingWise: boolean;
   isLoadingTransactions: boolean;
   transactionLoadError: string | null;
+  hasPreviousTransactions: boolean;
   hasMoreTransactions: boolean;
+  transactionPageTotalCount?: number;
+  bankActivitySummary: BankActivitySummary | null;
+  isLoadingBankActivitySummary: boolean;
+  bankActivitySummaryError: string | null;
   onImportWiseStatements: (files: FileList | null) => Promise<void>;
+  onLoadPreviousTransactions: () => Promise<void>;
   onLoadMoreTransactions: () => Promise<void>;
+  onRetryBankActivitySummary: () => Promise<void>;
   onLoadAllBankTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onFilterWiseTransactions: (dateRange: BankTransactionDateRange) => Promise<void>;
   onLoadRevolutTransactions: (dateRange: RevolutTransactionDateRange) => Promise<void>;
@@ -3329,10 +3296,33 @@ function BanksView({
             setSource={setAllBankSource}
             setActivityView={setActivityView}
             transactions={allBankTransactions}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            bankDirection={bankDirection}
+            setBankDirection={setBankDirection}
+            bankAccountFilter={bankAccountFilter}
+            setBankAccountFilter={setBankAccountFilter}
+            bankCategoryFilter={bankCategoryFilter}
+            setBankCategoryFilter={setBankCategoryFilter}
+            teamFilter={teamFilter}
+            setTeamFilter={setTeamFilter}
+            matchFilter={matchFilter}
+            setMatchFilter={setMatchFilter}
+            transactionSortKey={transactionSortKey}
+            setTransactionSortKey={setTransactionSortKey}
+            transactionSortDirection={transactionSortDirection}
+            setTransactionSortDirection={setTransactionSortDirection}
+            hasPrevious={hasPreviousTransactions}
             hasMore={hasMoreTransactions}
             isLoading={isLoadingTransactions}
             loadError={transactionLoadError}
+            totalCount={transactionPageTotalCount}
+            activitySummary={bankActivitySummary}
+            isLoadingActivitySummary={isLoadingBankActivitySummary}
+            activitySummaryError={bankActivitySummaryError}
+            onLoadPrevious={onLoadPreviousTransactions}
             onLoadMore={onLoadMoreTransactions}
+            onRetryActivitySummary={onRetryBankActivitySummary}
             rangeControls={(
               <BankDateRangeControls
                 dateRange={allBankDateRange}
@@ -3369,12 +3359,19 @@ function BanksView({
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
           setActivityView={setActivityView}
+          hasPreviousTransactions={hasPreviousTransactions}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          transactionPageTotalCount={transactionPageTotalCount}
+          bankActivitySummary={bankActivitySummary}
+          isLoadingBankActivitySummary={isLoadingBankActivitySummary}
+          bankActivitySummaryError={bankActivitySummaryError}
           isImportingWise={isImportingWise}
           onImportWiseStatements={onImportWiseStatements}
           onLoadMoreTransactions={onLoadMoreTransactions}
+          onLoadPreviousTransactions={onLoadPreviousTransactions}
+          onRetryBankActivitySummary={onRetryBankActivitySummary}
           wiseEntityView={wiseEntityView}
           periodActivity={wisePeriodActivity}
           periodMetricsError={bankPeriodMetricsError}
@@ -3421,14 +3418,21 @@ function BanksView({
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
           setActivityView={setActivityView}
+          hasPreviousTransactions={hasPreviousTransactions}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          transactionPageTotalCount={transactionPageTotalCount}
+          bankActivitySummary={bankActivitySummary}
+          isLoadingBankActivitySummary={isLoadingBankActivitySummary}
+          bankActivitySummaryError={bankActivitySummaryError}
           periodActivity={periodSourceById.get("revolut") ?? null}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
           onLoadMoreTransactions={onLoadMoreTransactions}
+          onLoadPreviousTransactions={onLoadPreviousTransactions}
+          onRetryBankActivitySummary={onRetryBankActivitySummary}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -3462,15 +3466,22 @@ function BanksView({
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
           setActivityView={setActivityView}
+          hasPreviousTransactions={hasPreviousTransactions}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          transactionPageTotalCount={transactionPageTotalCount}
+          bankActivitySummary={bankActivitySummary}
+          isLoadingBankActivitySummary={isLoadingBankActivitySummary}
+          bankActivitySummaryError={bankActivitySummaryError}
           periodActivity={periodSourceById.get("slash") ?? null}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
           periodSlashCashback={periodMetricsReady ? bankPeriodMetrics.slashCashback : null}
           onLoadMoreTransactions={onLoadMoreTransactions}
+          onLoadPreviousTransactions={onLoadPreviousTransactions}
+          onRetryBankActivitySummary={onRetryBankActivitySummary}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -3503,15 +3514,22 @@ function BanksView({
           transactionSortDirection={transactionSortDirection}
           setTransactionSortDirection={setTransactionSortDirection}
           setActivityView={setActivityView}
+          hasPreviousTransactions={hasPreviousTransactions}
           hasMoreTransactions={hasMoreTransactions}
           isLoadingTransactions={isLoadingTransactions}
           transactionLoadError={transactionLoadError}
+          transactionPageTotalCount={transactionPageTotalCount}
+          bankActivitySummary={bankActivitySummary}
+          isLoadingBankActivitySummary={isLoadingBankActivitySummary}
+          bankActivitySummaryError={bankActivitySummaryError}
           periodActivity={periodSourceById.get("amex") ?? null}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
           onLoadDateRange={onLoadAllBankTransactions}
           onLoadMoreTransactions={onLoadMoreTransactions}
+          onLoadPreviousTransactions={onLoadPreviousTransactions}
+          onRetryBankActivitySummary={onRetryBankActivitySummary}
           onMatch={onMatch}
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
@@ -3549,20 +3567,27 @@ type BankReconciliationViewProps = {
   setTeamFilter: (teamId: string) => void;
   searchTerm: string;
   setSearchTerm: (value: string) => void;
-  matchFilter: string;
-  setMatchFilter: (value: string) => void;
+  matchFilter: TransactionMatchFilter;
+  setMatchFilter: (value: TransactionMatchFilter) => void;
   transactionSortKey: TransactionSortKey;
   setTransactionSortKey: (value: TransactionSortKey) => void;
   transactionSortDirection: SortDirection;
   setTransactionSortDirection: (value: SortDirection) => void;
+  hasPreviousTransactions: boolean;
   hasMoreTransactions: boolean;
   isLoadingTransactions: boolean;
   transactionLoadError: string | null;
+  transactionPageTotalCount?: number;
+  bankActivitySummary: BankActivitySummary | null;
+  isLoadingBankActivitySummary: boolean;
+  bankActivitySummaryError: string | null;
   periodActivity: BankPeriodActivityMetrics | null;
   periodMetricsError: string | null;
   periodMetricsLoading: boolean;
   periodMetricsReady: boolean;
+  onLoadPreviousTransactions: () => Promise<void>;
   onLoadMoreTransactions: () => Promise<void>;
+  onRetryBankActivitySummary: () => Promise<void>;
   isImportingWise?: boolean;
   onImportWiseStatements?: (files: FileList | null) => Promise<void>;
   wiseEntityView?: WiseEntityView;
@@ -3599,14 +3624,21 @@ function BankReconciliationView({
   setTransactionSortKey,
   transactionSortDirection,
   setTransactionSortDirection,
+  hasPreviousTransactions,
   hasMoreTransactions,
   isLoadingTransactions,
   transactionLoadError,
+  transactionPageTotalCount,
+  bankActivitySummary,
+  isLoadingBankActivitySummary,
+  bankActivitySummaryError,
   periodActivity,
   periodMetricsError,
   periodMetricsLoading,
   periodMetricsReady,
+  onLoadPreviousTransactions,
   onLoadMoreTransactions,
+  onRetryBankActivitySummary,
   isImportingWise,
   onImportWiseStatements,
   wiseEntityView,
@@ -3673,6 +3705,9 @@ function BankReconciliationView({
       onRemove: () => setTeamFilter("all")
     }])
   ];
+  const transactionResultLabel = transactionPageTotalCount === undefined
+    ? `${rows.length} transactions on this page`
+    : `${rows.length} of ${transactionPageTotalCount.toLocaleString("en-US")} matching transactions`;
 
   return (
     <section className={`panel ${wide ? "wide-panel" : ""}`}>
@@ -3712,7 +3747,7 @@ function BankReconciliationView({
                 </label>
                 <label>
                   Transaction status
-                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by transaction status`} value={matchFilter} onValueChange={setMatchFilter}>
+                  <NativeSelect aria-label={`Filter ${sourceLabel} transactions by transaction status`} value={matchFilter} onValueChange={(value) => setMatchFilter(value as TransactionMatchFilter)}>
                     <NativeSelectOption value="all">All transactions</NativeSelectOption>
                     <NativeSelectOption value="matched">Categorized</NativeSelectOption>
                     <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
@@ -3820,7 +3855,7 @@ function BankReconciliationView({
       </div>
       <ActiveFilterBar
         filters={activeFilters}
-        resultLabel={`${rows.length} loaded bank transactions shown`}
+        resultLabel={transactionResultLabel}
         onClearAll={() => {
           setBankAccountFilter("all");
           setBankDirection("all");
@@ -3830,7 +3865,7 @@ function BankReconciliationView({
         }}
       />
       <span className="screen-reader-only" role="status" aria-live="polite">
-        {rows.length} loaded transactions shown. Direction: {directionLabel}. Transaction status: {categoryStatusLabel}.
+        {transactionResultLabel}. Direction: {directionLabel}. Transaction status: {categoryStatusLabel}.
       </span>
       <div className="wise-summary-grid">
         <SummaryTile
@@ -3877,37 +3912,36 @@ function BankReconciliationView({
         onAssignTeam={onAssignTeam}
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
+        hasPrevious={hasPreviousTransactions}
         hasMore={hasMoreTransactions}
         isLoading={isLoadingTransactions}
         loadError={transactionLoadError}
+        totalCount={transactionPageTotalCount}
+        onLoadPrevious={onLoadPreviousTransactions}
         onLoadMore={onLoadMoreTransactions}
         showWiseEntity={source === "wise" && wiseEntityView === "all"}
         source={source}
       /> : activityView === "groups" ? (
         <BankMerchantGroupView
-          hasMore={hasMoreTransactions}
-          isLoading={isLoadingTransactions}
-          loadError={transactionLoadError}
-          onRetry={onLoadMoreTransactions}
+          groups={bankActivitySummary?.merchantGroups ?? []}
+          isLoading={isLoadingBankActivitySummary}
+          loadError={bankActivitySummaryError}
+          onRetry={onRetryBankActivitySummary}
           period={period}
-          providers={dashboard.providers}
-          transactions={rows}
         />
       ) : activityView === "cards" ? (
         <BankCardActivityView
-          hasMore={hasMoreTransactions}
-          isLoading={isLoadingTransactions}
-          loadError={transactionLoadError}
-          onRetry={onLoadMoreTransactions}
-          transactions={rows}
+          groups={bankActivitySummary?.cardGroups ?? []}
+          isLoading={isLoadingBankActivitySummary}
+          loadError={bankActivitySummaryError}
+          onRetry={onRetryBankActivitySummary}
         />
       ) : (
         <BankAccountActivityView
-          hasMore={hasMoreTransactions}
-          isLoading={isLoadingTransactions}
-          loadError={transactionLoadError}
-          onRetry={onLoadMoreTransactions}
-          transactions={rows}
+          groups={bankActivitySummary?.accountGroups ?? []}
+          isLoading={isLoadingBankActivitySummary}
+          loadError={bankActivitySummaryError}
+          onRetry={onRetryBankActivitySummary}
         />
       )}
       {tableFooter}
@@ -5250,9 +5284,12 @@ function TransactionTable({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
+  hasPrevious,
   hasMore,
   isLoading,
   loadError,
+  totalCount,
+  onLoadPrevious,
   onLoadMore,
   showWiseEntity = false,
   source
@@ -5270,9 +5307,12 @@ function TransactionTable({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  hasPrevious: boolean;
   hasMore: boolean;
   isLoading: boolean;
   loadError: string | null;
+  totalCount?: number;
+  onLoadPrevious: () => Promise<void>;
   onLoadMore: () => Promise<void>;
   showWiseEntity?: boolean;
   source: BankSource;
@@ -5517,6 +5557,7 @@ function TransactionTable({
               const displayCategory = effectiveCategory(transaction);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
+              const voided = transaction.status === "voided";
               const counterpartyLabel = transactionCounterpartyLabel(transaction);
               const transactionDescription = transactionDescriptionLabel(transaction);
               const cashbackDetail = transaction.cashback
@@ -5589,6 +5630,14 @@ function TransactionTable({
                     </div>
                   </td>
                   <td>
+                    {voided ? (
+                      <span
+                        className="status-pill"
+                        title="Card authorization cancelled or reversed before settlement; no category is required."
+                      >
+                        Voided
+                      </span>
+                    ) : (
                     <div className="category-select">
                       <div className="category-control-row">
                         <CategorySearchSelect
@@ -5608,6 +5657,7 @@ function TransactionTable({
                         )}
                       </small>
                     </div>
+                    )}
                   </td>
                   <td>
                     <div className="company-match">
@@ -5664,20 +5714,32 @@ function TransactionTable({
           )}
         </tbody>
       </table>
-      {(hasMore || isLoading || loadError) && (
+      {(hasPrevious || hasMore || isLoading || loadError) && (
         <div className="bank-table-pagination">
           <span className={loadError ? "danger-text" : undefined}>
-            {loadError ?? `${rows.length} loaded transactions shown`}
+            {loadError ?? (totalCount === undefined
+              ? `${rows.length} transactions on this page`
+              : `${rows.length} of ${totalCount.toLocaleString("en-US")} matching transactions`)}
           </span>
-          <Button
-            className="secondary-button"
-            type="button"
-            disabled={isLoading}
-            onClick={() => void onLoadMore()}
-          >
-            {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <ChevronDown size={15} />}
-            {isLoading ? "Loading" : loadError ? "Retry" : `Show ${transactionTablePageSize} more`}
-          </Button>
+          <div className="bank-table-pagination-actions">
+            <Button
+              className="secondary-button"
+              type="button"
+              disabled={isLoading || !hasPrevious}
+              onClick={() => void onLoadPrevious()}
+            >
+              <ChevronLeft size={15} /> Previous {transactionTablePageSize}
+            </Button>
+            <Button
+              className="secondary-button"
+              type="button"
+              disabled={isLoading || (!hasMore && !loadError)}
+              onClick={() => void onLoadMore()}
+            >
+              {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <ChevronRight size={15} />}
+              {isLoading ? "Loading" : loadError ? "Retry" : `Next ${transactionTablePageSize}`}
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -6206,36 +6268,6 @@ function BankDateRangeControls({
   );
 }
 
-function BankDateRangeFooter({
-  dateRange,
-  isLoading,
-  onLoad
-}: {
-  dateRange: BankTransactionDateRange;
-  isLoading: boolean;
-  onLoad: (dateRange: BankTransactionDateRange) => Promise<void>;
-}) {
-  return (
-    <div className="bank-load-more">
-      <Button
-        className="secondary-button"
-        type="button"
-        disabled={isLoading}
-        onClick={() => void onLoad({
-          fromDate: shiftIsoDate(dateRange.fromDate, -bankHistoryLoadIncrementDays),
-          toDate: dateRange.toDate
-        })}
-      >
-        {isLoading ? <Loader2 className="spin" size={16} /> : <ChevronDown size={16} />}
-        More
-      </Button>
-      <InfoPopover label="more bank history">
-        Loads {bankHistoryLoadIncrementDays} earlier days while keeping the current end date.
-      </InfoPopover>
-    </div>
-  );
-}
-
 function RevolutView({
   dashboard,
   rows,
@@ -6269,14 +6301,6 @@ function RevolutView({
       windowDays={revolutDefaultActivityWindowDays}
     />
   );
-  const tableFooter = (
-    <BankDateRangeFooter
-      dateRange={dateRange}
-      isLoading={isLoadingDateRange}
-      onLoad={onLoadDateRange}
-    />
-  );
-
   return (
     <div className="split-view">
       <section className="panel">
@@ -6326,7 +6350,6 @@ function RevolutView({
         source="revolut"
         wide
         rangeControls={rangeControls}
-        tableFooter={tableFooter}
       />
     </div>
   );
@@ -6379,14 +6402,6 @@ function SlashView({
       windowDays={slashDefaultActivityWindowDays}
     />
   );
-  const tableFooter = (
-    <BankDateRangeFooter
-      dateRange={dateRange}
-      isLoading={isLoadingDateRange}
-      onLoad={onLoadDateRange}
-    />
-  );
-
   return (
     <div className="split-view">
       <section className="panel">
@@ -6468,7 +6483,6 @@ function SlashView({
         source="slash"
         wide
         rangeControls={rangeControls}
-        tableFooter={tableFooter}
       />
     </div>
   );
@@ -6508,14 +6522,6 @@ function AmexView({
       windowDays={revolutDefaultActivityWindowDays}
     />
   );
-  const tableFooter = (
-    <BankDateRangeFooter
-      dateRange={dateRange}
-      isLoading={isLoadingDateRange}
-      onLoad={onLoadDateRange}
-    />
-  );
-
   return (
     <div className="split-view">
       <section className="panel">
@@ -6577,7 +6583,6 @@ function AmexView({
         source="amex"
         wide
         rangeControls={rangeControls}
-        tableFooter={tableFooter}
       />
     </div>
   );

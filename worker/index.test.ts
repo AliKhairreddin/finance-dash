@@ -194,6 +194,22 @@ test("transaction page API validates every bound before reading storage", async 
       message: "Transaction order is invalid"
     },
     {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&wiseEntity=other",
+      message: "Transaction Wise entity is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&match=unmatched",
+      message: "Transaction category status is invalid"
+    },
+    {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&sort=merchant",
+      message: "Transaction sort is invalid"
+    },
+    {
+      query: `fromDate=2026-06-01&toDate=2026-06-30&search=${"x".repeat(201)}`,
+      message: "Transaction search is too long"
+    },
+    {
       query: "fromDate=2026-06-01&toDate=2026-06-30&limit=0",
       message: "Transaction limit must be between 1 and 200"
     },
@@ -777,6 +793,31 @@ test("scheduled handler ignores the non-09:00 Lebanon cron occurrence", async ()
     { scheduledTime: Date.parse("2026-07-20T07:00:00.000Z"), cron: "0 6,7 * * 1", noRetry() {} },
     { ASSETS: { fetch: async () => new Response("asset") } } as never
   );
+});
+
+test("five-minute scheduled handler drains the transaction classification backlog", async () => {
+  const originalConsoleError = console.error;
+  const events: string[] = [];
+  console.error = (message?: unknown) => {
+    events.push(String(message));
+  };
+
+  try {
+    await assert.rejects(worker.scheduled(
+      {
+        cron: "*/5 * * * *",
+        scheduledTime: new Date("2026-08-06T23:55:00.000Z").getTime(),
+        noRetry() {}
+      },
+      {} as never
+    ));
+    assert.equal(
+      events.some((event) => event.includes('"event":"transaction_classification_backlog_failed"')),
+      true
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test("hourly scheduled handler retries missed income automation after the Monday release time", async () => {

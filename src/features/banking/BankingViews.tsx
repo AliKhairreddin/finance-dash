@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, CircleAlert, Coins, Download, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -6,9 +6,8 @@ import { ActiveFilterBar, type ActiveFilter, FilterFieldGroup, FilterPopover, To
 import { AnimatedNumber, InfoPopover } from "@/components/ui/finance-visuals";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
+import { SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
-import { useUrlState } from "@/lib/url-state";
 import type {
   CreateHoldingPayload,
   DashboardSnapshot,
@@ -18,9 +17,11 @@ import type {
   HoldingKind,
   Provider,
   Transaction,
+  TransactionMatchFilter,
+  TransactionSortKey,
   UpdateHoldingPayload
 } from "../../../shared/types";
-import { isRequiredTransactionCategory, transactionBusinessCategory } from "../../../shared/categories";
+import type { BankActivitySummary } from "../../../shared/bankMerchantGroups";
 import { bankSources, type BankSource } from "../../../shared/banks";
 import {
   isInternalTransferTransaction,
@@ -36,6 +37,7 @@ import {
 import { exportBankTransactionsCsv } from "./exportTransactions";
 import {
   BankActivityViewToggle,
+  BankAccountActivityView,
   BankCardActivityView,
   BankMerchantGroupView,
   type BankActivityViewMode
@@ -50,8 +52,6 @@ const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "manual", label: "Manual" },
   { value: "tune", label: "TUNE" }
 ];
-type BankTransactionSortKey = "account" | "amount" | "category" | "counterparty" | "date" | "direction" | "source";
-
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
 }
@@ -80,10 +80,33 @@ export function AllBankTransactionsView({
   source,
   setSource,
   transactions,
+  searchTerm,
+  setSearchTerm,
+  bankDirection,
+  setBankDirection,
+  bankAccountFilter,
+  setBankAccountFilter,
+  bankCategoryFilter,
+  setBankCategoryFilter,
+  teamFilter,
+  setTeamFilter,
+  matchFilter,
+  setMatchFilter,
+  transactionSortKey,
+  setTransactionSortKey,
+  transactionSortDirection,
+  setTransactionSortDirection,
+  hasPrevious,
   hasMore,
   isLoading,
   loadError,
-  onLoadMore
+  totalCount,
+  activitySummary,
+  isLoadingActivitySummary,
+  activitySummaryError,
+  onLoadPrevious,
+  onLoadMore,
+  onRetryActivitySummary
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
@@ -94,27 +117,50 @@ export function AllBankTransactionsView({
   source: "all" | BankSource;
   setSource: (source: "all" | BankSource) => void;
   transactions: Transaction[];
+  searchTerm: string;
+  setSearchTerm: (value: string) => void;
+  bankDirection: "all" | "in" | "out";
+  setBankDirection: (direction: "all" | "in" | "out") => void;
+  bankAccountFilter: string;
+  setBankAccountFilter: (accountId: string) => void;
+  bankCategoryFilter: string;
+  setBankCategoryFilter: (category: string) => void;
+  teamFilter: string;
+  setTeamFilter: (teamId: string) => void;
+  matchFilter: TransactionMatchFilter;
+  setMatchFilter: (value: TransactionMatchFilter) => void;
+  transactionSortKey: TransactionSortKey;
+  setTransactionSortKey: (value: TransactionSortKey) => void;
+  transactionSortDirection: TableSortDirection;
+  setTransactionSortDirection: (value: TableSortDirection) => void;
+  hasPrevious: boolean;
   hasMore: boolean;
   isLoading: boolean;
   loadError: string | null;
+  totalCount?: number;
+  activitySummary: BankActivitySummary | null;
+  isLoadingActivitySummary: boolean;
+  activitySummaryError: string | null;
+  onLoadPrevious: () => Promise<void>;
   onLoadMore: () => Promise<void>;
+  onRetryActivitySummary: () => Promise<void>;
 }) {
-  const [query, setQuery] = useUrlState("allBankQuery", "");
-  const [direction, setDirection] = useUrlState<"all" | "in" | "out">("allBankDirection", "all", {
-    allowedValues: ["all", "in", "out"]
-  });
-  const [match, setMatch] = useUrlState<"all" | "matched" | "unmatched">("allBankMatch", "all", {
-    allowedValues: ["all", "matched", "unmatched"]
-  });
-  const [account, setAccount] = useUrlState("allBankAccount", "all");
-  const [category, setCategory] = useUrlState("allBankCategory", "all");
-  const [owner, setOwner] = useUrlState("allBankOwner", "all");
-  const [sortKey, setSortKey] = useUrlState<BankTransactionSortKey>("allBankSort", "date", {
-    allowedValues: ["account", "amount", "category", "counterparty", "date", "direction", "source"]
-  });
-  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("allBankOrder", "desc", {
-    allowedValues: ["asc", "desc"]
-  });
+  const query = searchTerm;
+  const setQuery = setSearchTerm;
+  const direction = bankDirection;
+  const setDirection = setBankDirection;
+  const account = bankAccountFilter;
+  const setAccount = setBankAccountFilter;
+  const category = bankCategoryFilter;
+  const setCategory = setBankCategoryFilter;
+  const owner = teamFilter;
+  const setOwner = setTeamFilter;
+  const match = matchFilter;
+  const setMatch = setMatchFilter;
+  const sortKey = transactionSortKey;
+  const setSortKey = setTransactionSortKey;
+  const sortDirection = transactionSortDirection;
+  const setSortDirection = setTransactionSortDirection;
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const expenseByTransactionId = useMemo(
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
@@ -133,41 +179,11 @@ export function AllBankTransactionsView({
     if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
   }, [account, accountOptions, setAccount, source]);
 
-  const rows = useMemo(() => {
-    function sortValue(transaction: Transaction): number | string {
-      if (sortKey === "account") return transaction.accountName;
-      if (sortKey === "amount") return transaction.amount;
-      if (sortKey === "category") return transaction.category;
-      if (sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
-      if (sortKey === "date") return transaction.date;
-      if (sortKey === "direction") return transaction.direction;
-      return sourceLabel(transaction.source);
-    }
+  const rows = transactions;
 
-    return transactions
-      .filter((transaction) => {
-        if (source !== "all" && transaction.source !== source) return false;
-        if (account !== "all" && transaction.accountId !== account) return false;
-        if (direction !== "all" && transaction.direction !== direction) return false;
-        if (category !== "all" && transactionBusinessCategory(transaction.category) !== category) return false;
-        if (owner !== "all" && (owner === "unassigned" ? Boolean(transaction.teamId) : transaction.teamId !== owner)) return false;
-        const categorized = isRequiredTransactionCategory(transaction.category, transaction.direction, dashboard.transactionCategories);
-        if (match === "matched" && !categorized) return false;
-        if (match === "unmatched" && categorized) return false;
-        const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
-        const search = query.trim().toLowerCase();
-        return !search || `${transaction.merchantName ?? ""} ${transaction.counterparty} ${transaction.description} ${transaction.accountName} ${provider?.name ?? ""}`.toLowerCase().includes(search);
-      })
-      .sort((left, right) =>
-        compareTableValues(sortValue(left), sortValue(right), sortDirection)
-        || compareTableValues(left.date, right.date, "desc")
-        || left.id.localeCompare(right.id)
-      );
-  }, [account, category, dashboard.transactionCategories, direction, match, owner, providersById, query, sortDirection, sortKey, source, transactions]);
-
-  function requestSort(nextSortKey: BankTransactionSortKey) {
+  function requestSort(nextSortKey: TransactionSortKey) {
     if (nextSortKey === sortKey) {
-      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
       return;
     }
     setSortKey(nextSortKey);
@@ -212,7 +228,9 @@ export function AllBankTransactionsView({
       <div className="panel-header compact unified-bank-header">
         <div className="unified-bank-title">
           <div><p className="eyebrow">Unified ledger</p><h2>All bank transactions</h2></div>
-          <span className="total-pill">{rows.length} loaded</span>
+          <span className="total-pill">
+            {totalCount === undefined ? `${rows.length} on page` : `${rows.length} of ${totalCount.toLocaleString("en-US")}`}
+          </span>
         </div>
         <div className="list-toolbar unified-bank-toolbar">
           <div className="list-toolbar-main">
@@ -264,10 +282,10 @@ export function AllBankTransactionsView({
                 </label>
                 <label>
                   Transaction status
-                  <NativeSelect aria-label="Filter bank transactions by transaction status" value={match} onValueChange={(value) => setMatch(value as "all" | "matched" | "unmatched")}>
+                  <NativeSelect aria-label="Filter bank transactions by transaction status" value={match} onValueChange={(value) => setMatch(value as TransactionMatchFilter)}>
                     <NativeSelectOption value="all">All transactions</NativeSelectOption>
                     <NativeSelectOption value="matched">Categorized</NativeSelectOption>
-                    <NativeSelectOption value="unmatched">Needs category</NativeSelectOption>
+                    <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
                   </NativeSelect>
                 </label>
                 <label>
@@ -313,7 +331,9 @@ export function AllBankTransactionsView({
       </div>
       <ActiveFilterBar
         filters={bankActiveFilters}
-        resultLabel={`${rows.length} loaded bank transactions shown`}
+        resultLabel={totalCount === undefined
+          ? `${rows.length} transactions on this page`
+          : `${rows.length} of ${totalCount.toLocaleString("en-US")} matching transactions`}
         onClearAll={() => {
           setSource("all");
           setAccount("all");
@@ -345,38 +365,44 @@ export function AllBankTransactionsView({
           </tbody>
         </table>
       </div>
-      {(hasMore || isLoading || loadError) && (
+      {(hasPrevious || hasMore || isLoading || loadError) && (
         <div className="bank-table-pagination">
           <span className={loadError ? "danger-text" : undefined}>
-            {loadError ?? `${rows.length} loaded transactions shown`}
+            {loadError ?? (totalCount === undefined
+              ? `${rows.length} transactions on this page`
+              : `${rows.length} of ${totalCount.toLocaleString("en-US")} matching transactions`)}
           </span>
-          <Button
-            className="secondary-button"
-            type="button"
-            disabled={isLoading}
-            onClick={() => void onLoadMore()}
-          >
-            {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <Plus size={15} />}
-            {isLoading ? "Loading" : loadError ? "Retry" : "Show 200 more"}
-          </Button>
+          <div className="bank-table-pagination-actions">
+            <Button className="secondary-button" type="button" disabled={isLoading || !hasPrevious} onClick={() => void onLoadPrevious()}>
+              <ChevronLeft size={15} /> Previous 100
+            </Button>
+            <Button className="secondary-button" type="button" disabled={isLoading || (!hasMore && !loadError)} onClick={() => void onLoadMore()}>
+              {isLoading ? <Loader2 className="spin" size={15} /> : loadError ? <RefreshCw size={15} /> : <ChevronRight size={15} />}
+              {isLoading ? "Loading" : loadError ? "Retry" : "Next 100"}
+            </Button>
+          </div>
         </div>
       )}</> : activityView === "groups" ? (
         <BankMerchantGroupView
-          hasMore={hasMore}
-          isLoading={isLoading}
-          loadError={loadError}
-          onRetry={onLoadMore}
+          groups={activitySummary?.merchantGroups ?? []}
+          isLoading={isLoadingActivitySummary}
+          loadError={activitySummaryError}
+          onRetry={onRetryActivitySummary}
           period={period}
-          providers={dashboard.providers}
-          transactions={rows}
+        />
+      ) : activityView === "cards" ? (
+        <BankCardActivityView
+          groups={activitySummary?.cardGroups ?? []}
+          isLoading={isLoadingActivitySummary}
+          loadError={activitySummaryError}
+          onRetry={onRetryActivitySummary}
         />
       ) : (
-        <BankCardActivityView
-          hasMore={hasMore}
-          isLoading={isLoading}
-          loadError={loadError}
-          onRetry={onLoadMore}
-          transactions={rows}
+        <BankAccountActivityView
+          groups={activitySummary?.accountGroups ?? []}
+          isLoading={isLoadingActivitySummary}
+          loadError={activitySummaryError}
+          onRetry={onRetryActivitySummary}
         />
       )}
     </section>

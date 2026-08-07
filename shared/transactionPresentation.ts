@@ -6,6 +6,7 @@ export function isInternalTransferTransaction(transaction: Transaction): boolean
 }
 
 export function isNonOperatingMovementTransaction(transaction: Transaction): boolean {
+  if (transaction.status === "voided") return true;
   const category = transactionBusinessCategory(transaction.category);
   return category === "Internal transfer" || category === "Capital movement";
 }
@@ -39,6 +40,7 @@ export function transactionDescriptionLabel(transaction: Transaction): string {
 }
 
 export function transactionMovementLabel(transaction: Transaction): string {
+  if (transaction.status === "voided") return "Voided";
   if (transaction.source !== "slash") return transaction.direction === "in" ? "In" : "Out";
 
   if (isSlashDailyCardPayment(transaction)) {

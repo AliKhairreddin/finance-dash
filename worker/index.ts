@@ -58,7 +58,9 @@ import type {
   Transaction,
   TransactionCategory,
   TransactionCategoryRule,
+  TransactionMatchFilter,
   TransactionPage,
+  TransactionSortKey,
   UpdateProviderPayload,
   UpdateHoldingPayload,
   UpdateInvoicePayload,
@@ -68,6 +70,11 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import {
+  summarizeBankActivity,
+  type BankActivitySummary,
+  type BankMerchantProvider
+} from "../shared/bankMerchantGroups";
 import {
   defaultAiSettings,
   listOpenRouterZdrModels,
@@ -84,7 +91,8 @@ import {
   isTransactionCategoryForDirection,
   sanitizeStoredTransactionCategories,
   sanitizeStoredTransactionCategoryRules,
-  transactionBusinessCategory
+  transactionBusinessCategory,
+  transactionNeedsCategoryReview
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import {
@@ -196,6 +204,7 @@ import { calculateMetrics } from "../server/calculations";
 import {
   aiProviderDirectoryForTransactions,
   enrichTransactions,
+  finalizeDeterministicCategorization,
   learnAliases,
   learnCategoryAliases,
   mergeWiseCardHolderTeamAssignments,
@@ -204,7 +213,6 @@ import {
   normalizeName,
   providerMatchesTransactionDirection,
   providerTypeForTransactionDirection,
-  semanticCategorizeTransaction,
   semanticMatchThreshold,
   transactionAiGroupKey,
   transactionAliasCandidates,
@@ -1634,6 +1642,59 @@ function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
   };
 }
 
+interface TransactionPageOptions {
+  fromDate: string;
+  toDate: string;
+  source?: BankTransactionSource;
+  direction?: Transaction["direction"];
+  wiseEntity?: "dn" | "lmd";
+  accountId?: string;
+  category?: string;
+  team?: string;
+  match: TransactionMatchFilter;
+  search?: string;
+  sortKey: TransactionSortKey;
+  order: "asc" | "desc";
+  cursor: string | null;
+  limit: number;
+}
+
+interface ActivityDirectory {
+  providers: BankMerchantProvider[];
+  teams: Array<{ id: string; name: string }>;
+  transactionCategories: TransactionCategory[];
+  documentedTransactionIds: string[];
+}
+
+async function readRawTransactionPage(
+  env: Env,
+  options: Pick<TransactionPageOptions, "fromDate" | "toDate" | "source" | "direction" | "order" | "cursor" | "limit">
+): Promise<TransactionPage> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const result = await convex.query(api.banking.getActivityPage, {
+    serviceToken,
+    source: options.source,
+    direction: options.direction,
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    order: options.order,
+    paginationOpts: {
+      cursor: options.cursor,
+      numItems: Math.max(1, Math.min(bankMutationBatchSize, Math.trunc(options.limit)))
+    }
+  });
+  return {
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.direction ? { direction: options.direction } : {}),
+    transactions: result.page,
+    continueCursor: result.isDone ? null : result.continueCursor,
+    isDone: result.isDone
+  };
+}
+
 async function readTransactionPage(
   env: Env,
   options: {
@@ -1649,19 +1710,14 @@ async function readTransactionPage(
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const connections = await bankConnectionDirectory(env);
+  const normalized = {
+    ...options,
+    order: options.order ?? "desc",
+    cursor: options.cursor ?? null,
+    limit: options.limit ?? bankMutationBatchSize
+  };
   const [result, coverage] = await Promise.all([
-    convex.query(api.banking.getActivityPage, {
-      serviceToken,
-      source: options.source,
-      direction: options.direction,
-      fromDate: options.fromDate,
-      toDate: options.toDate,
-      order: options.order ?? "desc",
-      paginationOpts: {
-        cursor: options.cursor ?? null,
-        numItems: Math.max(1, Math.min(bankMutationBatchSize, Math.trunc(options.limit ?? bankMutationBatchSize)))
-      }
-    }),
+    readRawTransactionPage(env, normalized),
     convex.query(api.banking.getActivityCoverage, {
       serviceToken,
       connections,
@@ -1671,15 +1727,201 @@ async function readTransactionPage(
     })
   ]);
   return {
+    ...result,
+    coverage
+  };
+}
+
+function normalizedActivityText(value: string | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean {
+  return Boolean(
+    options.search
+    || options.wiseEntity
+    || options.accountId
+    || options.category
+    || options.team
+    || options.match !== "all"
+    || options.sortKey !== "date"
+  );
+}
+
+function activityOffsetCursor(cursor: string | null): number {
+  if (!cursor) return 0;
+  const match = /^activity-offset:(\d+)$/.exec(cursor);
+  if (!match) throw new ApiError(400, "Transaction cursor does not match this filtered view");
+  const offset = Number(match[1]);
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new ApiError(400, "Transaction cursor is invalid");
+  }
+  return offset;
+}
+
+function compareActivityValues(left: boolean | number | string | undefined, right: boolean | number | string | undefined): number {
+  if (left === right) return 0;
+  if (left === undefined) return 1;
+  if (right === undefined) return -1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
+  return String(left).localeCompare(String(right), "en", { numeric: true, sensitivity: "base" });
+}
+
+function activitySortValue(
+  transaction: Transaction,
+  options: TransactionPageOptions,
+  providersById: ReadonlyMap<string, BankMerchantProvider>,
+  teamsById: ReadonlyMap<string, { id: string; name: string }>,
+  documentedTransactionIds: ReadonlySet<string>
+): boolean | number | string | undefined {
+  if (options.sortKey === "account") return transaction.accountName;
+  if (options.sortKey === "amount") return transaction.amount;
+  if (options.sortKey === "category") return transactionBusinessCategory(transaction.category);
+  if (options.sortKey === "company") {
+    return transaction.matchedProviderId
+      ? providersById.get(transaction.matchedProviderId)?.name
+      : transaction.merchantName ?? transaction.counterparty;
+  }
+  if (options.sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
+  if (options.sortKey === "date") return transaction.date;
+  if (options.sortKey === "direction") return transaction.direction;
+  if (options.sortKey === "document") {
+    return Boolean(transaction.matchedInvoiceId || documentedTransactionIds.has(transaction.id));
+  }
+  if (options.sortKey === "match") return transaction.categoryConfidence ?? 0;
+  if (options.sortKey === "period") return transaction.date.slice(0, 7);
+  if (options.sortKey === "source") return transaction.source;
+  return transaction.teamId ? teamsById.get(transaction.teamId)?.name : undefined;
+}
+
+function filterAndSortActivity(
+  transactions: readonly Transaction[],
+  options: TransactionPageOptions,
+  directory: ActivityDirectory
+): Transaction[] {
+  const providersById = new Map(directory.providers.map((provider) => [provider.id, provider]));
+  const teamsById = new Map(directory.teams.map((team) => [team.id, team]));
+  const documentedTransactionIds = new Set(directory.documentedTransactionIds);
+  const search = normalizedActivityText(options.search);
+  const rows = transactions.filter((transaction) => {
+    if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
+    if (options.accountId && transaction.accountId !== options.accountId) return false;
+    if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
+    if (options.team === "unassigned" && transaction.teamId) return false;
+    if (options.team && options.team !== "unassigned" && transaction.teamId !== options.team) return false;
+    if (options.match !== "all") {
+      const categorized = !transactionNeedsCategoryReview(
+        transaction,
+        directory.transactionCategories
+      );
+      if (options.match === "matched" ? !categorized : categorized) return false;
+    }
+    if (!search) return true;
+    const provider = transaction.matchedProviderId
+      ? providersById.get(transaction.matchedProviderId)
+      : undefined;
+    const team = transaction.teamId ? teamsById.get(transaction.teamId) : undefined;
+    return normalizedActivityText([
+      transaction.merchantName,
+      transaction.counterparty,
+      transaction.description,
+      transaction.rawName,
+      transaction.accountName,
+      transaction.cardHolderName,
+      transaction.cardLastFour,
+      transaction.category,
+      transaction.currency,
+      provider?.name,
+      provider?.legalName,
+      ...(provider?.aliases ?? []),
+      team?.name
+    ].filter(Boolean).join(" ")).includes(search);
+  });
+  const multiplier = options.order === "asc" ? 1 : -1;
+  return rows.sort((left, right) => {
+    const primary = compareActivityValues(
+      activitySortValue(left, options, providersById, teamsById, documentedTransactionIds),
+      activitySortValue(right, options, providersById, teamsById, documentedTransactionIds)
+    );
+    if (primary !== 0) return primary * multiplier;
+    const date = left.date.localeCompare(right.date);
+    return date !== 0 ? date * multiplier : left.id.localeCompare(right.id) * multiplier;
+  });
+}
+
+async function collectActivityTransactions(env: Env, options: TransactionPageOptions): Promise<{
+  directory: ActivityDirectory;
+  transactions: Transaction[];
+}> {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const directoryPromise = convex.query(api.dashboard.getAnalyticsDirectory, { serviceToken });
+  const transactions: Transaction[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const page = await readRawTransactionPage(env, {
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+      source: options.source,
+      direction: options.direction,
+      order: "asc",
+      cursor,
+      limit: bankMutationBatchSize
+    });
+    transactions.push(...page.transactions);
+    cursor = page.continueCursor;
+    if (cursor) {
+      if (seenCursors.has(cursor)) throw new ApiError(503, "Transaction pagination did not advance");
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+  const directory = await directoryPromise as ActivityDirectory;
+  return {
+    directory,
+    transactions: filterAndSortActivity(transactions, options, directory)
+  };
+}
+
+async function readScopedTransactionPage(env: Env, options: TransactionPageOptions): Promise<TransactionPage> {
+  if (!transactionPageNeedsScopeScan(options)) return readTransactionPage(env, options);
+  const connections = await bankConnectionDirectory(env);
+  const [collected, coverage] = await Promise.all([
+    collectActivityTransactions(env, options),
+    getConvexClient(env).query(api.banking.getActivityCoverage, {
+      serviceToken: getConvexServiceToken(env),
+      connections,
+      source: options.source,
+      fromDate: options.fromDate,
+      toDate: options.toDate
+    })
+  ]);
+  const offset = activityOffsetCursor(options.cursor);
+  const transactions = collected.transactions.slice(offset, offset + options.limit);
+  const nextOffset = offset + transactions.length;
+  const isDone = nextOffset >= collected.transactions.length;
+  return {
     fromDate: options.fromDate,
     toDate: options.toDate,
     ...(options.source ? { source: options.source } : {}),
     ...(options.direction ? { direction: options.direction } : {}),
-    transactions: result.page,
-    continueCursor: result.isDone ? null : result.continueCursor,
-    isDone: result.isDone,
+    transactions,
+    continueCursor: isDone ? null : `activity-offset:${nextOffset}`,
+    isDone,
+    totalCount: collected.transactions.length,
     coverage
   };
+}
+
+async function readBankActivitySummary(env: Env, options: TransactionPageOptions): Promise<BankActivitySummary> {
+  const collected = await collectActivityTransactions(env, { ...options, cursor: null });
+  return summarizeBankActivity(collected.transactions, collected.directory.providers);
 }
 
 interface BankAnalyticsDateRange {
@@ -3644,20 +3886,19 @@ function transactionCategoryNeedsReview(
   transaction: Transaction,
   categories: readonly Pick<TransactionCategory, "name" | "direction">[]
 ): boolean {
-  return !isRequiredTransactionCategory(
-    transaction.category,
-    transaction.direction,
-    categories
-  );
+  return transactionNeedsCategoryReview(transaction, categories);
 }
 
 function transactionNeedsCategorization(
   transaction: Transaction,
   categories: readonly Pick<TransactionCategory, "name" | "direction">[]
 ): boolean {
-  return transaction.classificationComplete !== true
-    || transactionCategoryNeedsReview(transaction, categories)
-    || !transaction.merchantName?.trim();
+  return transaction.status !== "voided"
+    && (
+      transaction.classificationComplete !== true
+      || transactionCategoryNeedsReview(transaction, categories)
+      || !transaction.merchantName?.trim()
+    );
 }
 
 async function autoCategorizeState(
@@ -3675,7 +3916,12 @@ async function autoCategorizeState(
     if (targetIds && !targetIds.has(transaction.id)) return transaction;
     if (!transactionNeedsCategorization(transaction, state.transactionCategories)) return transaction;
     reviewed += 1;
-    const categorized = semanticCategorizeTransaction(transaction, state.providers, state.transactionCategoryRules);
+    const categorized = finalizeDeterministicCategorization(
+      transaction,
+      state.providers,
+      state.transactionCategoryRules,
+      state.transactionCategories
+    );
     if (
       (transaction.source === "wise"
         || transaction.source === "revolut"
@@ -5344,7 +5590,7 @@ function opaqueCursor(value: string | null): string | null {
   return value;
 }
 
-function transactionPageOptions(url: URL): Parameters<typeof readTransactionPage>[1] {
+function transactionPageOptions(url: URL): TransactionPageOptions {
   const fromDate = url.searchParams.get("fromDate");
   const toDate = url.searchParams.get("toDate");
   if (!fromDate || !toDate) {
@@ -5368,11 +5614,52 @@ function transactionPageOptions(url: URL): Parameters<typeof readTransactionPage
   }
   const order = url.searchParams.get("order") ?? "desc";
   if (order !== "asc" && order !== "desc") throw new ApiError(400, "Transaction order is invalid");
+  const wiseEntity = url.searchParams.get("wiseEntity");
+  if (wiseEntity !== null && wiseEntity !== "dn" && wiseEntity !== "lmd") {
+    throw new ApiError(400, "Transaction Wise entity is invalid");
+  }
+  const match = url.searchParams.get("match") ?? "all";
+  if (match !== "all" && match !== "matched" && match !== "needs-review") {
+    throw new ApiError(400, "Transaction category status is invalid");
+  }
+  const sortKey = url.searchParams.get("sort") ?? "date";
+  const transactionSortKeys: readonly TransactionSortKey[] = [
+    "account",
+    "amount",
+    "category",
+    "company",
+    "counterparty",
+    "date",
+    "direction",
+    "document",
+    "match",
+    "period",
+    "source",
+    "team"
+  ];
+  if (!transactionSortKeys.includes(sortKey as TransactionSortKey)) {
+    throw new ApiError(400, "Transaction sort is invalid");
+  }
+  const search = url.searchParams.get("search")?.trim();
+  const accountId = url.searchParams.get("accountId")?.trim();
+  const category = url.searchParams.get("category")?.trim();
+  const team = url.searchParams.get("team")?.trim();
+  if (search && search.length > 200) throw new ApiError(400, "Transaction search is too long");
+  if (accountId && accountId.length > 256) throw new ApiError(400, "Transaction account is invalid");
+  if (category && category.length > 160) throw new ApiError(400, "Transaction category is invalid");
+  if (team && team.length > 256) throw new ApiError(400, "Transaction owner is invalid");
   return {
     fromDate,
     toDate,
     ...(source ? { source } : {}),
     ...(direction ? { direction } : {}),
+    ...(wiseEntity ? { wiseEntity } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(category ? { category } : {}),
+    ...(team ? { team } : {}),
+    ...(search ? { search } : {}),
+    match,
+    sortKey: sortKey as TransactionSortKey,
     order,
     cursor: opaqueCursor(url.searchParams.get("cursor")),
     limit: boundedPageLimit(url.searchParams.get("limit"))
@@ -5484,13 +5771,21 @@ async function handleApi(
       return json(response);
     }
 
+    if (url.pathname === "/api/transactions/summary" && request.method === "GET") {
+      const options = transactionPageOptions(url);
+      if (options.source && !bankSourceConfigured(env, options.source)) {
+        throw new ApiError(409, `${options.source} is not configured for transaction sync`);
+      }
+      return json(await readBankActivitySummary(env, options));
+    }
+
     if (url.pathname === "/api/transactions" && request.method === "GET") {
       const startedAt = Date.now();
       const options = transactionPageOptions(url);
       if (options.source && !bankSourceConfigured(env, options.source)) {
         throw new ApiError(409, `${options.source} is not configured for transaction sync`);
       }
-      const page = await readTransactionPage(env, options);
+      const page = await readScopedTransactionPage(env, options);
       const durationMs = Date.now() - startedAt;
       console.log(JSON.stringify({
         event: "transaction_page_loaded",
@@ -5876,6 +6171,16 @@ export default {
         }));
         failures.push(error);
       }
+      try {
+        await runHistoricalClassificationBackfill(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "transaction_classification_backlog_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
     }
     if (controller.cron === "*/15 * * * *") {
       try {
@@ -5883,16 +6188,6 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({
           event: "merit_activity_sync_failed",
-          scheduledTime: controller.scheduledTime,
-          error: error instanceof Error ? error.message : String(error)
-        }));
-        failures.push(error);
-      }
-      try {
-        await runHistoricalClassificationBackfill(env);
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "transaction_classification_backlog_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));

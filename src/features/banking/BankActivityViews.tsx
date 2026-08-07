@@ -6,12 +6,9 @@ import { useUrlState } from "@/lib/url-state";
 import {
   bankCardCashbackRate,
   bankGroupAmountTotal,
-  groupBankTransactions,
-  groupBankTransactionsByAccount,
-  groupBankTransactionsByCard,
-  type BankCardGroup,
+  type BankCardGroupSummary,
   type BankMerchantGroup,
-  type BankMerchantProvider
+  type BankMerchantGroupSummary
 } from "../../../shared/bankMerchantGroups";
 import {
   bankExpenseReportFileName,
@@ -101,21 +98,19 @@ export function BankActivityViewToggle({
 }
 
 function LoadingCompletePeriod({
-  hasMore,
   isLoading,
   loadError,
   onRetry
 }: {
-  hasMore: boolean;
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
 }) {
-  if (!hasMore && !isLoading && !loadError) return null;
+  if (!isLoading && !loadError) return null;
   return (
     <div className={`bank-group-loading ${loadError ? "danger-text" : ""}`} role={loadError ? "alert" : "status"}>
       {isLoading && <Loader2 aria-hidden="true" className="spin" size={15} />}
-      <span>{loadError ?? "Loading the complete selected period for accurate totals..."}</span>
+      <span>{loadError ?? "Calculating the complete selected period..."}</span>
       {loadError && (
         <Button className="secondary-button" type="button" onClick={() => void onRetry()}>
           <RefreshCw aria-hidden="true" size={14} /> Retry
@@ -126,18 +121,14 @@ function LoadingCompletePeriod({
 }
 
 export function BankMerchantGroupView({
-  transactions,
-  providers,
+  groups,
   period,
-  hasMore,
   isLoading,
   loadError,
   onRetry
 }: {
-  transactions: readonly Transaction[];
-  providers: readonly BankMerchantProvider[];
+  groups: readonly BankMerchantGroupSummary[];
   period: BankExpenseReportPeriod;
-  hasMore: boolean;
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
@@ -150,9 +141,8 @@ export function BankMerchantGroupView({
   });
   const [generatingPdfKey, setGeneratingPdfKey] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const groups = useMemo(() => groupBankTransactions(transactions, providers), [providers, transactions]);
   const rows = useMemo(() => {
-    function sortValue(group: BankMerchantGroup): number | string {
+    function sortValue(group: BankMerchantGroupSummary): number | string {
       if (sortKey === "cashback") return bankGroupAmountTotal(group.cashback);
       if (sortKey === "credits") return bankGroupAmountTotal(group.credits);
       if (sortKey === "firstDate") return group.firstDate;
@@ -178,11 +168,16 @@ export function BankMerchantGroupView({
     setSortDirection(nextSortKey === "merchant" || nextSortKey === "firstDate" || nextSortKey === "lastDate" ? "asc" : "desc");
   }
 
-  async function downloadReport(group: BankMerchantGroup): Promise<void> {
+  async function downloadReport(group: BankMerchantGroupSummary): Promise<void> {
     setGeneratingPdfKey(group.key);
     setPdfError(null);
     try {
-      const bytes = await generateBankExpenseReportPdf(group, period);
+      const reportGroup: BankMerchantGroup = {
+        ...group,
+        transactions: [],
+        cardGroups: group.cardGroups.map((card) => ({ ...card, transactions: [] }))
+      };
+      const bytes = await generateBankExpenseReportPdf(reportGroup, period);
       downloadBytes(bytes, bankExpenseReportFileName(group, period));
     } catch (caught) {
       setPdfError(caught instanceof Error ? caught.message : "Internal billing report could not be generated");
@@ -191,10 +186,10 @@ export function BankMerchantGroupView({
     }
   }
 
-  const periodIncomplete = hasMore || isLoading || Boolean(loadError);
+  const periodIncomplete = isLoading || Boolean(loadError);
   return (
     <>
-      <LoadingCompletePeriod hasMore={hasMore} isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
+      <LoadingCompletePeriod isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
       {pdfError && <div className="inline-error" role="alert">{pdfError}</div>}
       <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} merchant groups shown.</span>
       <div className="table-wrap bank-group-table-wrap">
@@ -250,14 +245,12 @@ export function BankMerchantGroupView({
 }
 
 export function BankCardActivityView({
-  transactions,
-  hasMore,
+  groups,
   isLoading,
   loadError,
   onRetry
 }: {
-  transactions: readonly Transaction[];
-  hasMore: boolean;
+  groups: readonly BankCardGroupSummary[];
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
@@ -268,9 +261,8 @@ export function BankCardActivityView({
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("bankCardOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
-  const groups = useMemo(() => groupBankTransactionsByCard(transactions), [transactions]);
   const rows = useMemo(() => {
-    function sortValue(group: BankCardGroup): number | string {
+    function sortValue(group: BankCardGroupSummary): number | string {
       if (sortKey === "account") return group.accountName;
       if (sortKey === "cashback") return bankGroupAmountTotal(group.cashback);
       if (sortKey === "cashbackRate") return bankCardCashbackRate(group);
@@ -298,7 +290,7 @@ export function BankCardActivityView({
 
   return (
     <>
-      <LoadingCompletePeriod hasMore={hasMore} isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
+      <LoadingCompletePeriod isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
       <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} cards shown.</span>
       <div className="table-wrap bank-card-table-wrap">
         <table className="data-table modern-income-table bank-card-table">
@@ -336,14 +328,12 @@ export function BankCardActivityView({
 }
 
 export function BankAccountActivityView({
-  transactions,
-  hasMore,
+  groups,
   isLoading,
   loadError,
   onRetry
 }: {
-  transactions: readonly Transaction[];
-  hasMore: boolean;
+  groups: readonly BankCardGroupSummary[];
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
@@ -354,9 +344,8 @@ export function BankAccountActivityView({
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("bankAccountOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
-  const groups = useMemo(() => groupBankTransactionsByAccount(transactions), [transactions]);
   const rows = useMemo(() => {
-    function sortValue(group: BankCardGroup): number | string {
+    function sortValue(group: BankCardGroupSummary): number | string {
       if (sortKey === "account") return group.accountName;
       if (sortKey === "cashback") return bankGroupAmountTotal(group.cashback);
       if (sortKey === "cashbackRate") return bankCardCashbackRate(group);
@@ -384,7 +373,7 @@ export function BankAccountActivityView({
 
   return (
     <>
-      <LoadingCompletePeriod hasMore={hasMore} isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
+      <LoadingCompletePeriod isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
       <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} accounts shown.</span>
       <div className="table-wrap bank-card-table-wrap">
         <table className="data-table modern-income-table bank-card-table">

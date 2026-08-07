@@ -158,6 +158,14 @@ export function isRequiredTransactionCategory(
     && isTransactionCategoryForDirection(normalized, direction, categories);
 }
 
+export function transactionNeedsCategoryReview(
+  transaction: Pick<Transaction, "category" | "direction" | "status">,
+  categories: readonly Pick<TransactionCategory, "name" | "direction">[] = initialTransactionCategories
+): boolean {
+  return transaction.status !== "voided"
+    && !isRequiredTransactionCategory(transaction.category, transaction.direction, categories);
+}
+
 export function normalizeTransactionCategoryName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
 }

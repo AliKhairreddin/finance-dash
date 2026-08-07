@@ -5328,8 +5328,7 @@ th.amount .sortable-table-heading {
   white-space: nowrap;
 }
 
-.bank-date-controls > .note-popover,
-.bank-load-more > .note-popover {
+.bank-date-controls > .note-popover {
   position: relative;
   top: auto;
   right: auto;
@@ -5337,8 +5336,7 @@ th.amount .sortable-table-heading {
   z-index: 14;
 }
 
-.bank-date-controls > .note-popover .note-popover-trigger,
-.bank-load-more > .note-popover .note-popover-trigger {
+.bank-date-controls > .note-popover .note-popover-trigger {
   width: 22px;
   height: 22px;
   min-height: 22px;
@@ -5482,16 +5480,6 @@ th.amount .sortable-table-heading {
   margin-top: 10px;
 }
 
-.bank-load-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 9px 14px;
-  border-top: 1px solid var(--line-soft);
-  background: var(--subtle-bg);
-}
-
 .bank-table-pagination {
   display: flex;
   align-items: center;
@@ -5500,6 +5488,12 @@ th.amount .sortable-table-heading {
   padding: 12px 14px 0;
   color: var(--app-muted);
   font-size: 0.78rem;
+}
+
+.bank-table-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .unified-bank-table {
@@ -6348,8 +6342,7 @@ th.amount .sortable-table-heading {
     justify-content: space-between;
   }
 
-  .bank-date-controls,
-  .bank-load-more {
+  .bank-date-controls {
     align-items: center;
     flex-direction: row;
   }

@@ -812,12 +812,16 @@ export const getAnalyticsDirectory = query({
     providers: v.array(v.object({
       id: v.string(),
       name: v.string(),
+      legalName: v.optional(v.string()),
+      aliases: v.array(v.string()),
       type: providerType
     })),
     teams: v.array(v.object({
       id: v.string(),
       name: v.string()
-    }))
+    })),
+    transactionCategories: v.array(transactionCategory),
+    documentedTransactionIds: v.array(v.string())
   }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
@@ -826,8 +830,18 @@ export const getAnalyticsDirectory = query({
       .withIndex("by_key", (q) => q.eq("key", "default"))
       .unique();
     return {
-      providers: (state?.providers ?? []).map(({ id, name, type }) => ({ id, name, type })),
-      teams: (state?.teams ?? []).map(({ id, name }) => ({ id, name }))
+      providers: (state?.providers ?? []).map(({ id, name, legalName, aliases, type }) => ({
+        id,
+        name,
+        legalName,
+        aliases,
+        type
+      })),
+      teams: (state?.teams ?? []).map(({ id, name }) => ({ id, name })),
+      transactionCategories: await listTransactionCategories(ctx),
+      documentedTransactionIds: (state?.expenses ?? []).flatMap((expense) =>
+        expense.transactionId ? [expense.transactionId] : []
+      )
     };
   }
 });

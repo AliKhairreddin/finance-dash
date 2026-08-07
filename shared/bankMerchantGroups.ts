@@ -36,6 +36,19 @@ export interface BankMerchantGroup {
   cashback: CurrencyTotals;
 }
 
+export type BankCardGroupSummary = Omit<BankCardGroup, "transactions">;
+
+export type BankMerchantGroupSummary = Omit<BankMerchantGroup, "transactions" | "cardGroups"> & {
+  cardGroups: BankCardGroupSummary[];
+};
+
+export interface BankActivitySummary {
+  merchantGroups: BankMerchantGroupSummary[];
+  cardGroups: BankCardGroupSummary[];
+  accountGroups: BankCardGroupSummary[];
+  transactionCount: number;
+}
+
 type MerchantIdentity = {
   key: string;
   name: string;
@@ -395,6 +408,26 @@ export function groupBankTransactions(
       cardGroups: groupBankTransactionsByCard(group.transactions)
     }))
     .sort((left, right) => right.transactionCount - left.transactionCount || left.name.localeCompare(right.name));
+}
+
+function cardGroupSummary(group: BankCardGroup): BankCardGroupSummary {
+  const { transactions: _transactions, ...summary } = group;
+  return summary;
+}
+
+export function summarizeBankActivity(
+  transactions: readonly Transaction[],
+  providers: readonly BankMerchantProvider[] = []
+): BankActivitySummary {
+  return {
+    merchantGroups: groupBankTransactions(transactions, providers).map((group) => {
+      const { transactions: _transactions, cardGroups, ...summary } = group;
+      return { ...summary, cardGroups: cardGroups.map(cardGroupSummary) };
+    }),
+    cardGroups: groupBankTransactionsByCard(transactions).map(cardGroupSummary),
+    accountGroups: groupBankTransactionsByAccount(transactions).map(cardGroupSummary),
+    transactionCount: transactions.length
+  };
 }
 
 export function bankGroupAmountTotal(totals: CurrencyTotals): number {
