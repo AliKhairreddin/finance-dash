@@ -1,3 +1,45 @@
+# Analytics category breakdown design QA
+
+## Scope and evidence
+
+- Previous chart implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-option-3-implementation.png`.
+- Updated chart implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-category-breakdown-chart.png`.
+- Same-state comparison: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-category-breakdown-comparison.png`.
+- Final category detail: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-category-breakdown-detail.jpg`.
+- Route: `http://localhost:5174/?page=analytics`; viewport: 1265 × 712 CSS px at 1× density; light theme; 2026 YTD; Spend → Software selected.
+- No exact screenshot of the removed legacy detail state exists. The detail interaction was recovered from the prior `AnalyticsCategoryCompaniesPanel` implementation and restyled within the current analytics design system. The exact visual comparison therefore covers the chart state, while the new detail state is evaluated as a focused implementation view.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Interaction hierarchy: the chart-card action now opens a dedicated category breakdown. The bank transaction drill-down is retained inside that category view, making category analysis and transaction inspection distinct steps.
+- Layout and spacing: the detail uses one full-width card with a compact header, four summary metrics, and a dense company/merchant table. It preserves the surrounding analytics header and avoids duplicating the chart content.
+- Typography and numeric hierarchy: the selected category is the detail title; USD estimate, native total, transaction count, company count, values, and shares use the existing dashboard's type scale and tabular alignment.
+- Colors and tokens: semantic spend/revenue color is limited to the USD summary. Borders, muted labels, hover states, and surfaces reuse existing app tokens.
+- Icons and assets: back, external-link, sort, and information controls use the existing Lucide icon system. There are no raster product assets in this data view.
+- Copy: `View category breakdown` replaces the ambiguous direct transaction action on the chart card. `View all transactions` appears inside the breakdown. Conversion methodology is kept in an accessible information control.
+- Accessibility: the back control and both drill-down actions have explicit accessible names. Every meaningful table column uses the shared sortable header control, visibly indicates direction, supports ascending and descending order, and persists sort state in the URL.
+
+## Interactions tested
+
+- Opened Spend → Software from the chart and confirmed `analyticsCategoryDetail=1` in the URL.
+- Confirmed the detail rendered USD estimate, native total, transaction count, company/merchant count, and the complete four-row breakdown.
+- Sorted Company or merchant ascending and descending; confirmed `analyticsCategorySort=name` and `analyticsCategoryOrder=asc` persisted in the URL.
+- Used Back to category charts and confirmed the stacked chart view returned without losing the selected category.
+- Used View all transactions from inside the detail and confirmed Banks opened with direction, category, and YTD date filters.
+- Confirmed the conversion explanation is exposed through `About category breakdown amounts` and the browser console contained no warnings or errors.
+
+## Comparison history
+
+- Pass 1: the previous and updated chart states matched except for the intentionally renamed action.
+- Pass 2: the first detail pass exposed persistent conversion helper copy; it was moved into the information control to preserve vertical space.
+- Pass 3: the information trigger inherited an absolute metric-card position; a scoped override returned it beside the breakdown heading. The final focused capture has no visible P0/P1/P2 issue.
+
+final result: passed
+
+---
+
 **Comparison Target**
 
 - Source visual truth: `/Users/alikheireddine/.codex/generated_images/019fef13-6e82-7881-bf32-6908577919ce/exec-ec818abf-0426-495e-b6aa-2e4c7915bd2a.png`

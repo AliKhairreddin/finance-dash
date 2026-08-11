@@ -4320,6 +4320,12 @@ function AnalyticsView({
     isValid: (value) => parseAnalyticsCategoryView(value) !== null
   });
   const categoryView = parseAnalyticsCategoryView(categoryViewValue);
+  const [categoryDetailValue, setCategoryDetailValue] = useUrlState<"" | "1">(
+    "analyticsCategoryDetail",
+    "",
+    { allowedValues: ["1"] }
+  );
+  const categoryDetailOpen = categoryDetailValue === "1";
   const analyticsYearOptions = useMemo(
     () => Array.from({ length: currentAnalyticsYear - 2000 + 1 }, (_, index) => String(currentAnalyticsYear - index)),
     [currentAnalyticsYear]
@@ -4666,6 +4672,26 @@ function AnalyticsView({
     setCategoryViewValue(analyticsCategoryViewValue(selection));
   }
 
+  function openAnalyticsCategoryDetail(): void {
+    if (!categoryView || !selectedCategorySegment || selectedCategorySegment.category === "Other") return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("analyticsCategoryDetail", "1");
+    window.history.pushState(
+      { ...window.history.state, analyticsCategoryDetailEntry: true },
+      "",
+      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
+    );
+    window.dispatchEvent(new Event("finance-dash:url-state-change"));
+  }
+
+  function closeAnalyticsCategoryDetail(): void {
+    if (window.history.state?.analyticsCategoryDetailEntry === true) {
+      window.history.back();
+      return;
+    }
+    setCategoryDetailValue("");
+  }
+
   return (
     <div className="categorization-layout">
       <section className="panel wide-panel">
@@ -4747,6 +4773,19 @@ function AnalyticsView({
         </div>
       </section>
 
+      {categoryDetailOpen && categoryView && selectedCategorySegment ? (
+        <AnalyticsCategoryBreakdownPanel
+          companyRows={categoryCompanyRows}
+          error={categoryCompaniesError}
+          loading={isLoadingCategoryCompanies}
+          periodLabel={analyticsPeriodLabel(periodSelection, analyticsToday)}
+          segment={selectedCategorySegment}
+          selection={categoryView}
+          onBack={closeAnalyticsCategoryDetail}
+          onRetry={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
+          onViewTransactions={() => onViewCategoryTransactions(categoryView, selectedAnalyticsRange)}
+        />
+      ) : <>
       <CategoryDistributionPanel
         title="Spend by category"
         direction="out"
@@ -4760,10 +4799,7 @@ function AnalyticsView({
         loading={isLoadingAnalyticsPeriod}
         onRetryCompanies={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
         onSelectCategory={(category) => inspectAnalyticsCategory({ direction: "out", category })}
-        onViewTransactions={(category) => onViewCategoryTransactions(
-          { direction: "out", category },
-          selectedAnalyticsRange
-        )}
+        onOpenBreakdown={openAnalyticsCategoryDetail}
       />
       <CategoryDistributionPanel
         title="Revenue by category"
@@ -4778,10 +4814,7 @@ function AnalyticsView({
         loading={isLoadingAnalyticsPeriod}
         onRetryCompanies={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
         onSelectCategory={(category) => inspectAnalyticsCategory({ direction: "in", category })}
-        onViewTransactions={(category) => onViewCategoryTransactions(
-          { direction: "in", category },
-          selectedAnalyticsRange
-        )}
+        onOpenBreakdown={openAnalyticsCategoryDetail}
       />
 
       {analytics && <>
@@ -4981,7 +5014,169 @@ function AnalyticsView({
         </div>
       </section>
       </>}
+      </>}
     </div>
+  );
+}
+
+type AnalyticsCategoryBreakdownSortKey = "name" | "transactions" | "amount" | "share";
+
+const analyticsCategoryBreakdownSortKeys: readonly AnalyticsCategoryBreakdownSortKey[] = [
+  "name",
+  "transactions",
+  "amount",
+  "share"
+];
+
+function AnalyticsCategoryBreakdownPanel({
+  selection,
+  periodLabel,
+  segment,
+  companyRows,
+  loading,
+  error,
+  onBack,
+  onRetry,
+  onViewTransactions
+}: {
+  selection: AnalyticsCategoryView;
+  periodLabel: string;
+  segment: CategoryPieSegment;
+  companyRows: Array<AnalyticsCategoryCompanyView & { name: string; kind: string }>;
+  loading: boolean;
+  error: string | null;
+  onBack: () => void;
+  onRetry: () => void;
+  onViewTransactions: () => void;
+}) {
+  const [sortKey, setSortKey] = useUrlState<AnalyticsCategoryBreakdownSortKey>(
+    "analyticsCategorySort",
+    "amount",
+    { allowedValues: analyticsCategoryBreakdownSortKeys }
+  );
+  const [sortDirection, setSortDirection] = useUrlState<SortDirection>(
+    "analyticsCategoryOrder",
+    "desc",
+    { allowedValues: ["asc", "desc"] }
+  );
+  const sortedRows = useMemo(() => [...companyRows].sort((left, right) => {
+    const sortValue = (company: typeof left): number | string => {
+      if (sortKey === "name") return company.name;
+      if (sortKey === "transactions") return company.transactionCount;
+      if (sortKey === "share") return segment.amount > 0 ? company.amountUsd / segment.amount : 0;
+      return company.amountUsd;
+    };
+    return compareTableValues(sortValue(left), sortValue(right), sortDirection)
+      || left.name.localeCompare(right.name);
+  }), [companyRows, segment.amount, sortDirection, sortKey]);
+  const tone = selection.direction === "out" ? "danger" : "good";
+
+  function requestSort(nextSortKey: AnalyticsCategoryBreakdownSortKey): void {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "name" ? "asc" : "desc");
+  }
+
+  return (
+    <section className="panel wide-panel analytics-category-companies analytics-category-breakdown">
+      <div className="panel-header analytics-category-companies-header analytics-category-breakdown-header">
+        <div className="analytics-category-title">
+          <Button type="button" className="icon-button" aria-label="Back to category charts" onClick={onBack}>
+            <ChevronLeft aria-hidden="true" size={17} />
+          </Button>
+          <div>
+            <p className="eyebrow">
+              {periodLabel} · {selection.direction === "out" ? "Spend" : "Revenue"} · USD estimate
+            </p>
+            <h2>{selection.category}</h2>
+          </div>
+        </div>
+        <Button type="button" className="secondary-button analytics-category-transactions" onClick={onViewTransactions}>
+          View all transactions <ArrowUpRight aria-hidden="true" size={14} />
+        </Button>
+      </div>
+
+      <div className="analytics-category-overview" aria-label={`${selection.category} category summary`}>
+        <div>
+          <span>USD estimate</span>
+          <strong className={tone}>{money(segment.amount, "USD")}</strong>
+        </div>
+        <div>
+          <span>Transactions</span>
+          <strong>{segment.count.toLocaleString()}</strong>
+        </div>
+        <div>
+          <span>Companies and merchants</span>
+          <strong>{companyRows.length.toLocaleString()}</strong>
+        </div>
+        <div className="analytics-category-native-total">
+          <span>Native total</span>
+          <strong title={formatCurrencyTotals(segment.nativeTotals)}>{formatCurrencyTotals(segment.nativeTotals)}</strong>
+        </div>
+      </div>
+
+      <div className="analytics-category-table-heading">
+        <div className="analytics-category-table-title">
+          <h3>Company and merchant breakdown</h3>
+          <InfoPopover label="category breakdown amounts">
+            <span>Amounts are converted to USD for a comparable share. Native amounts remain the source of truth.</span>
+          </InfoPopover>
+        </div>
+        {loading && (
+          <span className="analytics-category-loading" aria-live="polite">
+            <Loader2 className="spin" aria-hidden="true" size={14} /> Loading breakdown…
+          </span>
+        )}
+      </div>
+
+      {error ? (
+        <div className="analytics-category-state danger-text" role="alert">
+          <span>{error}</span>
+          <Button type="button" className="secondary-button" onClick={onRetry}>
+            <RefreshCw aria-hidden="true" size={14} /> Retry
+          </Button>
+        </div>
+      ) : companyRows.length > 0 ? (
+        <div className="table-wrap">
+          <table className="data-table analytics-company-table">
+            <thead>
+              <tr>
+                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Company or merchant</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount (USD)</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="share">Share</SortableTableHead>
+              </tr>
+            </thead>
+            <tbody aria-label={`${selection.category} company and merchant shares`}>
+              {sortedRows.map((company) => (
+                <tr key={company.companyKey}>
+                  <td>
+                    <span className="analytics-company-name">
+                      <strong>{company.name}</strong>
+                      <small>{company.kind} · Native {formatCurrencyTotals(company.nativeTotals)}</small>
+                    </span>
+                  </td>
+                  <td className="analytics-company-numeric">{company.transactionCount.toLocaleString()}</td>
+                  <td className="analytics-company-numeric"><strong>{money(company.amountUsd, "USD")}</strong></td>
+                  <td className="analytics-company-numeric"><strong>{formatShare(company.amountUsd, segment.amount)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="analytics-category-state">
+          {loading ? (
+            <><Loader2 className="spin" aria-hidden="true" size={16} /> Loading companies and merchants…</>
+          ) : (
+            "No companies or merchants make up this category in the selected period."
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4998,7 +5193,7 @@ function CategoryDistributionPanel({
   loading,
   onRetryCompanies,
   onSelectCategory,
-  onViewTransactions
+  onOpenBreakdown
 }: {
   title: string;
   direction: "in" | "out";
@@ -5012,7 +5207,7 @@ function CategoryDistributionPanel({
   loading: boolean;
   onRetryCompanies: () => void;
   onSelectCategory: (category: string) => void;
-  onViewTransactions: (category: string) => void;
+  onOpenBreakdown: () => void;
 }) {
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
   const selectedSegment = group?.segments.find((segment) => segment.category === selectedCategory) ?? null;
@@ -5095,8 +5290,8 @@ function CategoryDistributionPanel({
             loading={companiesLoading}
             previewSegment={previewSegment}
             selected={previewSegment?.category === selectedSegment?.category}
+            onOpenBreakdown={onOpenBreakdown}
             onRetry={onRetryCompanies}
-            onViewTransactions={onViewTransactions}
           />
         </div>
       ) : (
@@ -5116,8 +5311,8 @@ function CategoryDistributionPreview({
   companyRows,
   loading,
   error,
+  onOpenBreakdown,
   onRetry,
-  onViewTransactions
 }: {
   group: CategoryPieGroup;
   previewSegment: CategoryPieSegment | null;
@@ -5125,8 +5320,8 @@ function CategoryDistributionPreview({
   companyRows: Array<AnalyticsCategoryCompanyView & { name: string; kind: string }>;
   loading: boolean;
   error: string | null;
+  onOpenBreakdown: () => void;
   onRetry: () => void;
-  onViewTransactions: (category: string) => void;
 }) {
   if (!previewSegment) {
     return (
@@ -5192,9 +5387,9 @@ function CategoryDistributionPreview({
         <Button
           type="button"
           className="secondary-button category-preview-action"
-          onClick={() => onViewTransactions(previewSegment.category)}
+          onClick={onOpenBreakdown}
         >
-          View all transactions
+          View category breakdown <ChevronRight aria-hidden="true" size={14} />
         </Button>
       )}
     </aside>

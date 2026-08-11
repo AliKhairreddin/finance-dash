@@ -4220,6 +4220,122 @@ th.amount .sortable-table-heading {
   font-size: 0.9rem;
 }
 
+.analytics-category-breakdown {
+  overflow: hidden;
+}
+
+.analytics-category-breakdown-header {
+  min-height: 70px;
+}
+
+.analytics-category-transactions {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+.analytics-category-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--control-bg);
+}
+
+.analytics-category-overview > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 15px 16px;
+  border-right: 1px solid var(--line);
+}
+
+.analytics-category-overview > div:last-child {
+  border-right: 0;
+}
+
+.analytics-category-overview span,
+.analytics-category-table-heading span,
+.analytics-category-loading {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+
+.analytics-category-overview strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 1rem;
+  font-variant-numeric: lining-nums tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-category-overview strong.good {
+  color: var(--green);
+}
+
+.analytics-category-overview strong.danger {
+  color: var(--red);
+}
+
+.analytics-category-table-heading {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.analytics-category-table-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.analytics-category-table-title > .note-popover {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 12;
+}
+
+.analytics-category-table-title > .note-popover .note-popover-trigger {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  box-shadow: none;
+}
+
+.analytics-category-table-heading h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+
+.analytics-category-loading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 980px) {
+  .analytics-category-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analytics-category-overview > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .analytics-category-overview > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+}
+
 .analytics-category-state {
   display: flex;
   min-height: 148px;
@@ -6771,6 +6887,15 @@ th.amount .sortable-table-heading {
 
   .analytics-category-summary {
     justify-content: space-between;
+  }
+
+  .analytics-category-transactions {
+    width: 100%;
+  }
+
+  .analytics-category-table-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .bank-date-controls {
