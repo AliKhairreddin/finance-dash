@@ -6,6 +6,7 @@ import {
   canonicalProviders,
   finalizeDeterministicCategorization,
   learnAliases,
+  learnCategoryAliases,
   mergeProviderDirectory,
   mergeTeamDirectory,
   mergeWiseCardHolderTeamAssignments,
@@ -187,6 +188,69 @@ test("saved Facebook rules complete known charges without an AI request", () => 
   assert.equal(categorized.merchantName, "Meta / Facebook Ads");
   assert.equal(categorized.merchantKey, "metafacebookads");
   assert.equal(categorized.classificationComplete, true);
+});
+
+test("Slash daily card payments always finalize as internal transfers", () => {
+  const payment: Transaction = {
+    id: "slash-card-payment",
+    source: "slash",
+    slashAccountSubtype: "cash",
+    accountName: "Business Platinum Cash",
+    date: "2026-08-10",
+    description: "Daily Credit Card Payment",
+    rawName: "Daily Credit Card Payment",
+    counterparty: "Daily Credit Card Payment",
+    amount: 18_230.63,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Software",
+    categorySource: "manual",
+    merchantName: "Amex",
+    matchedProviderId: "provider-amex",
+    classificationComplete: true
+  };
+  const poisonedRule: TransactionCategoryRule = {
+    id: "category-rule-out-software",
+    category: "Software",
+    direction: "out",
+    aliases: ["card_payment"],
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z"
+  };
+
+  const categorized = finalizeDeterministicCategorization(payment, canonicalProviders, [poisonedRule]);
+
+  assert.equal(categorized.category, "Internal transfer");
+  assert.equal(categorized.categorySource, "rule");
+  assert.equal(categorized.categoryConfidence, 1);
+  assert.equal(categorized.categoryReason, "Slash daily card payment");
+  assert.equal(categorized.merchantName, "Slash card payment");
+  assert.equal(categorized.merchantKey, "slashcardpayment");
+  assert.equal(categorized.matchedProviderId, undefined);
+  assert.equal(categorized.classificationComplete, true);
+});
+
+test("category learning ignores generic bank activity types", () => {
+  const transaction: Transaction = {
+    id: "revolut-google-workspace",
+    source: "revolut",
+    accountName: "Revolut USD",
+    date: "2026-08-02",
+    description: "card_payment",
+    rawName: "Google Workspace",
+    counterparty: "Google Workspace",
+    amount: 20,
+    currency: "USD",
+    direction: "out",
+    status: "posted",
+    category: "Software",
+    merchantName: "Google Workspace"
+  };
+
+  const [rule] = learnCategoryAliases([], transaction, "Software", "2026-08-02T00:00:00.000Z");
+
+  assert.deepEqual(rule.aliases, ["Google Workspace"]);
 });
 
 test("AI receives only plausible company candidates for each transaction", () => {

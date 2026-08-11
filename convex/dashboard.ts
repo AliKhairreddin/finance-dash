@@ -5,7 +5,8 @@ import {
   initialTransactionCategories,
   isTransactionCategoryColor,
   isTransactionCategoryDirection,
-  normalizeTransactionCategoryName
+  normalizeTransactionCategoryName,
+  sanitizeStoredTransactionCategoryRules
 } from "../shared/categories";
 import { canonicalTeamId } from "../shared/business";
 import { maximumWiseStatementImportHistory } from "../shared/wiseEntities";
@@ -1008,6 +1009,26 @@ export const seedTransactionCategories = mutation({
       }
     }
     return listTransactionCategories(ctx);
+  }
+});
+
+export const repairGenericTransactionCategoryAliases = mutation({
+  args: { serviceToken: v.string() },
+  returns: v.object({ removedAliases: v.number(), updatedAt: v.union(v.string(), v.null()) }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
+    if (!state) return { removedAliases: 0, updatedAt: null };
+
+    const transactionCategoryRules = sanitizeStoredTransactionCategoryRules(state.transactionCategoryRules);
+    const previousAliasCount = state.transactionCategoryRules.reduce((total, rule) => total + rule.aliases.length, 0);
+    const nextAliasCount = transactionCategoryRules.reduce((total, rule) => total + rule.aliases.length, 0);
+    const removedAliases = previousAliasCount - nextAliasCount;
+    if (removedAliases === 0) return { removedAliases: 0, updatedAt: state.updatedAt };
+
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await ctx.db.patch(state._id, { transactionCategoryRules, updatedAt });
+    return { removedAliases, updatedAt };
   }
 });
 

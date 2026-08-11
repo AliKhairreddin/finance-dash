@@ -52,6 +52,22 @@ test("stored merchant category codes are removed from transactions and category 
   assert.deepEqual(sanitizeStoredTransactionCategoryRules([invalidRule, validRule]), [validRule]);
 });
 
+test("generic transaction types are removed from category memory without deleting merchant aliases", () => {
+  const rule: TransactionCategoryRule = {
+    id: "category-rule-out-software",
+    category: "Software",
+    direction: "out",
+    aliases: ["Google Workspace", "card_payment", "BANK-TRANSFER"],
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z"
+  };
+
+  assert.deepEqual(sanitizeStoredTransactionCategoryRules([rule]), [{
+    ...rule,
+    aliases: ["Google Workspace"]
+  }]);
+});
+
 test("income categories include ACP and offer verticals without exposing them to expenses", () => {
   const incomeOptions = transactionCategoryOptionsForDirection("in");
   const expenseOptions = transactionCategoryOptionsForDirection("out");

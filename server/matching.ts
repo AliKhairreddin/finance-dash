@@ -23,9 +23,11 @@ import {
 } from "../shared/business";
 import {
   initialTransactionCategories,
+  isGenericTransactionCategoryAlias,
   isRequiredTransactionCategory,
   transactionBusinessCategory
 } from "../shared/categories";
+import { isSlashDailyCardPayment } from "../shared/transactionPresentation";
 
 export const semanticMatchThreshold = 0.86;
 const maximumProviderAliasCount = 128;
@@ -738,6 +740,26 @@ export function enrichTransactions(
   categoryMemory: TransactionCategoryRule[] = []
 ): Transaction[] {
   return transactions.map((transaction) => {
+    if (isSlashDailyCardPayment(transaction)) {
+      const merchantName = "Slash card payment";
+      return {
+        ...transaction,
+        category: "Internal transfer",
+        merchantName,
+        merchantKey: transactionMerchantKey({ merchantName }),
+        classificationComplete: true,
+        categorySource: "rule",
+        categoryConfidence: 1,
+        categoryReason: "Slash daily card payment",
+        matchedProviderId: undefined,
+        companyMatchSource: undefined,
+        companyConfidence: undefined,
+        companyMatchReason: undefined,
+        confidence: 1,
+        matchReason: "Slash daily card payment"
+      };
+    }
+
     const learned = learnedCategory(transaction, categoryMemory);
     const ruleCategory = transaction.categorySource === "manual"
       ? undefined
@@ -855,7 +877,7 @@ export function transactionAliasCandidates(transaction: Transaction): string[] {
   const fullSignature = compactSignature([transaction.counterparty, transaction.description].join(" "));
   const rawSignature = compactSignature(transaction.rawName);
   return uniqueAliases([transaction.rawName, transaction.counterparty, transaction.description, fullSignature, rawSignature]).filter(
-    (alias) => normalizeName(alias).length >= 3
+    (alias) => normalizeName(alias).length >= 3 && !isGenericTransactionCategoryAlias(alias)
   );
 }
 
@@ -878,6 +900,7 @@ export function learnCategoryAliases(
 ): TransactionCategoryRule[] {
   const normalizedCategory = category.trim() || "Uncategorized";
   const aliases = transactionAliasCandidates(transaction);
+  if (aliases.length === 0) return rules;
   const learnedAliasNames = new Set(aliases.map(normalizeName));
   const id = categoryRuleId(normalizedCategory, transaction.direction);
   const withoutMovedAliases = rules.map((rule) =>

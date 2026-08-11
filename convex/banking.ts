@@ -11,6 +11,7 @@ import {
 import { assertBankActivityBatchBudget } from "../shared/bankRecordValidation";
 import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import { transactionBusinessCategory } from "../shared/categories";
+import { isSlashDailyCardPayment } from "../shared/transactionPresentation";
 import {
   bankProviderTransactionId,
   isCurrentBankTransactionId,
@@ -2512,6 +2513,89 @@ export const applyMerchantCategory = mutation({
     if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
     return {
       updated: result.page.length,
+      hasMore: !result.isDone,
+      continueCursor: result.isDone ? null : result.continueCursor
+    };
+  }
+});
+
+export const repairGenericCardPaymentAliasBatch = mutation({
+  args: {
+    serviceToken: v.string(),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number())
+  },
+  returns: v.object({
+    scanned: v.number(),
+    repairedSlashPayments: v.number(),
+    resetGenericAliasMatches: v.number(),
+    hasMore: v.boolean(),
+    continueCursor: v.union(v.string(), v.null())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const requestedLimit = args.limit === undefined || !Number.isFinite(args.limit)
+      ? maximumMaintenanceBatchSize
+      : Math.trunc(args.limit);
+    const limit = Math.max(1, Math.min(maximumMaintenanceBatchSize, requestedLimit));
+    const result = await ctx.db.query("bankTransactions").order("asc").paginate({
+      numItems: limit,
+      cursor: args.cursor ?? null,
+      maximumRowsRead: limit,
+      maximumBytesRead: maximumActivityBytesRead
+    });
+    const factDeltas = new Map<string, ProfitFactDelta>();
+    const analyticsChangedDates = new Set<string>();
+    let repairedSlashPayments = 0;
+    let resetGenericAliasMatches = 0;
+
+    for (const row of result.page) {
+      const slashDailyCardPayment = isSlashDailyCardPayment(row);
+      const genericAliasMatch = row.categorySource === "rule"
+        && row.categoryReason?.trim().toLowerCase() === "saved category alias: card payment";
+      if (!slashDailyCardPayment && !genericAliasMatch) continue;
+
+      const update = slashDailyCardPayment
+        ? {
+            category: "Internal transfer",
+            merchantName: "Slash card payment",
+            merchantKey: "slashcardpayment",
+            classificationComplete: true,
+            categorySource: "rule" as const,
+            categoryConfidence: 1,
+            categoryReason: "Slash daily card payment",
+            matchedProviderId: undefined,
+            companyMatchSource: undefined,
+            companyConfidence: undefined,
+            companyMatchReason: undefined,
+            matchedInvoiceId: undefined,
+            confidence: 1,
+            matchReason: "Slash daily card payment"
+          }
+        : {
+            category: "Uncategorized",
+            classificationComplete: false,
+            categorySource: undefined,
+            categoryConfidence: undefined,
+            categoryReason: undefined,
+            confidence: undefined,
+            matchReason: undefined
+          };
+      const next = { ...row, ...update };
+      if (!transactionVisibleChanged(row, next)) continue;
+      addVersionedProfitFactChange(factDeltas, row, next);
+      analyticsChangedDates.add(row.date);
+      await ctx.db.patch(row._id, update);
+      if (slashDailyCardPayment) repairedSlashPayments += 1;
+      else resetGenericAliasMatches += 1;
+    }
+
+    await applyProfitFactDeltas(ctx, factDeltas);
+    if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
+    return {
+      scanned: result.page.length,
+      repairedSlashPayments,
+      resetGenericAliasMatches,
       hasMore: !result.isDone,
       continueCursor: result.isDone ? null : result.continueCursor
     };

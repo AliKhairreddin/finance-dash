@@ -94,6 +94,36 @@ function normalizedCategoryKey(category?: string): string {
   return (category ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 
+const genericTransactionCategoryAliasTokens = new Set([
+  "ach",
+  "bank",
+  "card",
+  "cash",
+  "cashback",
+  "charge",
+  "credit",
+  "debit",
+  "deposit",
+  "fee",
+  "merchant",
+  "payment",
+  "pos",
+  "purchase",
+  "refund",
+  "sepa",
+  "topup",
+  "transaction",
+  "transfer",
+  "unknown",
+  "wire",
+  "withdrawal"
+]);
+
+export function isGenericTransactionCategoryAlias(alias?: string): boolean {
+  const tokens = normalizedCategoryKey(alias).split(" ").filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => genericTransactionCategoryAliasTokens.has(token));
+}
+
 function canonicalCategory(category?: string): string {
   const key = normalizedCategoryKey(category);
   const replacements: Record<string, string> = {
@@ -127,7 +157,13 @@ export function sanitizeStoredTransactionCategories(transactions: Transaction[])
 }
 
 export function sanitizeStoredTransactionCategoryRules(rules: TransactionCategoryRule[]): TransactionCategoryRule[] {
-  return rules.filter((rule) => !isMerchantCategoryCode(rule.category));
+  return rules
+    .filter((rule) => !isMerchantCategoryCode(rule.category))
+    .map((rule) => ({
+      ...rule,
+      aliases: rule.aliases.filter((alias) => !isGenericTransactionCategoryAlias(alias))
+    }))
+    .filter((rule) => rule.aliases.length > 0);
 }
 
 export function transactionCategoryOptionsForDirection(
