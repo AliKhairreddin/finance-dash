@@ -271,6 +271,138 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
   }
 });
 
+test("bulk dashboard payments are idempotent and manual invoice matching can be removed", async () => {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "finance-dash-payments-"));
+  const previousDirectory = process.cwd();
+  const createdAt = "2026-07-20T12:00:00.000Z";
+  const openInvoice = (id: string, amount: number): Invoice => ({
+    id,
+    providerId: "client-payments",
+    documentType: "sales_invoice",
+    origin: "manual",
+    customerName: "Payments Client",
+    amount,
+    currency: "USD",
+    status: "open",
+    meritStatus: "open",
+    meritDeliveryStatus: "saved",
+    invoiceNumber: `2026/${id}`,
+    issueDate: "2026-07-01",
+    dueDate: "2026-07-31",
+    source: "merit",
+    externalId: `merit-${id}`,
+    description: "Services",
+    revenueRunIds: [],
+    createdAt,
+    updatedAt: createdAt
+  });
+  try {
+    process.chdir(temporaryDirectory);
+    await mkdir(join(temporaryDirectory, ".local"), { recursive: true });
+    await writeFile(
+      join(temporaryDirectory, ".local", "finance-dashboard-store.json"),
+      JSON.stringify({
+        providers: [{
+          id: "client-payments",
+          name: "Payments Client",
+          type: "client",
+          tags: [],
+          aliases: [],
+          source: "manual",
+          createdAt
+        }],
+        invoices: [
+          openInvoice("bulk-1", 125),
+          openInvoice("bulk-2", 275),
+          { ...openInvoice("manual-1", 600), customerName: "Unrelated Client" },
+          {
+            ...openInvoice("draft-1", 50),
+            status: "draft",
+            meritStatus: undefined,
+            meritDeliveryStatus: "not-sent",
+            source: "manual",
+            externalId: undefined
+          }
+        ],
+        paymentAllocations: [], holdings: [], fxRates: [], automationRuns: [], teams: [],
+        transactionCategoryRules: [], revenuePartners: [], transactionTeamAssignments: [],
+        wiseCardHolderTeamAssignments: [], wiseStatementTransactions: [], wiseStatementImports: [],
+        transactions: [{
+          id: "wise-manual-payment",
+          source: "wise",
+          accountName: "Wise USD",
+          date: "2026-07-20",
+          description: "MISC RECEIPT 7788",
+          rawName: "MISC RECEIPT",
+          counterparty: "Unknown sender",
+          amount: 600,
+          currency: "USD",
+          direction: "in",
+          status: "settled",
+          category: "Revenue"
+        }],
+        revenueRuns: [], revenueAccruals: [], profitDistributionAdjustments: []
+      }),
+      "utf8"
+    );
+
+    const store = await import("./store");
+    await store.initializeStore();
+    await assert.rejects(
+      store.recordBulkInvoicePayments({
+        invoiceIds: ["bulk-1", "draft-1"],
+        operationId: "invalid-draft-batch",
+        paidAt: "2026-07-20",
+        source: "wise",
+        confirmation: "RECORD_DASHBOARD_PAYMENTS"
+      }),
+      /not an open sales invoice/
+    );
+    assert.equal(store.getSnapshot().paymentAllocations.length, 0);
+
+    const payload = {
+      invoiceIds: ["bulk-1", "bulk-2"],
+      operationId: "payment-operation-1",
+      paidAt: "2026-07-20",
+      source: "wise" as const,
+      confirmation: "RECORD_DASHBOARD_PAYMENTS" as const
+    };
+    const firstBulk = await store.recordBulkInvoicePayments(payload);
+    assert.equal(firstBulk.paymentAllocations.length, 2);
+    assert.deepEqual(
+      firstBulk.invoices.filter((invoice) => payload.invoiceIds.includes(invoice.id)).map((invoice) => invoice.status),
+      ["paid", "paid"]
+    );
+    assert.deepEqual(
+      firstBulk.invoices.filter((invoice) => payload.invoiceIds.includes(invoice.id)).map((invoice) => invoice.meritStatus),
+      ["open", "open"]
+    );
+    const retriedBulk = await store.recordBulkInvoicePayments(payload);
+    assert.equal(retriedBulk.paymentAllocations.length, 2);
+
+    const matched = await store.matchInvoicePayment("wise-manual-payment", {
+      invoiceId: "manual-1",
+      confirmation: "REVIEWED_INVOICE_MATCH"
+    });
+    assert.equal(matched.invoices.find((invoice) => invoice.id === "manual-1")?.status, "paid");
+    assert.equal(matched.paymentAllocations.filter((allocation) => allocation.transactionId === "wise-manual-payment").length, 1);
+    assert.equal(matched.transactionReviewPreview.find((transaction) => transaction.id === "wise-manual-payment")?.invoiceMatchSource, "manual");
+
+    const unmatched = await store.matchInvoicePayment("wise-manual-payment", {
+      confirmation: "REVIEWED_INVOICE_MATCH"
+    });
+    assert.equal(unmatched.invoices.find((invoice) => invoice.id === "manual-1")?.status, "open");
+    assert.equal(unmatched.paymentAllocations.filter((allocation) => allocation.transactionId === "wise-manual-payment").length, 0);
+    const unmatchedTransaction = unmatched.transactionReviewPreview.find((transaction) => transaction.id === "wise-manual-payment");
+    assert.equal(unmatchedTransaction?.matchedInvoiceId, undefined);
+    assert.equal(unmatchedTransaction?.invoiceMatchSource, "manual");
+    assert.equal(unmatchedTransaction?.invoiceMatchReason, "Manually left unmatched");
+  } finally {
+    process.chdir(previousDirectory);
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
 test("manual pulls stay transient until preparing a draft persists the run and invoice", async (context) => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "finance-dash-accrual-"));
   const previousDirectory = process.cwd();

@@ -217,6 +217,7 @@ const transactionCategoryRule = v.object({
 
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
+const invoiceMatchSource = v.union(v.literal("exact"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 
 const transaction = v.object({
@@ -259,6 +260,9 @@ const transaction = v.object({
   companyConfidence: v.optional(v.number()),
   companyMatchReason: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
+  invoiceMatchSource: v.optional(invoiceMatchSource),
+  invoiceMatchConfidence: v.optional(v.number()),
+  invoiceMatchReason: v.optional(v.string()),
   teamId: v.optional(v.string()),
   confidence: v.optional(v.number()),
   matchReason: v.optional(v.string())

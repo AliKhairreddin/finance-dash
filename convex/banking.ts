@@ -35,6 +35,7 @@ const bankSource = v.union(
 );
 const bankConnection = v.object({ source: bankSource, connectionKey: v.string() });
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
+const invoiceMatchSource = v.union(v.literal("exact"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 const maximumActivityPageSize = 200;
@@ -104,6 +105,9 @@ const transaction = v.object({
   companyConfidence: v.optional(v.number()),
   companyMatchReason: v.optional(v.string()),
   matchedInvoiceId: v.optional(v.string()),
+  invoiceMatchSource: v.optional(invoiceMatchSource),
+  invoiceMatchConfidence: v.optional(v.number()),
+  invoiceMatchReason: v.optional(v.string()),
   teamId: v.optional(v.string()),
   confidence: v.optional(v.number()),
   matchReason: v.optional(v.string())
@@ -125,6 +129,9 @@ const transactionEnrichmentUpdate = v.object({
   companyMatchSource: v.optional(transactionClassificationSource),
   companyConfidence: v.optional(v.number()),
   companyMatchReason: v.optional(v.string()),
+  invoiceMatchSource: v.optional(invoiceMatchSource),
+  invoiceMatchConfidence: v.optional(v.number()),
+  invoiceMatchReason: v.optional(v.string()),
   confidence: v.optional(v.number()),
   matchReason: v.optional(v.string())
 });
@@ -1527,6 +1534,9 @@ export const saveTransactionUpdates = mutation({
         companyMatchSource: item.companyMatchSource,
         companyConfidence: item.companyConfidence,
         companyMatchReason: item.companyMatchReason,
+        invoiceMatchSource: item.invoiceMatchSource,
+        invoiceMatchConfidence: item.invoiceMatchConfidence,
+        invoiceMatchReason: item.invoiceMatchReason,
         confidence: item.confidence,
         matchReason: item.matchReason
       };
@@ -1582,7 +1592,10 @@ export const applyMatchedInvoiceAssignmentsBatch = mutation({
     serviceToken: v.string(),
     assignments: v.array(v.object({
       transactionId: v.string(),
-      matchedInvoiceId: v.union(v.string(), v.null())
+      matchedInvoiceId: v.union(v.string(), v.null()),
+      invoiceMatchSource: v.optional(invoiceMatchSource),
+      invoiceMatchConfidence: v.optional(v.number()),
+      invoiceMatchReason: v.optional(v.string())
     }))
   },
   returns: v.object({ updated: v.number() }),
@@ -1605,7 +1618,10 @@ export const applyMatchedInvoiceAssignmentsBatch = mutation({
       const matchedInvoiceId = assignment.matchedInvoiceId ?? undefined;
       if (existing.matchedInvoiceId !== matchedInvoiceId) analyticsChangedDates.add(existing.date);
       await ctx.db.patch(existing._id, {
-        matchedInvoiceId
+        matchedInvoiceId,
+        invoiceMatchSource: assignment.invoiceMatchSource,
+        invoiceMatchConfidence: assignment.invoiceMatchConfidence,
+        invoiceMatchReason: assignment.invoiceMatchReason
       });
       updated += 1;
     }

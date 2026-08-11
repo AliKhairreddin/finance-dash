@@ -1,45 +1,42 @@
-import type { BankAnalyticsCategoryBreakdown, Transaction } from "./types";
+import { combineCurrencyTotals, convertCurrencyTotalsToUsd } from "./currencyTotals";
+import type { BankAnalyticsCategoryBreakdown, CurrencyTotals, FxRate, Transaction } from "./types";
 
 const categoryChartPalette = [
-  "#18181b",
-  "#52525b",
-  "#71717a",
-  "#137333",
-  "#b42318",
-  "#8a5a00",
-  "#0f766e",
-  "#a16207",
-  "#3f3f46",
-  "#a1a1aa",
-  "#7c3aed",
-  "#64748b",
-  "#be185d",
-  "#2f855a",
-  "#0369a1",
-  "#4338ca",
-  "#15803d",
-  "#a21caf",
-  "#0e7490",
-  "#dc2626",
-  "#4d7c0f",
-  "#2563eb",
-  "#b45309",
-  "#6d28d9",
-  "#047857"
+  "#6554c0",
+  "#0c66e4",
+  "#008da6",
+  "#e774bb",
+  "#f5a524",
+  "#403294"
 ] as const;
+
+const otherCategoryColor = "#d4d4d8";
 
 export type CategoryPieSegment = {
   category: string;
+  categories: string[];
   amount: number;
   count: number;
   color: string;
+  nativeTotals: CurrencyTotals;
 };
 
 export type CategoryPieGroup = {
-  currency: string;
+  currency: "USD";
   total: number;
+  nativeTotals: CurrencyTotals;
+  excludedCurrencies: string[];
+  staleCurrencies: string[];
+  asOf?: string;
   segments: CategoryPieSegment[];
 };
+
+export type CategoryPieGroups = {
+  in: CategoryPieGroup | null;
+  out: CategoryPieGroup | null;
+};
+
+type PendingCategoryPieSegment = Omit<CategoryPieSegment, "color">;
 
 function piePoint(radius: number, angle: number): [number, number] {
   const radians = (angle * Math.PI) / 180;
@@ -48,7 +45,7 @@ function piePoint(radius: number, angle: number): [number, number] {
 
 export function categoryDonutSegmentPath(startAngle: number, endAngle: number): string {
   const outerRadius = 51;
-  const innerRadius = 33;
+  const innerRadius = 31;
   const sweep = Math.max(0, Math.min(360, endAngle - startAngle));
   if (sweep <= 0) return "";
 
@@ -80,85 +77,145 @@ export function categoryDonutSegmentPath(startAngle: number, endAngle: number): 
   ].join(" ");
 }
 
-function categoryChartHash(category: string): number {
-  let hash = 0;
-  for (let index = 0; index < category.length; index += 1) {
-    hash = (hash * 31 + category.charCodeAt(index)) >>> 0;
-  }
-  return hash;
-}
-
-function categoryChartColor(category: string, usedColors: Set<string>, index: number): string {
-  const hash = categoryChartHash(category);
-
-  for (let offset = 0; offset < categoryChartPalette.length; offset += 1) {
-    const color = categoryChartPalette[(hash + offset) % categoryChartPalette.length];
-    if (!usedColors.has(color)) return color;
-  }
-
-  let attempt = 0;
-  while (true) {
-    const hue = Math.round((hash + (index + attempt) * 137.508) % 360);
-    const saturation = 58 + ((hash + attempt) % 16);
-    const lightness = 36 + ((index + attempt) % 12);
-    const color = `hsl(${hue} ${saturation}% ${lightness}%)`;
-    if (!usedColors.has(color)) return color;
-    attempt += 1;
-  }
-}
-
 function validCount(value: number | undefined): number {
   return Number.isSafeInteger(value) && value !== undefined && value >= 0 ? value : 0;
 }
 
-export function analyticsCategoryPieGroups(
+function normalizedCounts(counts: Record<string, number>): Map<string, number> {
+  const normalized = new Map<string, number>();
+  for (const [rawCurrency, count] of Object.entries(counts)) {
+    const currency = rawCurrency.trim().toUpperCase();
+    if (!currency) continue;
+    normalized.set(currency, (normalized.get(currency) ?? 0) + validCount(count));
+  }
+  return normalized;
+}
+
+function pendingDirectionSegments(
   rows: readonly BankAnalyticsCategoryBreakdown[],
-  direction: Transaction["direction"]
-): CategoryPieGroup[] {
-  const totalsByCurrency = new Map<string, Map<string, { amount: number; count: number }>>();
-  const categories = new Set<string>();
+  direction: Transaction["direction"],
+  rates: FxRate[]
+): { nativeTotals: CurrencyTotals; segments: PendingCategoryPieSegment[] } {
+  const categories = new Map<string, { nativeTotals: CurrencyTotals; count: number }>();
 
   for (const row of rows) {
     const category = row.category.trim();
     if (!category) continue;
     const totals = direction === "in" ? row.moneyIn : row.moneyOut;
-    const counts = direction === "in" ? row.moneyInTransactionCounts : row.moneyOutTransactionCounts;
+    const counts = normalizedCounts(
+      direction === "in" ? row.moneyInTransactionCounts : row.moneyOutTransactionCounts
+    );
+    const existing = categories.get(category) ?? { nativeTotals: {}, count: 0 };
 
     for (const [rawCurrency, amount] of Object.entries(totals)) {
       if (!Number.isFinite(amount) || amount <= 0) continue;
       const currency = rawCurrency.trim().toUpperCase();
       if (!currency) continue;
-      const categoryTotals = totalsByCurrency.get(currency) ?? new Map<string, { amount: number; count: number }>();
-      const existing = categoryTotals.get(category);
-      categoryTotals.set(category, {
-        amount: (existing?.amount ?? 0) + amount,
-        count: (existing?.count ?? 0) + validCount(counts[rawCurrency])
-      });
-      totalsByCurrency.set(currency, categoryTotals);
-      categories.add(category);
+      existing.nativeTotals[currency] = (existing.nativeTotals[currency] ?? 0) + amount;
+      existing.count += counts.get(currency) ?? 0;
+    }
+    categories.set(category, existing);
+  }
+
+  const nativeTotals = combineCurrencyTotals(...[...categories.values()].map((value) => value.nativeTotals));
+  const segments = [...categories].map(([category, value]) => ({
+    category,
+    categories: [category],
+    amount: convertCurrencyTotalsToUsd(value.nativeTotals, rates).totalUsd,
+    count: value.count,
+    nativeTotals: value.nativeTotals
+  })).filter((segment) => Number.isFinite(segment.amount) && segment.amount > 0)
+    .sort((left, right) => right.amount - left.amount || left.category.localeCompare(right.category));
+
+  return { nativeTotals, segments };
+}
+
+function groupTail(
+  segments: PendingCategoryPieSegment[],
+  visibleCategoryLimit: number
+): PendingCategoryPieSegment[] {
+  const visible = segments.slice(0, visibleCategoryLimit);
+  const tail = segments.slice(visibleCategoryLimit);
+  if (tail.length === 0) return visible;
+  return [
+    ...visible,
+    {
+      category: "Other",
+      categories: tail.map((segment) => segment.category),
+      amount: tail.reduce((sum, segment) => sum + segment.amount, 0),
+      count: tail.reduce((sum, segment) => sum + segment.count, 0),
+      nativeTotals: combineCurrencyTotals(...tail.map((segment) => segment.nativeTotals))
+    }
+  ];
+}
+
+function categoricalColors(
+  directions: Record<Transaction["direction"], PendingCategoryPieSegment[]>
+): Map<string, string> {
+  const neighbors = new Map<string, Set<string>>();
+  for (const segments of Object.values(directions)) {
+    const categories = segments.filter((segment) => segment.category !== "Other").map((segment) => segment.category);
+    for (const category of categories) {
+      const categoryNeighbors = neighbors.get(category) ?? new Set<string>();
+      for (const other of categories) {
+        if (other !== category) categoryNeighbors.add(other);
+      }
+      neighbors.set(category, categoryNeighbors);
     }
   }
 
-  const assignedColors = new Map<string, string>();
-  const usedColors = new Set<string>();
-  [...categories].sort((left, right) => left.localeCompare(right)).forEach((category, index) => {
-    const color = categoryChartColor(category, usedColors, index);
-    assignedColors.set(category, color);
-    usedColors.add(color);
-  });
+  const assigned = new Map<string, string>();
+  const orderedCategories = [...neighbors].sort((left, right) =>
+    right[1].size - left[1].size || left[0].localeCompare(right[0])
+  );
+  for (const [category, categoryNeighbors] of orderedCategories) {
+    const used = new Set([...categoryNeighbors].map((neighbor) => assigned.get(neighbor)).filter(Boolean));
+    const color = categoryChartPalette.find((candidate) => !used.has(candidate))
+      ?? categoryChartPalette[assigned.size % categoryChartPalette.length];
+    assigned.set(category, color);
+  }
+  return assigned;
+}
 
-  return [...totalsByCurrency].map(([currency, categoryTotals]) => {
-    const segments = [...categoryTotals].map(([category, values]) => ({
-      category,
-      amount: values.amount,
-      count: values.count,
-      color: assignedColors.get(category)!
-    })).sort((left, right) => right.amount - left.amount || left.category.localeCompare(right.category));
-    return {
-      currency,
-      total: segments.reduce((sum, segment) => sum + segment.amount, 0),
-      segments
-    };
-  }).filter((group) => Number.isFinite(group.total) && group.total > 0)
-    .sort((left, right) => right.total - left.total || left.currency.localeCompare(right.currency));
+function finishGroup(
+  nativeTotals: CurrencyTotals,
+  segments: PendingCategoryPieSegment[],
+  colors: Map<string, string>,
+  rates: FxRate[]
+): CategoryPieGroup | null {
+  if (segments.length === 0) return null;
+  const conversion = convertCurrencyTotalsToUsd(nativeTotals, rates);
+  return {
+    currency: "USD",
+    total: segments.reduce((sum, segment) => sum + segment.amount, 0),
+    nativeTotals,
+    excludedCurrencies: conversion.excludedCurrencies,
+    staleCurrencies: conversion.staleCurrencies,
+    ...(conversion.asOf ? { asOf: conversion.asOf } : {}),
+    segments: segments.map((segment) => ({
+      ...segment,
+      color: segment.category === "Other" ? otherCategoryColor : colors.get(segment.category)!
+    }))
+  };
+}
+
+export function analyticsCategoryPieGroups(
+  rows: readonly BankAnalyticsCategoryBreakdown[],
+  rates: FxRate[],
+  visibleCategoryLimit = 5
+): CategoryPieGroups {
+  if (!Number.isSafeInteger(visibleCategoryLimit) || visibleCategoryLimit < 1 || visibleCategoryLimit > 8) {
+    throw new Error("Analytics category chart limit must be between 1 and 8");
+  }
+  const inbound = pendingDirectionSegments(rows, "in", rates);
+  const outbound = pendingDirectionSegments(rows, "out", rates);
+  const pending = {
+    in: groupTail(inbound.segments, visibleCategoryLimit),
+    out: groupTail(outbound.segments, visibleCategoryLimit)
+  };
+  const colors = categoricalColors(pending);
+  return {
+    in: finishGroup(inbound.nativeTotals, pending.in, colors, rates),
+    out: finishGroup(outbound.nativeTotals, pending.out, colors, rates)
+  };
 }

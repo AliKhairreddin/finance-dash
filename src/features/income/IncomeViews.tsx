@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { isIsoDate, useUrlState } from "@/lib/url-state";
 import type {
   BillingCadence,
+  BulkRecordInvoicePaymentsPayload,
   CreateInvoicePayload,
   CurrencyTotals,
   DashboardSnapshot,
@@ -59,7 +60,7 @@ import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../shared/income";
 import { dashboardInvoiceDeletionBlockReason } from "../../../shared/invoiceDeletion";
 
-type InvoiceTab = "all" | "active" | "paid";
+type InvoiceTab = "all" | "pending" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open" | "accruing";
 type InvoiceDeliveryFilter = "all" | MeritDeliveryStatus;
 type RevenueRunSortKey = "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
@@ -627,6 +628,7 @@ export function InvoicesView({
   onDeleteDrafts,
   onUpdateDraft,
   onSendInvoices,
+  onBulkRecordPayments,
   onRecordPayment
 }: {
   dashboard: DashboardSnapshot;
@@ -636,10 +638,11 @@ export function InvoicesView({
   onDeleteDrafts: (invoiceIds: string[]) => Promise<void>;
   onUpdateDraft: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
+  onBulkRecordPayments: (payload: BulkRecordInvoicePaymentsPayload) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
 }) {
-  const [tab, setTab] = useUrlState<InvoiceTab>("invoiceTab", "all", {
-    allowedValues: ["all", "active", "paid"],
+  const [tab, setTab] = useUrlState<InvoiceTab>("invoiceTab", "pending", {
+    allowedValues: ["all", "pending", "paid"],
     history: "push"
   });
   const [query, setQuery] = useUrlState("invoiceQuery", "");
@@ -666,6 +669,7 @@ export function InvoicesView({
   const [editorRequest, setEditorRequest] = useState<InvoiceEditorRequest | null>(null);
   const [sendRequest, setSendRequest] = useState<InvoiceSendRequest | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [bulkPaymentInvoices, setBulkPaymentInvoices] = useState<Invoice[] | null>(null);
   const [deleteInvoices, setDeleteInvoices] = useState<Invoice[] | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
@@ -706,7 +710,9 @@ export function InvoicesView({
         : undefined;
     }
     if (sortKey === "period") return row.kind === "invoice" ? row.invoice.periodStart : row.accrual.periodStart;
-    return row.status;
+    return row.kind === "invoice"
+      ? `${row.status}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`
+      : row.status;
   }
 
   const filteredRows = allRows
@@ -741,6 +747,7 @@ export function InvoicesView({
             ...amountTerms,
             row.invoice.currency,
             row.invoice.status,
+            row.invoice.meritStatus ? `Merit ${row.invoice.meritStatus}` : undefined,
             invoiceDeliveryLabel(row.invoice.meritDeliveryStatus),
             rowCadence(row) === "manual" ? "Manual" : cadenceLabel(rowCadence(row)),
             row.invoice.source,
@@ -777,7 +784,7 @@ export function InvoicesView({
     });
   const visibleRows = filteredRows
     .filter((row) => {
-      if (tab === "active") return ["draft", "open", "accruing"].includes(row.status);
+      if (tab === "pending") return ["draft", "open", "accruing"].includes(row.status);
       if (tab === "paid") return row.status === "paid";
       return true;
     })
@@ -807,6 +814,7 @@ export function InvoicesView({
         row.kind === "invoice"
         && (
           invoiceCanBeSelected(row.invoice, providersById)
+          || row.invoice.status === "open"
           || !dashboardInvoiceDeletionBlockReason(row.invoice, dashboard.paymentAllocations)
         )
     )
@@ -820,6 +828,7 @@ export function InvoicesView({
     && selectedInvoices.length === selectedIds.length
     && selectedInvoices.every((invoice) => !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations));
   const selectedDraftCount = selectedInvoices.filter((invoice) => invoice.status === "draft").length;
+  const selectedPayableInvoices = selectedInvoices.filter((invoice) => invoice.status === "open");
   const selectedDeliveryCount = selectedInvoices.filter(invoiceCanBeDelivered).length;
 
   useEffect(() => {
@@ -828,6 +837,7 @@ export function InvoicesView({
         .filter(
           (invoice) =>
             invoiceCanBeSelected(invoice, providersById)
+            || invoice.status === "open"
             || !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations)
         )
         .map((invoice) => invoice.id)
@@ -985,7 +995,7 @@ export function InvoicesView({
           <div className="segmented-control invoice-tabs" aria-label="Invoice view">
             {([
               ["all", `All ${filteredRows.length}`],
-              ["active", `Active ${filteredRows.filter((row) => ["draft", "open", "accruing"].includes(row.status)).length}`],
+              ["pending", `Pending ${filteredRows.filter((row) => ["draft", "open", "accruing"].includes(row.status)).length}`],
               ["paid", `Paid ${filteredRows.filter((row) => row.status === "paid").length}`]
             ] as Array<[InvoiceTab, string]>).map(([id, label]) => (
               <Button
@@ -994,7 +1004,7 @@ export function InvoicesView({
                 type="button"
                 onClick={() => {
                   setTab(id);
-                  if (id !== "active") setStatusFilter("all");
+                  if (id !== "pending") setStatusFilter("all");
                 }}
               >
                 {label}
@@ -1008,6 +1018,15 @@ export function InvoicesView({
                 {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
                 {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
               </span>
+              <Button
+                className="icon-text-button"
+                type="button"
+                title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only open invoices can be recorded as paid"}
+                onClick={() => setBulkPaymentInvoices(selectedPayableInvoices)}
+                disabled={selectedPayableInvoices.length === 0}
+              >
+                <Check size={15} /> Record paid ({selectedPayableInvoices.length})
+              </Button>
               <Button
                 className="icon-text-button destructive-icon-button"
                 type="button"
@@ -1060,7 +1079,7 @@ export function InvoicesView({
                     onValueChange={(value) => {
                       const nextStatus = value as InvoiceStatusFilter;
                       setStatusFilter(nextStatus);
-                      if (nextStatus !== "all") setTab("active");
+                      if (nextStatus !== "all") setTab("pending");
                     }}
                   >
                     <NativeSelectOption value="all">All active statuses</NativeSelectOption>
@@ -1124,7 +1143,7 @@ export function InvoicesView({
         )}
         <div className="invoice-selection-help">
           <Check size={15} />
-          <span>Select unsent dashboard drafts to delete them together, or select send-ready drafts and open Merit invoices for bulk delivery. Record payments one invoice at a time so each bank allocation stays accurate.</span>
+          <span>Select open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.</span>
         </div>
         {duplicateError && <div className="inline-error">{duplicateError}</div>}
 
@@ -1175,26 +1194,29 @@ export function InvoicesView({
                 const canDeliverExisting = invoiceCanBeDelivered(invoice);
                 const deleteBlockReason = dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations);
                 const canDelete = !deleteBlockReason;
-                const selectable = ready || canDeliverExisting || canDelete;
+                const selectable = ready || canDeliverExisting || canDelete || invoice.status === "open";
                 return (
                   <tr key={invoice.id}>
-                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={ready ? "Select draft to save, deliver, or delete" : canDeliverExisting ? "Select existing Merit invoice for delivery" : canDelete ? "Select dashboard draft to delete" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
+                    <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={invoice.status === "open" ? "Select open invoice for payment or delivery actions" : ready ? "Select draft to save, deliver, or delete" : canDeliverExisting ? "Select existing Merit invoice for delivery" : canDelete ? "Select dashboard draft to delete" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
                     <td className="counterparty-cell"><strong>{invoice.invoiceNumber || "Draft invoice"}</strong><span>{provider?.name ?? invoice.customerName}</span><small>{invoice.description}</small></td>
                     <td className="invoice-created-cell">{createdAtLabel(invoice.createdAt)}</td>
                     <td><span>{periodLabel(invoice.periodStart, invoice.periodEnd)}</span><small>Due {dateLabel(invoice.dueDate)}</small></td>
                     <td className="amount"><strong>{money(invoice.amount, invoice.currency)}</strong>{paidAmount > 0 && invoice.status !== "paid" && <small>{money(paidAmount, invoice.currency)} recorded</small>}</td>
                     <td><span className="cadence-badge">{cadenceLabel(invoiceCadence)}</span></td>
                     <td>
-                      <span className={`status-pill invoice-status-${invoice.status}`}>{invoice.status}</span>
-                      {invoice.meritDeliveryStatus !== "not-sent" && (
-                        <small className={invoice.meritDeliveryStatus === "delivery-failed" ? "danger-text" : undefined}>
-                          {invoice.meritDeliveryStatus === "delivered"
-                            ? "Delivered by Merit"
-                            : invoice.meritDeliveryStatus === "delivery-failed"
-                              ? "Merit delivery failed"
-                              : "Saved in Merit"}
-                        </small>
-                      )}
+                      <div className="invoice-status-stack">
+                        <span><span className={`status-pill invoice-status-${invoice.status}`}>{invoice.status}</span><small>Dashboard</small></span>
+                        {invoice.meritStatus && <small>Merit: {invoice.meritStatus}</small>}
+                        {invoice.meritDeliveryStatus !== "not-sent" && (
+                          <small className={invoice.meritDeliveryStatus === "delivery-failed" ? "danger-text" : undefined}>
+                            {invoice.meritDeliveryStatus === "delivered"
+                              ? "Delivered by Merit"
+                              : invoice.meritDeliveryStatus === "delivery-failed"
+                                ? "Merit delivery failed"
+                                : "Saved in Merit"}
+                          </small>
+                        )}
+                      </div>
                       {(invoice.meritDeliveryError || invoice.sendError) && <small className="danger-text">{invoice.meritDeliveryError ?? invoice.sendError}</small>}
                     </td>
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
@@ -1245,6 +1267,7 @@ export function InvoicesView({
                                 {paymentSourceOptions.find((item) => item.value === allocation.source)?.label ?? allocation.source}
                                 {` · ${dateLabel(allocation.paidAt)} · ${money(allocation.amount, allocation.currency)}`}
                               </span>
+                              <small>{allocation.mode === "automatic" ? allocation.matchReason?.startsWith("AI:") ? "AI match" : "Exact match" : "Manual"}</small>
                               {allocation.note && <small>{allocation.note}</small>}
                             </div>
                           )) : <span className="paid-source-copy">Paid in dashboard</span>}
@@ -1289,6 +1312,16 @@ export function InvoicesView({
         }}
       />}
       {paymentInvoice && <MarkPaidDialog paymentAllocations={dashboard.paymentAllocations} invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} onSubmit={async (payload) => { await onRecordPayment(paymentInvoice.id, payload); setPaymentInvoice(null); }} />}
+      {bulkPaymentInvoices && <BulkMarkPaidDialog
+        invoices={bulkPaymentInvoices}
+        paymentAllocations={dashboard.paymentAllocations}
+        onClose={() => setBulkPaymentInvoices(null)}
+        onSubmit={async (payload) => {
+          await onBulkRecordPayments(payload);
+          setBulkPaymentInvoices(null);
+          setSelectedIds([]);
+        }}
+      />}
       {deleteInvoices && <DeleteInvoiceDialog
         invoices={deleteInvoices}
         onClose={() => setDeleteInvoices(null)}
@@ -1605,6 +1638,71 @@ function DeleteInvoiceDialog({
           <Button type="button" className="destructive-button" onClick={() => void remove()} disabled={submitting}>{submitting ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Delete {invoiceCount === 1 ? "dashboard draft" : `${invoiceCount} drafts`}</Button>
         </div>
       </div>
+    </div>,
+    document.body
+  );
+}
+
+function BulkMarkPaidDialog({
+  invoices,
+  paymentAllocations,
+  onClose,
+  onSubmit
+}: {
+  invoices: Invoice[];
+  paymentAllocations: PaymentAllocation[];
+  onClose: () => void;
+  onSubmit: (payload: BulkRecordInvoicePaymentsPayload) => Promise<void>;
+}) {
+  const [operationId] = useState(() => crypto.randomUUID());
+  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [source, setSource] = useState<PaymentSource>("wise");
+  const [accountName, setAccountName] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const totals = invoices.reduce<CurrencyTotals>((result, invoice) => ({
+    ...result,
+    [invoice.currency]: (result[invoice.currency] ?? 0) + Math.max(
+      0,
+      invoice.amount - paymentAllocations
+        .filter((allocation) => allocation.invoiceId === invoice.id)
+        .reduce((total, allocation) => total + allocation.amount, 0)
+    )
+  }), {});
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        invoiceIds: invoices.map((invoice) => invoice.id),
+        operationId,
+        paidAt,
+        source,
+        accountName: accountName.trim() || undefined,
+        note: note.trim() || undefined,
+        confirmation: "RECORD_DASHBOARD_PAYMENTS"
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Payments could not be recorded");
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal payment-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-mark-paid-title" onSubmit={submit}>
+        <div className="modal-header"><div><p className="eyebrow">Bulk dashboard payment</p><h2 id="bulk-mark-paid-title">Record {invoices.length} invoices as paid</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        <div className="merit-unchanged-banner"><CircleAlert size={18} /><div><strong>Merit will stay unchanged</strong><span>This records each invoice’s full outstanding balance in the dashboard. It does not mark invoices paid in Merit.</span></div></div>
+        {error && <div className="inline-error">{error}</div>}
+        <div className="payment-balance-line"><span>{invoices.length} open invoice{invoices.length === 1 ? "" : "s"}</span>{Object.entries(totals).sort().map(([currency, amount]) => <strong key={currency}>{money(amount, currency)}</strong>)}</div>
+        <div className="form-grid"><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label><label>Paid in / source<NativeSelect value={source} onValueChange={(value) => setSource(value as PaymentSource)}>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label></div>
+        <label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Optional" /></label>
+        <label>Payment note<Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context applied to every payment" /></label>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record {invoices.length} paid</Button></div>
+      </form>
     </div>,
     document.body
   );

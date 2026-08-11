@@ -1,5 +1,6 @@
 import type {
   AccountBalance,
+  AiInvoicePaymentMatch,
   ApproximateUsdTotals,
   AutomationRun,
   CurrencyTotals,
@@ -323,6 +324,162 @@ export function calculateInvoicePredictions(
     });
 }
 
+export interface InvoicePaymentMatchCandidateGroup {
+  transaction: Transaction;
+  invoices: Invoice[];
+}
+
+function invoicePaymentIdentityMatched(
+  transaction: Transaction,
+  invoice: Invoice,
+  provider: Provider | undefined,
+  allowAiCompanyMatch: boolean
+): boolean {
+  const transactionText = normalizedText(
+    [transaction.counterparty, transaction.rawName, transaction.description].join(" ")
+  );
+  const providerNames = [provider?.name, provider?.legalName, ...(provider?.aliases ?? []), invoice.customerName]
+    .filter(Boolean)
+    .map((value) => normalizedText(String(value)))
+    .filter((value) => value.replaceAll(" ", "").length >= 3);
+  const providerMatched = Boolean(
+    invoice.providerId
+    && invoice.providerId === transaction.matchedProviderId
+    && (
+      transaction.companyMatchSource === "manual"
+      || transaction.companyMatchSource === "rule"
+      || transaction.confidence === 1
+      || (allowAiCompanyMatch && (transaction.companyConfidence ?? transaction.confidence ?? 0) >= 0.72)
+    )
+  );
+  const providerNameMatched = providerNames.some((value) => containsNormalizedPhrase(transactionText, value));
+  const referenceMatched = [invoice.invoiceNumber, invoice.externalId]
+    .filter(Boolean)
+    .some((value) => containsNormalizedPhrase(transactionText, normalizedText(String(value))));
+  return providerMatched || providerNameMatched || referenceMatched;
+}
+
+export function invoicePaymentAiCandidates({
+  invoices,
+  transactions,
+  allocations,
+  providers
+}: {
+  invoices: Invoice[];
+  transactions: Transaction[];
+  allocations: PaymentAllocation[];
+  providers: Provider[];
+}): InvoicePaymentMatchCandidateGroup[] {
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  return transactions.flatMap((transaction): InvoicePaymentMatchCandidateGroup[] => {
+    if (
+      transaction.direction !== "in"
+      || (transaction.status !== "posted" && transaction.status !== "settled")
+      || !isPaymentSource(transaction.source)
+      || transaction.invoiceMatchSource === "manual"
+      || allocations.some((allocation) => allocation.transactionId === transaction.id)
+    ) {
+      return [];
+    }
+    const candidates = invoices.filter((invoice) => {
+      if (
+        invoice.documentType !== "sales_invoice"
+        || invoice.status !== "open"
+        || invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
+        || transaction.date < invoice.issueDate
+        || Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)) > 0.01
+      ) {
+        return false;
+      }
+      const provider = invoice.providerId ? providerById.get(invoice.providerId) : undefined;
+      return invoicePaymentIdentityMatched(transaction, invoice, provider, true);
+    });
+    return candidates.length > 0 ? [{ transaction, invoices: candidates }] : [];
+  });
+}
+
+export function reconcileAiInvoicePayments({
+  invoices,
+  transactions,
+  allocations,
+  providers,
+  matches,
+  minimumConfidence = 0.9,
+  now = new Date()
+}: {
+  invoices: Invoice[];
+  transactions: Transaction[];
+  allocations: PaymentAllocation[];
+  providers: Provider[];
+  matches: AiInvoicePaymentMatch[];
+  minimumConfidence?: number;
+  now?: Date;
+}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number } {
+  let nextInvoices = [...invoices];
+  const nextAllocations = [...allocations];
+  const candidateIds = new Map(
+    invoicePaymentAiCandidates({ invoices, transactions, allocations, providers })
+      .map((group) => [group.transaction.id, new Set(group.invoices.map((invoice) => invoice.id))])
+  );
+  const accepted = new Map<string, AiInvoicePaymentMatch>();
+  const claimedInvoices = new Set<string>();
+  for (const match of [...matches].sort((left, right) => right.confidence - left.confidence)) {
+    if (
+      match.confidence < minimumConfidence
+      || accepted.has(match.transactionId)
+      || claimedInvoices.has(match.invoiceId)
+      || !candidateIds.get(match.transactionId)?.has(match.invoiceId)
+    ) {
+      continue;
+    }
+    accepted.set(match.transactionId, match);
+    claimedInvoices.add(match.invoiceId);
+  }
+
+  const createdAt = now.toISOString();
+  const nextTransactions = transactions.map((transaction) => {
+    const match = accepted.get(transaction.id);
+    if (!match) return transaction;
+    const invoice = nextInvoices.find((item) => item.id === match.invoiceId);
+    if (!invoice) return transaction;
+    const amount = invoiceOutstanding(invoice, nextAllocations);
+    if (amount <= 0) return transaction;
+    nextAllocations.push({
+      id: `payment-ai-${slug(transaction.id)}-${slug(invoice.id)}`,
+      invoiceId: invoice.id,
+      transactionId: transaction.id,
+      amount,
+      currency: invoice.currency,
+      source: transaction.source as PaymentSource,
+      accountName: transaction.accountName,
+      reference: transaction.description,
+      mode: "automatic",
+      confidence: match.confidence,
+      matchReason: `AI: ${match.reason}`,
+      paidAt: transaction.date,
+      createdAt
+    });
+    nextInvoices = applyPaymentState(nextInvoices, nextAllocations).map((item) =>
+      item.id === invoice.id ? { ...item, updatedAt: createdAt } : item
+    );
+    return {
+      ...transaction,
+      matchedInvoiceId: invoice.id,
+      matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
+      invoiceMatchSource: "ai" as const,
+      invoiceMatchConfidence: match.confidence,
+      invoiceMatchReason: match.reason
+    };
+  });
+
+  return {
+    invoices: nextInvoices,
+    transactions: nextTransactions,
+    allocations: nextAllocations,
+    matched: nextAllocations.length - allocations.length
+  };
+}
+
 export function reconcileExactInvoicePayments({
   invoices,
   transactions,
@@ -345,14 +502,12 @@ export function reconcileExactInvoicePayments({
       transaction.direction !== "in" ||
       (transaction.status !== "posted" && transaction.status !== "settled") ||
       !isPaymentSource(transaction.source) ||
+      transaction.invoiceMatchSource === "manual" ||
       nextAllocations.some((allocation) => allocation.transactionId === transaction.id)
     ) {
       return transaction;
     }
 
-    const transactionText = normalizedText(
-      [transaction.counterparty, transaction.rawName, transaction.description].join(" ")
-    );
     const candidates = nextInvoices.filter((invoice) => {
       if (
         invoice.documentType !== "sales_invoice" ||
@@ -362,20 +517,7 @@ export function reconcileExactInvoicePayments({
       if (transaction.date < invoice.issueDate) return false;
       if (Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) > 0.01) return false;
       const provider = invoice.providerId ? providerById.get(invoice.providerId) : undefined;
-      const providerNames = [provider?.name, provider?.legalName, ...(provider?.aliases ?? []), invoice.customerName]
-        .filter(Boolean)
-        .map((value) => normalizedText(String(value)))
-        .filter((value) => value.replaceAll(" ", "").length >= 3);
-      const confirmedProviderMatched = Boolean(
-        invoice.providerId &&
-        invoice.providerId === transaction.matchedProviderId &&
-        transaction.confidence === 1
-      );
-      const providerNameMatched = providerNames.some((value) => containsNormalizedPhrase(transactionText, value));
-      const referenceMatched = [invoice.invoiceNumber, invoice.externalId]
-        .filter(Boolean)
-        .some((value) => containsNormalizedPhrase(transactionText, normalizedText(String(value))));
-      return confirmedProviderMatched || providerNameMatched || referenceMatched;
+      return invoicePaymentIdentityMatched(transaction, invoice, provider, false);
     });
     if (candidates.length !== 1) return transaction;
 
@@ -404,8 +546,9 @@ export function reconcileExactInvoicePayments({
       ...transaction,
       matchedInvoiceId: invoice.id,
       matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
-      confidence: 1,
-      matchReason: "Automatically matched to an exact open invoice"
+      invoiceMatchSource: "exact" as const,
+      invoiceMatchConfidence: 1,
+      invoiceMatchReason: "Exact amount, currency, and company or invoice reference"
     };
   });
 

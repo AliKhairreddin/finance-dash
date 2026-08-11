@@ -1,3 +1,131 @@
+**Comparison Target**
+
+- Source visual truth: `/Users/alikheireddine/.codex/generated_images/019fef13-6e82-7881-bf32-6908577919ce/exec-ec818abf-0426-495e-b6aa-2e4c7915bd2a.png`
+- Browser-rendered implementation: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-option-3-implementation.png`
+- Combined comparison evidence: `/Users/alikheireddine/.codex/visualizations/2026/08/11/019fef13-6e82-7881-bf32-6908577919ce/analytics-option-3-comparison.png`
+- Route: `http://localhost:5174/?page=analytics`
+- State: light theme, 2026 YTD, first spend category pinned, top companies loaded. Dynamic local fixture values differ from the design mock, but direction, selection, and loading states match.
+
+**Viewport and Normalization**
+
+- Source pixels: 1487 x 1058.
+- Implementation pixels and CSS viewport: 1265 x 712 at 1x density.
+- The source was scaled to 1265 px wide and top-cropped to 1265 x 712 before horizontal composition with the implementation. Browser chrome was excluded from both sides.
+- The full comparison preserves the implementation at native 1x density. A separate focused crop was not needed because the spend-card typography, controls, category rows, and detail pane remain legible in the original-resolution combined image.
+
+**Findings**
+
+- No actionable P0, P1, or P2 differences remain. The implementation preserves the selected direction's key structure: a full-width stacked card, consolidated USD donut, ranked category legend, pinned selection, native-amount detail, top-company preview, and transaction drill-down.
+- Fonts and typography: the implementation uses the product's existing Geist family and compact UI scale. Weight, hierarchy, numeric alignment, truncation, and line wrapping remain coherent with the source while fitting the existing dashboard shell.
+- Spacing and layout rhythm: chart, legend, and preview retain the source's three-column desktop proportion and vertical Spend/Revenue order. Existing dashboard header and sidebar density are intentionally preserved instead of replacing the app shell shown in the design exploration.
+- Colors and tokens: the categorical purple/blue/teal/pink/orange palette and neutral Other slice follow the selected design. Semantic spend/revenue totals continue to use the app's existing danger/good tokens.
+- Image quality and asset fidelity: the screen is a data UI with no source photography or raster product assets. Donut geometry renders as vector data visualization; Lucide icons remain sharp and consistent with the existing product icon system.
+- Copy and content: `USD estimate`, native amount disclosure, transaction counts, top-company context, and `View all transactions` are present. Detailed conversion methodology is kept in the accessible information popover.
+- Accessibility and behavior: category rows are semantic buttons with labels, pressed state, focus treatment, and keyboard selection. The donut mirrors the same selection visually. Reduced-motion-safe transitions are short and nonessential.
+
+**Interactions Tested**
+
+- Selected a revenue category and confirmed the URL persisted `analyticsCategoryView=in:Uncategorized`.
+- Opened the spend USD-estimate information control and confirmed the conversion explanation appeared as a tooltip.
+- Used `View all transactions` and confirmed navigation to Banks with direction, category, and YTD date filters in the URL.
+- Confirmed selected state, details, native totals, top-company rows, empty preview state, and loading completion in the browser-rendered DOM.
+- No fatal runtime or rendering error appeared during the tested interactions.
+
+**Comparison History**
+
+- Pass 1: the combined source and loaded implementation showed no actionable P0/P1/P2 mismatch. No visual fixes were required after this comparison.
+
+**Implementation Checklist**
+
+- [x] Consolidate every quoted currency into one USD-estimate chart per direction.
+- [x] Preserve native currency totals and exchange-rate disclosure.
+- [x] Stack Spend above Revenue at full width.
+- [x] Add hover/focus preview, click-to-pin state, category details, top companies, and transaction drill-down.
+- [x] Keep responsive tablet and mobile grid fallbacks.
+
+**Follow-up Polish**
+
+- P3: validate the category palette against future high-cardinality production data as category rankings change over time.
+
+final result: passed
+---
+
+# Sidebar navigation design QA
+
+## Scope and evidence
+
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-9ab22401-97d3-47a3-af5a-c7aca3837ce8.png`, plus the requested semantic-icon, selected-state, and navigation-order changes.
+- Rendered evidence: `/tmp/finance-dash-sidebar-qa-20260811/sidebar-light.png`, `/tmp/finance-dash-sidebar-qa-20260811/sidebar-dark.png`, and `/tmp/finance-dash-sidebar-qa-20260811/sidebar-mobile-dark.png`.
+- Same-input comparison: `/tmp/finance-dash-sidebar-qa-20260811/source-vs-implementation.png`.
+- Desktop viewport: 1280 × 720 CSS px at device pixel ratio 2. Responsive viewport: 390 × 844 CSS px.
+- Source: 402 × 1546 px, normalized to 201 × 773 CSS px. Focused implementation captures: 192 × 668 px light and 192 × 684 px dark, normalized by the browser to CSS-pixel output.
+- State: Analytics selected in light and dark themes; responsive navigation open in dark mode.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: the existing Geist family, weights, sizes, truncation, and hierarchy are preserved.
+- Spacing and layout rhythm: existing item sizing, radii, group spacing, nested guides, and sidebar width are preserved. Only the requested Accounting/Operations order changed.
+- Colors and tokens: the active item uses `--sidebar-accent` and `--sidebar-accent-foreground`. Light mode resolves to `oklch(0.97 0 0)` with a dark foreground; dark mode resolves to `rgb(24, 24, 27)` with `rgb(250, 250, 250)` foreground. Active border is transparent and box shadow is none.
+- Image and icon fidelity: all symbols remain Lucide vectors. Home, Landmark, BadgeDollarSign, FileText, and Building2 replace ambiguous Overview, Banks, Revenue, Invoices, and Companies symbols; the already-clear icons remain.
+- Copy and content: labels and badges are unchanged. Desktop and responsive order is Overview, Analytics, Banks, Accounting, Operations, Workspace.
+- Accessibility and interaction: the selected item retains `aria-current="page"`; keyboard-only focus remains visible; clicking Analytics updates the URL to `page=analytics`; theme switching and the responsive menu were exercised successfully.
+- Browser console warnings and errors after load: none.
+
+## Full-view and focused comparison evidence
+
+- The same-input comparison places the supplied sidebar and the updated light sidebar together at normalized density, making the selected row, icon silhouettes, group order, guides, labels, and density directly comparable.
+- Separate light and dark focused captures confirm the selected surface becomes darker in light mode and lighter in dark mode without the old inset edge, border, or shadow.
+- The responsive capture and DOM order confirm Accounting precedes Operations at the mobile breakpoint.
+
+## Comparison history
+
+1. [P1] The source selected item combined a bordered pill with an inset left edge. Removed the active border, inset shadow, and icon-specific accent color; post-fix light and dark captures show one flat tonal surface.
+2. [P2] Operations preceded Accounting. Reordered both desktop and responsive rendering; post-fix DOM and screenshot show primary pages, Accounting, Operations, then Workspace.
+3. [P2] Several icons were semantically ambiguous. Replaced five icons with direct Lucide equivalents; post-fix captures show the new set consistently in both themes and responsive navigation.
+
+## Interaction and runtime checks
+
+- Selected navigation, URL update, theme toggle, responsive menu, `aria-current`, keyboard focus, and browser console checked.
+- `git diff --check`: passed.
+- Repository-wide verification and deployments are owned by the Analytics task for the coordinated release.
+
+## Follow-up polish
+
+No P3 follow-up is required.
+
+final result: passed
+
+---
+
+# Invoice payment workflow browser QA
+
+## Scope and evidence
+
+- Rendered route: `http://127.0.0.1:5173/` at a 1265 × 709 CSS-pixel viewport.
+- State: Pending invoice tab selected by default, bulk Record paid action visible for selected open invoices, all-bank incoming payment row, and manual invoice-match dialog open.
+- Evidence was captured in the in-app browser after the combined Analytics, sidebar, and payment changes were present in the shared checkout.
+
+## Findings
+
+No actionable P0, P1, or P2 visual or interaction issues remain.
+
+- Pending is visibly selected when no `invoiceTab` URL parameter exists, and the result text describes the pending view.
+- The all-bank table preserves its sortable data columns and adds a dedicated action for incoming rows: `Match to an existing invoice`.
+- The manual-match dialog presents transaction, date, account, and amount context; a searchable invoice control; an explicit dashboard-only/Merit-unchanged warning; and a `Keep unmatched` action.
+- The bulk action labels the selected invoice count and makes the resulting dashboard-versus-Merit status distinction explicit.
+- Browser console warnings and errors after load: none.
+
+## Runtime checks
+
+- Combined lint, automated tests, and production build are owned and rerun by the Analytics task before the coordinated release.
+- Payment-specific regression coverage includes provider routing, AI candidate constraints, manual locks, atomic bulk validation and idempotency, and manual allocation removal/reopen behavior.
+
+final result: passed
+
+---
+
 # Unified Analytics calendar design QA
 
 ## Scope

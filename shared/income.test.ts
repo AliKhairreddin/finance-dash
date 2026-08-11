@@ -10,6 +10,7 @@ import {
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   hasNonZeroAccountBalance,
+  invoicePaymentAiCandidates,
   isLebanonIncomeAutomationTime,
   latestIncomeAutomationTimestamp,
   mergeFxRates,
@@ -17,6 +18,7 @@ import {
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
+  reconcileAiInvoicePayments,
   reconcileExactInvoicePayments,
   unreadIncomeAutomationCount
 } from "./income";
@@ -235,6 +237,8 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
   assert.equal(result.invoices[0].status, "paid");
   assert.equal(result.allocations[0].source, "wise");
   assert.equal(result.transactions[0].matchedInvoiceId, invoice.id);
+  assert.equal(result.transactions[0].invoiceMatchSource, "exact");
+  assert.equal(result.transactions[0].invoiceMatchConfidence, 1);
 
   const wrongCurrency = reconcileExactInvoicePayments({
     invoices: [invoice],
@@ -297,6 +301,90 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
     providers: [{ ...shortNameProvider, name: "A" }]
   });
   assert.equal(standaloneShortName.matched, 0);
+});
+
+test("manual invoice decisions are authoritative over exact and AI reconciliation", () => {
+  const invoice = openInvoice();
+  const provider = revenueProvider;
+  const transaction: Transaction = {
+    id: "wise-manual-lock",
+    source: "wise",
+    accountName: "Wise USD",
+    date: "2026-07-10",
+    description: "Client Co FD-100",
+    rawName: "Client Co",
+    counterparty: "Client Co",
+    amount: 1000,
+    currency: "USD",
+    direction: "in",
+    status: "settled",
+    category: "Partner network revenue",
+    invoiceMatchSource: "manual",
+    invoiceMatchReason: "Manually left unmatched"
+  };
+
+  assert.equal(reconcileExactInvoicePayments({
+    invoices: [invoice],
+    transactions: [transaction],
+    allocations: [],
+    providers: [provider]
+  }).matched, 0);
+  assert.deepEqual(invoicePaymentAiCandidates({
+    invoices: [invoice],
+    transactions: [transaction],
+    allocations: [],
+    providers: [provider]
+  }), []);
+});
+
+test("AI invoice reconciliation accepts only server-approved high-confidence matches", () => {
+  const invoice = openInvoice();
+  const transaction: Transaction = {
+    id: "wise-ai-payment",
+    source: "wise",
+    accountName: "Wise USD",
+    date: "2026-07-10",
+    description: "Payment for weekly services",
+    rawName: "Client Co",
+    counterparty: "Client Co",
+    amount: 1000,
+    currency: "USD",
+    direction: "in",
+    status: "settled",
+    category: "Partner network revenue",
+    matchedProviderId: revenueProvider.id,
+    companyMatchSource: "ai",
+    companyConfidence: 0.88
+  };
+  assert.equal(invoicePaymentAiCandidates({
+    invoices: [invoice],
+    transactions: [transaction],
+    allocations: [],
+    providers: [revenueProvider]
+  }).length, 1);
+
+  const rejected = reconcileAiInvoicePayments({
+    invoices: [invoice],
+    transactions: [transaction],
+    allocations: [],
+    providers: [revenueProvider],
+    matches: [{ transactionId: transaction.id, invoiceId: invoice.id, confidence: 0.89, reason: "Likely client" }]
+  });
+  assert.equal(rejected.matched, 0);
+
+  const accepted = reconcileAiInvoicePayments({
+    invoices: [invoice],
+    transactions: [transaction],
+    allocations: [],
+    providers: [revenueProvider],
+    matches: [{ transactionId: transaction.id, invoiceId: invoice.id, confidence: 0.96, reason: "Client and service period agree" }],
+    now: new Date("2026-07-10T12:00:00.000Z")
+  });
+  assert.equal(accepted.matched, 1);
+  assert.equal(accepted.invoices[0].status, "paid");
+  assert.equal(accepted.allocations[0].mode, "automatic");
+  assert.equal(accepted.transactions[0].invoiceMatchSource, "ai");
+  assert.equal(accepted.transactions[0].invoiceMatchConfidence, 0.96);
 });
 
 test("partial allocations keep an invoice open until fully covered", () => {

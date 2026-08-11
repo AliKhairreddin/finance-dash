@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -106,7 +106,8 @@ export function AllBankTransactionsView({
   activitySummaryError,
   onLoadPrevious,
   onLoadMore,
-  onRetryActivitySummary
+  onRetryActivitySummary,
+  onMatchInvoice
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
@@ -144,6 +145,7 @@ export function AllBankTransactionsView({
   onLoadPrevious: () => Promise<void>;
   onLoadMore: () => Promise<void>;
   onRetryActivitySummary: () => Promise<void>;
+  onMatchInvoice: (transaction: Transaction) => void;
 }) {
   const query = searchTerm;
   const setQuery = setSearchTerm;
@@ -347,6 +349,7 @@ export function AllBankTransactionsView({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="direction">Direction</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="category">Category / company</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
+            <th scope="col">Actions</th>
           </tr></thead>
           <tbody>
             {rows.length > 0 ? rows.map((transaction) => {
@@ -354,8 +357,8 @@ export function AllBankTransactionsView({
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td></tr>;
-            }) : <tr><td colSpan={7}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className="icon-button" type="button" title={transaction.matchedInvoiceId ? "Review or replace invoice match" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}><Link2 size={16} /></Button>}</td></tr>;
+            }) : <tr><td colSpan={8}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>
       </div>

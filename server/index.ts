@@ -5,6 +5,7 @@ import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
   AutoCategorizeTransactionsPayload,
+  BulkRecordInvoicePaymentsPayload,
   BankTransactionSource,
   CreateExpensePayload,
   CreateHoldingPayload,
@@ -19,6 +20,7 @@ import type {
   DraftRevenueRunPayload,
   ImportWiseStatementPayload,
   MatchTransactionPayload,
+  MatchInvoicePaymentPayload,
   MatchExpensePaymentPayload,
   RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
@@ -36,6 +38,7 @@ import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import { transactionBusinessCategory } from "../shared/categories";
 import {
   assignTransactionTeam,
+  autoMatchInvoicePayments,
   autoCategorizeTransactions,
   createExpense,
   createHolding,
@@ -64,6 +67,8 @@ import {
   matchTransaction,
   matchExpensePayment,
   previewInvoiceDuplicate,
+  matchInvoicePayment,
+  recordBulkInvoicePayments,
   recordInvoicePayment,
   refreshFxRates,
   runIncomeAutomation,
@@ -476,6 +481,24 @@ app.post("/api/transactions/auto-categorize", async (request, response, next) =>
   }
 });
 
+app.post("/api/invoices/auto-match-payments", async (_request, response, next) => {
+  try {
+    response.json(await autoMatchInvoicePayments());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/transactions/:transactionId/invoice-match", async (request, response, next) => {
+  try {
+    response.json(
+      await matchInvoicePayment(request.params.transactionId, request.body as MatchInvoicePaymentPayload)
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/transactions/:transactionId/team", async (request, response, next) => {
   try {
     const payload = {
@@ -623,6 +646,14 @@ app.post("/api/invoices/:invoiceId/payments", async (request, response, next) =>
     response.json(
       await recordInvoicePayment(request.params.invoiceId, request.body as RecordInvoicePaymentPayload)
     );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/invoices/payments/bulk", async (request, response, next) => {
+  try {
+    response.json(await recordBulkInvoicePayments(request.body as BulkRecordInvoicePaymentsPayload));
   } catch (error) {
     next(error);
   }

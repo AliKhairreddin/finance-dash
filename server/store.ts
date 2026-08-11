@@ -4,11 +4,13 @@ import type {
   AiPromptResult,
   AssignTransactionTeamPayload,
   AutomationRun,
+  AutoMatchInvoicePaymentsResult,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   BankAnalyticsCategoryCompaniesPage,
   BankAnalyticsSnapshot,
   BankTransactionSource,
+  BulkRecordInvoicePaymentsPayload,
   CreateHoldingPayload,
   CreateExpensePayload,
   CreateInvoicePayload,
@@ -30,6 +32,7 @@ import type {
   LedgerItem,
   MeritTax,
   MatchTransactionPayload,
+  MatchInvoicePaymentPayload,
   MatchExpensePaymentPayload,
   PaymentAllocation,
   PersistedAiSettings,
@@ -72,6 +75,7 @@ import {
   publicAiSettings,
   requireOpenRouterZdrModel,
   runOpenRouterPrompt,
+  runOpenRouterInvoicePaymentMatching,
   runOpenRouterTransactionCategorization
 } from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
@@ -116,6 +120,7 @@ import {
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   incomeAutomationTimezone,
+  invoicePaymentAiCandidates,
   invoiceOutstanding,
   isClosedBillingPeriod,
   isLiquidAccountBalance,
@@ -125,6 +130,7 @@ import {
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
+  reconcileAiInvoicePayments,
   reconcileExactInvoicePayments,
   revenueInvoiceId
 } from "../shared/income";
@@ -681,6 +687,54 @@ export async function autoCategorizeTransactions(
     aiMatches,
     categorizedOnly,
     reviewed
+  };
+}
+
+export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymentsResult> {
+  const knownTransactions = getKnownTransactions();
+  const exact = reconcileExactInvoicePayments({
+    invoices: applyPaymentState(invoices, paymentAllocations),
+    transactions: knownTransactions,
+    allocations: paymentAllocations,
+    providers
+  });
+  const eligibleForAi = invoicePaymentAiCandidates({
+    invoices: exact.invoices,
+    transactions: exact.transactions,
+    allocations: exact.allocations,
+    providers
+  });
+  const activeAiSettings = runtimeAiSettings();
+  const aiMatches = activeAiSettings.openRouterApiKey && eligibleForAi.length > 0
+    ? await runOpenRouterInvoicePaymentMatching(
+        activeAiSettings,
+        exact.transactions,
+        exact.invoices,
+        exact.allocations,
+        providers,
+        process.env.PUBLIC_APP_URL
+      )
+    : [];
+  const ai = reconcileAiInvoicePayments({
+    invoices: exact.invoices,
+    transactions: exact.transactions,
+    allocations: exact.allocations,
+    providers,
+    matches: aiMatches
+  });
+  const transactionById = new Map(ai.transactions.map((transaction) => [transaction.id, transaction]));
+  wiseStatementTransactions = wiseStatementTransactions.map(
+    (transaction) => transactionById.get(transaction.id) ?? transaction
+  );
+  transactions = transactions.map((transaction) => transactionById.get(transaction.id) ?? transaction);
+  invoices = ai.invoices;
+  paymentAllocations = ai.allocations;
+  if (exact.matched > 0 || ai.matched > 0) await persist();
+  return {
+    dashboard: getSnapshot(),
+    exactMatches: exact.matched,
+    aiMatches: ai.matched,
+    reviewed: eligibleForAi.length
   };
 }
 
@@ -1603,6 +1657,147 @@ function validPaymentSource(source: string): source is PaymentAllocation["source
   return ["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"].includes(source);
 }
 
+function bulkPaymentAllocationId(operationId: string, invoiceId: string): string {
+  const safeOperationId = operationId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+  const safeInvoiceId = invoiceId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+  return `payment-bulk-${safeOperationId}-${safeInvoiceId}`;
+}
+
+export async function recordBulkInvoicePayments(
+  payload: BulkRecordInvoicePaymentsPayload
+): Promise<DashboardSnapshot> {
+  const invoiceIds = [...new Set(payload.invoiceIds)];
+  if (
+    payload.confirmation !== "RECORD_DASHBOARD_PAYMENTS"
+    || invoiceIds.length === 0
+    || invoiceIds.length !== payload.invoiceIds.length
+    || invoiceIds.length > 200
+    || !/^[a-zA-Z0-9_-]{8,100}$/.test(payload.operationId)
+    || !validPaymentSource(payload.source)
+  ) {
+    throw new Error("Unique invoice IDs, operation ID, payment source, and explicit confirmation are required");
+  }
+  const paidAt = normalizedDate(payload.paidAt, "Paid date");
+  const selected = invoiceIds.map((invoiceId) => {
+    const invoice = invoices.find((item) => item.id === invoiceId);
+    if (!invoice) throw new Error(`Invoice ${invoiceId} was not found`);
+    const allocationId = bulkPaymentAllocationId(payload.operationId, invoiceId);
+    const existingAllocation = paymentAllocations.find((allocation) => allocation.id === allocationId);
+    if (existingAllocation) return { invoice, allocationId, outstanding: 0, alreadyRecorded: true };
+    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") {
+      throw new Error(`Invoice ${invoice.invoiceNumber} is not an open sales invoice`);
+    }
+    const outstanding = invoiceOutstanding(invoice, paymentAllocations);
+    if (outstanding <= 0) throw new Error(`Invoice ${invoice.invoiceNumber} has no outstanding balance`);
+    return { invoice, allocationId, outstanding, alreadyRecorded: false };
+  });
+  const createdAt = new Date().toISOString();
+  const additions: PaymentAllocation[] = selected.flatMap(({ invoice, allocationId, outstanding, alreadyRecorded }) =>
+    alreadyRecorded
+      ? []
+      : [{
+          id: allocationId,
+          invoiceId: invoice.id,
+          amount: Number(outstanding.toFixed(2)),
+          currency: invoice.currency,
+          source: payload.source,
+          accountName: cleanOptional(payload.accountName),
+          note: cleanOptional(payload.note),
+          mode: "manual" as const,
+          matchReason: "Bulk dashboard payment",
+          paidAt,
+          createdAt
+        }]
+  );
+  if (additions.length > 0) {
+    paymentAllocations = [...additions, ...paymentAllocations];
+    const selectedIds = new Set(invoiceIds);
+    invoices = applyPaymentState(invoices, paymentAllocations).map((invoice) =>
+      selectedIds.has(invoice.id) ? { ...invoice, updatedAt: createdAt } : invoice
+    );
+    await persist();
+  }
+  return getSnapshot();
+}
+
+export async function matchInvoicePayment(
+  transactionId: string,
+  payload: MatchInvoicePaymentPayload
+): Promise<DashboardSnapshot> {
+  if (payload.confirmation !== "REVIEWED_INVOICE_MATCH") {
+    throw new Error("Explicit invoice match confirmation is required");
+  }
+  const transaction = findKnownTransaction(transactionId);
+  if (!transaction) throw new Error("Bank transaction not found");
+  if (
+    transaction.direction !== "in"
+    || (transaction.status !== "posted" && transaction.status !== "settled")
+    || !validPaymentSource(transaction.source)
+  ) {
+    throw new Error("Only posted or settled incoming bank transactions can be matched to invoices");
+  }
+  const removedInvoiceIds = new Set(
+    paymentAllocations
+      .filter((allocation) => allocation.transactionId === transaction.id)
+      .map((allocation) => allocation.invoiceId)
+  );
+  paymentAllocations = paymentAllocations.filter((allocation) => allocation.transactionId !== transaction.id);
+  const invoice = payload.invoiceId ? invoices.find((item) => item.id === payload.invoiceId) : undefined;
+  if (payload.invoiceId && !invoice) throw new Error("Invoice not found");
+  if (invoice) {
+    if (invoice.documentType !== "sales_invoice" || invoice.status === "draft") {
+      throw new Error("Only saved sales invoices can receive bank payments");
+    }
+    if (invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()) {
+      throw new Error("The invoice and bank transaction currencies must match");
+    }
+    const outstanding = invoiceOutstanding(invoice, paymentAllocations);
+    if (outstanding <= 0) throw new Error("The selected invoice has no outstanding balance");
+    const createdAt = new Date().toISOString();
+    paymentAllocations = [{
+      id: `payment-manual-${crypto.randomUUID()}`,
+      invoiceId: invoice.id,
+      transactionId: transaction.id,
+      amount: Number(Math.min(outstanding, Math.abs(transaction.amount)).toFixed(2)),
+      currency: invoice.currency,
+      source: transaction.source,
+      accountName: transaction.accountName,
+      reference: transaction.description,
+      mode: "manual",
+      confidence: 1,
+      matchReason: "Manually matched bank transaction",
+      paidAt: transaction.date,
+      createdAt
+    }, ...paymentAllocations];
+    removedInvoiceIds.add(invoice.id);
+    if (invoice.providerId) {
+      providers = providers.map((provider) =>
+        provider.id === invoice.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
+      );
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  invoices = applyPaymentState(invoices, paymentAllocations).map((item) =>
+    removedInvoiceIds.has(item.id) ? { ...item, updatedAt } : item
+  );
+  const {
+    matchedInvoiceId: _matchedInvoiceId,
+    invoiceMatchConfidence: _invoiceMatchConfidence,
+    invoiceMatchReason: _invoiceMatchReason,
+    ...withoutInvoiceMatch
+  } = transaction;
+  updateStoredTransaction({
+    ...withoutInvoiceMatch,
+    matchedInvoiceId: invoice?.id,
+    ...(invoice?.providerId ? { matchedProviderId: invoice.providerId } : {}),
+    invoiceMatchSource: "manual",
+    invoiceMatchConfidence: 1,
+    invoiceMatchReason: invoice ? "Manually matched bank transaction" : "Manually left unmatched"
+  });
+  await persist();
+  return getSnapshot();
+}
+
 export async function recordInvoicePayment(
   invoiceId: string,
   payload: RecordInvoicePaymentPayload
@@ -1675,6 +1870,9 @@ export async function recordInvoicePayment(
       ...withoutInvoiceMatch,
       ...(linkedInvoiceIds.size === 1 ? { matchedInvoiceId: invoice.id } : {}),
       matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
+      invoiceMatchSource: "manual",
+      invoiceMatchConfidence: 1,
+      invoiceMatchReason: linkedInvoiceIds.size === 1 ? "Manually allocated to invoice" : "Manually split across invoices",
       confidence: 1,
       matchReason: "Confirmed invoice payment allocation"
     });

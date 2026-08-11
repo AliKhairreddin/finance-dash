@@ -24,6 +24,8 @@ export type MeritDeliveryStatus = "not-sent" | "saved" | "delivered" | "delivery
 
 export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "cash" | "kraken" | "trust" | "other";
 
+export type InvoiceMatchSource = "exact" | "ai" | "manual";
+
 export type HoldingKind = "cash" | "exchange" | "wallet";
 
 export type HoldingAssetType = "fiat" | "crypto";
@@ -331,6 +333,13 @@ export interface PaymentAllocation {
   createdAt: string;
 }
 
+export interface AiInvoicePaymentMatch {
+  transactionId: string;
+  invoiceId: string;
+  confidence: number;
+  reason: string;
+}
+
 export interface InvoicePaymentPrediction {
   invoiceId: string;
   sampleSize: number;
@@ -470,6 +479,9 @@ export interface Transaction {
   companyConfidence?: number;
   companyMatchReason?: string;
   matchedInvoiceId?: string;
+  invoiceMatchSource?: InvoiceMatchSource;
+  invoiceMatchConfidence?: number;
+  invoiceMatchReason?: string;
   teamId?: string;
   confidence?: number;
   matchReason?: string;
@@ -922,6 +934,28 @@ export interface RecordInvoicePaymentPayload {
   transactionId?: string;
   reference?: string;
   note?: string;
+}
+
+export interface BulkRecordInvoicePaymentsPayload {
+  invoiceIds: string[];
+  operationId: string;
+  paidAt: string;
+  source: PaymentSource;
+  accountName?: string;
+  note?: string;
+  confirmation: "RECORD_DASHBOARD_PAYMENTS";
+}
+
+export interface MatchInvoicePaymentPayload {
+  invoiceId?: string;
+  confirmation: "REVIEWED_INVOICE_MATCH";
+}
+
+export interface AutoMatchInvoicePaymentsResult {
+  dashboard: DashboardSnapshot;
+  exactMatches: number;
+  aiMatches: number;
+  reviewed: number;
 }
 
 export interface CreateHoldingPayload {

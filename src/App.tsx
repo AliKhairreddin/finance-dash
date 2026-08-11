@@ -4,7 +4,6 @@ import {
   ArrowUpRight,
   BadgeDollarSign,
   Banknote,
-  BarChart3,
   BookOpen,
   Building2,
   Check,
@@ -15,15 +14,20 @@ import {
   CircleDollarSign,
   CreditCard,
   Download,
+  FileText,
   FilePlus2,
+  Home,
   ReceiptText,
   Info,
   KeyRound,
+  Landmark,
+  Link2,
   Loader2,
   LogOut,
   Moon,
   PanelRightOpen,
   Pencil,
+  Pin,
   PieChart,
   Plus,
   RefreshCw,
@@ -31,10 +35,8 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
   Sun,
-  Tags,
   Trash2,
   Upload,
   UserRound,
@@ -72,12 +74,12 @@ import type {
   AiPromptResult,
   BankAnalyticsAggregate,
   BankAnalyticsCategoryCompaniesPage,
-  BankAnalyticsCategoryCompany,
   BankAnalyticsRelationship,
   BankAnalyticsSnapshot,
   BankPeriodDirectionMetrics,
   BankPeriodMetrics,
   BankPeriodSourceMetrics,
+  BulkRecordInvoicePaymentsPayload,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -98,6 +100,7 @@ import type {
   Invoice,
   MeritSendMode,
   MeritTax,
+  MatchInvoicePaymentPayload,
   OpenRouterZdrModel,
   ProfitDistributionAdjustment,
   ProfitDistributionBucket,
@@ -140,7 +143,8 @@ import { combineCurrencyTotals, convertCurrencyTotalsToUsd, hasCurrencyTotals, s
 import {
   analyticsCategoryPieGroups,
   categoryDonutSegmentPath,
-  type CategoryPieGroup
+  type CategoryPieGroup,
+  type CategoryPieSegment
 } from "../shared/categoryPie";
 import {
   analyticsCurrentPeriodRanges,
@@ -303,31 +307,36 @@ const analyticsMonthOptions = [
 
 type AnalyticsCategoryView = {
   direction: "in" | "out";
-  currency: string;
   category: string;
 };
 
 function analyticsCategoryViewValue(selection: AnalyticsCategoryView): string {
-  return `${selection.direction}:${selection.currency}:${selection.category}`;
+  return `${selection.direction}:${selection.category}`;
 }
 
 function parseAnalyticsCategoryView(value: string): AnalyticsCategoryView | null {
-  const firstSeparator = value.indexOf(":");
-  const secondSeparator = value.indexOf(":", firstSeparator + 1);
-  if (firstSeparator < 0 || secondSeparator < 0) return null;
-  const direction = value.slice(0, firstSeparator);
-  const currency = value.slice(firstSeparator + 1, secondSeparator);
-  const category = value.slice(secondSeparator + 1).trim();
+  const separator = value.indexOf(":");
+  if (separator < 0) return null;
+  const direction = value.slice(0, separator);
+  const category = value.slice(separator + 1).trim();
   if (
     (direction !== "in" && direction !== "out")
-    || !/^[A-Z0-9]{2,12}$/.test(currency)
     || !category
     || category.length > 160
   ) {
     return null;
   }
-  return { direction, currency, category };
+  return { direction, category };
 }
+
+type AnalyticsCategoryCompanyView = {
+  companyKey: string;
+  providerId?: string;
+  merchantName: string;
+  nativeTotals: CurrencyTotals;
+  amountUsd: number;
+  transactionCount: number;
+};
 
 function localIsoDate(daysFromToday = 0): string {
   const date = new Date();
@@ -834,6 +843,7 @@ function App() {
   ]);
   transactionPageRequestRef.current = transactionPageRequest;
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
+  const [invoiceMatchTransaction, setInvoiceMatchTransaction] = useState<Transaction | null>(null);
   const [expenseTransaction, setExpenseTransaction] = useState<Transaction | null>(null);
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -1938,6 +1948,33 @@ function App() {
     setNotice("Payment recorded in this dashboard only. Merit was not changed.");
   }
 
+  async function recordBulkInvoicePayments(payload: BulkRecordInvoicePaymentsPayload) {
+    const response = await fetch(`${apiBase}/invoices/payments/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Payments could not be recorded"));
+    setDashboard((await response.json()) as DashboardSnapshot);
+    setNotice(`${payload.invoiceIds.length} invoice${payload.invoiceIds.length === 1 ? "" : "s"} recorded as paid in this dashboard only. Merit was not changed.`);
+  }
+
+  async function matchInvoicePayment(transaction: Transaction, invoiceId?: string) {
+    const payload: MatchInvoicePaymentPayload = {
+      invoiceId,
+      confirmation: "REVIEWED_INVOICE_MATCH"
+    };
+    const response = await fetch(`${apiBase}/transactions/${encodeURIComponent(transaction.id)}/invoice-match`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Invoice match could not be saved"));
+    setDashboard((await response.json()) as DashboardSnapshot);
+    await refreshCurrentTransactionPage();
+    setNotice(invoiceId ? "Bank transaction matched to the invoice. Merit was not changed." : "Automatic invoice matching disabled for this transaction.");
+  }
+
   async function createHolding(payload: CreateHoldingPayload) {
     const response = await fetch(`${apiBase}/holdings`, {
       method: "POST",
@@ -2221,6 +2258,7 @@ function App() {
           onAssignTeam={assignTransactionTeam}
           onUpdateCategory={updateTransactionCategory}
           onOpenInvoice={openTransactionDocument}
+          onMatchInvoice={setInvoiceMatchTransaction}
           onCreateHolding={createHolding}
           onUpdateHolding={updateHolding}
           onDeleteHolding={deleteHolding}
@@ -2235,6 +2273,19 @@ function App() {
           analyticsSnapshots={analyticsSnapshots}
           dashboard={dashboard}
           ensureAnalyticsSnapshot={ensureAnalyticsSnapshot}
+          onViewCategoryTransactions={(selection, range) => {
+            setActiveTab("banks");
+            setBankTab("all");
+            setBankActivityView("transactions");
+            setAllBankSource("all");
+            setBankAccountFilter("all");
+            setTeamFilter("all");
+            setMatchFilter("all");
+            setSearchTerm("");
+            setBankDirection(selection.direction);
+            setBankCategoryFilter(selection.category);
+            setAllBankDateRange(range);
+          }}
         />
       )}
 
@@ -2260,6 +2311,7 @@ function App() {
           onDeleteDrafts={deleteInvoiceDrafts}
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
+          onBulkRecordPayments={recordBulkInvoicePayments}
           onRecordPayment={recordInvoicePayment}
         />
       )}
@@ -2319,6 +2371,18 @@ function App() {
           onSubmit={async (payload) => {
             await submitInvoice(payload);
             setInvoiceTransaction(null);
+          }}
+        />
+      )}
+
+      {invoiceMatchTransaction && (
+        <InvoicePaymentMatchDialog
+          transaction={invoiceMatchTransaction}
+          dashboard={dashboard}
+          onClose={() => setInvoiceMatchTransaction(null)}
+          onSubmit={async (invoiceId) => {
+            await matchInvoicePayment(invoiceMatchTransaction, invoiceId);
+            setInvoiceMatchTransaction(null);
           }}
         />
       )}
@@ -2515,24 +2579,24 @@ function Sidebar({
   const sidebarRef = useRef<HTMLElement>(null);
   type SidebarItem = { id: ActiveTab; label: string; icon: React.ReactNode };
   const primaryItems: SidebarItem[] = [
-    { id: "overview", label: "Overview", icon: <SlidersHorizontal size={17} /> },
+    { id: "overview", label: "Overview", icon: <Home size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
-    { id: "banks", label: "Banks", icon: <WalletCards size={17} /> },
+    { id: "banks", label: "Banks", icon: <Landmark size={17} /> },
   ];
   const operationsItems: SidebarItem[] = [
     { id: "management", label: "Management", icon: <BookOpen size={17} /> },
     { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
   ];
   const accountingItems: SidebarItem[] = [
-    { id: "revenue", label: "Revenue", icon: <BarChart3 size={17} /> },
-    { id: "invoices", label: "Invoices", icon: <FilePlus2 size={17} /> },
+    { id: "revenue", label: "Revenue", icon: <BadgeDollarSign size={17} /> },
+    { id: "invoices", label: "Invoices", icon: <FileText size={17} /> },
     { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> }
   ];
   const workspaceItems: SidebarItem[] = [
-    { id: "providers", label: "Companies", icon: <Tags size={17} /> },
+    { id: "providers", label: "Companies", icon: <Building2 size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
-  const activeItem = [...primaryItems, ...operationsItems, ...accountingItems, ...workspaceItems]
+  const activeItem = [...primaryItems, ...accountingItems, ...operationsItems, ...workspaceItems]
     .find((item) => item.id === activeTab) ?? primaryItems[0];
 
   useEffect(() => {
@@ -2612,13 +2676,13 @@ function Sidebar({
           {mobileMenuOpen && (
             <div className="mobile-nav-menu" data-testid="mobile-nav-menu" id="mobile-navigation-menu" role="menu">
               {primaryItems.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Accounting</div>
+              {accountingItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
               </div>
               {operationsItems.map((item) => navigationButton(item, false, true))}
-              <div className="mobile-nav-group-label">Accounting</div>
-              {accountingItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label">Workspace</div>
               {workspaceItems.map((item) => navigationButton(item, false, true))}
             </div>
@@ -2644,16 +2708,16 @@ function Sidebar({
       </div>
       <nav className="sidebar-nav">
         {primaryItems.map((item) => navigationButton(item))}
+        <div className="sidebar-section-label">Accounting</div>
+        <div className="sidebar-income-group">
+          {accountingItems.map((item) => navigationButton(item, true))}
+        </div>
         <div className="sidebar-section-label has-badge">
           <span>Operations</span>
           <span className="sidebar-beta-badge">Beta</span>
         </div>
         <div className="sidebar-income-group">
           {operationsItems.map((item) => navigationButton(item, true))}
-        </div>
-        <div className="sidebar-section-label">Accounting</div>
-        <div className="sidebar-income-group">
-          {accountingItems.map((item) => navigationButton(item, true))}
         </div>
         <div className="sidebar-section-label">Workspace</div>
         <div className="sidebar-income-group">
@@ -3108,6 +3172,7 @@ function BanksView({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
+  onMatchInvoice,
   onCreateHolding,
   onUpdateHolding,
   onDeleteHolding,
@@ -3172,6 +3237,7 @@ function BanksView({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  onMatchInvoice: (transaction: Transaction) => void;
   onCreateHolding: (payload: CreateHoldingPayload) => Promise<void>;
   onUpdateHolding: (holdingId: string, payload: UpdateHoldingPayload) => Promise<void>;
   onDeleteHolding: (holdingId: string) => Promise<void>;
@@ -3550,6 +3616,7 @@ function BanksView({
             onLoadPrevious={onLoadPreviousTransactions}
             onLoadMore={onLoadMoreTransactions}
             onRetryActivitySummary={onRetryBankActivitySummary}
+            onMatchInvoice={onMatchInvoice}
             rangeControls={(
               <BankDateRangeControls
                 dateRange={allBankDateRange}
@@ -3607,6 +3674,7 @@ function BanksView({
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
+          onMatchInvoice={onMatchInvoice}
           rangeControls={(
             <BankDateRangeControls
               dateRange={wiseDateRange}
@@ -3663,6 +3731,7 @@ function BanksView({
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
+          onMatchInvoice={onMatchInvoice}
         />
       )}
       {activeBank === "slash" && (
@@ -3711,6 +3780,7 @@ function BanksView({
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
+          onMatchInvoice={onMatchInvoice}
         />
       )}
       {activeBank === "amex" && (
@@ -3759,6 +3829,7 @@ function BanksView({
           onAssignTeam={onAssignTeam}
           onUpdateCategory={onUpdateCategory}
           onOpenInvoice={onOpenInvoice}
+          onMatchInvoice={onMatchInvoice}
         />
       )}
       {activeBank === "holdings" && (
@@ -3829,6 +3900,7 @@ type BankReconciliationViewProps = {
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  onMatchInvoice: (transaction: Transaction) => void;
   wide?: boolean;
   rangeControls?: ReactNode;
   tableFooter?: ReactNode;
@@ -3880,6 +3952,7 @@ function BankReconciliationView({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
+  onMatchInvoice,
   wide = false,
   rangeControls,
   tableFooter
@@ -4142,6 +4215,7 @@ function BankReconciliationView({
         onAssignTeam={onAssignTeam}
         onUpdateCategory={onUpdateCategory}
         onOpenInvoice={onOpenInvoice}
+        onMatchInvoice={onMatchInvoice}
         hasPrevious={hasPreviousTransactions}
         hasMore={hasMoreTransactions}
         isLoading={isLoadingTransactions}
@@ -4211,13 +4285,15 @@ function AnalyticsView({
   analyticsSnapshots,
   analyticsBuildReasons,
   analyticsDataRevision,
-  ensureAnalyticsSnapshot
+  ensureAnalyticsSnapshot,
+  onViewCategoryTransactions
 }: {
   dashboard: DashboardSnapshot;
   analyticsSnapshots: Record<string, BankAnalyticsSnapshot>;
   analyticsBuildReasons: Record<string, "historical-coverage" | "snapshot">;
   analyticsDataRevision: number;
   ensureAnalyticsSnapshot: (range: AnalyticsDateRange) => Promise<BankAnalyticsSnapshot>;
+  onViewCategoryTransactions: (selection: AnalyticsCategoryView, range: AnalyticsDateRange) => void;
 }) {
   const analyticsToday = localIsoDate();
   const currentAnalyticsYear = Number(analyticsToday.slice(0, 4));
@@ -4325,21 +4401,61 @@ function AnalyticsView({
   const analyticsPeriodBusy = isLoadingAnalyticsPeriod || analyticsBuildReason !== null;
   const summary = analytics?.summary;
   const categoryRows = analytics?.categories ?? [];
-  const spendPieGroups = analyticsCategoryPieGroups(categoryRows, "out");
-  const revenuePieGroups = analyticsCategoryPieGroups(categoryRows, "in");
+  const categoryPieGroups = useMemo(
+    () => analyticsCategoryPieGroups(categoryRows, dashboard.fxRates),
+    [categoryRows, dashboard.fxRates]
+  );
+  const spendPieGroup = categoryPieGroups.out;
+  const revenuePieGroup = categoryPieGroups.in;
+  const selectedCategoryGroup = categoryView?.direction === "out" ? spendPieGroup : revenuePieGroup;
+  const selectedCategorySegment = selectedCategoryGroup?.segments.find(
+    (segment) => segment.category === categoryView?.category
+  );
+
+  useEffect(() => {
+    if (!analytics) return;
+    if (categoryView && selectedCategorySegment) return;
+    const defaultSegment = spendPieGroup?.segments.find((segment) => segment.category !== "Other")
+      ?? revenuePieGroup?.segments.find((segment) => segment.category !== "Other");
+    if (!defaultSegment) {
+      if (categoryViewValue) setCategoryViewValue("");
+      return;
+    }
+    const direction = spendPieGroup?.segments.includes(defaultSegment) ? "out" : "in";
+    setCategoryViewValue(analyticsCategoryViewValue({ direction, category: defaultSegment.category }));
+  }, [
+    analytics,
+    categoryView,
+    categoryViewValue,
+    revenuePieGroup,
+    selectedCategorySegment,
+    setCategoryViewValue,
+    spendPieGroup
+  ]);
+
   const categoryViewKey = categoryView
     ? `${selectedAnalyticsRangeKey}:${analyticsCategoryViewValue(categoryView)}`
     : "";
+  const selectedCategoryCurrencies = selectedCategorySegment
+    ? Object.keys(selectedCategorySegment.nativeTotals).sort()
+    : [];
+  const selectedCategoryCurrenciesKey = selectedCategoryCurrencies.join(":");
   const [loadedCategoryCompanies, setLoadedCategoryCompanies] = useState<{
     key: string;
-    companies: BankAnalyticsCategoryCompany[];
+    companies: AnalyticsCategoryCompanyView[];
   } | null>(null);
   const [isLoadingCategoryCompanies, setIsLoadingCategoryCompanies] = useState(false);
   const [categoryCompaniesError, setCategoryCompaniesError] = useState<string | null>(null);
   const [categoryCompaniesAttempt, setCategoryCompaniesAttempt] = useState(0);
 
   useEffect(() => {
-    if (!categoryView || !analytics) {
+    if (
+      !categoryView
+      || !analytics
+      || !selectedCategorySegment
+      || selectedCategorySegment.categories.length !== 1
+      || categoryView.category === "Other"
+    ) {
       setLoadedCategoryCompanies(null);
       setIsLoadingCategoryCompanies(false);
       setCategoryCompaniesError(null);
@@ -4347,20 +4463,30 @@ function AnalyticsView({
     }
     const selection = categoryView;
     const controller = new AbortController();
-    const companies = new Map<string, BankAnalyticsCategoryCompany>();
-    const seenCursors = new Set<string>();
+    const companies = new Map<string, Omit<AnalyticsCategoryCompanyView, "amountUsd">>();
     setLoadedCategoryCompanies({ key: categoryViewKey, companies: [] });
     setIsLoadingCategoryCompanies(true);
     setCategoryCompaniesError(null);
 
-    async function loadCategoryCompanies(): Promise<void> {
+    function publishCompanies(): void {
+      setLoadedCategoryCompanies({
+        key: categoryViewKey,
+        companies: [...companies.values()].map((company) => ({
+          ...company,
+          amountUsd: convertCurrencyTotalsToUsd(company.nativeTotals, dashboard.fxRates).totalUsd
+        }))
+      });
+    }
+
+    async function loadCategoryCurrency(currency: string): Promise<void> {
       let cursor: string | null = null;
+      const seenCursors = new Set<string>();
       for (let pageNumber = 0; pageNumber < 1_000; pageNumber += 1) {
         const query = new URLSearchParams({
           fromDate: selectedAnalyticsRange.fromDate,
           toDate: selectedAnalyticsRange.toDate,
           direction: selection.direction,
-          currency: selection.currency,
+          currency,
           category: selection.category,
           limit: String(transactionTablePageSize)
         });
@@ -4377,7 +4503,7 @@ function AnalyticsView({
           || page.fromDate !== selectedAnalyticsRange.fromDate
           || page.toDate !== selectedAnalyticsRange.toDate
           || page.direction !== selection.direction
-          || page.currency !== selection.currency
+          || page.currency !== currency
           || page.category !== selection.category
         ) {
           throw new Error("Category companies returned data for the wrong slice");
@@ -4385,16 +4511,17 @@ function AnalyticsView({
         for (const company of page.companies) {
           const existing = companies.get(company.companyKey);
           companies.set(company.companyKey, {
-            ...company,
+            companyKey: company.companyKey,
+            ...(company.providerId ? { providerId: company.providerId } : {}),
             merchantName: existing?.merchantName ?? company.merchantName,
-            amount: (existing?.amount ?? 0) + company.amount,
+            nativeTotals: {
+              ...(existing?.nativeTotals ?? {}),
+              [currency]: (existing?.nativeTotals[currency] ?? 0) + company.amount
+            },
             transactionCount: (existing?.transactionCount ?? 0) + company.transactionCount
           });
         }
-        setLoadedCategoryCompanies({
-          key: categoryViewKey,
-          companies: [...companies.values()]
-        });
+        publishCompanies();
         if (page.isDone) return;
         if (!page.continueCursor || seenCursors.has(page.continueCursor)) {
           throw new Error("Category companies pagination did not advance");
@@ -4405,7 +4532,7 @@ function AnalyticsView({
       throw new Error("Category companies exceeded the supported page limit");
     }
 
-    void loadCategoryCompanies()
+    void Promise.all(selectedCategoryCurrencies.map((currency) => loadCategoryCurrency(currency)))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setCategoryCompaniesError(error instanceof Error ? error.message : "Category companies could not be loaded");
@@ -4418,15 +4545,19 @@ function AnalyticsView({
     analytics,
     categoryCompaniesAttempt,
     categoryView?.category,
-    categoryView?.currency,
     categoryView?.direction,
     categoryViewKey,
+    dashboard.fxRates,
+    selectedCategoryCurrenciesKey,
+    selectedCategorySegment,
     selectedAnalyticsRange.fromDate,
     selectedAnalyticsRange.toDate
   ]);
 
   const categoryCompanies = loadedCategoryCompanies?.key === categoryViewKey
-    ? loadedCategoryCompanies.companies
+    ? [...loadedCategoryCompanies.companies].sort(
+      (left, right) => right.amountUsd - left.amountUsd || left.merchantName.localeCompare(right.merchantName)
+    )
     : [];
   const analyticsTeamsById = new Map(
     (analytics?.teams ?? []).map((team) => [team.teamId ?? "", team] as const)
@@ -4529,32 +4660,10 @@ function AnalyticsView({
       ? dashboard.providers.find((provider) => provider.id === company.providerId)?.name ?? company.merchantName
       : company.merchantName,
     kind: company.providerId ? "Matched company" : "Merchant"
-  })).sort((left, right) => right.amount - left.amount || left.name.localeCompare(right.name));
-  const selectedCategorySegment = categoryView
-    ? (categoryView.direction === "out" ? spendPieGroups : revenuePieGroups)
-      .find((group) => group.currency === categoryView.currency)
-      ?.segments.find((segment) => segment.category === categoryView.category)
-    : undefined;
-  const selectedCategoryTotal = selectedCategorySegment?.amount
-    ?? categoryCompanyRows.reduce((sum, company) => sum + company.amount, 0);
+  })).sort((left, right) => right.amountUsd - left.amountUsd || left.name.localeCompare(right.name));
 
   function inspectAnalyticsCategory(selection: AnalyticsCategoryView): void {
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set("analyticsCategoryView", analyticsCategoryViewValue(selection));
-    window.history.pushState(
-      { ...window.history.state, analyticsCategoryViewEntry: true },
-      "",
-      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
-    );
-    window.dispatchEvent(new Event("finance-dash:url-state-change"));
-  }
-
-  function closeAnalyticsCategory(): void {
-    if (window.history.state?.analyticsCategoryViewEntry === true) {
-      window.history.back();
-      return;
-    }
-    setCategoryViewValue("");
+    setCategoryViewValue(analyticsCategoryViewValue(selection));
   }
 
   return (
@@ -4638,41 +4747,44 @@ function AnalyticsView({
         </div>
       </section>
 
-      {categoryView && analytics ? (
-        <AnalyticsCategoryCompaniesPanel
-          selection={categoryView}
-          periodLabel={analyticsPeriodLabel(periodSelection, analyticsToday)}
-          total={selectedCategoryTotal}
-          rows={categoryCompanyRows}
-          loading={isLoadingCategoryCompanies}
-          error={categoryCompaniesError}
-          onBack={closeAnalyticsCategory}
-          onRetry={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
-        />
-      ) : (
-        <>
-          <CategoryPiePanel
-            title="Spend by category"
-            direction="out"
-            tone="danger"
-            groups={spendPieGroups}
-            rates={dashboard.fxRates}
-            emptyLabel="No spend transactions yet"
-            loading={isLoadingAnalyticsPeriod}
-            onInspectCategory={inspectAnalyticsCategory}
-          />
-          <CategoryPiePanel
-            title="Revenue by category"
-            direction="in"
-            tone="good"
-            groups={revenuePieGroups}
-            rates={dashboard.fxRates}
-            emptyLabel="No revenue transactions yet"
-            loading={isLoadingAnalyticsPeriod}
-            onInspectCategory={inspectAnalyticsCategory}
-          />
+      <CategoryDistributionPanel
+        title="Spend by category"
+        direction="out"
+        tone="danger"
+        group={spendPieGroup}
+        selectedCategory={categoryView?.direction === "out" ? categoryView.category : null}
+        companyRows={categoryView?.direction === "out" ? categoryCompanyRows : []}
+        companiesError={categoryView?.direction === "out" ? categoryCompaniesError : null}
+        companiesLoading={categoryView?.direction === "out" && isLoadingCategoryCompanies}
+        emptyLabel="No spend transactions yet"
+        loading={isLoadingAnalyticsPeriod}
+        onRetryCompanies={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
+        onSelectCategory={(category) => inspectAnalyticsCategory({ direction: "out", category })}
+        onViewTransactions={(category) => onViewCategoryTransactions(
+          { direction: "out", category },
+          selectedAnalyticsRange
+        )}
+      />
+      <CategoryDistributionPanel
+        title="Revenue by category"
+        direction="in"
+        tone="good"
+        group={revenuePieGroup}
+        selectedCategory={categoryView?.direction === "in" ? categoryView.category : null}
+        companyRows={categoryView?.direction === "in" ? categoryCompanyRows : []}
+        companiesError={categoryView?.direction === "in" ? categoryCompaniesError : null}
+        companiesLoading={categoryView?.direction === "in" && isLoadingCategoryCompanies}
+        emptyLabel="No revenue transactions yet"
+        loading={isLoadingAnalyticsPeriod}
+        onRetryCompanies={() => setCategoryCompaniesAttempt((attempt) => attempt + 1)}
+        onSelectCategory={(category) => inspectAnalyticsCategory({ direction: "in", category })}
+        onViewTransactions={(category) => onViewCategoryTransactions(
+          { direction: "in", category },
+          selectedAnalyticsRange
+        )}
+      />
 
-          {analytics && <>
+      {analytics && <>
 
       <section className="panel wide-panel">
         <div className="panel-header compact">
@@ -4868,254 +4980,239 @@ function AnalyticsView({
           </table>
         </div>
       </section>
-          </>}
-        </>
-      )}
+      </>}
     </div>
   );
 }
 
-type AnalyticsCategoryCompanySortKey = "name" | "transactions" | "amount" | "share";
-
-const analyticsCategoryCompanySortKeys: readonly AnalyticsCategoryCompanySortKey[] = [
-  "name",
-  "transactions",
-  "amount",
-  "share"
-];
-
-function AnalyticsCategoryCompaniesPanel({
-  selection,
-  periodLabel,
-  total,
-  rows,
-  loading,
-  error,
-  onBack,
-  onRetry
-}: {
-  selection: AnalyticsCategoryView;
-  periodLabel: string;
-  total: number;
-  rows: Array<BankAnalyticsCategoryCompany & { name: string; kind: string }>;
-  loading: boolean;
-  error: string | null;
-  onBack: () => void;
-  onRetry: () => void;
-}) {
-  const [sortKey, setSortKey] = useUrlState<AnalyticsCategoryCompanySortKey>(
-    "analyticsCategorySort",
-    "amount",
-    { allowedValues: analyticsCategoryCompanySortKeys }
-  );
-  const [sortDirection, setSortDirection] = useUrlState<SortDirection>(
-    "analyticsCategoryOrder",
-    "desc",
-    { allowedValues: ["asc", "desc"] }
-  );
-  const sortedRows = useMemo(() => [...rows].sort((left, right) => {
-    const sortValue = (company: typeof left): number | string => {
-      if (sortKey === "name") return company.name;
-      if (sortKey === "transactions") return company.transactionCount;
-      if (sortKey === "share") return total > 0 ? company.amount / total : 0;
-      return company.amount;
-    };
-    return compareTableValues(sortValue(left), sortValue(right), sortDirection)
-      || left.name.localeCompare(right.name);
-  }), [rows, sortDirection, sortKey, total]);
-
-  function requestSort(nextSortKey: AnalyticsCategoryCompanySortKey): void {
-    if (nextSortKey === sortKey) {
-      setSortDirection((current) => current === "asc" ? "desc" : "asc");
-      return;
-    }
-    setSortKey(nextSortKey);
-    setSortDirection("asc");
-  }
-
-  return (
-    <section className="panel wide-panel analytics-category-companies">
-      <div className="panel-header analytics-category-companies-header">
-        <div className="analytics-category-title">
-          <Button type="button" className="icon-button" aria-label="Back to category charts" onClick={onBack}>
-            <ChevronLeft aria-hidden="true" size={17} />
-          </Button>
-          <div>
-            <p className="eyebrow">{periodLabel} · {selection.direction === "out" ? "Spend" : "Revenue"}</p>
-            <h2>{selection.category}</h2>
-          </div>
-        </div>
-        <div className="analytics-category-summary">
-          {loading && <Loader2 className="spin" aria-hidden="true" size={15} />}
-          <span>{rows.length.toLocaleString()} {rows.length === 1 ? "company" : "companies"}</span>
-          <strong>{money(total, selection.currency)}</strong>
-        </div>
-      </div>
-      {error ? (
-        <div className="analytics-category-state danger-text" role="alert">
-          <span>{error}</span>
-          <Button type="button" className="secondary-button" onClick={onRetry}>
-            <RefreshCw aria-hidden="true" size={14} /> Retry
-          </Button>
-        </div>
-      ) : rows.length > 0 ? (
-        <div className="table-wrap">
-          <table className="data-table analytics-company-table">
-            <thead>
-              <tr>
-                <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Company or merchant</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="analytics-company-numeric" direction={sortDirection} onSort={requestSort} sortKey="share">Share</SortableTableHead>
-              </tr>
-            </thead>
-            <tbody aria-label={`${selection.category} company and merchant shares`}>
-              {sortedRows.map((company) => (
-                <tr key={company.companyKey}>
-                  <td>
-                    <span className="analytics-company-name">
-                      <strong>{company.name}</strong>
-                      <small>{company.kind}</small>
-                    </span>
-                  </td>
-                  <td className="analytics-company-numeric">{company.transactionCount.toLocaleString()}</td>
-                  <td className="analytics-company-numeric"><strong>{money(company.amount, selection.currency)}</strong></td>
-                  <td className="analytics-company-numeric"><strong>{formatShare(company.amount, total)}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="analytics-category-state">
-          {loading ? (
-            <><Loader2 className="spin" aria-hidden="true" size={16} /> Loading companies and merchants…</>
-          ) : (
-            "No companies or merchants make up this category in the selected period."
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function CategoryPiePanel({
+function CategoryDistributionPanel({
   title,
   direction,
   tone,
-  groups,
-  rates,
+  group,
+  selectedCategory,
+  companyRows,
+  companiesError,
+  companiesLoading,
   emptyLabel,
-  controls,
   loading,
-  onInspectCategory
+  onRetryCompanies,
+  onSelectCategory,
+  onViewTransactions
 }: {
   title: string;
   direction: "in" | "out";
   tone: "good" | "danger";
-  groups: CategoryPieGroup[];
-  rates: FxRate[];
+  group: CategoryPieGroup | null;
+  selectedCategory: string | null;
+  companyRows: Array<AnalyticsCategoryCompanyView & { name: string; kind: string }>;
+  companiesError: string | null;
+  companiesLoading: boolean;
   emptyLabel: string;
-  controls?: ReactNode;
   loading: boolean;
-  onInspectCategory: (selection: AnalyticsCategoryView) => void;
+  onRetryCompanies: () => void;
+  onSelectCategory: (category: string) => void;
+  onViewTransactions: (category: string) => void;
 }) {
-  const nativeTotals = Object.fromEntries(groups.map((group) => [group.currency, group.total]));
+  const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
+  const selectedSegment = group?.segments.find((segment) => segment.category === selectedCategory) ?? null;
+  const previewSegment = group?.segments.find((segment) => segment.category === hoveredCategory)
+    ?? selectedSegment;
+
+  useEffect(() => {
+    if (hoveredCategory && !group?.segments.some((segment) => segment.category === hoveredCategory)) {
+      setHoveredCategory(null);
+    }
+  }, [group, hoveredCategory]);
 
   return (
-    <section className={`panel category-chart-panel ${tone}`}>
-      <div className="panel-header compact">
-        <h2>{title}</h2>
-        <span className={`total-pill ${tone}`} title={nativeCurrencyBreakdown(nativeTotals)}>{formatUsdCurrencyTotal(nativeTotals, rates)}</span>
+    <section className={`panel wide-panel category-distribution-panel ${tone}`} data-direction={direction}>
+      <div className="category-distribution-header">
+        <div className="category-distribution-heading">
+          <h2>{title}</h2>
+          <span>USD estimate</span>
+          <InfoPopover label={`${title} USD estimate`}>
+            <span>Non-USD activity is converted with the latest dashboard exchange rates. Native amounts remain the source of truth.</span>
+            {group?.asOf && <span>Oldest rate used: {dateLabel(group.asOf)}.</span>}
+            {(group?.staleCurrencies.length ?? 0) > 0 && <span>Last-known rates are used for {group!.staleCurrencies.join(", ")}.</span>}
+            {(group?.excludedCurrencies.length ?? 0) > 0 && <span>{group!.excludedCurrencies.join(", ")} activity is excluded because no USD quote is available.</span>}
+          </InfoPopover>
+        </div>
+        <div className="category-distribution-total">
+          <span>Total</span>
+          <strong className={tone}>{group ? money(group.total, "USD") : "—"}</strong>
+        </div>
       </div>
-      {controls}
-      <div className="category-chart-body">
-        {groups.length > 0 ? (
-          groups.map((group) => (
-            <CategoryPieGroupView
-              direction={direction}
+      {group ? (
+        <div className="category-distribution-body">
+          <div className="category-pie-visual category-distribution-chart">
+            <CategoryPieSvg
               group={group}
-              key={group.currency}
-              onInspectCategory={onInspectCategory}
+              activeCategory={previewSegment?.category ?? null}
+              selectedCategory={selectedSegment?.category ?? null}
+              onActivateCategory={setHoveredCategory}
+              onSelectCategory={onSelectCategory}
             />
-          ))
-        ) : (
-          <div className="money-empty category-chart-empty">
-            {loading && <Loader2 className="spin" aria-hidden="true" size={15} />}
-            {loading ? "Syncing transactions…" : emptyLabel}
+            <div className="pie-center category-distribution-center" aria-live="polite">
+              <span>{previewSegment?.category ?? "Total"}</span>
+              <strong>{compactMoney(previewSegment?.amount ?? group.total, "USD")}</strong>
+              <small>{previewSegment ? formatShare(previewSegment.amount, group.total) : "100%"}</small>
+            </div>
           </div>
-        )}
-      </div>
+          <div className="category-distribution-legend" aria-label={`${title} category shares`}>
+            {group.segments.map((segment, index) => {
+              const selected = segment.category === selectedSegment?.category;
+              const active = segment.category === previewSegment?.category;
+              return (
+                <button
+                  aria-label={`${selected ? "Selected" : "Select"} ${segment.category}: ${money(segment.amount, "USD")}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
+                  aria-pressed={selected}
+                  className={`category-distribution-row ${active ? "active" : ""} ${selected ? "selected" : ""}`}
+                  key={segment.category}
+                  onBlur={() => setHoveredCategory(null)}
+                  onClick={() => onSelectCategory(segment.category)}
+                  onFocus={() => setHoveredCategory(segment.category)}
+                  onMouseEnter={() => setHoveredCategory(segment.category)}
+                  onMouseLeave={() => setHoveredCategory(null)}
+                  type="button"
+                >
+                  <span className="category-distribution-rank">{index + 1}</span>
+                  <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
+                  <span className="legend-name" title={segment.category}>{segment.category}</span>
+                  <strong>{money(segment.amount, "USD")}</strong>
+                  <small>{formatShare(segment.amount, group.total)}</small>
+                  <span className="category-distribution-pin" aria-hidden="true">
+                    {selected && <Pin size={13} />}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <CategoryDistributionPreview
+            companyRows={companyRows}
+            error={companiesError}
+            group={group}
+            loading={companiesLoading}
+            previewSegment={previewSegment}
+            selected={previewSegment?.category === selectedSegment?.category}
+            onRetry={onRetryCompanies}
+            onViewTransactions={onViewTransactions}
+          />
+        </div>
+      ) : (
+        <div className="money-empty category-chart-empty">
+          {loading && <Loader2 className="spin" aria-hidden="true" size={15} />}
+          {loading ? "Syncing transactions…" : emptyLabel}
+        </div>
+      )}
     </section>
   );
 }
 
-function CategoryPieGroupView({
-  direction,
+function CategoryDistributionPreview({
   group,
-  onInspectCategory
+  previewSegment,
+  selected,
+  companyRows,
+  loading,
+  error,
+  onRetry,
+  onViewTransactions
 }: {
-  direction: "in" | "out";
   group: CategoryPieGroup;
-  onInspectCategory: (selection: AnalyticsCategoryView) => void;
+  previewSegment: CategoryPieSegment | null;
+  selected: boolean;
+  companyRows: Array<AnalyticsCategoryCompanyView & { name: string; kind: string }>;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  onViewTransactions: (category: string) => void;
 }) {
-  const [activeCategory, setActiveCategory] = useState<string | null>(group.segments[0]?.category ?? null);
+  if (!previewSegment) {
+    return (
+      <aside className="category-distribution-preview empty" aria-live="polite">
+        <span className="category-preview-icon"><PieChart aria-hidden="true" size={21} /></span>
+        <strong>Select a category</strong>
+        <span>Choose a slice or row to preview its details.</span>
+      </aside>
+    );
+  }
 
-  useEffect(() => {
-    if (!group.segments.some((segment) => segment.category === activeCategory)) {
-      setActiveCategory(group.segments[0]?.category ?? null);
-    }
-  }, [activeCategory, group.segments]);
+  const isOther = previewSegment.category === "Other";
+  const visibleCompanies = selected ? companyRows.slice(0, 2) : [];
 
   return (
-    <div className="category-pie-group">
-      <div className="category-pie-visual">
-        <CategoryPieSvg
-          group={group}
-          activeCategory={activeCategory}
-          onActivateCategory={setActiveCategory}
-          onInspectCategory={(category) => onInspectCategory({ direction, currency: group.currency, category })}
-        />
-        <div className="pie-center">
-          <span>{group.currency}</span>
-          <strong>{compactMoney(group.total, group.currency)}</strong>
-        </div>
+    <aside className="category-distribution-preview" aria-live="polite">
+      <div className="category-preview-summary">
+        <h3>{previewSegment.category} details</h3>
+        <p><strong>{compactMoney(previewSegment.amount, "USD")}</strong> <span>converted</span></p>
+        <p><strong>{previewSegment.count.toLocaleString()}</strong> <span>{previewSegment.count === 1 ? "transaction" : "transactions"}</span></p>
+        <p className="category-preview-native" title={formatCurrencyTotals(previewSegment.nativeTotals)}>
+          Native: {formatCurrencyTotals(previewSegment.nativeTotals)}
+        </p>
       </div>
-      <div className="category-legend">
-        <div className="category-legend-list" aria-label={`${group.currency} category share`}>
-          {group.segments.map((segment) => (
-            <button
-              aria-label={`Open ${segment.category}: ${money(segment.amount, group.currency)}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
-              className={`category-legend-row ${activeCategory === segment.category ? "active" : ""}`}
-              key={segment.category}
-              onClick={() => onInspectCategory({ direction, currency: group.currency, category: segment.category })}
-              onFocus={() => setActiveCategory(segment.category)}
-              onMouseEnter={() => setActiveCategory(segment.category)}
-              type="button"
-            >
-              <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
-              <span className="legend-name" title={segment.category}>{segment.category}</span>
-              <strong>{money(segment.amount, group.currency)}</strong>
-              <small>{formatShare(segment.amount, group.total)}</small>
-              <ChevronRight aria-hidden="true" size={15} />
-            </button>
-          ))}
-        </div>
+      <div className="category-preview-companies">
+        {isOther ? (
+          <>
+            <h4>{previewSegment.categories.length.toLocaleString()} smaller categories</h4>
+            <div className="category-preview-tail">
+              {previewSegment.categories.slice(0, 4).map((category) => <span key={category}>{category}</span>)}
+              {previewSegment.categories.length > 4 && <span>+{previewSegment.categories.length - 4} more</span>}
+            </div>
+          </>
+        ) : !selected ? (
+          <div className="category-preview-hint">Click to pin this category and load its top companies.</div>
+        ) : error ? (
+          <div className="category-preview-error" role="alert">
+            <span>{error}</span>
+            <Button type="button" className="secondary-button" onClick={onRetry}>
+              <RefreshCw aria-hidden="true" size={13} /> Retry
+            </Button>
+          </div>
+        ) : (
+          <>
+            <h4>Top companies</h4>
+            {visibleCompanies.map((company, index) => (
+              <div className="category-preview-company" key={company.companyKey}>
+                <span>{index + 1}</span>
+                <span className="legend-swatch" style={{ backgroundColor: previewSegment.color }} />
+                <strong title={company.name}>{company.name}</strong>
+                <span>{money(company.amountUsd, "USD")}</span>
+                <small>{formatShare(company.amountUsd, previewSegment.amount)}</small>
+              </div>
+            ))}
+            {loading && <div className="category-preview-loading"><Loader2 className="spin" aria-hidden="true" size={14} /> Loading companies…</div>}
+            {!loading && visibleCompanies.length === 0 && (
+              <div className="category-preview-hint">No matched companies or merchants in this category.</div>
+            )}
+          </>
+        )}
       </div>
-    </div>
+      {!isOther && selected && (
+        <Button
+          type="button"
+          className="secondary-button category-preview-action"
+          onClick={() => onViewTransactions(previewSegment.category)}
+        >
+          View all transactions
+        </Button>
+      )}
+    </aside>
   );
 }
 
 function CategoryPieSvg({
   group,
   activeCategory,
+  selectedCategory,
   onActivateCategory,
-  onInspectCategory
+  onSelectCategory
 }: {
   group: CategoryPieGroup;
   activeCategory: string | null;
-  onActivateCategory: (category: string) => void;
-  onInspectCategory: (category: string) => void;
+  selectedCategory: string | null;
+  onActivateCategory: (category: string | null) => void;
+  onSelectCategory: (category: string) => void;
 }) {
   let angle = -90;
 
@@ -5124,9 +5221,10 @@ function CategoryPieSvg({
       aria-hidden="true"
       className={`category-pie-svg ${activeCategory ? "has-active" : ""}`}
       focusable="false"
+      onMouseLeave={() => onActivateCategory(null)}
       viewBox="0 0 120 120"
     >
-      <circle className="pie-track" cx="60" cy="60" r="42" />
+      <circle className="pie-track" cx="60" cy="60" r="41" />
       {group.segments.map((segment, index) => {
         const startAngle = angle;
         angle = index === group.segments.length - 1
@@ -5134,16 +5232,16 @@ function CategoryPieSvg({
           : Math.min(270, angle + (segment.amount / group.total) * 360);
         return (
           <path
-            className={`pie-segment ${activeCategory === segment.category ? "active" : ""}`}
+            className={`pie-segment ${activeCategory === segment.category ? "active" : ""} ${selectedCategory === segment.category ? "selected" : ""}`}
             data-category={segment.category}
             d={categoryDonutSegmentPath(startAngle, angle)}
             fill={segment.color}
             key={segment.category}
-            onClick={() => onInspectCategory(segment.category)}
+            onClick={() => onSelectCategory(segment.category)}
             onMouseEnter={() => onActivateCategory(segment.category)}
           >
             <title>
-              {segment.category}: {money(segment.amount, group.currency)} ({formatShare(segment.amount, group.total)})
+              {segment.category}: {money(segment.amount, "USD")} ({formatShare(segment.amount, group.total)})
             </title>
           </path>
         );
@@ -5514,6 +5612,7 @@ function TransactionTable({
   onAssignTeam,
   onUpdateCategory,
   onOpenInvoice,
+  onMatchInvoice,
   hasPrevious,
   hasMore,
   isLoading,
@@ -5537,6 +5636,7 @@ function TransactionTable({
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onOpenInvoice: (transaction: Transaction) => void;
+  onMatchInvoice: (transaction: Transaction) => void;
   hasPrevious: boolean;
   hasMore: boolean;
   isLoading: boolean;
@@ -5922,13 +6022,14 @@ function TransactionTable({
                     {nonOperatingMovement ? (
                       <span className="status-pill">Not required</span>
                     ) : transaction.matchedInvoiceId || expense ? (
-                      <span className="status-pill good">{expense ? "Expense linked" : "Invoice linked"}</span>
+                      <div className="transaction-document-match"><span className="status-pill good">{expense ? "Expense linked" : "Invoice linked"}</span>{transaction.invoiceMatchSource && !expense && <small>{transaction.invoiceMatchSource === "ai" ? "AI matched" : transaction.invoiceMatchSource === "exact" ? "Exact match" : "Manual"}</small>}</div>
                     ) : (
-                      <span className="status-pill">None</span>
+                      <div className="transaction-document-match"><span className="status-pill">None</span>{transaction.invoiceMatchSource === "manual" && <small>Manual override</small>}</div>
                     )}
                   </td>
                   <td>
                     <div className="row-actions">
+                      {transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className="icon-button" title={transaction.matchedInvoiceId ? "Review or replace invoice match" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}><Link2 size={16} /></Button>}
                       <Button className="icon-button" title={documentTitle} disabled={nonOperatingMovement || Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
                         {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
@@ -7370,6 +7471,69 @@ function DeleteTransactionCategoryDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function InvoicePaymentMatchDialog({
+  transaction,
+  dashboard,
+  onClose,
+  onSubmit
+}: {
+  transaction: Transaction;
+  dashboard: DashboardSnapshot;
+  onClose: () => void;
+  onSubmit: (invoiceId?: string) => Promise<void>;
+}) {
+  const [invoiceId, setInvoiceId] = useState(transaction.matchedInvoiceId ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const providersById = new Map(dashboard.providers.map((provider) => [provider.id, provider]));
+  const candidates = dashboard.invoices
+    .filter((invoice) =>
+      invoice.documentType === "sales_invoice"
+      && invoice.status !== "draft"
+      && invoice.currency.toUpperCase() === transaction.currency.toUpperCase()
+      && (invoice.status === "open" || invoice.id === transaction.matchedInvoiceId)
+    )
+    .sort((left, right) => right.issueDate.localeCompare(left.issueDate));
+  const options = candidates.map((invoice) => {
+    const allocated = dashboard.paymentAllocations
+      .filter((allocation) => allocation.invoiceId === invoice.id && allocation.transactionId !== transaction.id)
+      .reduce((total, allocation) => total + allocation.amount, 0);
+    const outstanding = Math.max(0, invoice.amount - allocated);
+    const company = invoice.providerId ? providersById.get(invoice.providerId)?.name : invoice.customerName;
+    return {
+      value: invoice.id,
+      label: `${invoice.invoiceNumber} · ${company ?? invoice.customerName} · ${money(outstanding, invoice.currency)}`
+    };
+  });
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit(invoiceId || undefined);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Invoice match could not be saved");
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal payment-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-payment-match-title" onSubmit={save}>
+        <div className="modal-header"><div><p className="eyebrow">Bank payment match</p><h2 id="invoice-payment-match-title">Attach an invoice</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+        <div className="transaction-summary"><span>{dateLabel(transaction.date)} · {transaction.accountName}</span><strong>{money(Math.abs(transaction.amount), transaction.currency)}</strong><small>{transaction.counterparty || transaction.description}</small></div>
+        {transaction.invoiceMatchSource && <div className="income-callout"><Info size={16} /><span>Current decision: <strong>{transaction.invoiceMatchSource === "ai" ? "AI match" : transaction.invoiceMatchSource === "exact" ? "Exact automatic match" : transaction.matchedInvoiceId ? "Manual match" : "Manually unmatched"}</strong>{transaction.invoiceMatchReason ? ` · ${transaction.invoiceMatchReason}` : ""}</span></div>}
+        {error && <div className="inline-error">{error}</div>}
+        <label>Invoice<SearchableSelect value={invoiceId} options={options} onValueChange={setInvoiceId} placeholder="Search invoice number or company" emptyMessage="No open invoices in this currency" ariaLabel="Invoice payment match" /></label>
+        <div className="merit-unchanged-banner"><CircleAlert size={18} /><div><strong>Dashboard allocation only</strong><span>Saving replaces this transaction’s automatic match. Clearing the invoice keeps it manually unmatched. Merit is never changed.</span></div></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting}>{submitting ? <Loader2 className="spin" size={16} /> : invoiceId ? <Link2 size={16} /> : <X size={16} />}{invoiceId ? "Save invoice match" : "Keep unmatched"}</Button></div>
+      </form>
+    </div>,
+    document.body
   );
 }
 

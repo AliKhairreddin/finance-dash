@@ -1,14 +1,18 @@
 import type {
+  AiInvoicePaymentMatch,
   AiPromptPayload,
   AiPromptResult,
   AiSettings,
   AiTransactionCategorization,
   OpenRouterZdrModel,
+  Invoice,
+  PaymentAllocation,
   Provider,
   StoredAiSettings,
   Transaction,
   TransactionCategory
 } from "./types";
+import { invoicePaymentAiCandidates } from "./income";
 import {
   initialTransactionCategories,
   isRequiredTransactionCategory,
@@ -150,7 +154,8 @@ export async function runOpenRouterPrompt(
       model,
       messages,
       provider: {
-        zdr: true
+        zdr: true,
+        data_collection: "deny"
       }
     })
   });
@@ -181,6 +186,8 @@ export async function runOpenRouterPrompt(
 }
 
 class AiCategorizationOutputError extends Error {}
+
+class AiInvoiceMatchingOutputError extends Error {}
 
 function jsonObjectFromText(text: string): unknown {
   const cleaned = text
@@ -357,6 +364,129 @@ export async function runOpenRouterTransactionCategorization(
   for (const wave of chunk(chunk(transactions, 10), 4)) {
     const results = await Promise.all(wave.map(categorizeBatch));
     allMatches.push(...results.flat());
+  }
+
+  return allMatches;
+}
+
+export async function runOpenRouterInvoicePaymentMatching(
+  settings: StoredAiSettings,
+  transactions: Transaction[],
+  invoices: Invoice[],
+  allocations: PaymentAllocation[],
+  providers: Provider[],
+  referer?: string
+): Promise<AiInvoicePaymentMatch[]> {
+  const candidateGroups = invoicePaymentAiCandidates({ invoices, transactions, allocations, providers });
+  if (candidateGroups.length === 0) return [];
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const allMatches: AiInvoicePaymentMatch[] = [];
+
+  for (const batch of chunk(candidateGroups, 8)) {
+    const candidateInvoiceIds = new Map(
+      batch.map((group) => [group.transaction.id, new Set(group.invoices.map((invoice) => invoice.id))])
+    );
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await runOpenRouterPrompt(
+          settings,
+          {
+            systemPrompt: [
+              "You match received bank payments to existing sales invoices for a finance dashboard.",
+              "Every transaction includes a server-approved list of candidate invoices with exact outstanding amount, currency, date, and company or reference evidence.",
+              "Choose an invoice only when the bank text, client identity, invoice number, service period, or description makes the match highly convincing.",
+              "Do not guess from amount alone. Return no match for a transaction when evidence is ambiguous.",
+              "Use only transactionId and invoiceId values present in the payload.",
+              "Each transaction and invoice may appear at most once.",
+              "Return only JSON with this shape: {\"matches\":[{\"transactionId\":\"...\",\"invoiceId\":\"...\",\"confidence\":0.0,\"reason\":\"short evidence\"}]}"
+            ].join(" "),
+            prompt: JSON.stringify(
+              {
+                payment_candidates: batch.map(({ transaction, invoices: candidates }) => ({
+                  transaction: {
+                    id: transaction.id,
+                    date: transaction.date,
+                    source: transaction.source,
+                    accountName: transaction.accountName,
+                    counterparty: transaction.counterparty,
+                    rawName: transaction.rawName,
+                    description: transaction.description,
+                    amount: transaction.amount,
+                    currency: transaction.currency,
+                    matchedProviderId: transaction.matchedProviderId,
+                    companyConfidence: transaction.companyConfidence
+                  },
+                  invoices: candidates.map((invoice) => {
+                    const provider = invoice.providerId ? providerById.get(invoice.providerId) : undefined;
+                    return {
+                      id: invoice.id,
+                      invoiceNumber: invoice.invoiceNumber,
+                      company: provider?.legalName || provider?.name || invoice.customerName,
+                      providerId: invoice.providerId,
+                      description: invoice.description,
+                      issueDate: invoice.issueDate,
+                      dueDate: invoice.dueDate,
+                      periodStart: invoice.periodStart,
+                      periodEnd: invoice.periodEnd,
+                      amount: invoice.amount,
+                      currency: invoice.currency
+                    };
+                  })
+                }))
+              },
+              null,
+              2
+            )
+          },
+          referer
+        );
+        const parsed = jsonObjectFromText(result.output);
+        const matches = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as { matches?: unknown }).matches
+          : undefined;
+        if (!Array.isArray(matches)) {
+          throw new AiInvoiceMatchingOutputError("AI invoice matching JSON needs a matches array");
+        }
+        const valid: AiInvoicePaymentMatch[] = [];
+        const transactionIds = new Set<string>();
+        const invoiceIds = new Set<string>();
+        for (const value of matches) {
+          if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+          const row = value as Record<string, unknown>;
+          const transactionId = typeof row.transactionId === "string" ? row.transactionId : "";
+          const invoiceId = typeof row.invoiceId === "string" ? row.invoiceId : "";
+          const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence) ? row.confidence : -1;
+          const reason = typeof row.reason === "string" ? row.reason.trim() : "";
+          if (
+            !candidateInvoiceIds.get(transactionId)?.has(invoiceId)
+            || transactionIds.has(transactionId)
+            || invoiceIds.has(invoiceId)
+            || confidence < 0
+            || confidence > 1
+            || !reason
+          ) {
+            throw new AiInvoiceMatchingOutputError("AI invoice matching returned an invalid or duplicate match");
+          }
+          transactionIds.add(transactionId);
+          invoiceIds.add(invoiceId);
+          valid.push({ transactionId, invoiceId, confidence, reason });
+        }
+        allMatches.push(...valid);
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      console.error(JSON.stringify({
+        event: "invoice_ai_matching_batch_failed",
+        transactionIds: batch.map((group) => group.transaction.id),
+        failureType: lastError instanceof AiInvoiceMatchingOutputError ? "invalid_output" : "request_failed",
+        error: lastError instanceof Error ? lastError.message : String(lastError)
+      }));
+    }
   }
 
   return allMatches;

@@ -8,11 +8,13 @@ import type {
   AiPromptPayload,
   AssignTransactionTeamPayload,
   AutomationRun,
+  AutoMatchInvoicePaymentsResult,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   BankAnalyticsCategoryCompaniesPage,
   BankAnalyticsSnapshot,
   BankTransactionSource,
+  BulkRecordInvoicePaymentsPayload,
   CreateExpensePayload,
   CreateHoldingPayload,
   CreateInvoicePayload,
@@ -37,6 +39,7 @@ import type {
   LedgerItem,
   MeritTax,
   MatchTransactionPayload,
+  MatchInvoicePaymentPayload,
   MatchExpensePaymentPayload,
   PaymentAllocation,
   PersistedAiSettings,
@@ -81,6 +84,7 @@ import {
   publicAiSettings,
   requireOpenRouterZdrModel,
   runOpenRouterPrompt,
+  runOpenRouterInvoicePaymentMatching,
   runOpenRouterTransactionCategorization
 } from "../shared/ai";
 import { canonicalTeamId, canonicalTeamName } from "../shared/business";
@@ -152,6 +156,7 @@ import {
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   incomeAutomationTimezone,
+  invoicePaymentAiCandidates,
   invoiceOutstanding,
   isClosedBillingPeriod,
   isLiquidAccountBalance,
@@ -161,6 +166,7 @@ import {
   previousCalendarMonth,
   previousCompletedWeek,
   pruneSupersededAccrualRun,
+  reconcileAiInvoicePayments,
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
@@ -2385,6 +2391,9 @@ async function saveBankTransactionUpdates(
         companyMatchSource: transaction.companyMatchSource,
         companyConfidence: transaction.companyConfidence,
         companyMatchReason: transaction.companyMatchReason,
+        invoiceMatchSource: transaction.invoiceMatchSource,
+        invoiceMatchConfidence: transaction.invoiceMatchConfidence,
+        invoiceMatchReason: transaction.invoiceMatchReason,
         confidence: transaction.confidence,
         matchReason: transaction.matchReason
       }))
@@ -2400,7 +2409,10 @@ async function saveBankTransactionUpdates(
       serviceToken: getConvexServiceToken(env),
       assignments: transactions.map((transaction) => ({
         transactionId: transaction.id,
-        matchedInvoiceId: transaction.matchedInvoiceId ?? null
+        matchedInvoiceId: transaction.matchedInvoiceId ?? null,
+        invoiceMatchSource: transaction.invoiceMatchSource,
+        invoiceMatchConfidence: transaction.invoiceMatchConfidence,
+        invoiceMatchReason: transaction.invoiceMatchReason
       }))
     });
     for (const transaction of transactions) {
@@ -4045,6 +4057,111 @@ async function autoCategorizeBankTransactions(
   return summary;
 }
 
+async function loadInvoicePaymentMatchTransactions(
+  env: Env,
+  invoices: Invoice[]
+): Promise<Transaction[]> {
+  const transactions = new Map<string, Transaction>();
+  const invoicesByCurrency = new Map<string, Invoice[]>();
+  for (const invoice of invoices) {
+    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") continue;
+    const currency = invoice.currency.toUpperCase();
+    invoicesByCurrency.set(currency, [...(invoicesByCurrency.get(currency) ?? []), invoice]);
+  }
+  for (const [currency, currencyInvoices] of invoicesByCurrency) {
+    const earliestIssueDate = currencyInvoices.reduce(
+      (earliest, invoice) => invoice.issueDate < earliest ? invoice.issueDate : earliest,
+      currencyInvoices[0].issueDate
+    );
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
+      const page: {
+        transactions: Transaction[];
+        hasMore: boolean;
+        continueCursor: string | null;
+      } = await getConvexClient(env).query(api.banking.getInvoicePaymentCandidates, {
+        serviceToken: getConvexServiceToken(env),
+        currency,
+        limit: bankMutationBatchSize,
+        cursor
+      });
+      for (const transaction of page.transactions) transactions.set(transaction.id, transaction);
+      const oldestDate = page.transactions.at(-1)?.date;
+      if (!page.hasMore || (oldestDate && oldestDate < earliestIssueDate)) break;
+      if (!page.continueCursor || seenCursors.has(page.continueCursor)) {
+        throw new ApiError(503, "Invoice payment candidate pagination did not advance");
+      }
+      seenCursors.add(page.continueCursor);
+      cursor = page.continueCursor;
+    }
+  }
+  return [...transactions.values()];
+}
+
+async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePaymentsResult> {
+  const state = await loadPersisted(env);
+  const candidates = await loadInvoicePaymentMatchTransactions(env, state.invoices);
+  const originalTransactions = new Map(candidates.map((transaction) => [transaction.id, transaction]));
+  for (const transaction of candidates) {
+    upsertPersistedTransaction(state, transaction);
+    state.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
+    state.dirtyBankTransactionIds.delete(transaction.id);
+  }
+
+  const exact = reconcileExactInvoicePayments({
+    invoices: state.invoices,
+    transactions: candidates,
+    allocations: state.paymentAllocations,
+    providers: state.providers
+  });
+  state.invoices = exact.invoices;
+  state.paymentAllocations = exact.allocations;
+
+  const eligibleForAi = invoicePaymentAiCandidates({
+    invoices: exact.invoices,
+    transactions: exact.transactions,
+    allocations: exact.allocations,
+    providers: state.providers
+  });
+  const activeAiSettings = runtimeAiSettings(env, state.aiSettings);
+  const aiMatches = activeAiSettings.openRouterApiKey && eligibleForAi.length > 0
+    ? await runOpenRouterInvoicePaymentMatching(
+        activeAiSettings,
+        exact.transactions,
+        exact.invoices,
+        exact.allocations,
+        state.providers,
+        env.PUBLIC_APP_URL
+      )
+    : [];
+  const ai = reconcileAiInvoicePayments({
+    invoices: exact.invoices,
+    transactions: exact.transactions,
+    allocations: exact.allocations,
+    providers: state.providers,
+    matches: aiMatches
+  });
+  state.invoices = ai.invoices;
+  state.paymentAllocations = ai.allocations;
+
+  for (const transaction of ai.transactions) {
+    if (JSON.stringify(transaction) !== JSON.stringify(originalTransactions.get(transaction.id))) {
+      upsertPersistedTransaction(state, transaction);
+    }
+  }
+  if (exact.matched > 0 || ai.matched > 0) {
+    await savePersisted(env, state);
+    await saveBankTransactionUpdates(env, state);
+  }
+  return {
+    dashboard: await getSnapshot(env),
+    exactMatches: exact.matched,
+    aiMatches: ai.matched,
+    reviewed: eligibleForAi.length
+  };
+}
+
 async function categorizeHistoricalBankBacklog(
   env: Env,
   limit = 240
@@ -5107,12 +5224,168 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
   return { dashboard: await getSnapshot(env), outcomes };
 }
 
-const paymentSources = new Set(["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"]);
+const paymentSources = new Set<PaymentAllocation["source"]>(["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"]);
+
+function isInvoicePaymentSource(value: DataSource): value is Extract<DataSource, PaymentAllocation["source"]> {
+  return paymentSources.has(value as PaymentAllocation["source"]);
+}
 
 function isIsoCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function bulkPaymentAllocationId(operationId: string, invoiceId: string): string {
+  const safeOperationId = operationId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+  const safeInvoiceId = invoiceId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+  return `payment-bulk-${safeOperationId}-${safeInvoiceId}`;
+}
+
+async function recordBulkInvoicePayments(
+  env: Env,
+  payload: BulkRecordInvoicePaymentsPayload
+): Promise<DashboardSnapshot> {
+  const invoiceIds = [...new Set(payload.invoiceIds)];
+  if (
+    payload.confirmation !== "RECORD_DASHBOARD_PAYMENTS"
+    || invoiceIds.length === 0
+    || invoiceIds.length !== payload.invoiceIds.length
+    || invoiceIds.length > 200
+    || !/^[a-zA-Z0-9_-]{8,100}$/.test(payload.operationId)
+    || !isIsoCalendarDate(payload.paidAt)
+    || !paymentSources.has(payload.source)
+  ) {
+    throw new ApiError(400, "Unique invoice IDs, operation ID, paidAt, payment source, and explicit confirmation are required");
+  }
+  const state = await loadPersisted(env);
+  const selected = invoiceIds.map((invoiceId) => {
+    const invoice = state.invoices.find((item) => item.id === invoiceId);
+    if (!invoice) throw new ApiError(404, `Invoice ${invoiceId} was not found`);
+    const allocationId = bulkPaymentAllocationId(payload.operationId, invoiceId);
+    const existingAllocation = state.paymentAllocations.find((allocation) => allocation.id === allocationId);
+    if (existingAllocation) return { invoice, allocationId, outstanding: 0, alreadyRecorded: true };
+    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") {
+      throw new ApiError(409, `Invoice ${invoice.invoiceNumber} is not an open sales invoice`);
+    }
+    const outstanding = invoiceOutstanding(invoice, state.paymentAllocations);
+    if (outstanding <= 0) throw new ApiError(409, `Invoice ${invoice.invoiceNumber} has no outstanding balance`);
+    return { invoice, allocationId, outstanding, alreadyRecorded: false };
+  });
+  const createdAt = new Date().toISOString();
+  const additions: PaymentAllocation[] = selected.flatMap(({ invoice, allocationId, outstanding, alreadyRecorded }) =>
+    alreadyRecorded
+      ? []
+      : [{
+          id: allocationId,
+          invoiceId: invoice.id,
+          amount: Number(outstanding.toFixed(2)),
+          currency: invoice.currency,
+          source: payload.source,
+          accountName: cleanOptional(payload.accountName),
+          note: cleanOptional(payload.note),
+          mode: "manual" as const,
+          matchReason: "Bulk dashboard payment",
+          paidAt: payload.paidAt,
+          createdAt
+        }]
+  );
+  if (additions.length > 0) {
+    state.paymentAllocations = [...additions, ...state.paymentAllocations];
+    const selectedIds = new Set(invoiceIds);
+    state.invoices = applyPaymentState(state.invoices, state.paymentAllocations).map((invoice) =>
+      selectedIds.has(invoice.id) ? { ...invoice, updatedAt: createdAt } : invoice
+    );
+    await savePersisted(env, state);
+  }
+  return getSnapshot(env);
+}
+
+async function matchInvoicePayment(
+  env: Env,
+  transactionId: string,
+  payload: MatchInvoicePaymentPayload
+): Promise<DashboardSnapshot> {
+  if (payload.confirmation !== "REVIEWED_INVOICE_MATCH") {
+    throw new ApiError(400, "Explicit invoice match confirmation is required");
+  }
+  const state = await loadPersisted(env);
+  const transaction = await fetchTransactionForUpdate(env, transactionId, state);
+  if (!transaction) throw new ApiError(404, "Bank transaction not found");
+  if (
+    transaction.direction !== "in"
+    || (transaction.status !== "posted" && transaction.status !== "settled")
+    || !isInvoicePaymentSource(transaction.source)
+  ) {
+    throw new ApiError(409, "Only posted or settled incoming bank transactions can be matched to invoices");
+  }
+
+  const removedInvoiceIds = new Set(
+    state.paymentAllocations
+      .filter((allocation) => allocation.transactionId === transaction.id)
+      .map((allocation) => allocation.invoiceId)
+  );
+  state.paymentAllocations = state.paymentAllocations.filter(
+    (allocation) => allocation.transactionId !== transaction.id
+  );
+  const invoice = payload.invoiceId
+    ? state.invoices.find((item) => item.id === payload.invoiceId)
+    : undefined;
+  if (payload.invoiceId && !invoice) throw new ApiError(404, "Invoice not found");
+  if (invoice) {
+    if (invoice.documentType !== "sales_invoice" || invoice.status === "draft") {
+      throw new ApiError(409, "Only saved sales invoices can receive bank payments");
+    }
+    if (invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()) {
+      throw new ApiError(409, "The invoice and bank transaction currencies must match");
+    }
+    const outstanding = invoiceOutstanding(invoice, state.paymentAllocations);
+    if (outstanding <= 0) throw new ApiError(409, "The selected invoice has no outstanding balance");
+    const amount = Math.min(outstanding, Math.abs(transaction.amount));
+    const createdAt = new Date().toISOString();
+    state.paymentAllocations = [{
+      id: `payment-manual-${crypto.randomUUID()}`,
+      invoiceId: invoice.id,
+      transactionId: transaction.id,
+      amount: Number(amount.toFixed(2)),
+      currency: invoice.currency,
+      source: transaction.source,
+      accountName: transaction.accountName,
+      reference: transaction.description,
+      mode: "manual",
+      confidence: 1,
+      matchReason: "Manually matched bank transaction",
+      paidAt: transaction.date,
+      createdAt
+    }, ...state.paymentAllocations];
+    removedInvoiceIds.add(invoice.id);
+    if (invoice.providerId) {
+      state.providers = state.providers.map((provider) =>
+        provider.id === invoice.providerId ? learnAliases(provider, bankAliasNames(transaction)) : provider
+      );
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  state.invoices = applyPaymentState(state.invoices, state.paymentAllocations).map((item) =>
+    removedInvoiceIds.has(item.id) ? { ...item, updatedAt } : item
+  );
+  const {
+    matchedInvoiceId: _matchedInvoiceId,
+    invoiceMatchConfidence: _invoiceMatchConfidence,
+    invoiceMatchReason: _invoiceMatchReason,
+    ...withoutInvoiceMatch
+  } = transaction;
+  upsertPersistedTransaction(state, {
+    ...withoutInvoiceMatch,
+    matchedInvoiceId: invoice?.id,
+    ...(invoice?.providerId ? { matchedProviderId: invoice.providerId } : {}),
+    invoiceMatchSource: "manual",
+    invoiceMatchConfidence: 1,
+    invoiceMatchReason: invoice ? "Manually matched bank transaction" : "Manually left unmatched"
+  });
+  await savePersisted(env, state);
+  await saveBankTransactionUpdates(env, state);
+  return getSnapshot(env);
 }
 
 async function recordInvoicePayment(
@@ -5188,6 +5461,9 @@ async function recordInvoicePayment(
       ...transactionWithoutInvoice,
       ...(linkedInvoiceIds.size === 1 ? { matchedInvoiceId: invoiceId } : {}),
       matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
+      invoiceMatchSource: "manual",
+      invoiceMatchConfidence: 1,
+      invoiceMatchReason: linkedInvoiceIds.size === 1 ? "Manually allocated to invoice" : "Manually split across invoices",
       confidence: 1,
       matchReason: linkedInvoiceIds.size === 1 ? "Manually allocated to invoice" : "Manually split across invoices"
     };
@@ -6055,6 +6331,21 @@ async function handleApi(
       return json(await autoCategorizeTransactions(env, ((await request.json()) ?? {}) as AutoCategorizeTransactionsPayload));
     }
 
+    if (url.pathname === "/api/invoices/auto-match-payments" && request.method === "POST") {
+      return json(await autoMatchInvoicePayments(env));
+    }
+
+    const transactionInvoiceMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/invoice-match$/);
+    if (transactionInvoiceMatch && request.method === "POST") {
+      return json(
+        await matchInvoicePayment(
+          env,
+          decodeURIComponent(transactionInvoiceMatch[1]),
+          (await request.json()) as MatchInvoicePaymentPayload
+        )
+      );
+    }
+
     const teamMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/team$/);
     if (teamMatch && request.method === "POST") {
       const body = (await request.json()) as { teamId?: string | null };
@@ -6116,6 +6407,10 @@ async function handleApi(
 
     if (url.pathname === "/api/invoices/send" && request.method === "POST") {
       return json(await sendInvoices(env, (await request.json()) as SendInvoicesPayload));
+    }
+
+    if (url.pathname === "/api/invoices/payments/bulk" && request.method === "POST") {
+      return json(await recordBulkInvoicePayments(env, (await request.json()) as BulkRecordInvoicePaymentsPayload));
     }
 
     const invoicePaymentMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/payments$/);
@@ -6201,6 +6496,24 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({
           event: "transaction_classification_backlog_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+      try {
+        const result = await autoMatchInvoicePayments(env);
+        if (result.exactMatches > 0 || result.aiMatches > 0) {
+          console.log(JSON.stringify({
+            event: "invoice_payment_auto_match_completed",
+            exactMatches: result.exactMatches,
+            aiMatches: result.aiMatches,
+            reviewed: result.reviewed
+          }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "invoice_payment_auto_match_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
