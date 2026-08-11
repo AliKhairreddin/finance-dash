@@ -1,10 +1,14 @@
 export const analyticsPeriodModes = [
   "today",
   "yesterday",
+  "last_7_days",
+  "last_30_days",
   "this_week",
   "last_week",
   "this_month",
   "last_month",
+  "this_quarter",
+  "last_quarter",
   "month",
   "quarter",
   "ytd",
@@ -87,6 +91,11 @@ export function analyticsDateRange(
     return { fromDate: yesterday, toDate: yesterday };
   }
 
+  if (selection.mode === "last_7_days" || selection.mode === "last_30_days") {
+    const days = selection.mode === "last_7_days" ? 7 : 30;
+    return { fromDate: addUtcDays(today, 1 - days), toDate: today };
+  }
+
   if (selection.mode === "this_week") {
     return { fromDate: isoWeekStart(today), toDate: today };
   }
@@ -109,6 +118,21 @@ export function analyticsDateRange(
     return {
       fromDate: `${previousMonthEnd.slice(0, 7)}-01`,
       toDate: previousMonthEnd
+    };
+  }
+
+  if (selection.mode === "this_quarter" || selection.mode === "last_quarter") {
+    const currentMonth = Number(today.slice(5, 7));
+    const currentQuarterStartMonth = Math.floor((currentMonth - 1) / 3) * 3 + 1;
+    if (selection.mode === "this_quarter") {
+      return { fromDate: `${currentYear}-${pad2(currentQuarterStartMonth)}-01`, toDate: today };
+    }
+    const previousQuarterEnd = addUtcDays(`${currentYear}-${pad2(currentQuarterStartMonth)}-01`, -1);
+    const previousQuarterEndMonth = Number(previousQuarterEnd.slice(5, 7));
+    const previousQuarterStartMonth = previousQuarterEndMonth - 2;
+    return {
+      fromDate: `${previousQuarterEnd.slice(0, 4)}-${pad2(previousQuarterStartMonth)}-01`,
+      toDate: previousQuarterEnd
     };
   }
 
@@ -161,10 +185,14 @@ export function analyticsPeriodLabel(
   const range = analyticsDateRange(selection, today);
   if (selection.mode === "today") return "Today";
   if (selection.mode === "yesterday") return "Yesterday";
+  if (selection.mode === "last_7_days") return "Last 7 days";
+  if (selection.mode === "last_30_days") return "Last 30 days";
   if (selection.mode === "this_week") return "This week";
   if (selection.mode === "last_week") return "Last week";
   if (selection.mode === "this_month") return "This month";
   if (selection.mode === "last_month") return "Last month";
+  if (selection.mode === "this_quarter") return "This quarter";
+  if (selection.mode === "last_quarter") return "Last quarter";
   if (selection.mode === "custom") return `${range.fromDate} – ${range.toDate}`;
   if (selection.mode === "ytd") return `${range.fromDate.slice(0, 4)} YTD`;
   if (selection.mode === "year") return String(selection.year);

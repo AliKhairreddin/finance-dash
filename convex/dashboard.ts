@@ -203,7 +203,7 @@ const transactionCategoryRule = v.object({
 });
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
-const invoiceMatchSource = v.union(v.literal("exact"), v.literal("ai"), v.literal("manual"));
+const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const transactionCategory = v.object({
   id: v.string(),

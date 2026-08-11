@@ -66,7 +66,12 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
-import { summarizeBankActivity, type BankActivitySummary } from "../shared/bankMerchantGroups";
+import {
+  summarizeBankActivity,
+  transactionBankActivityGroupKey,
+  type BankActivityGroupType,
+  type BankActivitySummary
+} from "../shared/bankMerchantGroups";
 import { createBankAnalyticsAccumulator } from "../shared/analytics";
 import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import {
@@ -732,7 +737,8 @@ export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymen
   if (exact.matched > 0 || ai.matched > 0) await persist();
   return {
     dashboard: getSnapshot(),
-    exactMatches: exact.matched,
+    exactMatches: exact.exactMatched,
+    toleranceMatches: exact.toleranceMatched,
     aiMatches: ai.matched,
     reviewed: eligibleForAi.length
   };
@@ -2592,6 +2598,8 @@ type LocalTransactionPageOptions = {
   accountId?: string;
   category?: string;
   team?: string;
+  groupType?: BankActivityGroupType;
+  groupKey?: string;
   match: TransactionMatchFilter;
   search?: string;
   sortKey: TransactionSortKey;
@@ -2687,6 +2695,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.accountId || transaction.accountId === options.accountId)
       && (!options.category || transactionBusinessCategory(transaction.category) === options.category)
       && (!options.team || (options.team === "unassigned" ? !transaction.teamId : transaction.teamId === options.team))
+      && (!options.groupType || transactionBankActivityGroupKey(transaction, options.groupType, providers) === options.groupKey)
       && (options.match === "all" || (options.match === "matched" ? categorized : !categorized))
       && matchesSearch
       && transaction.date >= options.fromDate

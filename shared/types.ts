@@ -24,7 +24,7 @@ export type MeritDeliveryStatus = "not-sent" | "saved" | "delivered" | "delivery
 
 export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "cash" | "kraken" | "trust" | "other";
 
-export type InvoiceMatchSource = "exact" | "ai" | "manual";
+export type InvoiceMatchSource = "exact" | "tolerance" | "ai" | "manual";
 
 export type HoldingKind = "cash" | "exchange" | "wallet";
 
@@ -773,8 +773,9 @@ export interface BankAnalyticsMerchantRollup {
 
 export interface BankAnalyticsSummary {
   transactionCount: number;
-  externalTransactionCount: number;
+  operatingTransactionCount: number;
   internalTransferCount: number;
+  capitalMovementCount: number;
   matchedTransactionCount: number;
   needsReviewCount: number;
   activeTeamCount: number;
@@ -818,7 +819,7 @@ export interface BankPeriodMetrics {
 
 /** Compact response returned by GET /analytics?fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD. */
 export interface BankAnalyticsSnapshot {
-  version: 2;
+  version: 3;
   fromDate: string;
   toDate: string;
   generatedAt: string;
@@ -954,6 +955,7 @@ export interface MatchInvoicePaymentPayload {
 export interface AutoMatchInvoicePaymentsResult {
   dashboard: DashboardSnapshot;
   exactMatches: number;
+  toleranceMatches: number;
   aiMatches: number;
   reviewed: number;
 }

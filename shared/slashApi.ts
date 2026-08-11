@@ -608,7 +608,6 @@ function normalizeSlashTransaction(
 ): Transaction {
   const signedAmount = transaction.amountCents / 100;
   const counterparty = transaction.merchantData?.description?.trim() || transaction.description;
-  const accountLabel = `${accountIdentity.accountName} ${transaction.accountSubtype === "cash" ? "Cash" : "Credit"}`;
   const status: Transaction["status"] = transaction.status === "pending"
     ? "pending"
     : transaction.status === "failed"
@@ -624,7 +623,7 @@ function normalizeSlashTransaction(
     source: "slash",
     slashAccountSubtype: transaction.accountSubtype,
     accountId: `slash-${accountIdentity.accountId}-${transaction.accountSubtype}`,
-    accountName: accountLabel,
+    accountName: accountIdentity.accountName,
     date: transaction.date.slice(0, 10),
     description: transaction.description,
     rawName: counterparty,

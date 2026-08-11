@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  bankAccountGroupKey,
+  bankCardGroupKey,
+  bankMerchantGroupKey,
   bankCardCashbackRate,
   groupBankTransactions,
   groupBankTransactionsByAccount,
@@ -36,8 +39,9 @@ function bankTransaction(
 }
 
 test("Meta activity groups across bank sources and descriptor variants", () => {
+  const meta = bankTransaction("meta", "META ADS 438925", 30);
   const groups = groupBankTransactions([
-    bankTransaction("meta", "META ADS 438925", 30),
+    meta,
     bankTransaction("facebook", "Facebook Ads", 40, { source: "wise", accountId: "wise-usd", accountName: "Wise USD" }),
     bankTransaction("facebk", "FACEBK *5JR9SYHGG2", 50, { source: "revolut", accountId: "revolut-usd", accountName: "Revolut USD" }),
     bankTransaction("instagram", "Instagram promotion", 20, { direction: "in" })
@@ -50,6 +54,17 @@ test("Meta activity groups across bank sources and descriptor variants", () => {
   assert.deepEqual(groups[0].spend, { USD: 120 });
   assert.deepEqual(groups[0].credits, { USD: 20 });
   assert.deepEqual(groups[0].net, { USD: -100 });
+  assert.equal(bankMerchantGroupKey(meta), groups[0].key);
+});
+
+test("card and account group keys identify the exact drill-down rows", () => {
+  const transaction = bankTransaction("card", "Example", 25, {
+    cardId: "card-primary",
+    cardLastFour: "8744"
+  });
+  assert.equal(bankCardGroupKey(transaction), "slash:card:card-primary");
+  assert.equal(bankAccountGroupKey(transaction), "slash:account:slash-platinum");
+  assert.equal(bankCardGroupKey({ ...transaction, status: "pending" }), undefined);
 });
 
 test("Meta, TikTok, and NewsBreak are canonical social-media groups", () => {

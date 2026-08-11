@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 const dayMs = 24 * 60 * 60 * 1000;
+export const invoicePaymentAmountTolerance = 100;
 const weekdayByName: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -387,7 +388,7 @@ export function invoicePaymentAiCandidates({
         || invoice.status !== "open"
         || invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
         || transaction.date < invoice.issueDate
-        || Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)) > 0.01
+        || Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)) > invoicePaymentAmountTolerance
       ) {
         return false;
       }
@@ -492,10 +493,12 @@ export function reconcileExactInvoicePayments({
   allocations: PaymentAllocation[];
   providers: Provider[];
   now?: Date;
-}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number } {
+}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number; exactMatched: number; toleranceMatched: number } {
   let nextInvoices = [...invoices];
   let nextAllocations = [...allocations];
   let matched = 0;
+  let exactMatched = 0;
+  let toleranceMatched = 0;
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const nextTransactions = transactions.map((transaction) => {
     if (
@@ -508,20 +511,30 @@ export function reconcileExactInvoicePayments({
       return transaction;
     }
 
-    const candidates = nextInvoices.filter((invoice) => {
+    const eligibleInvoices = nextInvoices.filter((invoice) => {
       if (
         invoice.documentType !== "sales_invoice" ||
         invoice.status !== "open" ||
         invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
       ) return false;
       if (transaction.date < invoice.issueDate) return false;
-      if (Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) > 0.01) return false;
+      if (Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) > invoicePaymentAmountTolerance) return false;
       const provider = invoice.providerId ? providerById.get(invoice.providerId) : undefined;
       return invoicePaymentIdentityMatched(transaction, invoice, provider, false);
     });
+    const exactCandidates = eligibleInvoices.filter(
+      (invoice) => Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) <= 0.01
+    );
+    const candidates = exactCandidates.length > 0 ? exactCandidates : eligibleInvoices;
     if (candidates.length !== 1) return transaction;
 
     const invoice = candidates[0];
+    const difference = Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount));
+    const isExact = difference <= 0.01;
+    const matchReason = isExact
+      ? "Exact amount, currency, and company or invoice reference"
+      : `Amount within $${invoicePaymentAmountTolerance} fee tolerance (${difference.toFixed(2)} difference), with matching currency and company or invoice reference`;
+    const confidence = isExact ? 1 : 0.98;
     const createdAt = now.toISOString();
     nextAllocations.push({
       id: `payment-${slug(transaction.id)}-${slug(invoice.id)}`,
@@ -533,8 +546,8 @@ export function reconcileExactInvoicePayments({
       accountName: transaction.accountName,
       reference: transaction.description,
       mode: "automatic",
-      confidence: 1,
-      matchReason: "Exact amount, currency, and company or invoice reference",
+      confidence,
+      matchReason,
       paidAt: transaction.date,
       createdAt
     });
@@ -542,17 +555,19 @@ export function reconcileExactInvoicePayments({
       item.id === invoice.id ? { ...item, updatedAt: createdAt } : item
     );
     matched += 1;
+    if (isExact) exactMatched += 1;
+    else toleranceMatched += 1;
     return {
       ...transaction,
       matchedInvoiceId: invoice.id,
       matchedProviderId: invoice.providerId ?? transaction.matchedProviderId,
-      invoiceMatchSource: "exact" as const,
-      invoiceMatchConfidence: 1,
-      invoiceMatchReason: "Exact amount, currency, and company or invoice reference"
+      invoiceMatchSource: isExact ? "exact" as const : "tolerance" as const,
+      invoiceMatchConfidence: confidence,
+      invoiceMatchReason: matchReason
     };
   });
 
-  return { invoices: nextInvoices, transactions: nextTransactions, allocations: nextAllocations, matched };
+  return { invoices: nextInvoices, transactions: nextTransactions, allocations: nextAllocations, matched, exactMatched, toleranceMatched };
 }
 
 export function pruneSupersededAccrualRun(

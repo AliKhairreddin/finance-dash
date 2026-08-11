@@ -9,6 +9,18 @@ test("bank period presets support a single-day Today range", () => {
     fromDate: "2026-07-30",
     toDate: "2026-07-30"
   });
+  assert.deepEqual(bankPeriodPresetRange("yesterday", today), {
+    fromDate: "2026-07-29",
+    toDate: "2026-07-29"
+  });
+  assert.deepEqual(bankPeriodPresetRange("last-7-days", today), {
+    fromDate: "2026-07-24",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(bankPeriodPresetRange("last-30-days", today), {
+    fromDate: "2026-07-01",
+    toDate: "2026-07-30"
+  });
 });
 
 test("bank period presets use Monday-based current and previous weeks", () => {
@@ -41,5 +53,16 @@ test("bank period presets create inclusive recent and year-to-date ranges", () =
   assert.deepEqual(bankPeriodPresetRange("this-year", today), {
     fromDate: "2026-01-01",
     toDate: "2026-07-30"
+  });
+});
+
+test("bank period presets create current and previous calendar quarters", () => {
+  assert.deepEqual(bankPeriodPresetRange("this-quarter", today), {
+    fromDate: "2026-07-01",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(bankPeriodPresetRange("last-quarter", today), {
+    fromDate: "2026-04-01",
+    toDate: "2026-06-30"
   });
 });

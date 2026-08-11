@@ -66,7 +66,7 @@ export type BankPeriodSlashCashbackState = [
 ];
 
 export interface BankAnalyticsAccumulatorState {
-  version: 3;
+  version: 4;
   fromDate: string;
   toDate: string;
   configurationFingerprint: string;
@@ -74,6 +74,7 @@ export interface BankAnalyticsAccumulatorState {
   reviewSampleLimit: number;
   transactionCount: number;
   internalTransferCount: number;
+  capitalMovementCount: number;
   bankPeriodTransactionCount: number;
   needsReviewCount: number;
   evictedCandidateCount: number;
@@ -630,6 +631,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   const knownCurrencies = new Set<string>();
   let transactionCount = 0;
   let internalTransferCount = 0;
+  let capitalMovementCount = 0;
   let bankPeriodTransactionCount = 0;
   let needsReviewCount = 0;
   let evictedCandidateCount = 0;
@@ -661,7 +663,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       throw new Error(`Analytics accumulator state exceeds ${bankAnalyticsLimits.serializedStateBytes} bytes`);
     }
     if (
-      state.version !== 3
+      state.version !== 4
       || state.fromDate !== fromDate
       || state.toDate !== toDate
       || state.unmatchedMerchantRowLimit !== merchantRowLimit
@@ -840,6 +842,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
 
     transactionCount = nonNegativeInteger(state.transactionCount, "Analytics transaction count");
     internalTransferCount = nonNegativeInteger(state.internalTransferCount, "Analytics internal-transfer count");
+    capitalMovementCount = nonNegativeInteger(state.capitalMovementCount, "Analytics capital-movement count");
     bankPeriodTransactionCount = nonNegativeInteger(
       state.bankPeriodTransactionCount,
       "Analytics bank-period transaction count"
@@ -847,7 +850,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
     needsReviewCount = nonNegativeInteger(state.needsReviewCount, "Analytics review count");
     evictedCandidateCount = nonNegativeInteger(state.evictedCandidateCount, "Analytics merchant eviction count");
     if (
-      transactionCount !== summaryAggregate.transactionCount + internalTransferCount
+      transactionCount !== summaryAggregate.transactionCount + internalTransferCount + capitalMovementCount
       || needsReviewCount < summaryAggregate.needsReviewCount
       || needsReviewCount > transactionCount
       || reviewSamples.length > needsReviewCount
@@ -1038,8 +1041,9 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         }
       }
 
-      if (isInternalTransferTransaction(transaction)) {
-        internalTransferCount += 1;
+      if (isNonOperatingMovementTransaction(transaction)) {
+        if (isInternalTransferTransaction(transaction)) internalTransferCount += 1;
+        else capitalMovementCount += 1;
         continue;
       }
 
@@ -1109,7 +1113,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, aggregate]) => [key, aggregateState(aggregate)]);
     const state: BankAnalyticsAccumulatorState = {
-      version: 3,
+      version: 4,
       fromDate,
       toDate,
       configurationFingerprint: expectedConfigurationFingerprint,
@@ -1117,6 +1121,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       reviewSampleLimit,
       transactionCount,
       internalTransferCount,
+      capitalMovementCount,
       bankPeriodTransactionCount,
       needsReviewCount,
       evictedCandidateCount,
@@ -1230,14 +1235,15 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
     };
 
     return {
-      version: 2,
+      version: 3,
       fromDate,
       toDate,
       generatedAt,
       summary: {
         transactionCount,
-        externalTransactionCount: summaryAggregate.transactionCount,
+        operatingTransactionCount: summaryAggregate.transactionCount,
         internalTransferCount,
+        capitalMovementCount,
         matchedTransactionCount: summaryAggregate.matchedTransactionCount,
         needsReviewCount,
         activeTeamCount: activeTeams.size,

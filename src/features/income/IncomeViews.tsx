@@ -19,6 +19,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { CalendarPeriodPicker, calendarDateRangeLabel } from "@/components/ui/calendar-period-picker";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   ActiveFilterBar,
@@ -59,6 +60,7 @@ import type {
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../shared/income";
 import { dashboardInvoiceDeletionBlockReason } from "../../../shared/invoiceDeletion";
+import { bankPeriodPresetLabel, bankPeriodPresetRange, bankPeriodPresets, type BankPeriodPreset } from "../../../shared/bankPeriods";
 
 type InvoiceTab = "all" | "pending" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open" | "accruing";
@@ -291,6 +293,10 @@ export function RevenueView({
     "asc",
     { allowedValues: ["asc", "desc"] }
   );
+  const revenuePeriodToday = new Date().toISOString().slice(0, 10);
+  const revenueDateRange = periodPreset === "custom" && periodStart && periodEnd
+    ? { fromDate: periodStart, toDate: periodEnd }
+    : bankPeriodPresetRange(periodPreset === "custom" ? "last-week" : periodPreset, revenuePeriodToday);
 
   const partnersById = useMemo(
     () => new Map(dashboard.revenuePartners.map((partner) => [partner.id, partner])),
@@ -495,22 +501,31 @@ export function RevenueView({
               <NativeSelectOption value="failed">Failed</NativeSelectOption>
             </NativeSelect>
           </label>
-          <label>
-            Pull period
-            <NativeSelect value={periodPreset} onValueChange={(value) => setPeriodPreset(value as RevenuePeriodPreset)}>
-              <NativeSelectOption value="last-week">Last week</NativeSelectOption>
-              <NativeSelectOption value="last-7-days">Last 7 days</NativeSelectOption>
-              <NativeSelectOption value="this-week">This week to date</NativeSelectOption>
-              <NativeSelectOption value="this-month">This month to date</NativeSelectOption>
-              <NativeSelectOption value="custom">Custom</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          {periodPreset === "custom" && (
-            <>
-              <label>Start<Input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label>
-              <label>End<Input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label>
-            </>
-          )}
+          <div className="revenue-period-picker">
+            <span>Pull period</span>
+            <CalendarPeriodPicker
+              ariaLabel="Choose revenue pull period"
+              dateRange={revenueDateRange}
+              onApply={(range) => {
+                setPeriodStart(range.fromDate);
+                setPeriodEnd(range.toDate);
+                setPeriodPreset("custom");
+              }}
+              onSelectPreset={(value) => {
+                if (["last-week", "this-week", "last-7-days", "this-month"].includes(value)) {
+                  setPeriodPreset(value as RevenuePeriodPreset);
+                  return;
+                }
+                const range = bankPeriodPresetRange(value as BankPeriodPreset, revenuePeriodToday);
+                setPeriodStart(range.fromDate);
+                setPeriodEnd(range.toDate);
+                setPeriodPreset("custom");
+              }}
+              presetAriaLabel="Revenue pull period presets"
+              presetOptions={bankPeriodPresets.map((value) => ({ value, label: bankPeriodPresetLabel(value) }))}
+              triggerLabel={periodPreset === "custom" ? calendarDateRangeLabel(revenueDateRange) : bankPeriodPresetLabel(periodPreset)}
+            />
+          </div>
           <Button className="primary-button income-pull-button" type="submit" disabled={busy || (periodPreset === "custom" && (!periodStart || !periodEnd))}>
             {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Pull now
           </Button>
@@ -659,6 +674,11 @@ export function InvoicesView({
   });
   const [createdDateFrom, setCreatedDateFrom] = useUrlState("invoiceCreatedFrom", "", { isValid: isIsoDate });
   const [createdDateTo, setCreatedDateTo] = useUrlState("invoiceCreatedTo", "", { isValid: isIsoDate });
+  const invoiceFilterToday = new Date().toISOString().slice(0, 10);
+  const createdDateRange = {
+    fromDate: createdDateFrom || createdDateTo || invoiceFilterToday,
+    toDate: createdDateTo || createdDateFrom || invoiceFilterToday
+  };
   const [sortKey, setSortKey] = useUrlState<InvoiceSortKey>("invoiceSort", "period", {
     allowedValues: ["amount", "cadence", "company", "created", "forecast", "period", "status"]
   });
@@ -1118,16 +1138,30 @@ export function InvoicesView({
                 </label>
               </FilterFieldGroup>
               <FilterFieldGroup title="Created date">
-                <div className="toolbar-date-range">
-                  <label>
-                    From
-                    <Input type="date" aria-label="Filter invoices created from date" value={createdDateFrom} onChange={(event) => setCreatedDateFrom(event.target.value)} />
-                  </label>
-                  <label>
-                    To
-                    <Input type="date" aria-label="Filter invoices created to date" value={createdDateTo} onChange={(event) => setCreatedDateTo(event.target.value)} />
-                  </label>
-                </div>
+                <CalendarPeriodPicker
+                  ariaLabel="Filter invoices by created date"
+                  dateRange={createdDateRange}
+                  onApply={(range) => {
+                    setCreatedDateFrom(range.fromDate);
+                    setCreatedDateTo(range.toDate);
+                  }}
+                  onSelectPreset={(value) => {
+                    if (value === "all") {
+                      setCreatedDateFrom("");
+                      setCreatedDateTo("");
+                      return;
+                    }
+                    const range = bankPeriodPresetRange(value as BankPeriodPreset, invoiceFilterToday);
+                    setCreatedDateFrom(range.fromDate);
+                    setCreatedDateTo(range.toDate);
+                  }}
+                  presetAriaLabel="Invoice created-date presets"
+                  presetOptions={[
+                    { value: "all", label: "Any date" },
+                    ...bankPeriodPresets.map((value) => ({ value, label: bankPeriodPresetLabel(value) }))
+                  ]}
+                  triggerLabel={createdDateFrom || createdDateTo ? calendarDateRangeLabel(createdDateRange) : "Any date"}
+                />
               </FilterFieldGroup>
             </FilterPopover>
           </div>
@@ -1340,7 +1374,7 @@ function PaymentForecast({ invoice, prediction }: { invoice: Invoice; prediction
   if (invoice.status === "draft") return <span className="forecast-copy muted"><Clock3 size={14} /> Forecast starts from issue date</span>;
   if (invoice.status === "paid") return <span className="forecast-copy good"><Check size={14} /> Paid {invoice.paidAt ? dateLabel(invoice.paidAt) : ""}</span>;
   const sampleSize = prediction?.sampleSize ?? 0;
-  if (sampleSize < 5) return <span className="forecast-copy learning"><Sparkles size={14} /> Need {5 - sampleSize} of 5 matched payment{5 - sampleSize === 1 ? "" : "s"}</span>;
+  if (sampleSize < 5) return <span className="forecast-copy learning" title="Forecasting starts after five confirmed matched payments"><Sparkles size={14} /> {5 - sampleSize} more match{5 - sampleSize === 1 ? "" : "es"} needed</span>;
   if (!prediction?.predictedDate) return <span className="forecast-copy muted"><Clock3 size={14} /> Forecast unavailable</span>;
   return <span className="forecast-copy"><CalendarClock size={14} /><strong>{dateLabel(prediction.predictedDate)}</strong><small>Median {prediction.medianDays} days · last 5 matched</small></span>;
 }

@@ -75,6 +75,8 @@ import type {
 } from "../shared/types";
 import {
   summarizeBankActivity,
+  transactionBankActivityGroupKey,
+  type BankActivityGroupType,
   type BankActivitySummary,
   type BankMerchantProvider
 } from "../shared/bankMerchantGroups";
@@ -1658,6 +1660,8 @@ interface TransactionPageOptions {
   accountId?: string;
   category?: string;
   team?: string;
+  groupType?: BankActivityGroupType;
+  groupKey?: string;
   match: TransactionMatchFilter;
   search?: string;
   sortKey: TransactionSortKey;
@@ -1755,6 +1759,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
     || options.accountId
     || options.category
     || options.team
+    || options.groupType
     || options.match !== "all"
     || options.sortKey !== "date"
   );
@@ -1822,6 +1827,10 @@ function filterAndSortActivity(
     if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
     if (options.team === "unassigned" && transaction.teamId) return false;
     if (options.team && options.team !== "unassigned" && transaction.teamId !== options.team) return false;
+    if (
+      options.groupType
+      && transactionBankActivityGroupKey(transaction, options.groupType, directory.providers) !== options.groupKey
+    ) return false;
     if (options.match !== "all") {
       const categorized = !transactionNeedsCategoryReview(
         transaction,
@@ -1970,7 +1979,7 @@ function requireBankAnalyticsSnapshot(
 ): BankAnalyticsSnapshot {
   if (
     !isRecord(value)
-    || value.version !== 2
+    || value.version !== 3
     || value.fromDate !== range.fromDate
     || value.toDate !== range.toDate
     || !isRecord(value.summary)
@@ -4156,7 +4165,8 @@ async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePayme
   }
   return {
     dashboard: await getSnapshot(env),
-    exactMatches: exact.matched,
+    exactMatches: exact.exactMatched,
+    toleranceMatches: exact.toleranceMatched,
     aiMatches: ai.matched,
     reviewed: eligibleForAi.length
   };
@@ -5945,10 +5955,18 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   const accountId = url.searchParams.get("accountId")?.trim();
   const category = url.searchParams.get("category")?.trim();
   const team = url.searchParams.get("team")?.trim();
+  const groupType = url.searchParams.get("groupType")?.trim();
+  const groupKey = url.searchParams.get("groupKey")?.trim();
   if (search && search.length > 200) throw new ApiError(400, "Transaction search is too long");
   if (accountId && accountId.length > 256) throw new ApiError(400, "Transaction account is invalid");
   if (category && category.length > 160) throw new ApiError(400, "Transaction category is invalid");
   if (team && team.length > 256) throw new ApiError(400, "Transaction owner is invalid");
+  if (groupType && groupType !== "merchant" && groupType !== "card" && groupType !== "account") {
+    throw new ApiError(400, "Transaction group type is invalid");
+  }
+  if (Boolean(groupType) !== Boolean(groupKey) || (groupKey?.length ?? 0) > 512) {
+    throw new ApiError(400, "Transaction group filter is invalid");
+  }
   return {
     fromDate,
     toDate,
@@ -5958,6 +5976,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(accountId ? { accountId } : {}),
     ...(category ? { category } : {}),
     ...(team ? { team } : {}),
+    ...(groupType ? { groupType: groupType as BankActivityGroupType, groupKey } : {}),
     ...(search ? { search } : {}),
     match,
     sortKey: sortKey as TransactionSortKey,
@@ -6503,10 +6522,11 @@ export default {
       }
       try {
         const result = await autoMatchInvoicePayments(env);
-        if (result.exactMatches > 0 || result.aiMatches > 0) {
+        if (result.exactMatches > 0 || result.toleranceMatches > 0 || result.aiMatches > 0) {
           console.log(JSON.stringify({
             event: "invoice_payment_auto_match_completed",
             exactMatches: result.exactMatches,
+            toleranceMatches: result.toleranceMatches,
             aiMatches: result.aiMatches,
             reviewed: result.reviewed
           }));

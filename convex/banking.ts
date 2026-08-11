@@ -35,7 +35,7 @@ const bankSource = v.union(
 );
 const bankConnection = v.object({ source: bankSource, connectionKey: v.string() });
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
-const invoiceMatchSource = v.union(v.literal("exact"), v.literal("ai"), v.literal("manual"));
+const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 const maximumActivityPageSize = 200;

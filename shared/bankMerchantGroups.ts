@@ -2,6 +2,7 @@ import type { CurrencyTotals, Provider, Transaction } from "./types";
 import { isSlashDailyCardPayment } from "./transactionPresentation";
 
 export type BankMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | "aliases">;
+export type BankActivityGroupType = "merchant" | "card" | "account";
 
 export interface BankCardGroup {
   key: string;
@@ -256,15 +257,48 @@ export function transactionCardLastFour(transaction: Transaction): string | unde
   return normalizedCardLastFour(transaction.cardLastFour);
 }
 
+export function bankCardGroupKey(transaction: Transaction): string | undefined {
+  if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) return undefined;
+  const cardLastFour = transactionCardLastFour(transaction);
+  if (!cardLastFour) return undefined;
+  const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
+  const cardId = transaction.cardId?.trim();
+  return `${transaction.source}:${cardId ? `card:${cardId}` : `account:${accountIdentity}:last4:${cardLastFour}`}`;
+}
+
+export function bankAccountGroupKey(transaction: Transaction): string | undefined {
+  if (!settledBankTransaction(transaction)) return undefined;
+  const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
+  return `${transaction.source}:account:${accountIdentity}`;
+}
+
+export function bankMerchantGroupKey(
+  transaction: Transaction,
+  providers: readonly BankMerchantProvider[] = []
+): string | undefined {
+  if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) return undefined;
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  return merchantIdentity(transaction, providersById, providerAliasDirectory(providers)).key;
+}
+
+export function transactionBankActivityGroupKey(
+  transaction: Transaction,
+  groupType: BankActivityGroupType,
+  providers: readonly BankMerchantProvider[] = []
+): string | undefined {
+  if (groupType === "card") return bankCardGroupKey(transaction);
+  if (groupType === "account") return bankAccountGroupKey(transaction);
+  return bankMerchantGroupKey(transaction, providers);
+}
+
 export function groupBankTransactionsByCard(transactions: readonly Transaction[]): BankCardGroup[] {
   const groups = new Map<string, BankCardGroup>();
   for (const transaction of transactions) {
     if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) continue;
     const cardLastFour = transactionCardLastFour(transaction);
-    if (!cardLastFour) continue;
-    const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
+    const key = bankCardGroupKey(transaction);
+    if (!cardLastFour || !key) continue;
     const cardId = transaction.cardId?.trim();
-    const key = `${transaction.source}:${cardId ? `card:${cardId}` : `account:${accountIdentity}:last4:${cardLastFour}`}`;
     const existing = groups.get(key);
     const group: BankCardGroup = existing ?? {
       key,
@@ -307,9 +341,8 @@ export function groupBankTransactionsByCard(transactions: readonly Transaction[]
 export function groupBankTransactionsByAccount(transactions: readonly Transaction[]): BankCardGroup[] {
   const groups = new Map<string, BankCardGroup>();
   for (const transaction of transactions) {
-    if (!settledBankTransaction(transaction)) continue;
-    const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
-    const key = `${transaction.source}:account:${accountIdentity}`;
+    const key = bankAccountGroupKey(transaction);
+    if (!key) continue;
     const existing = groups.get(key);
     const group: BankCardGroup = existing ?? {
       key,

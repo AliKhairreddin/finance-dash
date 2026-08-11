@@ -240,6 +240,27 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
   assert.equal(result.transactions[0].invoiceMatchSource, "exact");
   assert.equal(result.transactions[0].invoiceMatchConfidence, 1);
 
+  const feeAdjusted = reconcileExactInvoicePayments({
+    invoices: [invoice],
+    transactions: [{ ...transaction, id: "wise-payment-fee", amount: 925 }],
+    allocations: [],
+    providers: [provider],
+    now: new Date("2026-07-10T12:00:00.000Z")
+  });
+  assert.equal(feeAdjusted.matched, 1);
+  assert.equal(feeAdjusted.exactMatched, 0);
+  assert.equal(feeAdjusted.toleranceMatched, 1);
+  assert.equal(feeAdjusted.transactions[0].invoiceMatchSource, "tolerance");
+  assert.equal(feeAdjusted.invoices[0].status, "paid");
+
+  const outsideFeeTolerance = reconcileExactInvoicePayments({
+    invoices: [invoice],
+    transactions: [{ ...transaction, id: "wise-payment-too-low", amount: 899.99 }],
+    allocations: [],
+    providers: [provider]
+  });
+  assert.equal(outsideFeeTolerance.matched, 0);
+
   const wrongCurrency = reconcileExactInvoicePayments({
     invoices: [invoice],
     transactions: [{ ...transaction, id: "wise-payment-2", currency: "CAD" }],
@@ -347,7 +368,7 @@ test("AI invoice reconciliation accepts only server-approved high-confidence mat
     description: "Payment for weekly services",
     rawName: "Client Co",
     counterparty: "Client Co",
-    amount: 1000,
+    amount: 925,
     currency: "USD",
     direction: "in",
     status: "settled",

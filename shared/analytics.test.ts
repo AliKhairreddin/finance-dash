@@ -70,6 +70,12 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
       amount: 500,
       category: "Internal transfer"
     }),
+    transaction("capital", {
+      source: "revolut",
+      amount: 900,
+      direction: "in",
+      category: "Capital movement"
+    }),
     transaction("revenue-eur", {
       source: "wise",
       wiseEntity: "lmd",
@@ -85,9 +91,10 @@ test("streaming bank Analytics preserves exact headline and bounded-dimension to
   const snapshot = accumulator.finish("2026-07-31T20:00:00.000Z");
 
   assert.deepEqual(snapshot.summary, {
-    transactionCount: 5,
-    externalTransactionCount: 4,
+    transactionCount: 6,
+    operatingTransactionCount: 4,
     internalTransferCount: 1,
+    capitalMovementCount: 1,
     matchedTransactionCount: 3,
     needsReviewCount: 1,
     activeTeamCount: 2,
@@ -266,8 +273,9 @@ test("streaming bank Analytics excludes voided tombstones from every aggregate",
   const snapshot = accumulator.finish("2026-07-31T20:00:00.000Z");
   assert.deepEqual(snapshot.summary, {
     transactionCount: 1,
-    externalTransactionCount: 1,
+    operatingTransactionCount: 1,
     internalTransferCount: 0,
+    capitalMovementCount: 0,
     matchedTransactionCount: 0,
     needsReviewCount: 0,
     activeTeamCount: 0,
@@ -352,7 +360,7 @@ test("unmatched merchant cardinality and snapshot payload stay hard-bounded", ()
   assert.ok(snapshot.unmatchedMerchants.other);
   assert.equal(
     retainedCount + (snapshot.unmatchedMerchants.other?.transactionCount ?? 0),
-    snapshot.summary.externalTransactionCount
+    snapshot.summary.operatingTransactionCount
   );
   assert.ok(JSON.stringify(snapshot).length < 15_000);
 });

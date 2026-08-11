@@ -12,7 +12,7 @@ import type {
   Transaction,
   TransactionCategory
 } from "./types";
-import { invoicePaymentAiCandidates } from "./income";
+import { invoiceOutstanding, invoicePaymentAiCandidates } from "./income";
 import {
   initialTransactionCategories,
   isRequiredTransactionCategory,
@@ -394,7 +394,7 @@ export async function runOpenRouterInvoicePaymentMatching(
           {
             systemPrompt: [
               "You match received bank payments to existing sales invoices for a finance dashboard.",
-              "Every transaction includes a server-approved list of candidate invoices with exact outstanding amount, currency, date, and company or reference evidence.",
+              "Every transaction includes a server-approved list of candidate invoices whose outstanding amount is within a 100 USD fee tolerance, with matching currency, date, and company or reference evidence.",
               "Choose an invoice only when the bank text, client identity, invoice number, service period, or description makes the match highly convincing.",
               "Do not guess from amount alone. Return no match for a transaction when evidence is ambiguous.",
               "Use only transactionId and invoiceId values present in the payload.",
@@ -430,6 +430,8 @@ export async function runOpenRouterInvoicePaymentMatching(
                       periodStart: invoice.periodStart,
                       periodEnd: invoice.periodEnd,
                       amount: invoice.amount,
+                      outstandingAmount: invoiceOutstanding(invoice, allocations),
+                      amountDifference: Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)),
                       currency: invoice.currency
                     };
                   })

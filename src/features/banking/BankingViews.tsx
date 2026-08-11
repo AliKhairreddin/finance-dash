@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,12 @@ import type {
   TransactionSortKey,
   UpdateHoldingPayload
 } from "../../../shared/types";
-import type { BankActivitySummary } from "../../../shared/bankMerchantGroups";
+import type {
+  BankActivityGroupType,
+  BankActivitySummary,
+  BankCardGroupSummary,
+  BankMerchantGroupSummary
+} from "../../../shared/bankMerchantGroups";
 import { bankSources, type BankSource } from "../../../shared/banks";
 import {
   isInternalTransferTransaction,
@@ -76,6 +81,8 @@ export function AllBankTransactionsView({
   rangeControls,
   activityView,
   setActivityView,
+  bankGroupType,
+  bankGroupLabel,
   period,
   source,
   setSource,
@@ -107,6 +114,10 @@ export function AllBankTransactionsView({
   onLoadPrevious,
   onLoadMore,
   onRetryActivitySummary,
+  onClearBankGroup,
+  onOpenMerchantGroup,
+  onOpenCardGroup,
+  onOpenAccountGroup,
   onMatchInvoice
 }: {
   dashboard: DashboardSnapshot;
@@ -114,6 +125,8 @@ export function AllBankTransactionsView({
   rangeControls: ReactNode;
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
+  bankGroupType: "" | BankActivityGroupType;
+  bankGroupLabel: string;
   period: { fromDate: string; toDate: string };
   source: "all" | BankSource;
   setSource: (source: "all" | BankSource) => void;
@@ -145,6 +158,10 @@ export function AllBankTransactionsView({
   onLoadPrevious: () => Promise<void>;
   onLoadMore: () => Promise<void>;
   onRetryActivitySummary: () => Promise<void>;
+  onClearBankGroup: () => void;
+  onOpenMerchantGroup: (group: BankMerchantGroupSummary) => void;
+  onOpenCardGroup: (group: BankCardGroupSummary) => void;
+  onOpenAccountGroup: (group: BankCardGroupSummary) => void;
   onMatchInvoice: (transaction: Transaction) => void;
 }) {
   const query = searchTerm;
@@ -193,6 +210,11 @@ export function AllBankTransactionsView({
   }
 
   const bankActiveFilters: ActiveFilter[] = [
+    ...(bankGroupType ? [{
+      key: "activity-group",
+      label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : "Account"}: ${bankGroupLabel}`,
+      onRemove: onClearBankGroup
+    }] : []),
     ...(source === "all" ? [] : [{
       key: "source",
       label: `Source: ${sourceLabel(source)}`,
@@ -331,6 +353,7 @@ export function AllBankTransactionsView({
           ? `${rows.length} transactions on this page`
           : `${rows.length} of ${totalCount.toLocaleString("en-US")} matching transactions`}
         onClearAll={() => {
+          onClearBankGroup();
           setSource("all");
           setAccount("all");
           setDirection("all");
@@ -357,7 +380,7 @@ export function AllBankTransactionsView({
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className="icon-button" type="button" title={transaction.matchedInvoiceId ? "Review or replace invoice match" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}><Link2 size={16} /></Button>}</td></tr>;
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} type="button" title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}</td></tr>;
             }) : <tr><td colSpan={8}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>
@@ -386,6 +409,7 @@ export function AllBankTransactionsView({
           loadError={activitySummaryError}
           onRetry={onRetryActivitySummary}
           period={period}
+          onOpenGroup={onOpenMerchantGroup}
         />
       ) : activityView === "cards" ? (
         <BankCardActivityView
@@ -393,6 +417,7 @@ export function AllBankTransactionsView({
           isLoading={isLoadingActivitySummary}
           loadError={activitySummaryError}
           onRetry={onRetryActivitySummary}
+          onOpenGroup={onOpenCardGroup}
         />
       ) : (
         <BankAccountActivityView
@@ -400,6 +425,7 @@ export function AllBankTransactionsView({
           isLoading={isLoadingActivitySummary}
           loadError={activitySummaryError}
           onRetry={onRetryActivitySummary}
+          onOpenGroup={onOpenAccountGroup}
         />
       )}
     </section>

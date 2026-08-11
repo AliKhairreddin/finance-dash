@@ -68,7 +68,7 @@ export function FilterPopover({
           const eventTarget = eventDetails.event.target;
           const relatedTarget = "relatedTarget" in eventDetails.event ? eventDetails.event.relatedTarget : null;
           const isNestedSelectInteraction = [eventTarget, relatedTarget].some(
-            (target) => target instanceof Element && target.closest(".searchable-select-positioner")
+            (target) => target instanceof Element && target.closest(".searchable-select-positioner, .bank-date-range-popover")
           );
           if (isNestedSelectInteraction) return;
         }

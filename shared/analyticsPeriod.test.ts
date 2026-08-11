@@ -70,6 +70,14 @@ test("analytics relative periods align to calendar days, Monday weeks, and month
     fromDate: "2026-07-29",
     toDate: "2026-07-29"
   });
+  assert.deepEqual(analyticsDateRange(selection("last_7_days"), today), {
+    fromDate: "2026-07-24",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("last_30_days"), today), {
+    fromDate: "2026-07-01",
+    toDate: "2026-07-30"
+  });
   assert.deepEqual(analyticsDateRange(selection("this_week"), today), {
     fromDate: "2026-07-27",
     toDate: "2026-07-30"
@@ -84,6 +92,14 @@ test("analytics relative periods align to calendar days, Monday weeks, and month
   });
   assert.deepEqual(analyticsDateRange(selection("last_month"), today), {
     fromDate: "2026-06-01",
+    toDate: "2026-06-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("this_quarter"), today), {
+    fromDate: "2026-07-01",
+    toDate: "2026-07-30"
+  });
+  assert.deepEqual(analyticsDateRange(selection("last_quarter"), today), {
+    fromDate: "2026-04-01",
     toDate: "2026-06-30"
   });
 });

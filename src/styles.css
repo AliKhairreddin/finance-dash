@@ -282,6 +282,41 @@
   min-width: 190px;
 }
 
+.bank-group-drilldown {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bank-group-drilldown > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.bank-group-drilldown > svg {
+  flex: 0 0 auto;
+  color: var(--app-muted);
+}
+
+.bank-group-drilldown:hover strong,
+.bank-group-drilldown:focus-visible strong {
+  color: var(--info-text);
+}
+
+.bank-group-drilldown:focus-visible {
+  outline: 2px solid var(--info-text);
+  outline-offset: 3px;
+}
+
 .bank-group-table th.action-column,
 .bank-group-table td.action-column {
   width: 48px;
@@ -786,6 +821,12 @@ h2 {
   border-color: var(--control-border-hover);
   background: var(--control-hover-bg);
   transform: translateY(-1px);
+}
+
+.icon-button.matched-action {
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-soft);
 }
 
 .secondary-button {
@@ -3615,13 +3656,11 @@ th.amount .sortable-table-heading {
   vector-effect: non-scaling-stroke;
   transition:
     opacity 0.16s ease,
-    filter 0.16s ease,
-    transform 0.16s ease;
+    filter 0.16s ease;
 }
 
 .pie-segment:hover {
   filter: drop-shadow(0 1px 1px rgba(9, 9, 11, 0.2));
-  transform: scale(1.025);
 }
 
 .category-pie-svg.has-active .pie-segment:not(.active) {
@@ -3631,7 +3670,6 @@ th.amount .sortable-table-heading {
 .pie-segment.active {
   filter: drop-shadow(0 1px 1px rgba(9, 9, 11, 0.22));
   opacity: 1;
-  transform: scale(1.025);
 }
 
 .pie-center {
@@ -3712,7 +3750,6 @@ th.amount .sortable-table-heading {
 
 .category-legend-row.active {
   background: var(--control-bg);
-  box-shadow: inset 2px 0 0 currentColor;
 }
 
 .legend-swatch {
@@ -3810,6 +3847,7 @@ th.amount .sortable-table-heading {
   gap: 14px;
   align-items: stretch;
   padding: 14px;
+  min-height: 286px;
 }
 
 .category-distribution-chart {
@@ -4967,19 +5005,9 @@ th.amount .sortable-table-heading {
 }
 
 .sidebar-income-group {
-  position: relative;
   display: grid;
   gap: 2px;
   margin-bottom: 6px;
-  padding-left: 8px;
-}
-
-.sidebar-income-group::before {
-  position: absolute;
-  inset: 4px auto 4px 2px;
-  width: 1px;
-  background: var(--line);
-  content: "";
 }
 
 .sidebar-nav button.nested {
@@ -5085,6 +5113,23 @@ th.amount .sortable-table-heading {
   grid-template-rows: 14px 36px;
   align-self: end;
   line-height: 14px;
+}
+
+.revenue-period-picker {
+  display: grid;
+  grid-template-rows: 14px 36px;
+  gap: 6px;
+  align-self: end;
+  min-width: 0;
+  color: var(--label-text);
+  font-size: 0.72rem;
+  font-weight: 690;
+  line-height: 14px;
+}
+
+.revenue-period-picker .bank-date-range-trigger {
+  width: 100%;
+  min-width: 0;
 }
 
 .revenue-pull-bar {
@@ -5451,6 +5496,7 @@ th.amount .sortable-table-heading {
 
 .invoice-control-table .forecast-copy {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .forecast-copy svg {
@@ -9141,24 +9187,22 @@ body {
 .income-summary-card.draft,
 .income-summary-card.accruing,
 .income-summary-card.warning {
-  background: var(--panel);
-}
-
-.income-summary-card.draft,
-.income-summary-card.accruing {
-  border-top-width: 3px !important;
+  border-width: 1px !important;
 }
 
 .income-summary-card.draft {
-  border-top-color: var(--amber) !important;
+  border-color: var(--amber-border) !important;
+  background: var(--amber-soft);
 }
 
 .income-summary-card.accruing {
-  border-top-color: var(--green) !important;
+  border-color: var(--green-border) !important;
+  background: var(--green-soft);
 }
 
 .income-summary-card.warning {
-  border-top: 3px solid var(--red) !important;
+  border-color: var(--red-border) !important;
+  background: var(--red-soft);
 }
 
 .wise-summary-grid {
@@ -9380,7 +9424,6 @@ body {
 .data-table tbody tr:hover,
 .management-report-table tbody tr:hover {
   background: var(--row-hover);
-  box-shadow: inset 3px 0 0 var(--violet);
 }
 
 .review-row {
@@ -9392,8 +9435,7 @@ body {
 }
 
 .review-row:hover {
-  box-shadow: inset 3px 0 0 var(--violet);
-  transform: translateX(2px);
+  box-shadow: none;
 }
 
 .toast,

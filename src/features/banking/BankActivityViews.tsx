@@ -1,4 +1,4 @@
-import { CreditCard, FileDown, Landmark, Layers3, List, Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, CreditCard, FileDown, Landmark, Layers3, List, Loader2, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
@@ -127,13 +127,15 @@ export function BankMerchantGroupView({
   period,
   isLoading,
   loadError,
-  onRetry
+  onRetry,
+  onOpenGroup
 }: {
   groups: readonly BankMerchantGroupSummary[];
   period: BankExpenseReportPeriod;
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
+  onOpenGroup: (group: BankMerchantGroupSummary) => void;
 }) {
   const [sortKey, setSortKey] = useUrlState<GroupSortKey>("bankGroupSort", "spend", {
     allowedValues: ["cashback", "credits", "firstDate", "lastDate", "merchant", "net", "sources", "spend", "transactions"]
@@ -214,7 +216,12 @@ export function BankMerchantGroupView({
               const net = bankGroupAmountTotal(group.net);
               return (
                 <tr key={group.key}>
-                  <td className="counterparty-cell"><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></td>
+                  <td className="counterparty-cell">
+                    <button className="bank-group-drilldown" type="button" onClick={() => onOpenGroup(group)}>
+                      <span><strong>{group.name}</strong><small>{aliases.length > 0 ? `${aliases.slice(0, 2).join(" · ")}${aliases.length > 2 ? ` · +${aliases.length - 2}` : ""}` : "Canonical merchant"}</small></span>
+                      <ChevronRight aria-hidden="true" size={15} />
+                    </button>
+                  </td>
                   <td>{group.sources.map(sourceLabel).join(", ")}</td>
                   <td>{group.transactionCount.toLocaleString("en-US")}</td>
                   <td>{dateLabel(group.firstDate)}</td>
@@ -250,12 +257,14 @@ export function BankCardActivityView({
   groups,
   isLoading,
   loadError,
-  onRetry
+  onRetry,
+  onOpenGroup
 }: {
   groups: readonly BankCardGroupSummary[];
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
+  onOpenGroup: (group: BankCardGroupSummary) => void;
 }) {
   const [sortKey, setSortKey] = useUrlState<CardSortKey>("bankCardSort", "spend", {
     allowedValues: ["account", "cashback", "cashbackRate", "card", "firstDate", "lastDate", "source", "spend", "transactions"]
@@ -310,7 +319,12 @@ export function BankCardActivityView({
           <tbody>
             {rows.map((group) => (
               <tr key={group.key}>
-                <td><strong>{group.label}</strong>{group.cardLastFour && <small>Last four digits only</small>}</td>
+                <td>
+                  <button className="bank-group-drilldown" type="button" onClick={() => onOpenGroup(group)}>
+                    <span><strong>{group.label}</strong>{group.cardLastFour && <small>Last four digits only</small>}</span>
+                    <ChevronRight aria-hidden="true" size={15} />
+                  </button>
+                </td>
                 <td><span className={`bank-source-badge source-${group.source}`}>{sourceLabel(group.source)}</span></td>
                 <td>{group.accountName}</td>
                 <td>{group.transactionCount.toLocaleString("en-US")}</td>
@@ -333,12 +347,14 @@ export function BankAccountActivityView({
   groups,
   isLoading,
   loadError,
-  onRetry
+  onRetry,
+  onOpenGroup
 }: {
   groups: readonly BankCardGroupSummary[];
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
+  onOpenGroup: (group: BankCardGroupSummary) => void;
 }) {
   const [sortKey, setSortKey] = useUrlState<AccountSortKey>("bankAccountSort", "spend", {
     allowedValues: ["account", "cashback", "cashbackRate", "credits", "firstDate", "lastDate", "source", "spend", "transactions"]
@@ -393,7 +409,12 @@ export function BankAccountActivityView({
           <tbody>
             {rows.map((group) => (
               <tr key={group.key}>
-                <td><strong>{group.accountName}</strong></td>
+                <td>
+                  <button className="bank-group-drilldown" type="button" onClick={() => onOpenGroup(group)}>
+                    <span><strong>{group.accountName}</strong></span>
+                    <ChevronRight aria-hidden="true" size={15} />
+                  </button>
+                </td>
                 <td><span className={`bank-source-badge source-${group.source}`}>{sourceLabel(group.source)}</span></td>
                 <td>{group.transactionCount.toLocaleString("en-US")}</td>
                 <td>{dateLabel(group.firstDate)}</td>

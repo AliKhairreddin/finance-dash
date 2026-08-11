@@ -242,6 +242,14 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";
     const category = typeof request.query.category === "string" ? request.query.category.trim() : "";
     const team = typeof request.query.team === "string" ? request.query.team.trim() : "";
+    const rawGroupType = typeof request.query.groupType === "string" ? request.query.groupType.trim() : "";
+    const groupKey = typeof request.query.groupKey === "string" ? request.query.groupKey.trim() : "";
+    if (rawGroupType && rawGroupType !== "merchant" && rawGroupType !== "card" && rawGroupType !== "account") {
+      throw new ClientRequestError("Transaction group type is invalid");
+    }
+    if (Boolean(rawGroupType) !== Boolean(groupKey) || groupKey.length > 512) {
+      throw new ClientRequestError("Transaction group filter is invalid");
+    }
     return {
       fromDate,
       toDate,
@@ -251,6 +259,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       ...(accountId ? { accountId } : {}),
       ...(category ? { category } : {}),
       ...(team ? { team } : {}),
+      ...(rawGroupType ? { groupType: rawGroupType as "merchant" | "card" | "account", groupKey } : {}),
       ...(search ? { search } : {}),
       match: match as TransactionMatchFilter,
       sortKey: sortKey as TransactionSortKey,

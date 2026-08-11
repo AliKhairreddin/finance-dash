@@ -1,9 +1,14 @@
 export const bankPeriodPresets = [
   "today",
+  "yesterday",
+  "last-7-days",
+  "last-30-days",
   "this-week",
   "last-week",
   "this-month",
   "last-month",
+  "this-quarter",
+  "last-quarter",
   "recent",
   "this-year"
 ] as const;
@@ -44,6 +49,16 @@ export function bankPeriodPresetRange(
 
   if (preset === "today") return { fromDate: today, toDate: today };
 
+  if (preset === "yesterday") {
+    const yesterday = shiftDate(today, -1);
+    return { fromDate: yesterday, toDate: yesterday };
+  }
+
+  if (preset === "last-7-days" || preset === "last-30-days") {
+    const days = preset === "last-7-days" ? 7 : 30;
+    return { fromDate: shiftDate(today, 1 - days), toDate: today };
+  }
+
   if (preset === "this-week") {
     return { fromDate: startOfIsoWeek(today), toDate: today };
   }
@@ -71,6 +86,23 @@ export function bankPeriodPresetRange(
     };
   }
 
+  if (preset === "this-quarter") {
+    const quarterStartMonth = Math.floor(date.getUTCMonth() / 3) * 3;
+    date.setUTCMonth(quarterStartMonth, 1);
+    return { fromDate: isoDate(date), toDate: today };
+  }
+
+  if (preset === "last-quarter") {
+    const thisQuarterStartMonth = Math.floor(date.getUTCMonth() / 3) * 3;
+    date.setUTCMonth(thisQuarterStartMonth, 1);
+    const thisQuarterStart = isoDate(date);
+    date.setUTCMonth(date.getUTCMonth() - 3, 1);
+    return {
+      fromDate: isoDate(date),
+      toDate: shiftDate(thisQuarterStart, -1)
+    };
+  }
+
   if (preset === "this-year") {
     return { fromDate: `${today.slice(0, 4)}-01-01`, toDate: today };
   }
@@ -83,10 +115,15 @@ export function bankPeriodPresetRange(
 
 export function bankPeriodPresetLabel(preset: BankPeriodPreset, recentDays = 45): string {
   if (preset === "today") return "Today";
+  if (preset === "yesterday") return "Yesterday";
+  if (preset === "last-7-days") return "Last 7 days";
+  if (preset === "last-30-days") return "Last 30 days";
   if (preset === "this-week") return "This week";
   if (preset === "last-week") return "Last week";
   if (preset === "this-month") return "This month";
   if (preset === "last-month") return "Last month";
+  if (preset === "this-quarter") return "This quarter";
+  if (preset === "last-quarter") return "Last quarter";
   if (preset === "this-year") return "This year";
   return `Recent ${recentDays} days`;
 }
