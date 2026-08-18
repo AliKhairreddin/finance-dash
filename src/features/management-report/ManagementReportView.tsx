@@ -578,10 +578,15 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
   );
 }
 
-function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
-  const [selectedPeriod, setSelectedPeriod] = useUrlState<SummaryPeriod>("managementPeriod", "ytd", {
-    isValid: (value) => value === "ytd" || /^\d{4}-\d{2}-\d{2}$/.test(value)
-  });
+function SummaryTab({
+  dashboard,
+  selectedPeriod,
+  setSelectedPeriod
+}: {
+  dashboard: ManagementReportDashboard;
+  selectedPeriod: SummaryPeriod;
+  setSelectedPeriod: (value: SummaryPeriod) => void;
+}) {
   const selectedPoint = selectedPeriod === "ytd" ? undefined : dashboard.trend.find((point) => point.period === selectedPeriod);
   const effectivePeriod = selectedPeriod === "ytd" || selectedPoint ? selectedPeriod : "ytd";
   const actual: PeriodActual = effectivePeriod === "ytd"
@@ -608,12 +613,6 @@ function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
 
   return (
     <div className="management-report-tab-panel">
-      <section className="management-report-panel">
-        <div className="management-report-toolbar management-report-period-toolbar">
-          <div className="management-report-panel-heading"><h3>Reporting period</h3></div>
-          <label className="management-report-field">Period<NativeSelect value={effectivePeriod} onValueChange={setSelectedPeriod}><NativeSelectOption value="ytd">{yearToDateOptionLabel(dashboard.metadata.asOf)}</NativeSelectOption>{[...dashboard.trend].reverse().map((point) => <NativeSelectOption key={point.period} value={point.period}>{monthPeriodOptionLabel(point.period)}</NativeSelectOption>)}</NativeSelect></label>
-        </div>
-      </section>
       <KpiGrid kpis={kpis} />
       {dashboard.bank.postCloseEntryCount > 0 && (
         <div className="management-report-summary-note warning"><TriangleAlert size={16} aria-hidden="true" /><span><strong>{wholeNumber.format(dashboard.bank.postCloseEntryCount)} post-close bank entries</strong> are shown in Ledger for visibility but excluded from the official reporting period through {dateLabel(dashboard.bank.officialThrough)}.</span></div>
@@ -968,6 +967,9 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
     allowedValues: ["summary", "performance", "ledger", "ownership"],
     history: "push"
   });
+  const [selectedPeriod, setSelectedPeriod] = useUrlState<SummaryPeriod>("managementPeriod", "ytd", {
+    isValid: (value) => value === "ytd" || /^\d{4}-\d{2}-\d{2}$/.test(value)
+  });
   const [dashboard, setDashboard] = useState<ManagementReportDashboard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1039,17 +1041,27 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
           <p className="eyebrow">Manual workbook</p>
           <h2>Management report</h2>
         </div>
-        <label className="management-report-field management-report-view-field">View
-          <NativeSelect value={section} onValueChange={(value) => setSection(value as ManagementReportSection)}>
-            <NativeSelectOption value="summary">Summary</NativeSelectOption>
-            <NativeSelectOption value="performance">Performance</NativeSelectOption>
-            <NativeSelectOption value="ledger">Ledger</NativeSelectOption>
-            <NativeSelectOption value="ownership">Ownership</NativeSelectOption>
-          </NativeSelect>
-        </label>
+        <div className={`management-report-page-controls ${section === "summary" ? "with-period" : ""}`}>
+          <label className="management-report-field management-report-view-field">View
+            <NativeSelect value={section} onValueChange={(value) => setSection(value as ManagementReportSection)}>
+              <NativeSelectOption value="summary">Summary</NativeSelectOption>
+              <NativeSelectOption value="performance">Performance</NativeSelectOption>
+              <NativeSelectOption value="ledger">Ledger</NativeSelectOption>
+              <NativeSelectOption value="ownership">Ownership</NativeSelectOption>
+            </NativeSelect>
+          </label>
+          {section === "summary" && (
+            <label className="management-report-field management-report-period-field">Period
+              <NativeSelect value={selectedPeriod} onValueChange={setSelectedPeriod}>
+                <NativeSelectOption value="ytd">{yearToDateOptionLabel(dashboard.metadata.asOf)}</NativeSelectOption>
+                {[...dashboard.trend].reverse().map((point) => <NativeSelectOption key={point.period} value={point.period}>{monthPeriodOptionLabel(point.period)}</NativeSelectOption>)}
+              </NativeSelect>
+            </label>
+          )}
+        </div>
       </header>
       <div className="management-report-content">
-        {section === "summary" && <SummaryTab dashboard={dashboard} />}
+        {section === "summary" && <SummaryTab dashboard={dashboard} selectedPeriod={selectedPeriod} setSelectedPeriod={setSelectedPeriod} />}
         {section === "performance" && <PerformanceTab dashboard={dashboard} />}
         {section === "ledger" && <LedgerTab dashboard={dashboard} />}
         {section === "ownership" && <OwnershipTab dashboard={dashboard} />}

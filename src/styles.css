@@ -7561,7 +7561,22 @@ th.amount .sortable-table-heading {
 }
 
 .management-report-view-field {
-  width: min(220px, 100%);
+  width: min(180px, 100%);
+}
+
+.management-report-page-controls {
+  display: grid;
+  min-width: 0;
+  align-items: end;
+  gap: 10px;
+}
+
+.management-report-page-controls.with-period {
+  grid-template-columns: minmax(150px, 180px) minmax(220px, 260px);
+}
+
+.management-report-period-field {
+  width: min(260px, 100%);
 }
 
 .management-report-content {
@@ -8344,10 +8359,6 @@ th.amount .sortable-table-heading {
   background: var(--panel-soft);
 }
 
-.management-report-period-toolbar .management-report-field {
-  width: min(260px, 100%);
-}
-
 .management-report-selected-row td {
   background: var(--info-bg);
 }
@@ -8551,6 +8562,20 @@ th.amount .sortable-table-heading {
 @media (max-width: 760px) {
   .management-report-view {
     gap: 14px;
+  }
+
+  .management-report-page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .management-report-page-controls.with-period {
+    width: 100%;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  }
+
+  .management-report-page-controls .management-report-field {
+    width: 100%;
   }
 
   .management-report-status-topline,
