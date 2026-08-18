@@ -69,11 +69,12 @@ const percentNumber = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1
 });
 
-function money(value: number, currency = "USD", maximumFractionDigits = 0): string {
+function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
-    maximumFractionDigits
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   }).format(value);
 }
 
@@ -749,7 +750,7 @@ function PlatformPerformance({ platforms }: { platforms: ManagementReportPlatfor
         <table className="management-report-table">
           <caption>Platform profitability</caption>
           <thead><tr><th scope="col">Period</th><th scope="col">Platform</th><th className="amount" scope="col">Revenue</th><th className="amount" scope="col">Spend</th><th className="amount" scope="col">Profit</th><th className="amount" scope="col">Margin</th><th className="amount" scope="col">Leads</th><th className="amount" scope="col">CPL</th></tr></thead>
-          <tbody>{platforms.length > 0 ? platforms.map((row) => <tr className={row.isTotal ? "total-row" : ""} key={row.platformMetricId}><td>{row.periodLabel}</td><td>{row.platform}</td><td className="amount">{money(row.revenue)}</td><td className="amount">{money(row.spend)}</td><td className={`amount ${valueTone(row.profit)}`}>{money(row.profit)}</td><td className={`amount ${valueTone(row.profitMargin)}`}>{percent(row.profitMargin)}</td><td className="amount">{wholeNumber.format(row.leads)}</td><td className="amount">{money(row.cpl, "USD", 2)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No platform profitability rows were parsed.</td></tr>}</tbody>
+          <tbody>{platforms.length > 0 ? platforms.map((row) => <tr className={row.isTotal ? "total-row" : ""} key={row.platformMetricId}><td>{row.periodLabel}</td><td>{row.platform}</td><td className="amount">{money(row.revenue)}</td><td className="amount">{money(row.spend)}</td><td className={`amount ${valueTone(row.profit)}`}>{money(row.profit)}</td><td className={`amount ${valueTone(row.profitMargin)}`}>{percent(row.profitMargin)}</td><td className="amount">{wholeNumber.format(row.leads)}</td><td className="amount">{money(row.cpl)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No platform profitability rows were parsed.</td></tr>}</tbody>
         </table>
       </div>
     </section>
@@ -880,7 +881,7 @@ function LedgerTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
               <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="usdAmount">USD amount</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="period">Period</SortableTableHead>
             </tr></thead>
-            <tbody>{visibleEntries.length > 0 ? visibleEntries.map((entry) => <tr key={entry.entryId}><td>{dateLabel(entry.date)}</td><td>{entry.companyName}</td><td>{entry.bankName}</td><td>{entry.segment}</td><td className="wrap"><strong>{entry.nature}</strong><small>{entry.accountType}</small></td><td className={`amount ${bankEntryTone(entry)}`}>{money(entry.amountIncludingVat, entry.currency, 2)}</td><td className={`amount ${bankEntryTone(entry)}`}>{entry.hasUsdAmount ? money(entry.amountUsd, "USD", 2) : "—"}</td><td>{entry.isPostClose ? <span className="management-report-entity-status inactive"><Clock3 size={11} aria-hidden="true" />Post-close</span> : <span className="management-report-entity-status"><CheckCircle2 size={11} aria-hidden="true" />Official</span>}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No sanitized ledger entries match these filters.</td></tr>}</tbody>
+            <tbody>{visibleEntries.length > 0 ? visibleEntries.map((entry) => <tr key={entry.entryId}><td>{dateLabel(entry.date)}</td><td>{entry.companyName}</td><td>{entry.bankName}</td><td>{entry.segment}</td><td className="wrap"><strong>{entry.nature}</strong><small>{entry.accountType}</small></td><td className={`amount ${bankEntryTone(entry)}`}>{money(entry.amountIncludingVat, entry.currency)}</td><td className={`amount ${bankEntryTone(entry)}`}>{entry.hasUsdAmount ? money(entry.amountUsd) : "—"}</td><td>{entry.isPostClose ? <span className="management-report-entity-status inactive"><Clock3 size={11} aria-hidden="true" />Post-close</span> : <span className="management-report-entity-status"><CheckCircle2 size={11} aria-hidden="true" />Official</span>}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No sanitized ledger entries match these filters.</td></tr>}</tbody>
           </table>
         </div>
       </section>
