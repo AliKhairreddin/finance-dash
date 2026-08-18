@@ -10,17 +10,20 @@ import {
   FileSpreadsheet,
   Info,
   Loader2,
+  PanelRightOpen,
   RefreshCw,
   Search,
   ShieldCheck,
-  TriangleAlert
+  TriangleAlert,
+  X
 } from "lucide-react";
+import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlState } from "@/lib/url-state";
 import type {
   ManagementReportBankAggregate,
@@ -93,6 +96,33 @@ function dateTimeLabel(value: string): string {
   }).format(new Date(value));
 }
 
+function monthPeriodLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+}
+
+function monthNameLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return new Intl.DateTimeFormat("en-US", { month: "long" }).format(date);
+}
+
+function shortMonthPeriodLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  return new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(date);
+}
+
+function monthPeriodOptionLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  const month = new Intl.DateTimeFormat("en-US", { month: "short" }).format(date);
+  return `${monthPeriodLabel(value)} · ${month} 1–${date.getDate()}`;
+}
+
+function yearToDateOptionLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  const end = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
+  return `Year to date · Jan 1–${end}`;
+}
+
 function valueTone(value: number): string {
   if (value > 0) return "management-report-positive";
   if (value < 0) return "management-report-negative";
@@ -152,7 +182,7 @@ function checkIcon(check: ManagementReportCheck) {
   return <Info size={15} aria-hidden="true" />;
 }
 
-function StatusBand({ dashboard }: { dashboard: ManagementReportDashboard }) {
+function ManagementReportDetailsDrawer({ dashboard }: { dashboard: ManagementReportDashboard }) {
   const usableSheets = dashboard.sheetSummaries.filter(
     (sheet) => sheet.status === "ready" || sheet.status === "ready-with-warnings"
   ).length;
@@ -166,75 +196,103 @@ function StatusBand({ dashboard }: { dashboard: ManagementReportDashboard }) {
       : "Management report needs attention";
 
   return (
-    <section className="management-report-status-band" aria-labelledby="management-report-status-title">
-      <div className="management-report-status-topline">
-        <div className="management-report-status-title">
-          <span className={`management-report-status-title-icon ${dashboard.status}`}>
-            {dashboard.status === "ready" ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
-          </span>
-          <div>
-            <h2 id="management-report-status-title">{statusLabel}</h2>
-            <p>{dashboard.metadata.reportName}</p>
+    <BaseDialog.Root>
+      {createPortal(
+        <BaseDialog.Trigger className="bank-details-nudge" aria-label="Open management report details">
+          <PanelRightOpen aria-hidden="true" size={17} />
+          <span>Details</span>
+        </BaseDialog.Trigger>,
+        document.body
+      )}
+      <BaseDialog.Portal>
+        <BaseDialog.Backdrop className="bank-details-backdrop" />
+        <BaseDialog.Popup className="bank-details-drawer management-report-details-drawer">
+          <div className="bank-details-drawer-header">
+            <div>
+              <p className="eyebrow">Management report</p>
+              <BaseDialog.Title>Workbook import details</BaseDialog.Title>
+            </div>
+            <BaseDialog.Close className="icon-button" aria-label="Close management report details">
+              <X aria-hidden="true" size={18} />
+            </BaseDialog.Close>
           </div>
-        </div>
-        <span className="management-report-source-badge"><FileSpreadsheet size={13} aria-hidden="true" /> Manual workbook import</span>
-      </div>
+          <BaseDialog.Description className="screen-reader-only">
+            Reporting close, source, workbook coverage, and import checks for the manual management report.
+          </BaseDialog.Description>
+          <div className="bank-details-drawer-body">
+            <section className="bank-details-section">
+              <div className="management-report-details-summary">
+                <div className="management-report-status-title">
+                  <span className={`management-report-status-title-icon ${dashboard.status}`}>
+                    {dashboard.status === "ready" ? <ShieldCheck size={18} aria-hidden="true" /> : <TriangleAlert size={18} aria-hidden="true" />}
+                  </span>
+                  <div>
+                    <h2>{statusLabel}</h2>
+                    <p>{dashboard.metadata.reportName}</p>
+                  </div>
+                </div>
+                <span className="management-report-source-badge"><FileSpreadsheet size={13} aria-hidden="true" /> Manual workbook import</span>
+              </div>
+              <div className="management-report-status-grid">
+                <div className="management-report-status-item">
+                  <span className="management-report-status-label"><CalendarDays size={13} aria-hidden="true" /> Reporting period</span>
+                  <span className="management-report-status-value">YTD through {monthPeriodLabel(dashboard.metadata.asOf)}</span>
+                  <span className="management-report-status-note">{monthNameLabel(dashboard.metadata.asOf)} month-end · official bank close {dateLabel(dashboard.metadata.officialBankThrough)}</span>
+                </div>
+                <div className="management-report-status-item">
+                  <span className="management-report-status-label"><Clock3 size={13} aria-hidden="true" /> Imported at</span>
+                  <span className="management-report-status-value">{dateTimeLabel(dashboard.metadata.importedAt)}</span>
+                  <span className="management-report-status-note">Import ID {dashboard.metadata.importId}</span>
+                </div>
+                <div className="management-report-status-item">
+                  <span className="management-report-status-label"><Database size={13} aria-hidden="true" /> Source type</span>
+                  <span className="management-report-status-value">Manual workbook</span>
+                  <span className="management-report-status-note">{dashboard.metadata.sourceLabel}</span>
+                </div>
+                <div className="management-report-status-item">
+                  <span className="management-report-status-label"><CheckCircle2 size={13} aria-hidden="true" /> Sheet coverage</span>
+                  <span className="management-report-status-value">{usableSheets} of {dashboard.sheetSummaries.length} usable</span>
+                  <span className="management-report-status-note">{actionableChecks.length} warning{actionableChecks.length === 1 ? "" : "s"} or errors</span>
+                </div>
+              </div>
+            </section>
 
-      <div className="management-report-status-grid">
-        <div className="management-report-status-item">
-          <span className="management-report-status-label"><CalendarDays size={13} aria-hidden="true" /> Reporting through</span>
-          <span className="management-report-status-value">{dateLabel(dashboard.metadata.asOf)}</span>
-          <span className="management-report-status-note">Official bank close: {dateLabel(dashboard.metadata.officialBankThrough)}</span>
-        </div>
-        <div className="management-report-status-item">
-          <span className="management-report-status-label"><Clock3 size={13} aria-hidden="true" /> Imported at</span>
-          <span className="management-report-status-value">{dateTimeLabel(dashboard.metadata.importedAt)}</span>
-          <span className="management-report-status-note">Import ID {dashboard.metadata.importId}</span>
-        </div>
-        <div className="management-report-status-item">
-          <span className="management-report-status-label"><Database size={13} aria-hidden="true" /> Source type</span>
-          <span className="management-report-status-value">Manual workbook</span>
-          <span className="management-report-status-note">{dashboard.metadata.sourceLabel}</span>
-        </div>
-        <div className="management-report-status-item">
-          <span className="management-report-status-label"><CheckCircle2 size={13} aria-hidden="true" /> Sheet coverage</span>
-          <span className="management-report-status-value">{usableSheets} of {dashboard.sheetSummaries.length} usable</span>
-          <span className="management-report-status-note">{actionableChecks.length} warning{actionableChecks.length === 1 ? "" : "s"} or errors</span>
-        </div>
-      </div>
+            <section className="bank-details-section">
+              <div className="bank-details-section-heading"><h3>Workbook coverage</h3><span>{usableSheets}/{dashboard.sheetSummaries.length} sheets</span></div>
+              <div className="management-report-details-section-body management-report-sheet-list">
+                {dashboard.sheetSummaries.map((sheet) => (
+                  <span
+                    className={`management-report-sheet-pill ${sheet.status === "ready" ? "" : sheet.status === "ready-with-warnings" ? "warning" : "error"}`}
+                    key={sheet.key}
+                    title={`${sheet.title}: ${sheet.status}`}
+                  >
+                    {sheet.status === "ready" ? <CheckCircle2 size={12} aria-hidden="true" /> : <TriangleAlert size={12} aria-hidden="true" />}
+                    <span>{sheet.title}</span>
+                    <small>{wholeNumber.format(sheet.parsedRecordCount)} records</small>
+                  </span>
+                ))}
+              </div>
+            </section>
 
-      <div className="management-report-quality">
-        <div className="management-report-coverage">
-          <div className="management-report-quality-heading"><strong>Workbook coverage</strong><span>{usableSheets}/{dashboard.sheetSummaries.length} sheets</span></div>
-          <div className="management-report-sheet-list">
-            {dashboard.sheetSummaries.map((sheet) => (
-              <span
-                className={`management-report-sheet-pill ${sheet.status === "ready" ? "" : sheet.status === "ready-with-warnings" ? "warning" : "error"}`}
-                key={sheet.key}
-                title={`${sheet.title}: ${sheet.status}`}
-              >
-                {sheet.status === "ready" ? <CheckCircle2 size={12} aria-hidden="true" /> : <TriangleAlert size={12} aria-hidden="true" />}
-                <span>{sheet.title}</span>
-                <small>{wholeNumber.format(sheet.parsedRecordCount)} records</small>
-              </span>
-            ))}
+            <section className="bank-details-section">
+              <div className="bank-details-section-heading"><h3>Import checks</h3><span>{hiddenCheckCount > 0 ? `+${hiddenCheckCount} more` : "Latest import"}</span></div>
+              <div className="management-report-details-section-body">
+                <ul className="management-report-check-list">
+                  {visibleChecks.length > 0 ? visibleChecks.map((check) => (
+                    <li className={`management-report-check ${check.severity}`} key={`${check.code}-${check.sheetKey ?? "report"}-${check.sourceRow ?? 0}`}>
+                      {checkIcon(check)}
+                      <span>{check.message}</span>
+                    </li>
+                  )) : (
+                    <li className="management-report-check pass"><CheckCircle2 size={15} aria-hidden="true" /><span>All workbook checks passed.</span></li>
+                  )}
+                </ul>
+              </div>
+            </section>
           </div>
-        </div>
-        <div className="management-report-checks">
-          <div className="management-report-quality-heading"><strong>Import checks</strong><span>{hiddenCheckCount > 0 ? `+${hiddenCheckCount} more` : "Latest import"}</span></div>
-          <ul className="management-report-check-list">
-            {visibleChecks.length > 0 ? visibleChecks.map((check) => (
-              <li className={`management-report-check ${check.severity}`} key={`${check.code}-${check.sheetKey ?? "report"}-${check.sourceRow ?? 0}`}>
-                {checkIcon(check)}
-                <span>{check.message}</span>
-              </li>
-            )) : (
-              <li className="management-report-check pass"><CheckCircle2 size={15} aria-hidden="true" /><span>All workbook checks passed.</span></li>
-            )}
-          </ul>
-        </div>
-      </div>
-    </section>
+        </BaseDialog.Popup>
+      </BaseDialog.Portal>
+    </BaseDialog.Root>
   );
 }
 
@@ -280,7 +338,7 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
             <div className="management-report-chart-legend"><span><i /> Revenue</span><span className="spend"><i /> Marketing spend</span></div>
             {trend.map((point) => (
               <div className={`management-report-trend-row ${selectedPeriod === point.period ? "selected" : ""}`} key={point.period}>
-                <span className="management-report-trend-label">{point.label}</span>
+                <span className="management-report-trend-label">{shortMonthPeriodLabel(point.period)}</span>
                 <span className="management-report-trend-track">
                   <span className="management-report-trend-bar revenue" style={{ width: `${Math.abs(point.revenue) / maximum * 100}%` }} />
                   <span className="management-report-trend-bar spend" style={{ width: `${Math.abs(point.marketingSpend) / maximum * 100}%` }} />
@@ -305,7 +363,7 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
           <tbody>
             {sortedTrend.length > 0 ? sortedTrend.map((point) => (
               <tr className={selectedPeriod === point.period ? "management-report-selected-row" : ""} key={point.period}>
-                <td>{point.label}</td><td className="amount">{money(point.revenue)}</td><td className="amount">{money(point.marketingSpend)}</td><td className="amount">{money(point.operatingSpend)}</td><td className={`amount ${valueTone(point.grossProfit)}`}>{money(point.grossProfit)}</td><td className={`amount ${valueTone(point.netProfit)}`}>{money(point.netProfit)}</td>
+                <td>{shortMonthPeriodLabel(point.period)}</td><td className="amount">{money(point.revenue)}</td><td className="amount">{money(point.marketingSpend)}</td><td className="amount">{money(point.operatingSpend)}</td><td className={`amount ${valueTone(point.grossProfit)}`}>{money(point.grossProfit)}</td><td className={`amount ${valueTone(point.netProfit)}`}>{money(point.netProfit)}</td>
               </tr>
             )) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly trend is available.</td></tr>}
           </tbody>
@@ -486,7 +544,7 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
           <tbody>
             {visibleRows.length > 0 ? visibleRows.map(({ actual, unit }) => (
               <tr key={unit.id}>
-                <td className="wrap"><strong>{unit.name}</strong><small>{selectedPeriod === "ytd" ? unit.latestPeriodLabel : dateLabel(selectedPeriod)}</small></td>
+                <td className="wrap"><strong>{unit.name}</strong><small>{selectedPeriod === "ytd" ? unit.latestPeriodLabel : monthPeriodLabel(selectedPeriod)}</small></td>
                 <td>{businessUnitKindLabel(unit)}</td>
                 <td><span className={`management-report-entity-status ${unit.active ? "" : "inactive"}`}>{unit.active ? <CheckCircle2 size={11} aria-hidden="true" /> : <CircleAlert size={11} aria-hidden="true" />}{unit.active ? "Active" : "Inactive"}</span></td>
                 <td className="amount">{actual ? money(actual.revenue) : "—"}</td>
@@ -515,7 +573,9 @@ function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
         ...selectedPoint!,
         netMargin: selectedPoint!.revenue === 0 ? 0 : selectedPoint!.netProfit / selectedPoint!.revenue
       };
-  const periodLabel = effectivePeriod === "ytd" ? `YTD through ${dateLabel(dashboard.metadata.asOf)}` : dateLabel(effectivePeriod);
+  const periodLabel = effectivePeriod === "ytd"
+    ? `YTD through ${monthPeriodLabel(dashboard.metadata.asOf)}`
+    : monthPeriodLabel(effectivePeriod);
   const kpis: ManagementReportKpi[] = effectivePeriod === "ytd" ? dashboard.kpis : [
     { id: "period-revenue", label: "Revenue", value: actual.revenue, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
     { id: "period-marketing", label: "Marketing spend", value: actual.marketingSpend, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
@@ -534,7 +594,7 @@ function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
       <section className="management-report-panel">
         <div className="management-report-toolbar management-report-period-toolbar">
           <div className="management-report-panel-heading"><h3>Reporting period</h3></div>
-          <label className="management-report-field">Period<NativeSelect value={effectivePeriod} onValueChange={setSelectedPeriod}><NativeSelectOption value="ytd">YTD through {dateLabel(dashboard.metadata.asOf)}</NativeSelectOption>{[...dashboard.trend].reverse().map((point) => <NativeSelectOption key={point.period} value={point.period}>{dateLabel(point.period)}</NativeSelectOption>)}</NativeSelect></label>
+          <label className="management-report-field">Period<NativeSelect value={effectivePeriod} onValueChange={setSelectedPeriod}><NativeSelectOption value="ytd">{yearToDateOptionLabel(dashboard.metadata.asOf)}</NativeSelectOption>{[...dashboard.trend].reverse().map((point) => <NativeSelectOption key={point.period} value={point.period}>{monthPeriodOptionLabel(point.period)}</NativeSelectOption>)}</NativeSelect></label>
         </div>
       </section>
       <KpiGrid kpis={kpis} />
@@ -632,7 +692,7 @@ function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
               <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="grossProfit">Gross profit</SortableTableHead>
               <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="netProfit">Net profit</SortableTableHead>
             </tr></thead>
-            <tbody>{visibleMonths.length > 0 ? visibleMonths.map((month) => <tr key={month.period}><td>{month.label}</td><td className="amount">{money(month.revenue)}</td><td className="amount">{money(month.marketingSpend)}</td><td className="amount">{money(month.operatingSpend)}</td><td className={`amount ${valueTone(month.grossProfit)}`}>{money(month.grossProfit)}</td><td className={`amount ${valueTone(month.netProfit)}`}>{money(month.netProfit)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly P&amp;L rows are available for {selected.name}.</td></tr>}</tbody>
+            <tbody>{visibleMonths.length > 0 ? visibleMonths.map((month) => <tr key={month.period}><td>{shortMonthPeriodLabel(month.period)}</td><td className="amount">{money(month.revenue)}</td><td className="amount">{money(month.marketingSpend)}</td><td className="amount">{money(month.operatingSpend)}</td><td className={`amount ${valueTone(month.grossProfit)}`}>{money(month.grossProfit)}</td><td className={`amount ${valueTone(month.netProfit)}`}>{money(month.netProfit)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly P&amp;L rows are available for {selected.name}.</td></tr>}</tbody>
           </table>
         </div>
       </section>
@@ -955,23 +1015,27 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
 
   return (
     <section className="management-report-view" aria-label="Management report">
-      <StatusBand dashboard={dashboard} />
-      <Tabs
-        className="management-report-tabs"
-        value={section}
-        onValueChange={(value) => setSection(value as ManagementReportSection)}
-      >
-        <TabsList className="management-report-tab-list">
-          <TabsTrigger className="management-report-tab-trigger" value="summary">Summary</TabsTrigger>
-          <TabsTrigger className="management-report-tab-trigger" value="performance">Performance</TabsTrigger>
-          <TabsTrigger className="management-report-tab-trigger" value="ledger">Ledger</TabsTrigger>
-          <TabsTrigger className="management-report-tab-trigger" value="ownership">Ownership</TabsTrigger>
-        </TabsList>
-        <TabsContent className="management-report-tab-panel" value="summary"><SummaryTab dashboard={dashboard} /></TabsContent>
-        <TabsContent className="management-report-tab-panel" value="performance"><PerformanceTab dashboard={dashboard} /></TabsContent>
-        <TabsContent className="management-report-tab-panel" value="ledger"><LedgerTab dashboard={dashboard} /></TabsContent>
-        <TabsContent className="management-report-tab-panel" value="ownership"><OwnershipTab dashboard={dashboard} /></TabsContent>
-      </Tabs>
+      <ManagementReportDetailsDrawer dashboard={dashboard} />
+      <header className="management-report-page-header">
+        <div>
+          <p className="eyebrow">Manual workbook</p>
+          <h2>Management report</h2>
+        </div>
+        <label className="management-report-field management-report-view-field">View
+          <NativeSelect value={section} onValueChange={(value) => setSection(value as ManagementReportSection)}>
+            <NativeSelectOption value="summary">Summary</NativeSelectOption>
+            <NativeSelectOption value="performance">Performance</NativeSelectOption>
+            <NativeSelectOption value="ledger">Ledger</NativeSelectOption>
+            <NativeSelectOption value="ownership">Ownership</NativeSelectOption>
+          </NativeSelect>
+        </label>
+      </header>
+      <div className="management-report-content">
+        {section === "summary" && <SummaryTab dashboard={dashboard} />}
+        {section === "performance" && <PerformanceTab dashboard={dashboard} />}
+        {section === "ledger" && <LedgerTab dashboard={dashboard} />}
+        {section === "ownership" && <OwnershipTab dashboard={dashboard} />}
+      </div>
     </section>
   );
 }

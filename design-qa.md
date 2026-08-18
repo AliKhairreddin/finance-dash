@@ -37,7 +37,6 @@ No actionable P0, P1, or P2 differences remain.
 - Pass 3: the information trigger inherited an absolute metric-card position; a scoped override returned it beside the breakdown heading. The final focused capture has no visible P0/P1/P2 issue.
 
 final result: passed
-
 ---
 
 **Comparison Target**
@@ -998,5 +997,65 @@ None.
 ## Follow-up polish
 
 No blocking or requested follow-up polish remains.
+
+final result: passed
+
+---
+
+# Management navigation and report-details QA
+
+## Evidence
+
+- Source visual truth:
+  - `output/product-design/source-tabs-scroll.png` — the supplied 766 × 106 screenshot showing the cramped, vertically scrollable section tabs that must be removed.
+  - `output/product-design/banks-final-drawer-reference.png` — the existing Banks drawer pattern requested as the interaction and styling reference.
+- Rendered implementation:
+  - `output/product-design/management-final-desktop.png` — Management summary with the compact View selector and explicit July range.
+  - `output/product-design/management-final-drawer-desktop.png` — Management workbook-details drawer open.
+  - `output/product-design/management-details-drawer-mobile.png` — narrow-screen drawer state.
+- Combined comparison evidence:
+  - `output/product-design/navigation-comparison.png` — supplied tab-strip problem above the replacement header and View selector.
+  - `output/product-design/final-drawer-comparison.png` — Banks reference and Management implementation side by side.
+- Desktop drawer comparison: 1280 × 720 CSS pixels, device pixel ratio 1, 1280 × 720 source and implementation captures. No density normalization was required.
+- Navigation comparison: the 766 × 106 supplied crop was retained at source size; the implementation header crop was resized to 766 × 59 to compare the affected control region without browser chrome.
+- Narrow-screen check: 390 × 844 CSS viewport; the drawer capture is 390 × 844 pixels at device pixel ratio 1.
+- State: dark theme, Management Summary, July 2026 selected, report-details drawer tested closed and open.
+
+## Findings
+
+No actionable P0, P1, or P2 issues remain.
+
+- Fonts and typography: Geist, weights, hierarchy, uppercase labels, and compact control typography match the existing Finance and Banks surfaces. The July option remains readable at desktop and narrow widths.
+- Spacing and layout rhythm: the scrollable tab strip is gone; the View selector aligns with the report heading. The right-edge trigger, 430-pixel drawer, section spacing, borders, radii, and close control match Banks.
+- Colors and visual tokens: the implementation reuses the existing panel, border, muted, green, focus, backdrop, and shadow tokens. No new off-system colors were introduced.
+- Image quality and asset fidelity: no raster assets are required by this interface. The drawer and trigger use the same library icon treatment as Banks; no placeholder or handcrafted icon assets were introduced.
+- Copy and content: month choices now state both the month and exact range (for example, “July 2026 · Jul 1–31”). YTD is explicitly “Jan 1–Jul 31, 2026,” and drawer metadata explains that Jul 31 is the July month-end close.
+- Accessibility and interaction: the View and Period controls have accessible names; the drawer is a modal dialog with title, description, close control, backdrop, focus management, and Escape behavior supplied by the existing dialog primitive. URL state remains authoritative for the selected view and period.
+- Responsiveness: no document-level horizontal overflow was found at desktop or 390-pixel width. On narrow screens, the trigger changes to the same bottom pill used by Banks and the drawer remains vertically scrollable.
+
+## Comparison history
+
+1. Initial comparison found a P2 period-label ambiguity: the period control was fixed, but trend rows and drawer metadata still exposed month-end dates such as `31-Jul-26` without saying they represented July.
+2. Fixed by displaying month names in monthly charts/tables and changing the drawer summary to “YTD through July 2026” with “July month-end · official bank close Jul 31, 2026.”
+3. Post-fix evidence in `management-final-desktop.png` and `management-final-drawer-desktop.png` shows the ambiguity removed. The final side-by-side drawer comparison confirms the Banks shell and interaction styling are preserved.
+
+## Primary interactions tested
+
+- Open and close the right-edge Details drawer.
+- Change View from Summary to Performance and confirm `managementSection=performance` in the URL.
+- Change Period to July and confirm `managementPeriod=2026-07-31`, July-only revenue, and July-only composition values.
+- Confirm the former tab list is absent.
+- Check desktop and narrow layouts, document overflow, and browser console warnings/errors (none found).
+
+## Implementation checklist
+
+- [x] Replace the four-button tab strip with a compact View selector.
+- [x] Move workbook import metadata, coverage, and checks into the Banks-style drawer.
+- [x] Clarify month-only and YTD period labels.
+- [x] Verify desktop, narrow, URL-state, dialog, and console behavior.
+
+## Follow-up polish
+
+No P3 polish items are required for this change.
 
 final result: passed

@@ -7532,6 +7532,42 @@ th.amount .sortable-table-heading {
   gap: 18px;
 }
 
+.management-report-page-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.management-report-page-header .eyebrow,
+.management-report-page-header h2 {
+  margin: 0;
+}
+
+.management-report-page-header .eyebrow {
+  margin-bottom: 3px;
+}
+
+.management-report-page-header h2 {
+  color: var(--ink);
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+
+.management-report-view-field {
+  width: min(220px, 100%);
+}
+
+.management-report-content {
+  min-width: 0;
+}
+
 .management-report-state {
   display: grid;
   min-height: 360px;
@@ -7818,45 +7854,46 @@ th.amount .sortable-table-heading {
 .management-report-check.warning svg { color: var(--amber); }
 .management-report-check.error svg { color: var(--red); }
 
-.management-report-tabs {
-  min-width: 0;
-  gap: 16px;
-}
-
-.management-report-tab-list {
-  display: inline-flex;
-  width: fit-content;
-  max-width: 100%;
-  overflow-x: auto;
-  justify-content: flex-start;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-soft);
-}
-
-.management-report-tab-trigger {
-  min-width: max-content;
-  height: 32px;
-  flex: 0 0 auto;
-  padding-inline: 12px;
-  border-radius: 7px;
-  color: var(--app-muted);
-  font-size: 12px;
-}
-
-.management-report-tab-trigger[data-active] {
-  border-color: var(--line);
-  background: var(--panel);
-  color: var(--ink);
-  box-shadow: 0 1px 3px rgba(9, 9, 11, 0.07);
-}
-
 .management-report-tab-panel {
   display: grid;
   min-width: 0;
   gap: 16px;
+}
+
+.management-report-details-summary {
+  display: grid;
+  gap: 12px;
+  padding: 13px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-header-shine), var(--panel-soft);
+}
+
+.management-report-details-summary .management-report-source-badge {
+  width: fit-content;
+}
+
+.management-report-details-drawer .management-report-status-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.management-report-details-drawer .management-report-status-item {
+  padding: 12px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.management-report-details-drawer .management-report-status-item:last-child {
+  border-bottom: 0;
+}
+
+.management-report-details-section-body {
+  padding: 12px;
+}
+
+.management-report-details-drawer .bank-details-section-heading > span {
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .management-report-kpi-grid {
@@ -8523,11 +8560,6 @@ th.amount .sortable-table-heading {
 
   .management-report-quality {
     padding-inline: 12px;
-  }
-
-  .management-report-tab-list {
-    display: flex;
-    width: 100%;
   }
 
   .management-report-trend-row {
