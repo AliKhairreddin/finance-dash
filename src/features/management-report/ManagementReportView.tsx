@@ -45,6 +45,19 @@ interface ManagementReportApiResponse {
 type PerformanceDimension = "team" | "offer" | "platform";
 type LedgerSortKey = "bank" | "company" | "date" | "nativeAmount" | "nature" | "period" | "team" | "usdAmount";
 type ManagementReportSection = "summary" | "performance" | "ledger" | "ownership";
+type SummaryPeriod = "ytd" | string;
+type TrendSortKey = "grossProfit" | "marketingSpend" | "month" | "netProfit" | "operatingSpend" | "revenue";
+type CompositionSortKey = "metric" | "value";
+type UnitSortKey = "marketing" | "margin" | "name" | "operating" | "profit" | "revenue" | "status" | "type";
+
+interface PeriodActual {
+  grossProfit: number;
+  marketingSpend: number;
+  netMargin: number;
+  netProfit: number;
+  operatingSpend: number;
+  revenue: number;
+}
 
 const wholeNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const percentNumber = new Intl.NumberFormat("en-US", {
@@ -234,8 +247,27 @@ function PanelHeader({ title, detail, trailing }: { title: string; detail: strin
   );
 }
 
-function TrendPanel({ trend }: { trend: ManagementReportTrendPoint[] }) {
+function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; trend: ManagementReportTrendPoint[] }) {
+  const [sortKey, setSortKey] = useUrlState<TrendSortKey>("managementTrendSort", "month", {
+    allowedValues: ["grossProfit", "marketingSpend", "month", "netProfit", "operatingSpend", "revenue"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("managementTrendOrder", "asc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const sortedTrend = useMemo(() => [...trend].sort((left, right) => {
+    const value = (point: ManagementReportTrendPoint): number | string => sortKey === "month" ? point.period : point[sortKey];
+    return compareTableValues(value(left), value(right), sortDirection) || left.period.localeCompare(right.period);
+  }), [sortDirection, sortKey, trend]);
   const maximum = Math.max(1, ...trend.flatMap((point) => [Math.abs(point.revenue), Math.abs(point.marketingSpend)]));
+
+  function requestSort(nextSortKey: TrendSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "month" ? "asc" : "desc");
+  }
 
   return (
     <section className="management-report-panel" aria-labelledby="management-report-trend-title">
@@ -247,7 +279,7 @@ function TrendPanel({ trend }: { trend: ManagementReportTrendPoint[] }) {
           <div aria-hidden="true" className="management-report-trend-chart">
             <div className="management-report-chart-legend"><span><i /> Revenue</span><span className="spend"><i /> Marketing spend</span></div>
             {trend.map((point) => (
-              <div className="management-report-trend-row" key={point.period}>
+              <div className={`management-report-trend-row ${selectedPeriod === point.period ? "selected" : ""}`} key={point.period}>
                 <span className="management-report-trend-label">{point.label}</span>
                 <span className="management-report-trend-track">
                   <span className="management-report-trend-bar revenue" style={{ width: `${Math.abs(point.revenue) / maximum * 100}%` }} />
@@ -262,10 +294,17 @@ function TrendPanel({ trend }: { trend: ManagementReportTrendPoint[] }) {
       <div className="management-report-table-wrap">
         <table className="management-report-table">
           <caption>Monthly management performance values equivalent to the trend chart</caption>
-          <thead><tr><th scope="col">Month</th><th className="amount" scope="col">Revenue</th><th className="amount" scope="col">Marketing</th><th className="amount" scope="col">Operating</th><th className="amount" scope="col">Gross profit</th><th className="amount" scope="col">Net profit</th></tr></thead>
+          <thead><tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="month">Month</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="revenue">Revenue</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="marketingSpend">Marketing</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="operatingSpend">Operating</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="grossProfit">Gross profit</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="netProfit">Net profit</SortableTableHead>
+          </tr></thead>
           <tbody>
-            {trend.length > 0 ? trend.map((point) => (
-              <tr key={point.period}>
+            {sortedTrend.length > 0 ? sortedTrend.map((point) => (
+              <tr className={selectedPeriod === point.period ? "management-report-selected-row" : ""} key={point.period}>
                 <td>{point.label}</td><td className="amount">{money(point.revenue)}</td><td className="amount">{money(point.marketingSpend)}</td><td className="amount">{money(point.operatingSpend)}</td><td className={`amount ${valueTone(point.grossProfit)}`}>{money(point.grossProfit)}</td><td className={`amount ${valueTone(point.netProfit)}`}>{money(point.netProfit)}</td>
               </tr>
             )) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly trend is available.</td></tr>}
@@ -276,19 +315,39 @@ function TrendPanel({ trend }: { trend: ManagementReportTrendPoint[] }) {
   );
 }
 
-function SummaryComposition({ dashboard }: { dashboard: ManagementReportDashboard }) {
+function SummaryComposition({ actual, periodLabel }: { actual: PeriodActual; periodLabel: string }) {
+  const [sortKey, setSortKey] = useUrlState<CompositionSortKey>("managementCompositionSort", "value", {
+    allowedValues: ["metric", "value"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("managementCompositionOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
   const rows = [
-    { label: "Revenue", value: dashboard.summary.revenue },
-    { label: "Marketing spend", value: dashboard.summary.marketingSpend },
-    { label: "Operating spend", value: dashboard.summary.operatingSpend },
-    { label: "Net profit", value: dashboard.summary.netProfit }
+    { label: "Revenue", value: actual.revenue },
+    { label: "Marketing spend", value: actual.marketingSpend },
+    { label: "Operating spend", value: actual.operatingSpend },
+    { label: "Net profit", value: actual.netProfit }
   ];
+  const sortedRows = [...rows].sort((left, right) => compareTableValues(
+    sortKey === "metric" ? left.label : left.value,
+    sortKey === "metric" ? right.label : right.value,
+    sortDirection
+  ));
   const maximum = Math.max(1, ...rows.map((row) => Math.abs(row.value)));
+
+  function requestSort(nextSortKey: CompositionSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "metric" ? "asc" : "desc");
+  }
 
   return (
     <section className="management-report-panel" aria-labelledby="management-report-composition-title">
       <div className="management-report-panel-header">
-        <div className="management-report-panel-heading"><h3 id="management-report-composition-title">P&amp;L composition</h3><p>Official actuals across management units.</p></div>
+        <div className="management-report-panel-heading"><h3 id="management-report-composition-title">P&amp;L composition</h3><p>{periodLabel} consolidated actual.</p></div>
       </div>
       <div className="management-report-panel-body">
         <div aria-hidden="true" className="management-report-breakdown">
@@ -303,37 +362,140 @@ function SummaryComposition({ dashboard }: { dashboard: ManagementReportDashboar
       <div className="management-report-table-wrap">
         <table className="management-report-table">
           <caption>P and L composition values equivalent to the bar chart</caption>
-          <thead><tr><th scope="col">Metric</th><th className="amount" scope="col">Actual</th></tr></thead>
-          <tbody>{rows.map((row) => <tr key={row.label}><td>{row.label}</td><td className={`amount ${valueTone(row.value)}`}>{money(row.value)}</td></tr>)}</tbody>
+          <thead><tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="metric">Metric</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="value">Actual</SortableTableHead>
+          </tr></thead>
+          <tbody>{sortedRows.map((row) => <tr key={row.label}><td>{row.label}</td><td className={`amount ${valueTone(row.value)}`}>{money(row.value)}</td></tr>)}</tbody>
         </table>
       </div>
     </section>
   );
 }
 
-function BusinessUnitTable({ units }: { units: ManagementReportBusinessUnit[] }) {
+function PlatformSpendDonut({ dashboard, selectedPeriod }: { dashboard: ManagementReportDashboard; selectedPeriod: SummaryPeriod }) {
+  const colors = ["#18181b", "#6366f1", "#0ea5e9", "#14b8a6", "#f59e0b", "#ec4899"];
+  const rows = useMemo(() => {
+    const byPlatform = new Map<string, number>();
+    for (const row of dashboard.platforms) {
+      if (row.isTotal || /ytd/i.test(row.periodLabel) || row.spend <= 0) continue;
+      if (selectedPeriod === "ytd" ? row.period > dashboard.metadata.asOf : row.period !== selectedPeriod) continue;
+      byPlatform.set(row.platform, (byPlatform.get(row.platform) ?? 0) + row.spend);
+    }
+    return [...byPlatform.entries()]
+      .map(([label, value]) => ({ label, value }))
+      .sort((left, right) => right.value - left.value);
+  }, [dashboard.metadata.asOf, dashboard.platforms, selectedPeriod]);
+  const total = rows.reduce((sum, row) => sum + row.value, 0);
+  let cursor = 0;
+  const gradient = rows.map((row, index) => {
+    const start = cursor;
+    cursor += total === 0 ? 0 : row.value / total * 100;
+    return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+  }).join(", ");
+
+  return (
+    <section className="management-report-panel" aria-labelledby="management-report-platform-mix-title">
+      <div className="management-report-panel-header"><div className="management-report-panel-heading"><h3 id="management-report-platform-mix-title">Platform spend mix</h3><p>Manual PLP workbook allocation.</p></div></div>
+      <div className="management-report-donut-layout">
+        {total > 0 ? <div aria-label={`Platform spend mix totaling ${money(total)}`} className="management-report-donut" role="img" style={{ backgroundImage: `conic-gradient(${gradient})` }}><span>{money(total)}</span></div> : <div className="management-report-empty-row">No platform spend for this period.</div>}
+        {total > 0 && <dl className="management-report-donut-legend">{rows.map((row, index) => <div key={row.label}><dt><i style={{ background: colors[index % colors.length] }} />{row.label}</dt><dd>{percent(row.value / total)}</dd></div>)}</dl>}
+      </div>
+    </section>
+  );
+}
+
+function businessUnitPeriodActual(unit: ManagementReportBusinessUnit, selectedPeriod: SummaryPeriod): PeriodActual | undefined {
+  if (selectedPeriod === "ytd") return unit.actual;
+  const month = unit.monthly.find((row) => row.period === selectedPeriod);
+  if (!month) return undefined;
+  return { ...month, netMargin: month.revenue === 0 ? 0 : month.netProfit / month.revenue };
+}
+
+function businessUnitKindLabel(unit: ManagementReportBusinessUnit): string {
+  if (unit.kind === "team") return "Team";
+  if (unit.kind === "offer") return "Offer";
+  if (unit.kind === "affiliate") return "Affiliate";
+  return "Company";
+}
+
+function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryPeriod; units: ManagementReportBusinessUnit[] }) {
+  const [query, setQuery] = useUrlState("managementUnitQuery", "");
+  const [type, setType] = useUrlState("managementUnitType", "all", { allowedValues: ["all", "affiliate", "offer", "team"] });
+  const [status, setStatus] = useUrlState("managementUnitStatus", "all", { allowedValues: ["active", "all", "inactive"] });
+  const [sortKey, setSortKey] = useUrlState<UnitSortKey>("managementUnitSort", "revenue", {
+    allowedValues: ["marketing", "margin", "name", "operating", "profit", "revenue", "status", "type"]
+  });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("managementUnitOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const visibleRows = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const rows = units.map((unit) => ({ actual: businessUnitPeriodActual(unit, selectedPeriod), unit })).filter(({ unit }) => {
+      if (type !== "all" && unit.kind !== type) return false;
+      if (status === "active" && !unit.active) return false;
+      if (status === "inactive" && unit.active) return false;
+      return !normalizedQuery || `${unit.name} ${unit.reportLabel} ${unit.kind}`.toLowerCase().includes(normalizedQuery);
+    });
+    const value = ({ actual, unit }: (typeof rows)[number]): boolean | number | string | undefined => {
+      if (sortKey === "name") return unit.name;
+      if (sortKey === "type") return businessUnitKindLabel(unit);
+      if (sortKey === "status") return unit.active;
+      if (sortKey === "revenue") return actual?.revenue;
+      if (sortKey === "marketing") return actual?.marketingSpend;
+      if (sortKey === "operating") return actual?.operatingSpend;
+      if (sortKey === "profit") return actual?.netProfit;
+      return actual?.netMargin;
+    };
+    return rows.sort((left, right) => compareTableValues(value(left), value(right), sortDirection) || left.unit.name.localeCompare(right.unit.name));
+  }, [query, selectedPeriod, sortDirection, sortKey, status, type, units]);
+
+  function requestSort(nextSortKey: UnitSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection(nextSortKey === "name" || nextSortKey === "type" ? "asc" : "desc");
+  }
+
   return (
     <section className="management-report-panel" aria-labelledby="management-report-units-title">
       <div className="management-report-panel-header">
-        <div className="management-report-panel-heading"><h3 id="management-report-units-title">Business unit snapshot</h3><p>Teams, offers, and affiliate activity retain their workbook classification.</p></div>
+        <div className="management-report-panel-heading"><h3 id="management-report-units-title">Business unit snapshot</h3><p>Workbook-classified teams, offers, and affiliates.</p></div>
+        <span className="management-report-source-badge">{visibleRows.length} of {units.length}</span>
+      </div>
+      <div className="management-report-filter-grid">
+        <label className="management-report-field">Search<span className="management-report-search"><Search size={14} aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Business unit" /></span></label>
+        <label className="management-report-field">Type<NativeSelect value={type} onValueChange={(value) => setType(value as typeof type)}><NativeSelectOption value="all">All types</NativeSelectOption><NativeSelectOption value="team">Teams</NativeSelectOption><NativeSelectOption value="offer">Offers</NativeSelectOption><NativeSelectOption value="affiliate">Affiliates</NativeSelectOption></NativeSelect></label>
+        <label className="management-report-field">Status<NativeSelect value={status} onValueChange={(value) => setStatus(value as typeof status)}><NativeSelectOption value="all">All statuses</NativeSelectOption><NativeSelectOption value="active">Active</NativeSelectOption><NativeSelectOption value="inactive">Inactive</NativeSelectOption></NativeSelect></label>
       </div>
       <div className="management-report-table-wrap">
         <table className="management-report-table">
           <caption>Business unit management performance</caption>
-          <thead><tr><th scope="col">Business unit</th><th scope="col">Type</th><th scope="col">Status</th><th className="amount" scope="col">Revenue</th><th className="amount" scope="col">Marketing</th><th className="amount" scope="col">Operating</th><th className="amount" scope="col">Net profit</th><th className="amount" scope="col">Net margin</th></tr></thead>
+          <thead><tr>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Business unit</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="type">Type</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="revenue">Revenue</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="marketing">Marketing</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="operating">Operating</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="profit">Net profit</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="margin">Net margin</SortableTableHead>
+          </tr></thead>
           <tbody>
-            {units.length > 0 ? units.map((unit) => (
+            {visibleRows.length > 0 ? visibleRows.map(({ actual, unit }) => (
               <tr key={unit.id}>
-                <td className="wrap"><strong>{unit.name}</strong><small>{unit.latestPeriodLabel}</small></td>
-                <td>{unit.kind === "team" ? "Team" : unit.kind === "offer" ? "Offer" : "Affiliate"}</td>
+                <td className="wrap"><strong>{unit.name}</strong><small>{selectedPeriod === "ytd" ? unit.latestPeriodLabel : dateLabel(selectedPeriod)}</small></td>
+                <td>{businessUnitKindLabel(unit)}</td>
                 <td><span className={`management-report-entity-status ${unit.active ? "" : "inactive"}`}>{unit.active ? <CheckCircle2 size={11} aria-hidden="true" /> : <CircleAlert size={11} aria-hidden="true" />}{unit.active ? "Active" : "Inactive"}</span></td>
-                <td className="amount">{money(unit.actual.revenue)}</td>
-                <td className="amount">{money(unit.actual.marketingSpend)}</td>
-                <td className="amount">{money(unit.actual.operatingSpend)}</td>
-                <td className={`amount ${valueTone(unit.actual.netProfit)}`}>{money(unit.actual.netProfit)}</td>
-                <td className={`amount ${valueTone(unit.actual.netMargin)}`}>{percent(unit.actual.netMargin)}</td>
+                <td className="amount">{actual ? money(actual.revenue) : "—"}</td>
+                <td className="amount">{actual ? money(actual.marketingSpend) : "—"}</td>
+                <td className="amount">{actual ? money(actual.operatingSpend) : "—"}</td>
+                <td className={`amount ${actual ? valueTone(actual.netProfit) : "management-report-muted"}`}>{actual ? money(actual.netProfit) : "—"}</td>
+                <td className={`amount ${actual ? valueTone(actual.netMargin) : "management-report-muted"}`}>{actual ? percent(actual.netMargin) : "—"}</td>
               </tr>
-            )) : <tr><td className="management-report-empty-row" colSpan={8}>No business units were parsed.</td></tr>}
+            )) : <tr><td className="management-report-empty-row" colSpan={8}>No business units match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -342,14 +504,45 @@ function BusinessUnitTable({ units }: { units: ManagementReportBusinessUnit[] })
 }
 
 function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
+  const [selectedPeriod, setSelectedPeriod] = useUrlState<SummaryPeriod>("managementPeriod", "ytd", {
+    isValid: (value) => value === "ytd" || /^\d{4}-\d{2}-\d{2}$/.test(value)
+  });
+  const selectedPoint = selectedPeriod === "ytd" ? undefined : dashboard.trend.find((point) => point.period === selectedPeriod);
+  const effectivePeriod = selectedPeriod === "ytd" || selectedPoint ? selectedPeriod : "ytd";
+  const actual: PeriodActual = effectivePeriod === "ytd"
+    ? dashboard.consolidated.actual
+    : {
+        ...selectedPoint!,
+        netMargin: selectedPoint!.revenue === 0 ? 0 : selectedPoint!.netProfit / selectedPoint!.revenue
+      };
+  const periodLabel = effectivePeriod === "ytd" ? `YTD through ${dateLabel(dashboard.metadata.asOf)}` : dateLabel(effectivePeriod);
+  const kpis: ManagementReportKpi[] = effectivePeriod === "ytd" ? dashboard.kpis : [
+    { id: "period-revenue", label: "Revenue", value: actual.revenue, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
+    { id: "period-marketing", label: "Marketing spend", value: actual.marketingSpend, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
+    { id: "period-operating", label: "Operating spend", value: actual.operatingSpend, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
+    { id: "period-gross-profit", label: "Gross profit", value: actual.grossProfit, unit: "currency", currency: "USD", tone: actual.grossProfit >= 0 ? "positive" : "negative", detail: periodLabel },
+    { id: "period-net-profit", label: "Net profit", value: actual.netProfit, unit: "currency", currency: "USD", tone: actual.netProfit >= 0 ? "positive" : "negative", detail: periodLabel },
+    { id: "period-net-margin", label: "Net margin", value: actual.netMargin, unit: "percent", tone: actual.netMargin >= 0 ? "positive" : "negative", detail: periodLabel }
+  ];
+
+  useEffect(() => {
+    if (selectedPeriod !== effectivePeriod) setSelectedPeriod(effectivePeriod);
+  }, [effectivePeriod, selectedPeriod, setSelectedPeriod]);
+
   return (
     <div className="management-report-tab-panel">
-      <KpiGrid kpis={dashboard.kpis} />
+      <section className="management-report-panel">
+        <div className="management-report-toolbar management-report-period-toolbar">
+          <div className="management-report-panel-heading"><h3>Reporting period</h3></div>
+          <label className="management-report-field">Period<NativeSelect value={effectivePeriod} onValueChange={setSelectedPeriod}><NativeSelectOption value="ytd">YTD through {dateLabel(dashboard.metadata.asOf)}</NativeSelectOption>{[...dashboard.trend].reverse().map((point) => <NativeSelectOption key={point.period} value={point.period}>{dateLabel(point.period)}</NativeSelectOption>)}</NativeSelect></label>
+        </div>
+      </section>
+      <KpiGrid kpis={kpis} />
       {dashboard.bank.postCloseEntryCount > 0 && (
         <div className="management-report-summary-note warning"><TriangleAlert size={16} aria-hidden="true" /><span><strong>{wholeNumber.format(dashboard.bank.postCloseEntryCount)} post-close bank entries</strong> are shown in Ledger for visibility but excluded from the official reporting period through {dateLabel(dashboard.bank.officialThrough)}.</span></div>
       )}
-      <div className="management-report-two-column"><TrendPanel trend={dashboard.trend} /><SummaryComposition dashboard={dashboard} /></div>
-      <BusinessUnitTable units={dashboard.businessUnits} />
+      <div className="management-report-two-column"><TrendPanel selectedPeriod={effectivePeriod} trend={dashboard.trend} /><div className="management-report-summary-side"><SummaryComposition actual={actual} periodLabel={periodLabel} /><PlatformSpendDonut dashboard={dashboard} selectedPeriod={effectivePeriod} /></div></div>
+      <BusinessUnitTable selectedPeriod={effectivePeriod} units={dashboard.businessUnits} />
     </div>
   );
 }
@@ -365,13 +558,37 @@ function teamKpis(team: ManagementReportBusinessUnit): ManagementReportKpi[] {
 
 function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
   const [selectedId, setSelectedId] = useUrlState("managementTeam", teams[0]?.id ?? "");
+  const [monthSortKey, setMonthSortKey] = useUrlState<TrendSortKey>("managementTeamMonthSort", "month", {
+    allowedValues: ["grossProfit", "marketingSpend", "month", "netProfit", "operatingSpend", "revenue"]
+  });
+  const [monthSortDirection, setMonthSortDirection] = useUrlState<TableSortDirection>("managementTeamMonthOrder", "asc", {
+    allowedValues: ["asc", "desc"]
+  });
   const selected = teams.find((team) => team.id === selectedId) ?? teams[0];
+  const visibleMonths = useMemo(() => {
+    if (!selected) return [];
+    return selected.monthly
+      .filter((month) => month.period <= selected.latestPeriod)
+      .sort((left, right) => {
+        const value = (month: (typeof selected.monthly)[number]): number | string => monthSortKey === "month" ? month.period : month[monthSortKey];
+        return compareTableValues(value(left), value(right), monthSortDirection) || left.period.localeCompare(right.period);
+      });
+  }, [monthSortDirection, monthSortKey, selected]);
 
   useEffect(() => {
     if (teams.length > 0 && !teams.some((team) => team.id === selectedId)) {
       setSelectedId(teams[0].id);
     }
   }, [selectedId, setSelectedId, teams]);
+
+  function requestMonthSort(nextSortKey: TrendSortKey) {
+    if (nextSortKey === monthSortKey) {
+      setMonthSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setMonthSortKey(nextSortKey);
+    setMonthSortDirection(nextSortKey === "month" ? "asc" : "desc");
+  }
 
   if (!selected) return <div className="management-report-state"><div className="management-report-state-content"><p>No team performance was parsed.</p></div></div>;
 
@@ -407,8 +624,15 @@ function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
         <div className="management-report-table-wrap">
           <table className="management-report-table">
             <caption>{selected.name} monthly profit and loss</caption>
-            <thead><tr><th scope="col">Month</th><th className="amount" scope="col">Revenue</th><th className="amount" scope="col">Marketing</th><th className="amount" scope="col">Operating</th><th className="amount" scope="col">Gross profit</th><th className="amount" scope="col">Net profit</th></tr></thead>
-            <tbody>{selected.monthly.length > 0 ? selected.monthly.map((month) => <tr key={month.period}><td>{month.label}</td><td className="amount">{money(month.revenue)}</td><td className="amount">{money(month.marketingSpend)}</td><td className="amount">{money(month.operatingSpend)}</td><td className={`amount ${valueTone(month.grossProfit)}`}>{money(month.grossProfit)}</td><td className={`amount ${valueTone(month.netProfit)}`}>{money(month.netProfit)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly P&amp;L rows are available for {selected.name}.</td></tr>}</tbody>
+            <thead><tr>
+              <SortableTableHead activeSortKey={monthSortKey} direction={monthSortDirection} onSort={requestMonthSort} sortKey="month">Month</SortableTableHead>
+              <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="revenue">Revenue</SortableTableHead>
+              <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="marketingSpend">Marketing</SortableTableHead>
+              <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="operatingSpend">Operating</SortableTableHead>
+              <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="grossProfit">Gross profit</SortableTableHead>
+              <SortableTableHead activeSortKey={monthSortKey} className="amount" direction={monthSortDirection} onSort={requestMonthSort} sortKey="netProfit">Net profit</SortableTableHead>
+            </tr></thead>
+            <tbody>{visibleMonths.length > 0 ? visibleMonths.map((month) => <tr key={month.period}><td>{month.label}</td><td className="amount">{money(month.revenue)}</td><td className="amount">{money(month.marketingSpend)}</td><td className="amount">{money(month.operatingSpend)}</td><td className={`amount ${valueTone(month.grossProfit)}`}>{money(month.grossProfit)}</td><td className={`amount ${valueTone(month.netProfit)}`}>{money(month.netProfit)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly P&amp;L rows are available for {selected.name}.</td></tr>}</tbody>
           </table>
         </div>
       </section>

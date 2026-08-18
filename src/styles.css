@@ -7930,6 +7930,12 @@ th.amount .sortable-table-heading {
   align-items: start;
 }
 
+.management-report-summary-side {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
 .management-report-ownership-sections {
   display: grid;
   min-width: 0;
@@ -7995,6 +8001,12 @@ th.amount .sortable-table-heading {
   grid-template-columns: 74px minmax(0, 1fr) 84px;
   align-items: center;
   gap: 10px;
+  padding: 3px 5px;
+  border-radius: 7px;
+}
+
+.management-report-trend-row.selected {
+  background: var(--info-bg);
 }
 
 .management-report-trend-label,
@@ -8185,6 +8197,78 @@ th.amount .sortable-table-heading {
   background: var(--app-muted);
 }
 
+.management-report-donut-layout {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 18px;
+}
+
+.management-report-donut {
+  position: relative;
+  display: grid;
+  width: 132px;
+  height: 132px;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.management-report-donut::after {
+  position: absolute;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--panel);
+  content: "";
+}
+
+.management-report-donut span {
+  z-index: 1;
+  max-width: 68px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 750;
+  font-variant-numeric: lining-nums tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-report-donut-legend {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.management-report-donut-legend div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.management-report-donut-legend dt {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--app-muted);
+}
+
+.management-report-donut-legend dt i {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+
+.management-report-donut-legend dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
 .management-report-toolbar {
   display: flex;
   min-width: 0;
@@ -8194,6 +8278,14 @@ th.amount .sortable-table-heading {
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-soft);
+}
+
+.management-report-period-toolbar .management-report-field {
+  width: min(260px, 100%);
+}
+
+.management-report-selected-row td {
+  background: var(--info-bg);
 }
 
 .management-report-dimension-switch {
@@ -8447,6 +8539,15 @@ th.amount .sortable-table-heading {
   }
 
   .management-report-field {
+    width: 100%;
+  }
+
+  .management-report-donut-layout {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .management-report-donut-legend {
     width: 100%;
   }
 }

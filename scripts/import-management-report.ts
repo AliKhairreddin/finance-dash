@@ -153,14 +153,16 @@ function normalizedSheetName(value: string): string {
 }
 
 const visibleSheetAliases: Record<ManagementReportSheetKey, string[]> = {
-  shareholders: ["1 shareholders fund", "1 shareholder s fund"],
-  "vb-cp": ["2 vb cp"],
-  "consolidated-bank": ["c consolidated bank"],
-  "vb-acp": ["5 vb acp"],
-  "vb-wag": ["3 vb wag"],
-  "wag-aff": ["b wag and aff"],
+  shareholders: ["partners balance"],
+  "vb-consolidated": ["vb consolidated"],
+  "vb-cp": ["1 vb cp"],
+  "vb-wag": ["2 vb wag"],
+  "vb-hcp": ["3 vb hcp"],
   "vb-rest": ["4 vb rest"],
-  plp: ["6 plp"]
+  "vb-acp": ["5 vb acp"],
+  plp: ["6 plp"],
+  "wag-aff": ["b wag and aff"],
+  "consolidated-bank": ["e consolidated bank"]
 };
 
 function visibleSheetKey(name: string): ManagementReportSheetKey | undefined {

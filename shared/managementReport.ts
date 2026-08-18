@@ -1,16 +1,18 @@
 export const managementReportSheetKeys = [
   "shareholders",
+  "vb-consolidated",
   "vb-cp",
-  "consolidated-bank",
-  "vb-acp",
   "vb-wag",
-  "wag-aff",
+  "vb-hcp",
   "vb-rest",
-  "plp"
+  "vb-acp",
+  "plp",
+  "wag-aff",
+  "consolidated-bank"
 ] as const;
 
 /** Increment whenever normalized import semantics change. */
-export const managementReportParserVersion = "2" as const;
+export const managementReportParserVersion = "3" as const;
 
 export type ManagementReportSheetKey = (typeof managementReportSheetKeys)[number];
 
@@ -22,14 +24,16 @@ export interface ManagementReportSheetDefinition {
 }
 
 export const managementReportSheetDefinitions: Record<ManagementReportSheetKey, ManagementReportSheetDefinition> = {
-  shareholders: { key: "shareholders", title: "1. Shareholder's Fund", gid: "1247494965", kind: "ownership" },
-  "vb-cp": { key: "vb-cp", title: "2. VB - CP", gid: "1514461595", kind: "business-performance" },
-  "consolidated-bank": { key: "consolidated-bank", title: "C. Consolidated Bank", gid: "739792447", kind: "bank-ledger" },
-  "vb-acp": { key: "vb-acp", title: "5. VB - ACP", gid: "1819366902", kind: "business-performance" },
-  "vb-wag": { key: "vb-wag", title: "3. VB - Wag", gid: "215542753", kind: "business-performance" },
-  "wag-aff": { key: "wag-aff", title: "B. Wag & Aff", gid: "681261509", kind: "offer-reconciliation" },
-  "vb-rest": { key: "vb-rest", title: "4. VB - Rest", gid: "123277687", kind: "business-performance" },
-  plp: { key: "plp", title: "6. PLP", gid: "763974701", kind: "platform-profitability" }
+  shareholders: { key: "shareholders", title: "Partner's Balance", gid: "603483122", kind: "ownership" },
+  "vb-consolidated": { key: "vb-consolidated", title: "VB - Consolidated", gid: "469791453", kind: "business-performance" },
+  "vb-cp": { key: "vb-cp", title: "1. VB - CP", gid: "2050887097", kind: "business-performance" },
+  "vb-wag": { key: "vb-wag", title: "2. VB - Wag", gid: "218502312", kind: "business-performance" },
+  "vb-hcp": { key: "vb-hcp", title: "3. VB - HCP", gid: "1190727950", kind: "business-performance" },
+  "vb-rest": { key: "vb-rest", title: "4. VB - Rest", gid: "1731002992", kind: "business-performance" },
+  "vb-acp": { key: "vb-acp", title: "5. VB - ACP", gid: "119552608", kind: "business-performance" },
+  plp: { key: "plp", title: "6. PLP", gid: "1000794575", kind: "platform-profitability" },
+  "wag-aff": { key: "wag-aff", title: "B. Wag & Aff", gid: "1598290578", kind: "offer-reconciliation" },
+  "consolidated-bank": { key: "consolidated-bank", title: "E. Consolidated Bank", gid: "1830813046", kind: "bank-ledger" }
 };
 
 export interface ManagementReportImportMetadata {
@@ -205,7 +209,7 @@ export interface ManagementReportBusinessMonth {
 export interface ManagementReportBusinessUnit {
   id: string;
   name: string;
-  kind: "team" | "offer" | "affiliate";
+  kind: "company" | "team" | "offer" | "affiliate";
   parentTeamId?: string;
   active: boolean;
   sourceSheet: ManagementReportSheetKey;
@@ -375,6 +379,7 @@ export interface ManagementReportDashboard {
   kpis: ManagementReportKpi[];
   summary: ManagementReportSummary;
   trend: ManagementReportTrendPoint[];
+  consolidated: ManagementReportBusinessUnit;
   businessUnits: ManagementReportBusinessUnit[];
   ownership: ManagementReportOwnership;
   platforms: ManagementReportPlatformPerformance[];
@@ -699,14 +704,16 @@ function businessColumns(header: ManagementReportCsvRecord): ManagementReportBus
 function standardizedBusinessMetric(label: string): string | undefined {
   const normalized = normalizedText(label).toLowerCase().replace(/\s+/g, " ");
   const ratio = normalized.includes("(%)");
+  const baseLabel = normalized.replace(/\s*\(%\)\s*$/, "");
   if (normalized.startsWith("total advertising revenue")) return ratio ? "revenue-margin" : "revenue";
   if (normalized.startsWith("total marketing spend")) return ratio ? "marketing-spend-margin" : "marketing-spend";
-  if (normalized === "gross profit" || normalized === "gross profit (%)") return ratio ? "gross-margin" : "gross-profit";
-  if (normalized === "total spend") return "operating-spend";
-  if (normalized === "ebitda" || normalized === "ebitda (%)") return ratio ? "ebitda-margin" : "ebitda";
-  if (normalized === "net profit" || normalized === "net profit (%)") return ratio ? "net-margin" : "net-profit";
-  if (normalized === "net margin" || normalized === "net margin (%)") return ratio ? "net-margin" : "net-profit";
-  if (normalized === "net" || normalized === "net (%)") return ratio ? "net-after-withdrawals-margin" : "net-after-withdrawals";
+  if (baseLabel === "gross profit") return ratio ? "gross-margin" : "gross-profit";
+  if (baseLabel === "total spend") return "operating-spend";
+  if (baseLabel === "ebitda/net profit") return ratio ? "net-margin" : "net-profit";
+  if (baseLabel === "ebitda") return ratio ? "ebitda-margin" : "ebitda";
+  if (baseLabel === "net profit") return ratio ? "net-margin" : "net-profit";
+  if (baseLabel === "net margin") return ratio ? "net-margin" : "net-profit";
+  if (baseLabel === "net") return ratio ? "net-after-withdrawals-margin" : "net-after-withdrawals";
   return undefined;
 }
 
@@ -729,7 +736,7 @@ function linePercentage(line: ManagementReportBusinessLine | undefined, key: str
 }
 
 function businessUnitFromTable(
-  sheetKey: "vb-cp" | "vb-wag" | "vb-acp",
+  sheetKey: "vb-consolidated" | "vb-cp" | "vb-wag" | "vb-hcp" | "vb-acp",
   records: ManagementReportCsvRecord[]
 ): BusinessParseResult {
   const checks: ManagementReportCheck[] = [];
@@ -743,9 +750,11 @@ function businessUnitFromTable(
   }
 
   const definitions = {
+    "vb-consolidated": { id: "digital-nudge", name: "Digital Nudge", kind: "company" as const, active: true },
     "vb-cp": { id: "cognitive-pixel", name: "Cognitive Pixel", kind: "team" as const, active: true },
     "vb-wag": { id: "wagner", name: "Wagner", kind: "team" as const, active: true },
-    "vb-acp": { id: "acp", name: "ACP", kind: "offer" as const, parentTeamId: "cognitive-pixel", active: true }
+    "vb-hcp": { id: "hcp", name: "HCP", kind: "team" as const, active: true },
+    "vb-acp": { id: "acp", name: "ACP", kind: "offer" as const, active: true }
   };
   const definition = definitions[sheetKey];
   const columns = businessColumns(header);
@@ -1977,24 +1986,24 @@ export function buildManagementReport(
     }
   };
 
+  const consolidatedRecords = recordsBySheet.get("vb-consolidated");
+  if (!consolidatedRecords) throw new Error("VB - Consolidated is required for the management report.");
+  const consolidatedResult = businessUnitFromTable("vb-consolidated", consolidatedRecords);
+  const consolidated = consolidatedResult.units[0];
+  if (!consolidated) throw new Error("VB - Consolidated did not produce a reportable business unit.");
+  updateSummary("vb-consolidated", consolidatedResult.parsedRecordCount, consolidatedResult.checks);
+
   const businessUnits: ManagementReportBusinessUnit[] = [];
-  for (const key of ["vb-cp", "vb-wag", "vb-acp"] as const) {
+  for (const key of ["vb-cp", "vb-wag", "vb-hcp", "vb-acp"] as const) {
     const records = recordsBySheet.get(key);
     if (!records) continue;
     const result = businessUnitFromTable(key, records);
     businessUnits.push(...result.units);
     updateSummary(key, result.parsedRecordCount, result.checks);
   }
-  const inferredAsOf = businessUnits
-    .map((unit) => unit.latestPeriod)
-    .filter((period) => /^\d{4}-\d{2}-\d{2}$/.test(period))
-    .sort()
-    .at(-1);
-  const reportAsOf = metadata.asOf ?? inferredAsOf ?? "1970-01-01";
-  if (reportAsOf === "1970-01-01") {
-    const cpSummary = sheetSummaries.get("vb-cp");
-    cpSummary?.checks.push(check("vb-cp", "report-close-missing", "error", "The official management-report close date could not be inferred; pass metadata.asOf."));
-    if (cpSummary) cpSummary.status = "invalid";
+  const reportAsOf = metadata.asOf ?? consolidated.latestPeriod;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reportAsOf)) {
+    throw new Error("VB - Consolidated does not identify a valid management-report close date.");
   }
   const restRecords = recordsBySheet.get("vb-rest");
   if (restRecords) {
@@ -2037,6 +2046,7 @@ export function buildManagementReport(
   }
 
   const facts = [
+    ...factsFromBusinessUnits([consolidated]),
     ...factsFromBusinessUnits(businessUnits),
     ...factsFromOwnership(ownership, reportAsOf),
     ...factsFromPlatforms(platforms),
@@ -2050,18 +2060,21 @@ export function buildManagementReport(
   }
 
   const summary = emptySummary();
-  const consolidatedBusinessUnits = businessUnits.filter((unit) => unit.parentTeamId === undefined);
-  summary.revenue = sum(consolidatedBusinessUnits.map((unit) => unit.actual.revenue));
-  summary.marketingSpend = sum(consolidatedBusinessUnits.map((unit) => unit.actual.marketingSpend));
-  summary.operatingSpend = sum(consolidatedBusinessUnits.map((unit) => unit.actual.operatingSpend));
-  summary.grossProfit = sum(consolidatedBusinessUnits.map((unit) => unit.actual.grossProfit));
-  summary.netProfit = sum(consolidatedBusinessUnits.map((unit) => unit.actual.netProfit));
-  summary.netMargin = summary.revenue === 0 ? 0 : summary.netProfit / summary.revenue;
+  summary.revenue = consolidated.actual.revenue;
+  summary.marketingSpend = consolidated.actual.marketingSpend;
+  summary.operatingSpend = consolidated.actual.operatingSpend;
+  summary.grossProfit = consolidated.actual.grossProfit;
+  summary.netProfit = consolidated.actual.netProfit;
+  summary.netMargin = consolidated.actual.netMargin;
   summary.shareholderEquity = ownership.totalEquityBalance;
-  const ytdPlatformTotal = platforms.find((item) => item.isTotal && /ytd/i.test(item.periodLabel));
-  summary.platformRevenue = ytdPlatformTotal?.revenue ?? 0;
-  summary.platformSpend = ytdPlatformTotal?.spend ?? 0;
-  summary.platformProfit = ytdPlatformTotal?.profit ?? 0;
+  const platformMonthlyTotals = platforms.filter((item) =>
+    item.isTotal
+    && !/ytd/i.test(item.periodLabel)
+    && item.period <= reportAsOf
+  );
+  summary.platformRevenue = sum(platformMonthlyTotals.map((item) => item.revenue));
+  summary.platformSpend = sum(platformMonthlyTotals.map((item) => item.spend));
+  summary.platformProfit = sum(platformMonthlyTotals.map((item) => item.profit));
   const officialBankEntries = bankResult.entries.filter((entry) => entry.isIncludedInOfficialPeriod);
   summary.bankIncome = sum(officialBankEntries.filter((entry) => entry.accountType.toLowerCase() === "income").map((entry) => entry.amountUsd));
   summary.bankExpense = sum(officialBankEntries.filter((entry) => entry.accountType.toLowerCase().includes("expense")).map((entry) => entry.amountUsd));
@@ -2103,7 +2116,8 @@ export function buildManagementReport(
     checks,
     kpis,
     summary,
-    trend: buildTrend(businessUnits),
+    trend: buildTrend([consolidated]).filter((point) => point.period <= reportAsOf),
+    consolidated,
     businessUnits,
     ownership,
     platforms,

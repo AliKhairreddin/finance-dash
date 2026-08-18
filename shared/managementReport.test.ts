@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   buildManagementReport,
   managementReportParserVersion,
-  managementReportSheetKeys,
   parseManagementReportCsv,
   type ManagementReportSheetKey
 } from "./managementReport";
@@ -36,8 +34,8 @@ function businessCsv(revenue: number, marketingSpend: number, operatingSpend: nu
     ["", "Finance Spend:"],
     ["", "Software", "Bank", operatingSpend, operatingSpend, operatingSpend, "0.42", "1"],
     ["", "TOTAL SPEND", "", operatingSpend, operatingSpend, operatingSpend, "0.42", "1"],
-    ["", "NET PROFIT", "", netProfit, netProfit, netProfit, "0.42", "1"],
-    ["", "NET PROFIT (%)", "", netProfit / revenue, netProfit / revenue, netProfit / revenue, "0.42", "1"]
+    ["", "EBITDA/NET PROFIT", "", netProfit, netProfit, netProfit, "0.42", "1"],
+    ["", "EBITDA/NET PROFIT (%)", "", netProfit / revenue, netProfit / revenue, netProfit / revenue, "0.42", "1"]
   ]);
 }
 
@@ -53,6 +51,7 @@ function syntheticSheets(): Record<ManagementReportSheetKey, string> {
       ["", "Total Equity Balance", "", 300, "Total Assets & Liability", "", 300],
       ["", "", "", "", "", "", "", "Total Profit as of 31st May 26", 30, 10, 20]
     ]),
+    "vb-consolidated": businessCsv(390, 268, 33),
     "vb-cp": businessCsv(100, 60, 10),
     "consolidated-bank": csv([
       ["", "Date", "Company Name", "Bank Name", "Service Month", "Month", "Reference", "User Name", "BS/PL", "Account Type", "Nature of Expense", "Segment", "Currency", "Amount incl. VAT", "Rate to USD", "Amount", "Comment", "Reco"],
@@ -60,8 +59,8 @@ function syntheticSheets(): Record<ManagementReportSheetKey, string> {
       ["", "31-May-26", "Digital Nudge", "Wise", "31-May-26", "31-May-26", "Expense reference", "Finance", "PL", "Expense", "Software", "Cognitive Pixel", "USD", 40, 1, 40, "", ""],
       ["", "14-Jun-26", "Digital Nudge", "Amex", "30-Jun-26", "30-Jun-26", "POST_CLOSE_REFERENCE", "SECRET_CARD_USER", "PL", "Expense", "Software", "ACP", "EUR", 50, "", "", "", ""]
     ]),
-    "vb-acp": businessCsv(30, 20, 2),
     "vb-wag": businessCsv(200, 150, 20),
+    "vb-hcp": businessCsv(10, 8, 1),
     "wag-aff": csv([
       ["", "", "Total Spend", 500, "", 500],
       ["", "", "", "", "", "", "", "Offer Redtrack 1 Cognitive", "Offer Source", "Redtrack Revenue", "Dashboard Source", "Dashboard Revenue"],
@@ -73,6 +72,7 @@ function syntheticSheets(): Record<ManagementReportSheetKey, string> {
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "ACA revenue", 10, 11],
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "Final Calculation"]
     ]),
+    "vb-acp": businessCsv(30, 20, 2),
     "vb-rest": csv([
       ["", "Atlantic Ocean + Affiliates"],
       ["", "Business Performance"],
@@ -110,7 +110,7 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   const first = buildManagementReport(sheets, metadata);
   const second = buildManagementReport(sheets, metadata);
 
-  assert.equal(managementReportParserVersion, "2");
+  assert.equal(managementReportParserVersion, "3");
   assert.deepEqual(first.facts.map((fact) => fact.factId), second.facts.map((fact) => fact.factId));
   assert.deepEqual(first.bankEntries.map((entry) => entry.entryId), second.bankEntries.map((entry) => entry.entryId));
   assert.deepEqual(first.sourceRows.map((row) => row.sourceRowId), second.sourceRows.map((row) => row.sourceRowId));
@@ -125,9 +125,11 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   assert.equal(revenueLine?.percentages["run-rate-42"], 0.42);
   assert.equal(revenueLine?.percentages["sales-rate"], 1);
 
-  assert.equal(first.dashboard.summary.revenue, 350, "ACP stays visible but is not double-counted above its Cognitive Pixel parent");
+  assert.equal(first.dashboard.summary.revenue, 390, "the consolidated workbook tab is authoritative for headline totals");
+  assert.equal(first.dashboard.consolidated.actual.netProfit, 89);
   assert.equal(first.dashboard.businessUnits.find((unit) => unit.id === "acp")?.actual.revenue, 30);
-  assert.equal(first.dashboard.trend.find((point) => point.period === "2026-05-31")?.revenue, 300);
+  assert.equal(first.dashboard.businessUnits.find((unit) => unit.id === "hcp")?.actual.netProfit, 1);
+  assert.equal(first.dashboard.trend.find((point) => point.period === "2026-05-31")?.revenue, 390);
   const atlanticOcean = first.dashboard.businessUnits.find((unit) => unit.id === "atlantic-ocean");
   assert.equal(atlanticOcean?.latestPeriodLabel, "Atlantic Ocean Performance");
   assert.equal(atlanticOcean?.columns.find((column) => column.key === "performance")?.label, "Atlantic Ocean Performance");
@@ -157,63 +159,4 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   assert.doesNotMatch(publicJson, /sourceRowId/);
   assert.match(JSON.stringify(first.bankEntries), /SECRET_REFERENCE/);
   assert.match(JSON.stringify(first.sourceRows), /SECRET_CARD_USER/);
-});
-
-const realFixtureRoot = "/tmp/codex-finance-dash-management-report-20260721";
-const realFixtureNames: Record<ManagementReportSheetKey, string> = {
-  shareholders: "shareholders.csv",
-  "vb-cp": "vb-cp.csv",
-  "consolidated-bank": "consolidated-bank.csv",
-  "vb-acp": "vb-acp.csv",
-  "vb-wag": "vb-wag.csv",
-  "wag-aff": "wag-aff.csv",
-  "vb-rest": "vb-rest.csv",
-  plp: "plp.csv"
-};
-const hasRealFixtures = managementReportSheetKeys.every((key) => existsSync(`${realFixtureRoot}/${realFixtureNames[key]}`));
-
-test("real management-report snapshot reconciles across all eight sheets", { skip: !hasRealFixtures }, () => {
-  const sheets = Object.fromEntries(managementReportSheetKeys.map((key) => [
-    key,
-    readFileSync(`${realFixtureRoot}/${realFixtureNames[key]}`, "utf8")
-  ])) as Record<ManagementReportSheetKey, string>;
-  const result = buildManagementReport(sheets, {
-    importedAt: "2026-07-21T12:00:00.000Z",
-    asOf: "2026-05-31",
-    sourceLabel: "Local validation snapshot"
-  });
-
-  assert.equal(result.sourceRows.length, 5_808);
-  assert.equal(result.dashboard.bank.totalEntryCount, 3_123);
-  assert.equal(result.dashboard.bank.officialEntryCount, 3_109);
-  assert.equal(result.dashboard.bank.postCloseEntryCount, 14);
-  assert.equal(result.dashboard.bank.unconvertedEntryCount, 14);
-  assert.equal(new Set(result.facts.map((fact) => fact.factId)).size, result.facts.length);
-  assert.equal(result.dashboard.checks.filter((item) => item.severity === "error").length, 0);
-
-  const byUnit = new Map(result.dashboard.businessUnits.map((unit) => [unit.id, unit]));
-  assert.equal(byUnit.get("cognitive-pixel")?.actual.revenue, 7_549_793);
-  assert.equal(byUnit.get("cognitive-pixel")?.actual.netProfit, 353_437);
-  assert.equal(byUnit.get("wagner")?.actual.netProfit, 205_791);
-  assert.equal(byUnit.get("acp")?.actual.netProfit, 26_403);
-  assert.equal(byUnit.get("atlantic-ocean")?.actual.netProfit, 346);
-  assert.equal(byUnit.get("affiliates")?.actual.netProfit, 5_049);
-  const consolidatedUnits = result.dashboard.businessUnits.filter((unit) => unit.parentTeamId === undefined);
-  assert.equal(result.dashboard.summary.revenue, consolidatedUnits.reduce((total, unit) => total + unit.actual.revenue, 0));
-  assert.equal(result.dashboard.summary.netProfit, consolidatedUnits.reduce((total, unit) => total + unit.actual.netProfit, 0));
-  assert.notEqual(
-    result.dashboard.summary.revenue,
-    result.dashboard.businessUnits.reduce((total, unit) => total + unit.actual.revenue, 0),
-    "ACP is reported independently but must not inflate the consolidated total"
-  );
-  assert.equal(result.dashboard.ownership.totalEquityBalance, 2_140_718);
-
-  const ytdPlatform = result.dashboard.platforms.find((item) => item.isTotal && /ytd/i.test(item.periodLabel));
-  assert.equal(ytdPlatform?.revenue, 7_757_594);
-  assert.equal(ytdPlatform?.profit, 1_273_897);
-  assert.equal(ytdPlatform?.profitMargin, 0.16);
-  assert.equal(result.dashboard.offerReconciliation.redtrackRevenue, 4_353_772.28);
-  assert.equal(result.dashboard.offerReconciliation.dashboardRevenue, 4_307_059.66);
-  assert.ok(result.dashboard.checks.some((item) => item.code === "bank-post-close-rows"));
-  assert.ok(result.dashboard.checks.some((item) => item.code === "bank-unconverted-rows"));
 });

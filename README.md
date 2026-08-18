@@ -174,7 +174,7 @@ Missing credentials should produce unavailable/empty integration states rather t
 
 ## Management Report Imports
 
-The Management workspace keeps the legacy workbook in this dashboard while preserving a clear boundary between a closed manual report snapshot and live operating data. The importer reads every workbook tab for source lineage, normalizes the eight visible management tabs, records data-quality checks, and exposes only sanitized reporting data through the public API. Hidden supporting rows and sensitive transaction references are never returned by `/api/management-report`.
+The Management workspace keeps the legacy workbook in this dashboard while preserving a clear boundary between a closed manual report snapshot and live operating data. The importer reads every workbook tab for source lineage, normalizes the ten current reporting tabs, records data-quality checks, and exposes only sanitized reporting data through the public API. The authoritative `VB - Consolidated` tab drives headline and monthly P&L totals, while unit, platform, ownership, offer, and bank tabs remain available for drill-down. Hidden supporting rows and sensitive transaction references are never returned by `/api/management-report`.
 
 Prepare a local snapshot:
 
@@ -188,7 +188,7 @@ Upload the same content-addressed snapshot to Convex after configuring `CONVEX_U
 npm run import:management-report -- "https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit" --convex
 ```
 
-A local `.xlsx` path is also accepted. Imports are idempotent by workbook content hash. The May 2026 close stays separate from June source rows, which remain visibly marked as post-close data. Future bank, advertising, revenue, invoice, and FX APIs should write normalized ledger and metric records behind the same reporting model instead of recreating spreadsheet formulas.
+A local `.xlsx` path is also accepted. Imports are idempotent by workbook content hash. The Summary view keeps its selected YTD or monthly period, table sorting, and unit filters in the URL. Future bank, advertising, revenue, invoice, and FX APIs should write normalized ledger and metric records behind the same reporting model instead of recreating spreadsheet formulas.
 
 ## Wise Statement Imports
 
