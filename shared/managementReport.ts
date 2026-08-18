@@ -12,7 +12,7 @@ export const managementReportSheetKeys = [
 ] as const;
 
 /** Increment whenever normalized import semantics change. */
-export const managementReportParserVersion = "3" as const;
+export const managementReportParserVersion = "4" as const;
 
 export type ManagementReportSheetKey = (typeof managementReportSheetKeys)[number];
 
@@ -753,7 +753,7 @@ function businessUnitFromTable(
     "vb-consolidated": { id: "digital-nudge", name: "Digital Nudge", kind: "company" as const, active: true },
     "vb-cp": { id: "cognitive-pixel", name: "Cognitive Pixel", kind: "team" as const, active: true },
     "vb-wag": { id: "wagner", name: "Wagner", kind: "team" as const, active: true },
-    "vb-hcp": { id: "hcp", name: "HCP", kind: "team" as const, active: true },
+    "vb-hcp": { id: "hcp", name: "HCP", kind: "offer" as const, active: true },
     "vb-acp": { id: "acp", name: "ACP", kind: "offer" as const, active: true }
   };
   const definition = definitions[sheetKey];

@@ -7960,17 +7960,11 @@ th.amount .sortable-table-heading {
 .management-report-tone.negative { color: var(--red); }
 .management-report-tone.warning { color: var(--amber); }
 
-.management-report-two-column {
+.management-report-summary-visuals {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  align-items: start;
-}
-
-.management-report-summary-side {
-  display: grid;
-  min-width: 0;
-  gap: 12px;
+  align-items: stretch;
 }
 
 .management-report-ownership-sections {
@@ -8033,6 +8027,11 @@ th.amount .sortable-table-heading {
   gap: 12px;
 }
 
+.management-report-trend-chart.focused {
+  gap: 14px;
+  padding: 8px 4px;
+}
+
 .management-report-trend-row {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr) 84px;
@@ -8044,6 +8043,33 @@ th.amount .sortable-table-heading {
 
 .management-report-trend-row.selected {
   background: var(--info-bg);
+}
+
+.management-report-trend-chart.focused .management-report-trend-row {
+  grid-template-columns: 96px minmax(0, 1fr) 128px;
+  gap: 16px;
+  min-height: 76px;
+  padding: 10px 12px;
+}
+
+.management-report-trend-chart.focused .management-report-trend-label,
+.management-report-trend-chart.focused .management-report-trend-value {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.management-report-trend-chart.focused .management-report-trend-track {
+  height: 50px;
+}
+
+.management-report-trend-chart.focused .management-report-trend-bar.revenue {
+  top: 8px;
+  height: 13px;
+}
+
+.management-report-trend-chart.focused .management-report-trend-bar.spend {
+  bottom: 8px;
+  height: 13px;
 }
 
 .management-report-trend-label,
@@ -8236,25 +8262,26 @@ th.amount .sortable-table-heading {
 
 .management-report-donut-layout {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
-  padding: 18px;
+  gap: 24px;
+  min-height: 276px;
+  padding: 24px;
 }
 
 .management-report-donut {
   position: relative;
   display: grid;
-  width: 132px;
-  height: 132px;
+  width: 196px;
+  height: 196px;
   place-items: center;
   border-radius: 50%;
 }
 
 .management-report-donut::after {
   position: absolute;
-  width: 76px;
-  height: 76px;
+  width: 112px;
+  height: 112px;
   border-radius: 50%;
   background: var(--panel);
   content: "";
@@ -8262,9 +8289,9 @@ th.amount .sortable-table-heading {
 
 .management-report-donut span {
   z-index: 1;
-  max-width: 68px;
+  max-width: 100px;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 750;
   font-variant-numeric: lining-nums tabular-nums;
   text-overflow: ellipsis;
@@ -8515,7 +8542,7 @@ th.amount .sortable-table-heading {
     border-bottom: 1px solid var(--line-soft);
   }
 
-  .management-report-two-column,
+  .management-report-summary-visuals,
   .management-report-quality {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -8564,6 +8591,18 @@ th.amount .sortable-table-heading {
 
   .management-report-trend-row {
     grid-template-columns: 58px minmax(120px, 1fr) 76px;
+  }
+
+  .management-report-trend-chart.focused .management-report-trend-row {
+    grid-template-columns: 62px minmax(140px, 1fr) 92px;
+    gap: 10px;
+    min-height: 68px;
+    padding-inline: 8px;
+  }
+
+  .management-report-trend-chart.focused .management-report-trend-label,
+  .management-report-trend-chart.focused .management-report-trend-value {
+    font-size: 12px;
   }
 
   .management-report-panel-body {

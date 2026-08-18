@@ -313,11 +313,20 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("managementTrendOrder", "asc", {
     allowedValues: ["asc", "desc"]
   });
-  const sortedTrend = useMemo(() => [...trend].sort((left, right) => {
+  const visibleTrend = useMemo(
+    () => selectedPeriod === "ytd" ? trend : trend.filter((point) => point.period === selectedPeriod),
+    [selectedPeriod, trend]
+  );
+  const sortedTrend = useMemo(() => [...visibleTrend].sort((left, right) => {
     const value = (point: ManagementReportTrendPoint): number | string => sortKey === "month" ? point.period : point[sortKey];
     return compareTableValues(value(left), value(right), sortDirection) || left.period.localeCompare(right.period);
-  }), [sortDirection, sortKey, trend]);
-  const maximum = Math.max(1, ...trend.flatMap((point) => [Math.abs(point.revenue), Math.abs(point.marketingSpend)]));
+  }), [sortDirection, sortKey, visibleTrend]);
+  const maximum = Math.max(1, ...visibleTrend.flatMap((point) => [Math.abs(point.revenue), Math.abs(point.marketingSpend)]));
+  const isFocusedMonth = selectedPeriod !== "ytd";
+  const title = isFocusedMonth ? `${monthPeriodLabel(selectedPeriod)} performance` : "Monthly performance trend";
+  const detail = isFocusedMonth
+    ? "Revenue, spend, gross profit, and net profit for the selected month."
+    : "Revenue and marketing spend from the official management period.";
 
   function requestSort(nextSortKey: TrendSortKey) {
     if (nextSortKey === sortKey) {
@@ -331,13 +340,13 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
   return (
     <section className="management-report-panel" aria-labelledby="management-report-trend-title">
       <div className="management-report-panel-header">
-        <div className="management-report-panel-heading"><h3 id="management-report-trend-title">Monthly performance trend</h3><p>Revenue and marketing spend from the official management period.</p></div>
+        <div className="management-report-panel-heading"><h3 id="management-report-trend-title">{title}</h3><p>{detail}</p></div>
       </div>
       <div className="management-report-panel-body">
-        {trend.length > 0 ? (
-          <div aria-hidden="true" className="management-report-trend-chart">
+        {visibleTrend.length > 0 ? (
+          <div aria-hidden="true" className={`management-report-trend-chart ${isFocusedMonth ? "focused" : ""}`}>
             <div className="management-report-chart-legend"><span><i /> Revenue</span><span className="spend"><i /> Marketing spend</span></div>
-            {trend.map((point) => (
+            {visibleTrend.map((point) => (
               <div className={`management-report-trend-row ${selectedPeriod === point.period ? "selected" : ""}`} key={point.period}>
                 <span className="management-report-trend-label">{shortMonthPeriodLabel(point.period)}</span>
                 <span className="management-report-trend-track">
@@ -352,7 +361,7 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
       </div>
       <div className="management-report-table-wrap">
         <table className="management-report-table">
-          <caption>Monthly management performance values equivalent to the trend chart</caption>
+          <caption>Management performance values equivalent to the trend chart</caption>
           <thead><tr>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="month">Month</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="revenue">Revenue</SortableTableHead>
@@ -452,10 +461,13 @@ function PlatformSpendDonut({ dashboard, selectedPeriod }: { dashboard: Manageme
     cursor += total === 0 ? 0 : row.value / total * 100;
     return `${colors[index % colors.length]} ${start}% ${cursor}%`;
   }).join(", ");
+  const periodLabel = selectedPeriod === "ytd"
+    ? `YTD through ${monthPeriodLabel(dashboard.metadata.asOf)}`
+    : monthPeriodLabel(selectedPeriod);
 
   return (
-    <section className="management-report-panel" aria-labelledby="management-report-platform-mix-title">
-      <div className="management-report-panel-header"><div className="management-report-panel-heading"><h3 id="management-report-platform-mix-title">Platform spend mix</h3><p>Manual PLP workbook allocation.</p></div></div>
+    <section className="management-report-panel management-report-platform-mix" aria-labelledby="management-report-platform-mix-title">
+      <div className="management-report-panel-header"><div className="management-report-panel-heading"><h3 id="management-report-platform-mix-title">Platform spend mix</h3><p>{periodLabel} manual PLP allocation.</p></div></div>
       <div className="management-report-donut-layout">
         {total > 0 ? <div aria-label={`Platform spend mix totaling ${money(total)}`} className="management-report-donut" role="img" style={{ backgroundImage: `conic-gradient(${gradient})` }}><span>{money(total)}</span></div> : <div className="management-report-empty-row">No platform spend for this period.</div>}
         {total > 0 && <dl className="management-report-donut-legend">{rows.map((row, index) => <div key={row.label}><dt><i style={{ background: colors[index % colors.length] }} />{row.label}</dt><dd>{percent(row.value / total)}</dd></div>)}</dl>}
@@ -490,7 +502,8 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
   });
   const visibleRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    const rows = units.map((unit) => ({ actual: businessUnitPeriodActual(unit, selectedPeriod), unit })).filter(({ unit }) => {
+    const rows = units.map((unit) => ({ actual: businessUnitPeriodActual(unit, selectedPeriod), unit })).filter(({ actual, unit }) => {
+      if (selectedPeriod !== "ytd" && !actual) return false;
       if (type !== "all" && unit.kind !== type) return false;
       if (status === "active" && !unit.active) return false;
       if (status === "inactive" && unit.active) return false;
@@ -508,6 +521,9 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
     };
     return rows.sort((left, right) => compareTableValues(value(left), value(right), sortDirection) || left.unit.name.localeCompare(right.unit.name));
   }, [query, selectedPeriod, sortDirection, sortKey, status, type, units]);
+  const periodUnitCount = selectedPeriod === "ytd"
+    ? units.length
+    : units.filter((unit) => Boolean(businessUnitPeriodActual(unit, selectedPeriod))).length;
 
   function requestSort(nextSortKey: UnitSortKey) {
     if (nextSortKey === sortKey) {
@@ -522,7 +538,7 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
     <section className="management-report-panel" aria-labelledby="management-report-units-title">
       <div className="management-report-panel-header">
         <div className="management-report-panel-heading"><h3 id="management-report-units-title">Business unit snapshot</h3><p>Workbook-classified teams, offers, and affiliates.</p></div>
-        <span className="management-report-source-badge">{visibleRows.length} of {units.length}</span>
+        <span className="management-report-source-badge">{visibleRows.length} of {periodUnitCount}</span>
       </div>
       <div className="management-report-filter-grid">
         <label className="management-report-field">Search<span className="management-report-search"><Search size={14} aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Business unit" /></span></label>
@@ -554,7 +570,7 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
                 <td className={`amount ${actual ? valueTone(actual.netProfit) : "management-report-muted"}`}>{actual ? money(actual.netProfit) : "—"}</td>
                 <td className={`amount ${actual ? valueTone(actual.netMargin) : "management-report-muted"}`}>{actual ? percent(actual.netMargin) : "—"}</td>
               </tr>
-            )) : <tr><td className="management-report-empty-row" colSpan={8}>No business units match these filters.</td></tr>}
+            )) : <tr><td className="management-report-empty-row" colSpan={8}>No business units have data for this period or match these filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -602,7 +618,8 @@ function SummaryTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
       {dashboard.bank.postCloseEntryCount > 0 && (
         <div className="management-report-summary-note warning"><TriangleAlert size={16} aria-hidden="true" /><span><strong>{wholeNumber.format(dashboard.bank.postCloseEntryCount)} post-close bank entries</strong> are shown in Ledger for visibility but excluded from the official reporting period through {dateLabel(dashboard.bank.officialThrough)}.</span></div>
       )}
-      <div className="management-report-two-column"><TrendPanel selectedPeriod={effectivePeriod} trend={dashboard.trend} /><div className="management-report-summary-side"><SummaryComposition actual={actual} periodLabel={periodLabel} /><PlatformSpendDonut dashboard={dashboard} selectedPeriod={effectivePeriod} /></div></div>
+      <div className="management-report-summary-visuals"><PlatformSpendDonut dashboard={dashboard} selectedPeriod={effectivePeriod} /><SummaryComposition actual={actual} periodLabel={periodLabel} /></div>
+      <TrendPanel selectedPeriod={effectivePeriod} trend={dashboard.trend} />
       <BusinessUnitTable selectedPeriod={effectivePeriod} units={dashboard.businessUnits} />
     </div>
   );

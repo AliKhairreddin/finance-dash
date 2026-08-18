@@ -110,7 +110,7 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   const first = buildManagementReport(sheets, metadata);
   const second = buildManagementReport(sheets, metadata);
 
-  assert.equal(managementReportParserVersion, "3");
+  assert.equal(managementReportParserVersion, "4");
   assert.deepEqual(first.facts.map((fact) => fact.factId), second.facts.map((fact) => fact.factId));
   assert.deepEqual(first.bankEntries.map((entry) => entry.entryId), second.bankEntries.map((entry) => entry.entryId));
   assert.deepEqual(first.sourceRows.map((row) => row.sourceRowId), second.sourceRows.map((row) => row.sourceRowId));
@@ -128,7 +128,9 @@ test("normalized report build is deterministic, period-safe, and redacts bank li
   assert.equal(first.dashboard.summary.revenue, 390, "the consolidated workbook tab is authoritative for headline totals");
   assert.equal(first.dashboard.consolidated.actual.netProfit, 89);
   assert.equal(first.dashboard.businessUnits.find((unit) => unit.id === "acp")?.actual.revenue, 30);
-  assert.equal(first.dashboard.businessUnits.find((unit) => unit.id === "hcp")?.actual.netProfit, 1);
+  const hcp = first.dashboard.businessUnits.find((unit) => unit.id === "hcp");
+  assert.equal(hcp?.kind, "offer");
+  assert.equal(hcp?.actual.netProfit, 1);
   assert.equal(first.dashboard.trend.find((point) => point.period === "2026-05-31")?.revenue, 390);
   const atlanticOcean = first.dashboard.businessUnits.find((unit) => unit.id === "atlantic-ocean");
   assert.equal(atlanticOcean?.latestPeriodLabel, "Atlantic Ocean Performance");
