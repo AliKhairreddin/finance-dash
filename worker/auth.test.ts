@@ -43,8 +43,8 @@ class FakeTelegramOtpState {
     this.state = cancelTelegramOtpTransition(this.state, challengeId, now);
   }
 
-  async ensureWebhook() {
-    return false;
+  async pollOnboarding() {
+    return 0;
   }
 }
 
@@ -53,7 +53,6 @@ function telegramEnv(state = new FakeTelegramOtpState()) {
     AUTH_SESSION_SECRET: testSessionSecret,
     TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
     TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
-    TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
     TELEGRAM_OTP_STATE: { getByName: () => state }
   } as never;
 }

@@ -1,20 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleTelegramWebhook, parseTelegramAuthUsers } from "./telegram";
+import { parseTelegramAuthUsers, pollTelegramUpdates } from "./telegram";
 
 const baseEnv = {
-  PUBLIC_APP_URL: "https://finance.example",
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
-  TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
-  TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
-  TELEGRAM_OTP_STATE: {}
+  TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" })
 } as never;
 
-function telegramUpdate(chatId: number, firstName: string, username?: string) {
+function telegramUpdate(updateId: number, chatId: number, firstName: string, username?: string) {
   return {
-    update_id: 1,
+    update_id: updateId,
     message: {
-      message_id: 2,
+      message_id: updateId + 1,
       from: {
         id: chatId,
         is_bot: false,
@@ -25,17 +22,6 @@ function telegramUpdate(chatId: number, firstName: string, username?: string) {
       text: "hello"
     }
   };
-}
-
-function webhookRequest(update: unknown, secret = "test-webhook-secret"): Request {
-  return new Request("https://finance.example/telegram/webhook", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Telegram-Bot-Api-Secret-Token": secret
-    },
-    body: JSON.stringify(update)
-  });
 }
 
 test("Telegram user mappings normalize login names and reject ambiguous entries", () => {
@@ -50,19 +36,21 @@ test("Telegram user mappings normalize login names and reject ambiguous entries"
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264", Amin: "5518715264" })), null);
 });
 
-test("an unmapped coworker receives their chat ID by messaging the bot", async () => {
+test("an unmapped coworker receives their chat ID after messaging the bot", async () => {
   const replies: Array<{ chatId: string; text: string }> = [];
-  const response = await handleTelegramWebhook(
-    webhookRequest(telegramUpdate(777888999, "Amin", "amin_dn")),
-    baseEnv,
-    {
-      async sendMessage(_env, chatId, text) {
-        replies.push({ chatId, text });
-      }
+  const offsets: number[] = [];
+  const result = await pollTelegramUpdates(baseEnv, 40, {
+    async getUpdates(_env, offset) {
+      offsets.push(offset);
+      return [telegramUpdate(40, 777888999, "Amin", "amin_dn")];
+    },
+    async sendMessage(_env, chatId, text) {
+      replies.push({ chatId, text });
     }
-  );
+  });
 
-  assert.equal(response?.status, 204);
+  assert.deepEqual(offsets, [40]);
+  assert.deepEqual(result, { nextOffset: 41, processed: 1 });
   assert.deepEqual(replies, [{
     chatId: "777888999",
     text: "Hi Amin (@amin_dn). Your Finance Dash chat ID is 777888999. Send this chat ID to your dashboard administrator together with the username you want to use."
@@ -71,55 +59,74 @@ test("an unmapped coworker receives their chat ID by messaging the bot", async (
 
 test("a mapped user receives a connection confirmation", async () => {
   const replies: string[] = [];
-  const response = await handleTelegramWebhook(
-    webhookRequest(telegramUpdate(5518715264, "Ali")),
-    baseEnv,
-    {
-      async sendMessage(_env, _chatId, text) {
-        replies.push(text);
-      }
+  const result = await pollTelegramUpdates(baseEnv, 100, {
+    async getUpdates() {
+      return [telegramUpdate(100, 5518715264, "Ali")];
+    },
+    async sendMessage(_env, _chatId, text) {
+      replies.push(text);
     }
-  );
+  });
 
-  assert.equal(response?.status, 204);
+  assert.deepEqual(result, { nextOffset: 101, processed: 1 });
   assert.deepEqual(replies, [
     "Hi Ali. You are connected to Finance Dash as Ali. You can receive sign-in codes here."
   ]);
 });
 
-test("webhook requests require Telegram's configured secret header", async () => {
+test("group messages are ignored while their update offset advances", async () => {
   let sent = false;
-  const response = await handleTelegramWebhook(
-    webhookRequest(telegramUpdate(777888999, "Amin"), "wrong-secret"),
-    baseEnv,
-    { async sendMessage() { sent = true; } }
-  );
-  assert.equal(response?.status, 404);
+  const groupUpdate = telegramUpdate(72, 777888999, "Amin") as Record<string, any>;
+  groupUpdate.message.chat.type = "group";
+  const result = await pollTelegramUpdates(baseEnv, 72, {
+    async getUpdates() { return [groupUpdate]; },
+    async sendMessage() { sent = true; }
+  });
+
+  assert.deepEqual(result, { nextOffset: 73, processed: 1 });
   assert.equal(sent, false);
 });
 
-test("group messages and malformed updates are ignored", async () => {
-  let sent = false;
-  const groupUpdate = telegramUpdate(777888999, "Amin") as Record<string, any>;
-  groupUpdate.message.chat.type = "group";
-  const groupResponse = await handleTelegramWebhook(
-    webhookRequest(groupUpdate),
-    baseEnv,
-    { async sendMessage() { sent = true; } }
-  );
-  assert.equal(groupResponse?.status, 204);
-  assert.equal(sent, false);
+test("already-consumed updates are skipped without duplicate replies", async () => {
+  let sends = 0;
+  const result = await pollTelegramUpdates(baseEnv, 51, {
+    async getUpdates() {
+      return [telegramUpdate(50, 777888999, "Amin"), telegramUpdate(51, 777888999, "Amin")];
+    },
+    async sendMessage() { sends += 1; }
+  });
 
-  const malformedResponse = await handleTelegramWebhook(
-    new Request("https://finance.example/telegram/webhook", {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain",
-        "X-Telegram-Bot-Api-Secret-Token": "test-webhook-secret"
-      },
-      body: "not-json"
-    }),
-    baseEnv
+  assert.deepEqual(result, { nextOffset: 52, processed: 1 });
+  assert.equal(sends, 1);
+});
+
+test("invalid polling offsets, mappings, and update IDs fail closed", async () => {
+  await assert.rejects(() => pollTelegramUpdates(baseEnv, -1), /offset was invalid/);
+  await assert.rejects(
+    () => pollTelegramUpdates(
+      {
+        ...(baseEnv as unknown as Record<string, unknown>),
+        TELEGRAM_AUTH_USERS_JSON: "not-json"
+      } as never,
+      0,
+      { async getUpdates() { return []; } }
+    ),
+    /mapping was invalid/
   );
-  assert.equal(malformedResponse?.status, 400);
+  await assert.rejects(
+    () => pollTelegramUpdates(baseEnv, 0, {
+      async getUpdates() { return [{ update_id: "invalid" }]; }
+    }),
+    /update was invalid/
+  );
+});
+
+test("a failed reply leaves the update available for the next polling run", async () => {
+  await assert.rejects(
+    () => pollTelegramUpdates(baseEnv, 90, {
+      async getUpdates() { return [telegramUpdate(90, 777888999, "Amin")]; },
+      async sendMessage() { throw new Error("Telegram send failed"); }
+    }),
+    /Telegram send failed/
+  );
 });

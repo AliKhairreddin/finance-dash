@@ -1,8 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
-
-const TELEGRAM_WEBHOOK_PATH = "/telegram/webhook";
-const TELEGRAM_UPDATE_BODY_LIMIT_BYTES = 64 * 1024;
-const textEncoder = new TextEncoder();
+const TELEGRAM_API_BODY_LIMIT_BYTES = 1024 * 1024;
+const TELEGRAM_UPDATE_LIMIT = 100;
 
 export interface TelegramAuthUser {
   username: string;
@@ -12,11 +9,9 @@ export interface TelegramAuthUser {
 
 type TelegramEnv = Pick<
   WorkerEnv,
-  | "PUBLIC_APP_URL"
   | "TELEGRAM_AUTH_USERS_JSON"
   | "TELEGRAM_BOT_TOKEN"
   | "TELEGRAM_OTP_STATE"
-  | "TELEGRAM_WEBHOOK_SECRET"
 >;
 
 interface TelegramApiEnvelope {
@@ -30,7 +25,13 @@ interface TelegramPrivateMessage {
   telegramUsername?: string;
 }
 
-interface TelegramWebhookDependencies {
+interface TelegramUpdate {
+  updateId: number;
+  message: TelegramPrivateMessage | null;
+}
+
+interface TelegramPollingDependencies {
+  getUpdates?: typeof getTelegramUpdates;
   sendMessage?: typeof sendTelegramMessage;
 }
 
@@ -73,17 +74,47 @@ export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthU
   return users.length > 0 ? users : null;
 }
 
-async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {
-  const [leftDigest, rightDigest] = await Promise.all([
-    crypto.subtle.digest("SHA-256", textEncoder.encode(left)),
-    crypto.subtle.digest("SHA-256", textEncoder.encode(right))
-  ]);
-  return timingSafeEqual(new Uint8Array(leftDigest), new Uint8Array(rightDigest));
-}
-
 function telegramApiEnvelope(value: unknown): TelegramApiEnvelope | null {
   if (!isRecord(value) || typeof value.ok !== "boolean") return null;
   return { ok: value.ok, ...(Object.hasOwn(value, "result") ? { result: value.result } : {}) };
+}
+
+async function readBoundedResponseJson(response: Response): Promise<unknown> {
+  const contentLengthHeader = response.headers.get("Content-Length");
+  const contentLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+  if (
+    contentLength !== null &&
+    (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > TELEGRAM_API_BODY_LIMIT_BYTES)
+  ) {
+    throw new Error("Telegram API response was invalid");
+  }
+  if (!response.body) throw new Error("Telegram API response was invalid");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > TELEGRAM_API_BODY_LIMIT_BYTES) {
+        await reader.cancel();
+        throw new Error("Telegram API response was invalid");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(body));
 }
 
 async function telegramApi(
@@ -104,9 +135,9 @@ async function telegramApi(
 
   let envelope: TelegramApiEnvelope | null = null;
   try {
-    envelope = telegramApiEnvelope(await response.json());
+    envelope = telegramApiEnvelope(await readBoundedResponseJson(response));
   } catch {
-    // The API response is expected to be a small JSON envelope.
+    // Every Bot API response is expected to use Telegram's bounded JSON envelope.
   }
   if (!response.ok || !envelope?.ok) {
     throw new Error(`Telegram ${method} request failed`);
@@ -127,73 +158,26 @@ export async function sendTelegramMessage(
   });
 }
 
-export async function setTelegramWebhook(
-  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN" | "TELEGRAM_WEBHOOK_SECRET">,
-  url: string
+export async function deleteTelegramWebhook(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">
 ): Promise<void> {
-  await telegramApi(env, "setWebhook", {
-    url,
-    secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-    allowed_updates: ["message"],
-    drop_pending_updates: false
+  await telegramApi(env, "deleteWebhook", { drop_pending_updates: false });
+}
+
+async function getTelegramUpdates(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
+  offset: number
+): Promise<unknown[]> {
+  const result = await telegramApi(env, "getUpdates", {
+    offset,
+    limit: TELEGRAM_UPDATE_LIMIT,
+    timeout: 0,
+    allowed_updates: ["message"]
   });
-}
-
-function configuredWebhookUrl(env: Pick<TelegramEnv, "PUBLIC_APP_URL">): string | null {
-  try {
-    const appUrl = new URL(env.PUBLIC_APP_URL);
-    if (appUrl.protocol !== "https:") return null;
-    return new URL(TELEGRAM_WEBHOOK_PATH, appUrl.origin).toString();
-  } catch {
-    return null;
+  if (!Array.isArray(result) || result.length > TELEGRAM_UPDATE_LIMIT) {
+    throw new Error("Telegram getUpdates response was invalid");
   }
-}
-
-export async function ensureTelegramWebhook(env: TelegramEnv): Promise<void> {
-  const webhookUrl = configuredWebhookUrl(env);
-  if (!webhookUrl || !env.TELEGRAM_OTP_STATE) {
-    throw new Error("Telegram webhook configuration is unavailable");
-  }
-  await env.TELEGRAM_OTP_STATE.getByName("telegram-webhook").ensureWebhook(webhookUrl);
-}
-
-async function readBoundedJson(request: Request, maximumBytes: number): Promise<unknown> {
-  const contentType = request.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
-  const contentLengthHeader = request.headers.get("Content-Length");
-  const contentLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
-  if (
-    contentType !== "application/json" ||
-    (contentLength !== null && (!Number.isFinite(contentLength) || contentLength > maximumBytes)) ||
-    !request.body
-  ) {
-    throw new Error("Invalid Telegram update");
-  }
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maximumBytes) {
-        await reader.cancel();
-        throw new Error("Invalid Telegram update");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return JSON.parse(new TextDecoder().decode(body));
+  return result;
 }
 
 function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
@@ -212,47 +196,53 @@ function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
   };
 }
 
-export async function handleTelegramWebhook(
-  request: Request,
-  env: TelegramEnv,
-  dependencies: TelegramWebhookDependencies = {}
-): Promise<Response | null> {
-  const webhookUrl = configuredWebhookUrl(env);
-  const requestUrl = new URL(request.url);
-  if (!webhookUrl || requestUrl.origin !== new URL(webhookUrl).origin || requestUrl.pathname !== TELEGRAM_WEBHOOK_PATH) {
-    return null;
+function telegramUpdate(value: unknown): TelegramUpdate {
+  if (!isRecord(value) || typeof value.update_id !== "number" || !Number.isSafeInteger(value.update_id)) {
+    throw new Error("Telegram update was invalid");
   }
-  if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
-
-  const providedSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
-  if (
-    !env.TELEGRAM_WEBHOOK_SECRET ||
-    !(await timingSafeStringEqual(providedSecret, env.TELEGRAM_WEBHOOK_SECRET))
-  ) {
-    return new Response(null, { status: 404 });
+  if (value.update_id < 0 || value.update_id >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("Telegram update ID was invalid");
   }
+  return { updateId: value.update_id, message: telegramPrivateMessage(value) };
+}
 
-  let update: unknown;
-  try {
-    update = await readBoundedJson(request, TELEGRAM_UPDATE_BODY_LIMIT_BYTES);
-  } catch {
-    return new Response(null, { status: 400 });
-  }
-
-  const message = telegramPrivateMessage(update);
-  if (!message) return new Response(null, { status: 204 });
-
-  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? [];
+function onboardingReply(message: TelegramPrivateMessage, users: TelegramAuthUser[]): string {
   const configuredUser = users.find((user) => user.chatId === message.chatId);
   const telegramLabel = message.telegramUsername ? ` (@${message.telegramUsername})` : "";
-  const reply = configuredUser
+  return configuredUser
     ? `Hi ${message.firstName}. You are connected to Finance Dash as ${configuredUser.username}. You can receive sign-in codes here.`
     : `Hi ${message.firstName}${telegramLabel}. Your Finance Dash chat ID is ${message.chatId}. Send this chat ID to your dashboard administrator together with the username you want to use.`;
+}
 
-  try {
-    await (dependencies.sendMessage ?? sendTelegramMessage)(env, message.chatId, reply);
-  } catch {
-    return new Response(null, { status: 502 });
+export async function pollTelegramUpdates(
+  env: Pick<TelegramEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN">,
+  offset: number,
+  dependencies: TelegramPollingDependencies = {}
+): Promise<{ nextOffset: number; processed: number }> {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Telegram update offset was invalid");
+  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  if (!users) throw new Error("Telegram user mapping was invalid");
+  const values = await (dependencies.getUpdates ?? getTelegramUpdates)(env, offset);
+  let nextOffset = offset;
+  let processed = 0;
+
+  for (const value of values) {
+    const update = telegramUpdate(value);
+    if (update.updateId < nextOffset) continue;
+    if (update.message) {
+      await (dependencies.sendMessage ?? sendTelegramMessage)(
+        env,
+        update.message.chatId,
+        onboardingReply(update.message, users)
+      );
+    }
+    nextOffset = update.updateId + 1;
+    processed += 1;
   }
-  return new Response(null, { status: 204 });
+  return { nextOffset, processed };
+}
+
+export async function pollTelegramOnboarding(env: TelegramEnv): Promise<number> {
+  if (!env.TELEGRAM_OTP_STATE) throw new Error("Telegram polling state is unavailable");
+  return env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").pollOnboarding();
 }

@@ -49,14 +49,13 @@ const workerTestAuth = {
   PUBLIC_APP_URL: "https://finance.example",
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ "finance-test": "5518715264" }),
-  TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
   TELEGRAM_OTP_STATE: {
     getByName() {
       return {
         async issueOtp() { throw new Error("Unexpected OTP request"); },
         async verifyOtp() { throw new Error("Unexpected OTP verification"); },
         async cancelOtp() {},
-        async ensureWebhook() { return false; }
+        async pollOnboarding() { return 0; }
       };
     }
   }
@@ -804,6 +803,31 @@ test("scheduled handler ignores the non-09:00 Lebanon cron occurrence", async ()
     { scheduledTime: Date.parse("2026-07-20T07:00:00.000Z"), cron: "0 6,7 * * 1", noRetry() {} },
     { ASSETS: { fetch: async () => new Response("asset") } } as never
   );
+});
+
+test("one-minute scheduled handler polls Telegram onboarding updates", async () => {
+  let calls = 0;
+  await worker.scheduled(
+    {
+      cron: "* * * * *",
+      scheduledTime: new Date("2026-08-21T20:00:00.000Z").getTime(),
+      noRetry() {}
+    },
+    {
+      TELEGRAM_OTP_STATE: {
+        getByName(name: string) {
+          assert.equal(name, "telegram-onboarding");
+          return {
+            async pollOnboarding() {
+              calls += 1;
+              return 0;
+            }
+          };
+        }
+      }
+    } as never
+  );
+  assert.equal(calls, 1);
 });
 
 test("five-minute scheduled handler drains the transaction classification backlog", async () => {

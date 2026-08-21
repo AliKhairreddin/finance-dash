@@ -183,10 +183,7 @@ import {
   createBankAnalyticsJobIdentity
 } from "../shared/analyticsJob";
 import { enforceSiteAuthentication } from "./auth";
-import {
-  ensureTelegramWebhook,
-  handleTelegramWebhook
-} from "./telegram";
+import { pollTelegramOnboarding } from "./telegram";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -6477,23 +6474,6 @@ export default {
     env: Env,
     executionContext?: ExecutionContext
   ): Promise<Response> {
-    const telegramWebhookResponse = await handleTelegramWebhook(request, env);
-    if (telegramWebhookResponse) return telegramWebhookResponse;
-
-    if (executionContext) {
-      const hostname = new URL(request.url).hostname;
-      if (hostname !== "slash.thatcanadian.dev") {
-        executionContext.waitUntil(
-          ensureTelegramWebhook(env).catch((error) => {
-            console.error(JSON.stringify({
-              event: "telegram_webhook_setup_failed",
-              message: error instanceof Error ? error.message : String(error)
-            }));
-          })
-        );
-      }
-    }
-
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;
 
@@ -6505,6 +6485,21 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
+    if (controller.cron === "* * * * *") {
+      try {
+        const processed = await pollTelegramOnboarding(env);
+        if (processed > 0) {
+          console.log(JSON.stringify({ event: "telegram_onboarding_updates_processed", processed }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "telegram_onboarding_poll_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
     if (controller.cron === "*/5 * * * *") {
       try {
         await enqueueSlashCardMetadataRepair(env);

@@ -1,5 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
-import { setTelegramWebhook } from "./telegram";
+import {
+  deleteTelegramWebhook,
+  pollTelegramUpdates
+} from "./telegram";
 import {
   cancelTelegramOtpTransition,
   issueTelegramOtpTransition,
@@ -12,11 +15,12 @@ import {
 } from "./telegramOtp";
 
 const OTP_STATE_KEY = "otp-state";
-const WEBHOOK_CONFIGURATION_KEY = "webhook-configuration";
-const WEBHOOK_RECHECK_MS = 24 * 60 * 60 * 1000;
+const POLLING_CONFIGURATION_KEY = "polling-configuration";
+const POLLING_OFFSET_KEY = "polling-offset";
+const POLLING_CONFIGURATION_RECHECK_MS = 24 * 60 * 60 * 1000;
 const textEncoder = new TextEncoder();
 
-interface StoredWebhookConfiguration {
+interface StoredPollingConfiguration {
   fingerprint: string;
   configuredAt: number;
 }
@@ -27,10 +31,10 @@ function base64UrlEncode(value: Uint8Array<ArrayBuffer>): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
 }
 
-async function configurationFingerprint(env: WorkerEnv, url: string): Promise<string> {
+async function configurationFingerprint(env: WorkerEnv): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    textEncoder.encode(`${env.TELEGRAM_BOT_TOKEN}\u0000${env.TELEGRAM_WEBHOOK_SECRET}\u0000${url}`)
+    textEncoder.encode(`finance-telegram-polling.v1\u0000${env.TELEGRAM_BOT_TOKEN}`)
   );
   return base64UrlEncode(new Uint8Array(digest));
 }
@@ -88,21 +92,35 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
     });
   }
 
-  async ensureWebhook(url: string): Promise<boolean> {
+  async pollOnboarding(): Promise<number> {
     return this.serialize(async () => {
       const now = Date.now();
-      const fingerprint = await configurationFingerprint(this.env, url);
-      const stored = await this.ctx.storage.get<StoredWebhookConfiguration>(WEBHOOK_CONFIGURATION_KEY);
-      if (
-        stored?.fingerprint === fingerprint &&
-        stored.configuredAt > now - WEBHOOK_RECHECK_MS
-      ) {
-        return false;
+      const fingerprint = await configurationFingerprint(this.env);
+      const stored = await this.ctx.storage.get<StoredPollingConfiguration>(POLLING_CONFIGURATION_KEY);
+      const tokenChanged = stored?.fingerprint !== fingerprint;
+      const needsConfiguration = tokenChanged
+        || !stored
+        || stored.configuredAt <= now - POLLING_CONFIGURATION_RECHECK_MS;
+      if (needsConfiguration) {
+        await deleteTelegramWebhook(this.env);
+        await this.ctx.storage.put(POLLING_CONFIGURATION_KEY, { fingerprint, configuredAt: now });
+        if (tokenChanged) await this.ctx.storage.delete(POLLING_OFFSET_KEY);
       }
 
-      await setTelegramWebhook(this.env, url);
-      await this.ctx.storage.put(WEBHOOK_CONFIGURATION_KEY, { fingerprint, configuredAt: now });
-      return true;
+      const offset = await this.ctx.storage.get<number>(POLLING_OFFSET_KEY) ?? 0;
+      let result: Awaited<ReturnType<typeof pollTelegramUpdates>>;
+      try {
+        result = await pollTelegramUpdates(this.env, offset);
+      } catch (error) {
+        if (needsConfiguration) throw error;
+        await deleteTelegramWebhook(this.env);
+        await this.ctx.storage.put(POLLING_CONFIGURATION_KEY, { fingerprint, configuredAt: now });
+        result = await pollTelegramUpdates(this.env, offset);
+      }
+      if (result.nextOffset !== offset) {
+        await this.ctx.storage.put(POLLING_OFFSET_KEY, result.nextOffset);
+      }
+      return result.processed;
     });
   }
 

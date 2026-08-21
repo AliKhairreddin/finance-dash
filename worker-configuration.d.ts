@@ -58,7 +58,6 @@ interface __BaseEnv_WorkerEnv {
 	AUTH_SESSION_SECRET: string;
 	TELEGRAM_BOT_TOKEN: string;
 	TELEGRAM_AUTH_USERS_JSON: string;
-	TELEGRAM_WEBHOOK_SECRET: string;
 	SLASH_AUTH_USERNAME: string;
 	SLASH_AUTH_PASSWORD_HASH: string;
 	OPENROUTER_API_KEY: string;
