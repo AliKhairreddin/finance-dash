@@ -24,15 +24,17 @@ function telegramUpdate(updateId: number, chatId: number, firstName: string, use
   };
 }
 
-test("Telegram user mappings normalize login names and reject ambiguous entries", () => {
-  assert.deepEqual(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264" })), [{
-    username: "Ali",
-    normalizedUsername: "ali",
-    chatId: "5518715264"
-  }]);
+test("Telegram user mappings normalize login names, including internal spaces", () => {
+  assert.deepEqual(parseTelegramAuthUsers(JSON.stringify({
+    Ali: "5518715264",
+    "  Ali   M  ": "6064572340"
+  })), [
+    { username: "Ali", normalizedUsername: "ali", chatId: "5518715264" },
+    { username: "Ali M", normalizedUsername: "ali m", chatId: "6064572340" }
+  ]);
   assert.equal(parseTelegramAuthUsers("not-json"), null);
-  assert.equal(parseTelegramAuthUsers(JSON.stringify({ "Ali Smith": "5518715264" })), null);
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264", ali: "123456789" })), null);
+  assert.equal(parseTelegramAuthUsers(JSON.stringify({ "Ali M": "5518715264", "ali  m": "123456789" })), null);
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264", Amin: "5518715264" })), null);
 });
 

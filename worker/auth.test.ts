@@ -52,7 +52,10 @@ function telegramEnv(state = new FakeTelegramOtpState()) {
   return {
     AUTH_SESSION_SECRET: testSessionSecret,
     TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
-    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({
+      Ali: "5518715264",
+      "Ali M": "6064572340"
+    }),
     TELEGRAM_OTP_STATE: { getByName: () => state }
   } as never;
 }
@@ -216,7 +219,7 @@ test("Telegram OTP creates a secure session that authenticates the next request"
   const requestResponse = await enforceSiteAuthentication(
     formRequest("https://finance.example/login", {
       step: "request",
-      username: "Ali",
+      username: "  Ali   M ",
       returnTo: "/income"
     }),
     env,
@@ -224,11 +227,11 @@ test("Telegram OTP creates a secure session that authenticates the next request"
   );
   assert.equal(requestResponse?.status, 200);
   assert.deepEqual(delivered, [{
-    chatId: "5518715264",
+    chatId: "6064572340",
     text: "Your Finance Dash sign-in code is 123456. It expires in 5 minutes. If you didn’t request this code, you can ignore this message.",
     protected: true
   }]);
-  assert.match(await requestResponse?.text() ?? "", /Enter the 6-digit code sent to Ali on Telegram/);
+  assert.match(await requestResponse?.text() ?? "", /Enter the 6-digit code sent to Ali M on Telegram/);
   const loginCookie = cookieFrom(requestResponse as Response, "__Host-finance_login");
 
   const verifyResponse = await enforceSiteAuthentication(

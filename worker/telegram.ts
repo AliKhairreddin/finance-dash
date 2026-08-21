@@ -40,7 +40,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function normalizeFinanceUsername(value: string): string {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase().replace(/\s+/gu, " ");
 }
 
 export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthUser[] | null {
@@ -57,10 +57,11 @@ export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthU
   const normalizedUsernames = new Set<string>();
   const chatIds = new Set<string>();
   for (const [username, chatIdValue] of Object.entries(parsed)) {
-    const normalizedUsername = normalizeFinanceUsername(username);
+    const displayUsername = username.trim().replace(/\s+/gu, " ");
+    const normalizedUsername = normalizeFinanceUsername(displayUsername);
     const chatId = typeof chatIdValue === "string" ? chatIdValue.trim() : "";
     if (
-      !/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(normalizedUsername) ||
+      !/^[a-z0-9][a-z0-9._ -]{0,63}$/u.test(normalizedUsername) ||
       !/^[1-9][0-9]{0,19}$/u.test(chatId) ||
       normalizedUsernames.has(normalizedUsername) ||
       chatIds.has(chatId)
@@ -69,7 +70,7 @@ export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthU
     }
     normalizedUsernames.add(normalizedUsername);
     chatIds.add(chatId);
-    users.push({ username: username.trim(), normalizedUsername, chatId });
+    users.push({ username: displayUsername, normalizedUsername, chatId });
   }
   return users.length > 0 ? users : null;
 }
