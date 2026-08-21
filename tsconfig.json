@@ -20,6 +20,6 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src", "server", "shared", "worker", "convex", "scripts"],
+  "include": ["src", "server", "shared", "worker", "convex", "scripts", "worker-configuration.d.ts"],
   "references": []
 }

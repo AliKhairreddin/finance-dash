@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { WorkerEnv } from "../worker-configuration";
 import type { Invoice, Transaction } from "../shared/types";
 import { createAuthSessionToken } from "./auth";
 import worker, {
@@ -16,7 +15,7 @@ import worker, {
   incrementalBankDateRange,
   missingBankActivityRanges,
   mergeInvoices
-} from "./index";
+} from "./handler";
 
 test("automatic bank transaction sync excludes manual Wise imports", () => {
   assert.deepEqual(automaticTransactionBankSources, ["revolut", "slash", "amex"]);
@@ -46,16 +45,28 @@ test("saved Wise balance accounts do not depend on a transaction sync record", (
 });
 
 const workerTestAuth = {
-  AUTH_USERNAME: "finance-test",
-  AUTH_PASSWORD_HASH:
-    "pbkdf2-sha256$100000$MDEyMzQ1Njc4OWFiY2RlZg$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  AUTH_SESSION_SECRET: "worker-test-session-secret"
+  AUTH_SESSION_SECRET: "worker-test-session-secret",
+  PUBLIC_APP_URL: "https://finance.example",
+  TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
+  TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ "finance-test": "5518715264" }),
+  TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
+  TELEGRAM_OTP_STATE: {
+    getByName() {
+      return {
+        async issueOtp() { throw new Error("Unexpected OTP request"); },
+        async verifyOtp() { throw new Error("Unexpected OTP verification"); },
+        async cancelOtp() {},
+        async ensureWebhook() { return false; }
+      };
+    }
+  }
 };
 
 async function authenticatedRequest(url: string, init: RequestInit = {}): Promise<Request> {
   const token = await createAuthSessionToken(
     workerTestAuth.AUTH_SESSION_SECRET,
-    new URL(url).hostname
+    new URL(url).hostname,
+    "finance-test"
   );
   const headers = new Headers(init.headers);
   headers.set("Cookie", `__Host-finance_session=${token}`);

@@ -1,6 +1,6 @@
 import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { argv, stdin, stdout } from "node:process";
+import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 
 // Cloudflare Workers supports PBKDF2 iteration counts up to 100,000.
@@ -47,11 +47,8 @@ async function readHidden(prompt: string): Promise<string> {
   });
 }
 
-const isSlashCredential = argv.includes("--slash");
 const prompt = createInterface({ input: stdin, output: stdout });
-const username = (await prompt.question(
-  isSlashCredential ? "Slash-only authentication username: " : "Authentication username: "
-)).trim();
+const username = (await prompt.question("Slash-only authentication username: ")).trim();
 prompt.close();
 if (!username) throw new Error("Username is required.");
 
@@ -67,18 +64,10 @@ const verifier = [
   passwordHash.toString("base64url")
 ].join("$");
 
-const secrets = JSON.stringify(
-  isSlashCredential
-    ? {
-        SLASH_AUTH_USERNAME: username,
-        SLASH_AUTH_PASSWORD_HASH: verifier
-      }
-    : {
-        AUTH_USERNAME: username,
-        AUTH_PASSWORD_HASH: verifier,
-        AUTH_SESSION_SECRET: randomBytes(32).toString("base64url")
-      }
-);
+const secrets = JSON.stringify({
+  SLASH_AUTH_USERNAME: username,
+  SLASH_AUTH_PASSWORD_HASH: verifier
+});
 const result = spawnSync("npx", ["wrangler", "secret", "bulk"], {
   cwd: process.cwd(),
   encoding: "utf8",
@@ -89,6 +78,6 @@ if (result.error) throw result.error;
 if (result.status !== 0) throw new Error(`Wrangler exited with status ${result.status ?? "unknown"}.`);
 
 console.log(
-  `${isSlashCredential ? "Slash-only authentication" : "Authentication"} secrets configured. `
+  "Slash-only authentication secrets configured. "
   + "The password and derived values were not printed or written to disk."
 );

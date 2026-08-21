@@ -1,24 +1,64 @@
 /* eslint-disable */
-// Generated from wrangler.jsonc and .env.example; runtime library types come from tsconfig.
-export {};
-
+// Worker bindings mirror wrangler.jsonc and .env.example. Runtime declarations stay
+// local because global Cloudflare DOM types conflict with the browser application.
 interface Fetcher {
 	fetch(request: Request): Promise<Response>;
 }
 
-interface __BaseEnv_Env {
+interface DurableObjectStorage {
+	get<T>(key: string): Promise<T | undefined>;
+	put<T>(key: string, value: T): Promise<void>;
+	delete(key: string): Promise<boolean>;
+	setAlarm(scheduledTime: number | Date): Promise<void>;
+	deleteAlarm(): Promise<void>;
+}
+
+interface DurableObjectState {
+	readonly storage: DurableObjectStorage;
+}
+
+interface DurableObjectNamespace<T> {
+	getByName(name: string): T;
+}
+
+declare module "cloudflare:workers" {
+	export class DurableObject<Env = WorkerEnv> {
+		protected readonly ctx: DurableObjectState;
+		protected readonly env: Env;
+		constructor(ctx: DurableObjectState, env: Env);
+	}
+}
+
+interface ExecutionContext {
+	waitUntil(promise: Promise<unknown>): void;
+}
+
+interface ScheduledController {
+	readonly scheduledTime: number;
+	readonly cron: string;
+	noRetry(): void;
+}
+
+interface ExportedHandler<Env> {
+	fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
+	scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
+}
+interface __BaseEnv_WorkerEnv {
 	ASSETS: Fetcher;
-	PUBLIC_APP_URL: string;
+	PUBLIC_APP_URL: "https://finance.thatcanadian.dev";
 	PORT: string;
 	VITE_API_BASE: string;
 	VITE_CONVEX_URL: string;
 	CONVEX_URL: string;
 	CONVEX_DEPLOYMENT: string;
 	CONVEX_SERVICE_TOKEN: string;
+	BANK_LEDGER_LEGACY_DISPOSITION: string;
+	BANK_LEDGER_ORPHAN_ASSIGNMENT_DISPOSITION: string;
 	MANAGEMENT_REPORT_IMPORT_TOKEN: string;
-	AUTH_USERNAME: string;
-	AUTH_PASSWORD_HASH: string;
 	AUTH_SESSION_SECRET: string;
+	TELEGRAM_BOT_TOKEN: string;
+	TELEGRAM_AUTH_USERS_JSON: string;
+	TELEGRAM_WEBHOOK_SECRET: string;
 	SLASH_AUTH_USERNAME: string;
 	SLASH_AUTH_PASSWORD_HASH: string;
 	OPENROUTER_API_KEY: string;
@@ -37,8 +77,8 @@ interface __BaseEnv_Env {
 	SLASH_LEGAL_ENTITY_ID: string;
 	SLASH_BASE_URL: string;
 	AMEX_TOKEN_URL: string;
-	AMEX_API_BASE_URL: string;
 	AMEX_CONNECTION_ID: string;
+	AMEX_API_BASE_URL: string;
 	AMEX_CLIENT_ID: string;
 	AMEX_CLIENT_SECRET: string;
 	AMEX_REFRESH_TOKEN: string;
@@ -64,35 +104,13 @@ interface __BaseEnv_Env {
 	KISSTERRA_TUNE_API_KEY: string;
 	KISSTERRA_TUNE_API_BASE_URL: string;
 	COINBASE_SPOT_PRICES_URL: string;
+	TELEGRAM_OTP_STATE: DurableObjectNamespace<import("./worker/index").TelegramOtpState>;
 }
-
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./worker/index");
+		durableNamespaces: "TelegramOtpState";
 	}
-	interface Env extends __BaseEnv_Env {}
+	interface Env extends __BaseEnv_WorkerEnv {}
 }
-
-interface Env extends __BaseEnv_Env {}
-
-type StringifyValues<EnvType extends Record<string, unknown>> = {
-	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
-};
-
-declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<__BaseEnv_Env> {}
-}
-
-export type WorkerEnv = Env;
-export interface WorkerScheduledController {
-	readonly scheduledTime: number;
-	readonly cron: string;
-	noRetry(): void;
-}
-export interface WorkerExecutionContext {
-	waitUntil(promise: Promise<unknown>): void;
-}
-export interface WorkerExportedHandler {
-	fetch(request: Request, env: Env, ctx: WorkerExecutionContext): Response | Promise<Response>;
-	scheduled?(controller: WorkerScheduledController, env: Env, ctx: WorkerExecutionContext): void | Promise<void>;
-}
+interface WorkerEnv extends __BaseEnv_WorkerEnv {}

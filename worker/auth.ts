@@ -1,7 +1,14 @@
-import type { WorkerEnv as Env } from "../worker-configuration";
 import { timingSafeEqual } from "node:crypto";
+import {
+  normalizeFinanceUsername,
+  parseTelegramAuthUsers,
+  sendTelegramMessage,
+  type TelegramAuthUser
+} from "./telegram";
+import { TELEGRAM_OTP_EXPIRY_MS } from "./telegramOtp";
 
 const AUTH_COOKIE_NAME = "__Host-finance_session";
+const LOGIN_COOKIE_NAME = "__Host-finance_login";
 const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
@@ -18,12 +25,13 @@ const PUBLIC_APP_ASSET_PATHS = new Set([
 ]);
 
 type AuthEnv = Pick<
-  Env,
-  | "AUTH_USERNAME"
-  | "AUTH_PASSWORD_HASH"
+  WorkerEnv,
   | "AUTH_SESSION_SECRET"
-  | "SLASH_AUTH_USERNAME"
   | "SLASH_AUTH_PASSWORD_HASH"
+  | "SLASH_AUTH_USERNAME"
+  | "TELEGRAM_AUTH_USERS_JSON"
+  | "TELEGRAM_BOT_TOKEN"
+  | "TELEGRAM_OTP_STATE"
 >;
 
 interface AuthCredential {
@@ -31,15 +39,36 @@ interface AuthCredential {
   passwordHash: string;
 }
 
-interface AuthConfig {
-  credentials: AuthCredential[];
-  sessionSecret: string;
-}
-
 interface PasswordVerifier {
   iterations: number;
   salt: Uint8Array<ArrayBuffer>;
   hash: Uint8Array<ArrayBuffer>;
+}
+
+interface TelegramAuthConfig {
+  users: TelegramAuthUser[];
+  sessionSecret: string;
+}
+
+interface LoginChallenge {
+  username: string;
+  challengeId: string;
+}
+
+interface AuthDependencies {
+  now?: () => number;
+  generateOtp?: () => string;
+  sendTelegramMessage?: typeof sendTelegramMessage;
+}
+
+type LoginMode = "telegram-username" | "telegram-code" | "password";
+
+interface LoginPageOptions {
+  mode: LoginMode;
+  returnTo: string;
+  scriptNonce: string;
+  username?: string;
+  error?: string;
 }
 
 class InvalidLoginBodyError extends Error {}
@@ -82,39 +111,20 @@ function parsePasswordVerifier(value: string): PasswordVerifier | null {
   return { iterations, salt, hash };
 }
 
-function authConfig(env: AuthEnv, hostname: string): AuthConfig | null {
-  const username = env.AUTH_USERNAME?.trim();
-  const passwordHash = env.AUTH_PASSWORD_HASH?.trim();
+function slashCredential(env: AuthEnv): { credential: AuthCredential; sessionSecret: string } | null {
+  const username = env.SLASH_AUTH_USERNAME?.trim();
+  const passwordHash = env.SLASH_AUTH_PASSWORD_HASH?.trim();
   const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
   if (!username || !passwordHash || !sessionSecret || !parsePasswordVerifier(passwordHash)) return null;
-
-  const credentials = [{ username, passwordHash }];
-  if (hostname === SLASH_APP_HOSTNAME) {
-    const slashUsername = env.SLASH_AUTH_USERNAME?.trim();
-    const slashPasswordHash = env.SLASH_AUTH_PASSWORD_HASH?.trim();
-    if (!slashUsername || !slashPasswordHash || !parsePasswordVerifier(slashPasswordHash)) return null;
-    credentials.push({ username: slashUsername, passwordHash: slashPasswordHash });
-  }
-
-  return { credentials, sessionSecret };
+  return { credential: { username, passwordHash }, sessionSecret };
 }
 
-async function derivePasswordHash(
-  password: string,
-  verifier: PasswordVerifier
-): Promise<Uint8Array<ArrayBuffer>> {
-  const key = await crypto.subtle.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const derived = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: verifier.salt,
-      iterations: verifier.iterations
-    },
-    key,
-    256
-  );
-  return new Uint8Array(derived);
+function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
+  const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
+  const botToken = env.TELEGRAM_BOT_TOKEN?.trim();
+  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  if (!sessionSecret || !botToken || !users || !env.TELEGRAM_OTP_STATE) return null;
+  return { users, sessionSecret };
 }
 
 async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {
@@ -132,23 +142,21 @@ export async function verifyLoginCredentials(
 ): Promise<boolean> {
   const verifier = parsePasswordVerifier(config.passwordHash);
   if (!verifier || username.length > 256 || password.length > 1024) return false;
-
+  const key = await crypto.subtle.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
   const [usernameMatches, candidateHash] = await Promise.all([
     timingSafeStringEqual(username, config.username),
-    derivePasswordHash(password, verifier)
+    crypto.subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        hash: "SHA-256",
+        salt: verifier.salt,
+        iterations: verifier.iterations
+      },
+      key,
+      256
+    )
   ]);
-  return usernameMatches && timingSafeEqual(candidateHash, verifier.hash);
-}
-
-async function verifyAnyLoginCredential(
-  username: string,
-  password: string,
-  credentials: AuthCredential[]
-): Promise<boolean> {
-  const matches = await Promise.all(
-    credentials.map((credential) => verifyLoginCredentials(username, password, credential))
-  );
-  return matches.some(Boolean);
+  return usernameMatches && timingSafeEqual(new Uint8Array(candidateHash), verifier.hash);
 }
 
 async function sessionKey(secret: string): Promise<CryptoKey> {
@@ -164,13 +172,19 @@ async function sessionKey(secret: string): Promise<CryptoKey> {
 export async function createAuthSessionToken(
   secret: string,
   audience: string,
+  subject: string,
   nowMilliseconds = Date.now()
 ): Promise<string> {
   const issuedAt = Math.floor(nowMilliseconds / 1000);
   const expiresAt = issuedAt + AUTH_SESSION_SECONDS;
-  const encodedAudience = base64UrlEncode(textEncoder.encode(audience));
-  const nonce = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)));
-  const payload = `v2.${issuedAt}.${expiresAt}.${encodedAudience}.${nonce}`;
+  const payload = [
+    "v3",
+    issuedAt,
+    expiresAt,
+    base64UrlEncode(textEncoder.encode(audience)),
+    base64UrlEncode(textEncoder.encode(subject)),
+    base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)))
+  ].join(".");
   const signature = await crypto.subtle.sign("HMAC", await sessionKey(secret), textEncoder.encode(payload));
   return `${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
@@ -181,18 +195,23 @@ export async function verifyAuthSessionToken(
   expectedAudience: string,
   nowMilliseconds = Date.now()
 ): Promise<boolean> {
-  const [version, issuedAtValue, expiresAtValue, audienceValue, nonce, signatureValue, extra] = token.split(".");
-  const issuedAt = Number(issuedAtValue);
-  const expiresAt = Number(expiresAtValue);
-  const audienceBytes = base64UrlDecode(audienceValue ?? "");
+  const [version, issuedValue, expiresValue, audienceValue, subjectValue, nonce, signatureValue, extra] =
+    token.split(".");
+  const issuedAt = Number(issuedValue);
+  const expiresAt = Number(expiresValue);
+  const audience = base64UrlDecode(audienceValue ?? "");
+  const subject = base64UrlDecode(subjectValue ?? "");
   const signature = base64UrlDecode(signatureValue ?? "");
   const now = Math.floor(nowMilliseconds / 1000);
   if (
-    version !== "v2" ||
+    version !== "v3" ||
     extra !== undefined ||
     !Number.isSafeInteger(issuedAt) ||
     !Number.isSafeInteger(expiresAt) ||
-    !audienceBytes ||
+    !audience ||
+    !subject ||
+    subject.byteLength === 0 ||
+    subject.byteLength > 256 ||
     !nonce ||
     !signature ||
     signature.byteLength !== 32 ||
@@ -203,25 +222,107 @@ export async function verifyAuthSessionToken(
   ) {
     return false;
   }
-
-  const payload = `${version}.${issuedAt}.${expiresAt}.${audienceValue}.${nonce}`;
-  const signatureMatches = await crypto.subtle.verify(
-    "HMAC",
-    await sessionKey(secret),
-    signature,
-    textEncoder.encode(payload)
+  const payload = `${version}.${issuedAt}.${expiresAt}.${audienceValue}.${subjectValue}.${nonce}`;
+  return (
+    (await crypto.subtle.verify("HMAC", await sessionKey(secret), signature, textEncoder.encode(payload))) &&
+    new TextDecoder().decode(audience) === expectedAudience
   );
-  if (!signatureMatches) return false;
-  return new TextDecoder().decode(audienceBytes) === expectedAudience;
 }
 
-function cookieValue(request: Request): string | null {
-  const cookieHeader = request.headers.get("Cookie");
-  if (!cookieHeader) return null;
-  for (const cookie of cookieHeader.split(";")) {
+async function createLoginToken(
+  secret: string,
+  audience: string,
+  username: string,
+  challengeId: string,
+  expiresAtMilliseconds: number,
+  nowMilliseconds: number
+): Promise<string> {
+  const payload = [
+    "v1",
+    Math.floor(nowMilliseconds / 1000),
+    Math.floor(expiresAtMilliseconds / 1000),
+    base64UrlEncode(textEncoder.encode(audience)),
+    base64UrlEncode(textEncoder.encode(username)),
+    base64UrlEncode(textEncoder.encode(challengeId))
+  ].join(".");
+  const signature = await crypto.subtle.sign("HMAC", await sessionKey(secret), textEncoder.encode(payload));
+  return `${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
+}
+
+async function verifyLoginToken(
+  token: string,
+  secret: string,
+  expectedAudience: string,
+  nowMilliseconds: number
+): Promise<LoginChallenge | null> {
+  const [version, issuedValue, expiresValue, audienceValue, usernameValue, challengeValue, signatureValue, extra] =
+    token.split(".");
+  const issuedAt = Number(issuedValue);
+  const expiresAt = Number(expiresValue);
+  const audience = base64UrlDecode(audienceValue ?? "");
+  const username = base64UrlDecode(usernameValue ?? "");
+  const challenge = base64UrlDecode(challengeValue ?? "");
+  const signature = base64UrlDecode(signatureValue ?? "");
+  const now = Math.floor(nowMilliseconds / 1000);
+  if (
+    version !== "v1" ||
+    extra !== undefined ||
+    !Number.isSafeInteger(issuedAt) ||
+    !Number.isSafeInteger(expiresAt) ||
+    !audience ||
+    !username ||
+    username.byteLength === 0 ||
+    username.byteLength > 64 ||
+    !challenge ||
+    challenge.byteLength === 0 ||
+    challenge.byteLength > 128 ||
+    !signature ||
+    signature.byteLength !== 32 ||
+    issuedAt > now + 60 ||
+    expiresAt <= now ||
+    expiresAt <= issuedAt ||
+    expiresAt - issuedAt > Math.ceil(TELEGRAM_OTP_EXPIRY_MS / 1000)
+  ) {
+    return null;
+  }
+  const payload = `${version}.${issuedAt}.${expiresAt}.${audienceValue}.${usernameValue}.${challengeValue}`;
+  if (!(await crypto.subtle.verify("HMAC", await sessionKey(secret), signature, textEncoder.encode(payload)))) {
+    return null;
+  }
+  if (new TextDecoder().decode(audience) !== expectedAudience) return null;
+  return {
+    username: new TextDecoder().decode(username),
+    challengeId: new TextDecoder().decode(challenge)
+  };
+}
+
+async function otpCodeHash(
+  secret: string,
+  username: string,
+  challengeId: string,
+  code: string
+): Promise<string> {
+  const payload = `finance-telegram-otp.v1\u0000${username}\u0000${challengeId}\u0000${code}`;
+  const signature = await crypto.subtle.sign("HMAC", await sessionKey(secret), textEncoder.encode(payload));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+function generateTelegramOtp(): string {
+  const range = 1_000_000;
+  const maximum = 0x1_0000_0000 - (0x1_0000_0000 % range);
+  const value = new Uint32Array(1);
+  do crypto.getRandomValues(value); while (value[0] >= maximum);
+  return String(value[0] % range).padStart(6, "0");
+}
+
+function cookieValue(request: Request, name: string): string | null {
+  const header = request.headers.get("Cookie");
+  if (!header) return null;
+  for (const cookie of header.split(";")) {
     const separator = cookie.indexOf("=");
-    if (separator < 0 || cookie.slice(0, separator).trim() !== AUTH_COOKIE_NAME) continue;
-    return cookie.slice(separator + 1).trim() || null;
+    if (separator >= 0 && cookie.slice(0, separator).trim() === name) {
+      return cookie.slice(separator + 1).trim() || null;
+    }
   }
   return null;
 }
@@ -230,8 +331,12 @@ function sessionCookie(token: string): string {
   return `${AUTH_COOKIE_NAME}=${token}; Path=/; Max-Age=${AUTH_SESSION_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
 }
 
-function expiredSessionCookie(): string {
-  return `${AUTH_COOKIE_NAME}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
+function expiredCookie(name: string): string {
+  return `${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function loginCookie(token: string, expiresAt: number, now: number): string {
+  return `${LOGIN_COOKIE_NAME}=${token}; Path=/; Max-Age=${Math.max(1, Math.ceil((expiresAt - now) / 1000))}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function safeReturnTo(value: string | null): string {
@@ -267,327 +372,93 @@ function securityHeaders(scriptNonce?: string): Headers {
   });
 }
 
-function htmlResponse(body: string, init: ResponseInit = {}, scriptNonce?: string): Response {
+function htmlResponse(
+  body: string,
+  init: ResponseInit = {},
+  scriptNonce?: string,
+  cookies: string[] = []
+): Response {
   const headers = securityHeaders(scriptNonce);
   headers.set("Content-Type", "text/html; charset=utf-8");
-  if (init.headers) {
-    new Headers(init.headers).forEach((value, name) => headers.set(name, value));
-  }
+  if (init.headers) new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
   return new Response(body, { ...init, headers });
 }
 
-function loginPage(returnTo: string, scriptNonce: string, error?: string): string {
-  const errorMarkup = error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : "";
+function loginForm(options: LoginPageOptions): string {
+  const returnTo = escapeHtml(options.returnTo);
+  const username = escapeHtml(options.username ?? "");
+  if (options.mode === "telegram-code") {
+    return `<p class="subhead">Enter the 6-digit code sent to ${username} on Telegram.</p>
+      <form method="post" action="/login">
+        <input type="hidden" name="step" value="verify">
+        <input type="hidden" name="returnTo" value="${returnTo}">
+        <div class="field"><label for="code">Verification code</label><input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus></div>
+        <button class="submit" type="submit">Verify code</button>
+      </form>
+      <div class="secondary-actions">
+        <form method="post" action="/login"><input type="hidden" name="step" value="request"><input type="hidden" name="username" value="${username}"><input type="hidden" name="returnTo" value="${returnTo}"><button class="link-button" type="submit">Send a new code</button></form>
+        <a href="/login?returnTo=${encodeURIComponent(options.returnTo)}">Use another username</a>
+      </div>`;
+  }
+  if (options.mode === "password") {
+    return `<p class="subhead">Use your Slash credentials to continue.</p>
+      <form method="post" action="/login">
+        <input type="hidden" name="returnTo" value="${returnTo}">
+        <div class="field"><label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
+        <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+        <button class="submit" type="submit">Sign in</button>
+      </form>`;
+  }
+  return `<p class="subhead">Enter your username and we’ll send a code to your Telegram.</p>
+      <form method="post" action="/login">
+        <input type="hidden" name="step" value="request">
+        <input type="hidden" name="returnTo" value="${returnTo}">
+        <div class="field"><label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
+        <button class="submit" type="submit">Send Telegram code</button>
+      </form>`;
+}
+
+function loginPage(options: LoginPageOptions): string {
+  const error = options.error ? `<p class="error" role="alert">${escapeHtml(options.error)}</p>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260729-2">
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260729-2">
-  <link rel="manifest" href="/site.webmanifest?v=20260729-2" crossorigin="use-credentials">
-  <meta name="theme-color" content="#09090b">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="Finance">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260729-2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260729-2"><link rel="manifest" href="/site.webmanifest?v=20260729-2" crossorigin="use-credentials">
+  <meta name="theme-color" content="#09090b"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black"><meta name="apple-mobile-web-app-title" content="Finance">
   <title>Sign in · Finance Dashboard</title>
   <style>
-    :root {
-      color-scheme: light;
-      font-family: "Geist Variable", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --ink: #09090b;
-      --muted: #71717a;
-      --line: #e4e4e7;
-      --line-strong: #a1a1aa;
-      --panel: #ffffff;
-      --panel-soft: #fafafa;
-      --page: #ffffff;
-      --control: #ffffff;
-      --control-hover: #f4f4f5;
-      --button: #09090b;
-      --button-hover: #27272a;
-      --button-text: #ffffff;
-      --focus: rgba(24, 24, 27, .14);
-      --shadow: 0 14px 34px rgba(9, 9, 11, .08);
-      --shadow-soft: 0 8px 24px rgba(9, 9, 11, .05);
-      --error: #b42318;
-      --error-bg: #fff1f1;
-      --error-border: #ffd0cc;
-      --theme-track: #f4f4f5;
-      --theme-border: #d4d4d8;
-      --theme-option: #71717a;
-      --theme-thumb: #ffffff;
-      --theme-thumb-color: #09090b;
-      --theme-shadow: 0 6px 16px rgba(9, 9, 11, .16);
-    }
-    html[data-theme="dark"] {
-      color-scheme: dark;
-      --ink: #fafafa;
-      --muted: #a1a1aa;
-      --line: #27272a;
-      --line-strong: #52525b;
-      --panel: #050505;
-      --panel-soft: #0a0a0a;
-      --page: #000000;
-      --control: #050505;
-      --control-hover: #111111;
-      --button: #fafafa;
-      --button-hover: #e4e4e7;
-      --button-text: #000000;
-      --focus: rgba(250, 250, 250, .22);
-      --shadow: 0 16px 36px rgba(0, 0, 0, .32);
-      --shadow-soft: 0 10px 28px rgba(0, 0, 0, .42);
-      --error: #ff8f85;
-      --error-bg: rgba(180, 35, 24, .22);
-      --error-border: rgba(255, 143, 133, .34);
-      --theme-track: #050505;
-      --theme-border: #3f3f46;
-      --theme-option: #a1a1aa;
-      --theme-thumb: #fafafa;
-      --theme-thumb-color: #000000;
-      --theme-shadow: 0 8px 18px rgba(0, 0, 0, .34);
-    }
-    * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
-    body { min-width: 320px; min-height: 100vh; margin: 0; color: var(--ink); background: var(--page); }
-    button, input { font: inherit; }
-    button { cursor: pointer; }
-    .site-header {
-      position: fixed;
-      inset: 0 0 auto;
-      z-index: 2;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      min-height: 72px;
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--line);
-      background: color-mix(in srgb, var(--page) 94%, transparent);
-      backdrop-filter: blur(16px);
-    }
-    .brand {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      color: var(--ink);
-      font-size: 15px;
-      font-weight: 760;
-      letter-spacing: -.02em;
-    }
-    .brand svg { width: 19px; height: 19px; color: var(--muted); stroke-width: 1.8; }
-    .theme-toggle {
-      position: relative;
-      display: inline-flex;
-      flex: 0 0 auto;
-      width: 74px;
-      height: 36px;
-      padding: 3px;
-      border: 1px solid var(--theme-border);
-      border-radius: 12px;
-      color: var(--theme-option);
-      background: var(--theme-track);
-      box-shadow: var(--shadow-soft);
-      transition: border-color .16s, background-color .16s, transform .16s;
-    }
-    .theme-toggle:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-    .theme-option {
-      position: relative;
-      z-index: 1;
-      display: inline-flex;
-      width: 32px;
-      height: 28px;
-      align-items: center;
-      justify-content: center;
-    }
-    .theme-option svg, .theme-thumb svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
-    .theme-thumb {
-      position: absolute;
-      top: 3px;
-      left: 3px;
-      z-index: 2;
-      display: grid;
-      width: 32px;
-      height: 28px;
-      place-items: center;
-      border-radius: 9px;
-      color: var(--theme-thumb-color);
-      background: var(--theme-thumb);
-      box-shadow: var(--theme-shadow);
-      transition: color .18s, background-color .18s, transform .18s;
-    }
-    .theme-thumb .moon { display: none; }
-    html[data-theme="dark"] .theme-thumb { transform: translateX(36px); }
-    html[data-theme="dark"] .theme-thumb .sun { display: none; }
-    html[data-theme="dark"] .theme-thumb .moon { display: block; }
-    .login-shell {
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 104px 24px 48px;
-    }
-    .login-card {
-      width: min(100%, 400px);
-      padding: 28px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--panel);
-      box-shadow: var(--shadow-soft);
-    }
-    .eyebrow {
-      margin: 0 0 10px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 720;
-      letter-spacing: .09em;
-      text-transform: uppercase;
-    }
-    h1 { margin: 0; font-size: 25px; line-height: 1.18; font-weight: 760; letter-spacing: -.04em; }
-    .subhead { margin: 9px 0 26px; color: var(--muted); font-size: 14px; line-height: 1.5; }
-    .field { margin-bottom: 17px; }
-    label { display: block; margin: 0 0 7px; color: var(--ink); font-size: 13px; font-weight: 650; }
-    input {
-      width: 100%;
-      height: 42px;
-      padding: 0 12px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      outline: none;
-      color: var(--ink);
-      background: var(--control);
-      box-shadow: 0 1px 2px rgba(9, 9, 11, .04);
-      transition: border-color .16s, background-color .16s, box-shadow .16s;
-    }
-    input:hover { border-color: var(--line-strong); }
-    input:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px var(--focus); }
-    input:-webkit-autofill {
-      -webkit-text-fill-color: var(--ink);
-      box-shadow: 0 0 0 1000px var(--control) inset;
-    }
-    .submit {
-      width: 100%;
-      min-height: 42px;
-      margin-top: 3px;
-      border: 1px solid transparent;
-      border-radius: 10px;
-      color: var(--button-text);
-      background: var(--button);
-      box-shadow: 0 10px 22px rgba(9, 9, 11, .16);
-      font-size: 14px;
-      font-weight: 680;
-      transition: background-color .16s, box-shadow .16s, transform .16s;
-    }
-    .submit:hover { background: var(--button-hover); transform: translateY(-1px); }
-    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-    input:focus-visible { outline: none; }
-    .error {
-      margin: -5px 0 18px;
-      padding: 10px 12px;
-      border: 1px solid var(--error-border);
-      border-radius: 10px;
-      color: var(--error);
-      background: var(--error-bg);
-      font-size: 13px;
-      line-height: 1.4;
-    }
-    .session-note {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      margin: 20px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .session-note svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
-    @media (max-width: 520px) {
-      .site-header { min-height: 64px; padding: 14px 16px; }
-      .login-shell { padding: 88px 16px 28px; }
-      .login-card { padding: 24px 22px; border-radius: 14px; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
-    }
+    :root{color-scheme:light;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--ink:#09090b;--muted:#71717a;--line:#e4e4e7;--line2:#a1a1aa;--panel:#fff;--page:#fff;--control:#fff;--button:#09090b;--button2:#27272a;--buttonText:#fff;--focus:rgba(24,24,27,.14);--error:#b42318;--errorBg:#fff1f1;--errorLine:#ffd0cc;--track:#f4f4f5;--thumb:#fff;--shadow:0 8px 24px rgba(9,9,11,.05)}
+    html[data-theme="dark"]{color-scheme:dark;--ink:#fafafa;--muted:#a1a1aa;--line:#27272a;--line2:#52525b;--panel:#050505;--page:#000;--control:#050505;--button:#fafafa;--button2:#e4e4e7;--buttonText:#000;--focus:rgba(250,250,250,.22);--error:#ff8f85;--errorBg:rgba(180,35,24,.22);--errorLine:rgba(255,143,133,.34);--track:#111;--thumb:#fafafa;--shadow:0 10px 28px rgba(0,0,0,.42)}
+    *{box-sizing:border-box}html,body{min-height:100%}body{min-width:320px;margin:0;color:var(--ink);background:var(--page)}button,input{font:inherit}button{cursor:pointer}
+    header{position:fixed;inset:0 0 auto;display:flex;align-items:center;justify-content:space-between;min-height:72px;padding:18px 24px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--page) 94%,transparent);backdrop-filter:blur(16px)}
+    .brand{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:760}.brand svg{width:19px;height:19px;color:var(--muted)}
+    .theme{width:42px;height:36px;border:1px solid var(--line);border-radius:12px;color:var(--ink);background:var(--track)}.theme svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2}
+    main{min-height:100vh;display:grid;place-items:center;padding:104px 24px 48px}.card{width:min(100%,400px);padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--panel);box-shadow:var(--shadow)}
+    .eyebrow{margin:0 0 10px;color:var(--muted);font-size:11px;font-weight:720;letter-spacing:.09em;text-transform:uppercase}h1{margin:0;font-size:25px;line-height:1.18;letter-spacing:-.04em}.subhead{margin:9px 0 26px;color:var(--muted);font-size:14px;line-height:1.5}
+    .field{margin-bottom:17px}label{display:block;margin:0 0 7px;font-size:13px;font-weight:650}input{width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;outline:none;color:var(--ink);background:var(--control)}input:hover,input:focus{border-color:var(--line2)}input:focus{box-shadow:0 0 0 3px var(--focus)}
+    .submit{width:100%;min-height:42px;margin-top:3px;border:0;border-radius:10px;color:var(--buttonText);background:var(--button);font-size:14px;font-weight:680}.submit:hover{background:var(--button2)}
+    .error{margin:-5px 0 18px;padding:10px 12px;border:1px solid var(--errorLine);border-radius:10px;color:var(--error);background:var(--errorBg);font-size:13px}.secondary-actions{display:flex;justify-content:space-between;gap:12px;margin-top:18px;font-size:12px}.secondary-actions form{margin:0}.secondary-actions a,.link-button{padding:0;border:0;color:var(--muted);background:transparent;text-decoration:underline;text-underline-offset:3px}
+    .session{display:flex;align-items:center;justify-content:center;gap:6px;margin:20px 0 0;color:var(--muted);font-size:12px}.session svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2}
+    button:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:2px}@media(max-width:520px){header{min-height:64px;padding:14px 16px}main{padding:88px 16px 28px}.card{padding:24px 22px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
   </style>
 </head>
 <body>
-  <header class="site-header">
-    <div class="brand">
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <rect width="18" height="14" x="3" y="5" rx="2" fill="none" stroke="currentColor"></rect>
-        <path d="M3 10h18M7 15h.01" fill="none" stroke="currentColor" stroke-linecap="round"></path>
-      </svg>
-      <span>Finance</span>
-    </div>
-    <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to dark mode" aria-pressed="false">
-      <span class="theme-option" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
-      </span>
-      <span class="theme-option" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
-      </span>
-      <span class="theme-thumb" data-theme-thumb aria-hidden="true">
-        <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
-        <svg class="moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
-      </span>
-    </button>
-  </header>
-  <main class="login-shell">
-    <section class="login-card" aria-labelledby="login-title">
-      <p class="eyebrow">Secure access</p>
-      <h1 id="login-title">Sign in to Finance</h1>
-      <p class="subhead">Use your dashboard credentials to continue.</p>
-      ${errorMarkup}
-      <form method="post" action="/login">
-        <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
-        <div class="field">
-          <label for="username">Username</label>
-          <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
-        </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-        </div>
-        <button class="submit" type="submit">Sign in</button>
-      </form>
-      <p class="session-note">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"></path><path d="m9 12 2 2 4-4"></path></svg>
-        Secure session · 12 hours
-      </p>
-    </section>
-  </main>
-  <script nonce="${scriptNonce}">
-    (() => {
-      const key = "finance-dash-theme";
-      const root = document.documentElement;
-      const toggle = document.querySelector("[data-theme-toggle]");
-      let theme = "light";
-      try {
-        theme = localStorage.getItem(key) === "dark" ? "dark" : "light";
-      } catch {}
-      const applyTheme = () => {
-        const isDark = theme === "dark";
-        root.dataset.theme = theme;
-        toggle?.setAttribute("aria-pressed", String(isDark));
-        toggle?.setAttribute("aria-label", \`Switch to \${isDark ? "light" : "dark"} mode\`);
-      };
-      applyTheme();
-      toggle?.addEventListener("click", () => {
-        theme = theme === "dark" ? "light" : "dark";
-        try {
-          localStorage.setItem(key, theme);
-        } catch {}
-        applyTheme();
-      });
-    })();
-  </script>
+  <header><div class="brand"><svg aria-hidden="true" viewBox="0 0 24 24"><rect width="18" height="14" x="3" y="5" rx="2" fill="none" stroke="currentColor"></rect><path d="M3 10h18M7 15h.01" fill="none" stroke="currentColor"></path></svg><span>Finance</span></div><button class="theme" type="button" data-theme-toggle aria-label="Switch color theme"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4 12h2M18 12h2"></path></svg></button></header>
+  <main><section class="card" aria-labelledby="login-title"><p class="eyebrow">Secure access</p><h1 id="login-title">Sign in to Finance</h1>${error}${loginForm(options)}<p class="session"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"></path><path d="m9 12 2 2 4-4"></path></svg>Secure session · 12 hours</p></section></main>
+  <script nonce="${options.scriptNonce}">(()=>{const key="finance-dash-theme";const root=document.documentElement;let theme="light";try{theme=localStorage.getItem(key)==="dark"?"dark":"light"}catch{}const apply=()=>{root.dataset.theme=theme};apply();document.querySelector("[data-theme-toggle]")?.addEventListener("click",()=>{theme=theme==="dark"?"light":"dark";try{localStorage.setItem(key,theme)}catch{}apply()})})();</script>
 </body>
 </html>`;
 }
 
-function loginHtmlResponse(returnTo: string, error?: string, init: ResponseInit = {}): Response {
+function loginHtmlResponse(
+  options: Omit<LoginPageOptions, "scriptNonce">,
+  init: ResponseInit = {},
+  cookies: string[] = []
+): Response {
   const scriptNonce = base64UrlEncode(crypto.getRandomValues(new Uint8Array(18)));
-  return htmlResponse(loginPage(returnTo, scriptNonce, error), init, scriptNonce);
+  return htmlResponse(loginPage({ ...options, scriptNonce }), init, scriptNonce, cookies);
 }
 
 async function readLoginForm(request: Request): Promise<URLSearchParams> {
@@ -601,7 +472,6 @@ async function readLoginForm(request: Request): Promise<URLSearchParams> {
   ) {
     throw new InvalidLoginBodyError();
   }
-
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
@@ -619,7 +489,6 @@ async function readLoginForm(request: Request): Promise<URLSearchParams> {
   } finally {
     reader.releaseLock();
   }
-
   const body = new Uint8Array(totalBytes);
   let offset = 0;
   for (const chunk of chunks) {
@@ -629,10 +498,10 @@ async function readLoginForm(request: Request): Promise<URLSearchParams> {
   return new URLSearchParams(new TextDecoder().decode(body));
 }
 
-function redirect(location: string, cookie?: string): Response {
+function redirect(location: string, cookies: string[] = []): Response {
   const headers = securityHeaders();
   headers.set("Location", location);
-  if (cookie) headers.set("Set-Cookie", cookie);
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
   return new Response(null, { status: 303, headers });
 }
 
@@ -650,62 +519,281 @@ function authUnavailable(pathname: string): Response {
 }
 
 async function hasValidSession(request: Request, secret: string, audience: string): Promise<boolean> {
-  const token = cookieValue(request);
+  const token = cookieValue(request, AUTH_COOKIE_NAME);
   return token ? verifyAuthSessionToken(token, secret, audience) : false;
 }
 
-export async function enforceSiteAuthentication(request: Request, env: AuthEnv): Promise<Response | null> {
-  const url = new URL(request.url);
-  if (
-    (request.method === "GET" || request.method === "HEAD") &&
-    PUBLIC_APP_ASSET_PATHS.has(url.pathname)
-  ) {
-    return null;
-  }
+function telegramUser(config: TelegramAuthConfig, username: string): TelegramAuthUser | undefined {
+  const normalized = normalizeFinanceUsername(username);
+  return config.users.find((user) => user.normalizedUsername === normalized);
+}
 
-  const config = authConfig(env, url.hostname);
+async function enforceSlashAuth(request: Request, env: AuthEnv, url: URL): Promise<Response | null> {
+  const config = slashCredential(env);
   if (!config) return authUnavailable(url.pathname);
-
-  if (url.pathname === "/logout") {
-    return redirect("/login", expiredSessionCookie());
-  }
-
+  if (url.pathname === "/logout") return redirect("/login", [expiredCookie(AUTH_COOKIE_NAME)]);
   if (url.pathname === "/login") {
-    const returnTo = safeReturnTo(
-      request.method === "GET" ? url.searchParams.get("returnTo") : null
-    );
+    const returnTo = safeReturnTo(request.method === "GET" ? url.searchParams.get("returnTo") : null);
     if (request.method === "GET") {
       return (await hasValidSession(request, config.sessionSecret, url.hostname))
         ? redirect(returnTo)
-        : loginHtmlResponse(returnTo);
+        : loginHtmlResponse({ mode: "password", returnTo });
     }
     if (request.method !== "POST") {
-      return loginHtmlResponse(returnTo, undefined, { status: 405, headers: { Allow: "GET, POST" } });
+      return loginHtmlResponse({ mode: "password", returnTo }, { status: 405, headers: { Allow: "GET, POST" } });
     }
-
     try {
       const form = await readLoginForm(request);
       const formReturnTo = safeReturnTo(form.get("returnTo"));
       const username = form.get("username") ?? "";
       const password = form.get("password") ?? "";
-      if (await verifyAnyLoginCredential(username, password, config.credentials)) {
-        const token = await createAuthSessionToken(config.sessionSecret, url.hostname);
-        return redirect(formReturnTo, sessionCookie(token));
+      if (await verifyLoginCredentials(username, password, config.credential)) {
+        const token = await createAuthSessionToken(
+          config.sessionSecret,
+          url.hostname,
+          normalizeFinanceUsername(username)
+        );
+        return redirect(formReturnTo, [sessionCookie(token)]);
       }
-      return loginHtmlResponse(formReturnTo, "Invalid username or password.", { status: 401 });
+      return loginHtmlResponse(
+        { mode: "password", returnTo: formReturnTo, error: "Invalid username or password." },
+        { status: 401 }
+      );
     } catch (error) {
       if (!(error instanceof InvalidLoginBodyError)) throw error;
-      return loginHtmlResponse("/", "Invalid sign-in request.", { status: 400 });
+      return loginHtmlResponse(
+        { mode: "password", returnTo: "/", error: "Invalid sign-in request." },
+        { status: 400 }
+      );
     }
   }
-
   if (await hasValidSession(request, config.sessionSecret, url.hostname)) return null;
   if (url.pathname.startsWith("/api/")) {
-    return Response.json(
-      { message: "Authentication required" },
-      { status: 401, headers: { "Cache-Control": "no-store" } }
-    );
+    return Response.json({ message: "Authentication required" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }
   const returnTo = safeReturnTo(`${url.pathname}${url.search}${url.hash}`);
   return redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+}
+
+async function requestTelegramOtp(
+  env: AuthEnv,
+  config: TelegramAuthConfig,
+  url: URL,
+  usernameInput: string,
+  returnTo: string,
+  dependencies: AuthDependencies
+): Promise<Response> {
+  const now = dependencies.now?.() ?? Date.now();
+  const normalizedUsername = normalizeFinanceUsername(usernameInput);
+  const user = telegramUser(config, usernameInput);
+  const generatedChallengeId = crypto.randomUUID();
+  const generatedCode = dependencies.generateOtp?.() ?? generateTelegramOtp();
+
+  if (!user) {
+    const expiresAt = now + TELEGRAM_OTP_EXPIRY_MS;
+    const token = await createLoginToken(
+      config.sessionSecret,
+      url.hostname,
+      normalizedUsername || "unknown",
+      generatedChallengeId,
+      expiresAt,
+      now
+    );
+    return loginHtmlResponse(
+      { mode: "telegram-code", returnTo, username: usernameInput.trim() || "that user" },
+      {},
+      [loginCookie(token, expiresAt, now)]
+    );
+  }
+
+  const codeHash = await otpCodeHash(
+    config.sessionSecret,
+    user.normalizedUsername,
+    generatedChallengeId,
+    generatedCode
+  );
+  const state = env.TELEGRAM_OTP_STATE.getByName(`telegram-otp:${user.normalizedUsername}`);
+  const result = await state.issueOtp(generatedChallengeId, codeHash, now);
+  if (result.status === "rate_limited") {
+    return loginHtmlResponse(
+      { mode: "telegram-username", returnTo, error: "Too many code requests. Please try again later." },
+      { status: 429, headers: { "Retry-After": String(result.retryAfterSeconds) } }
+    );
+  }
+  if (result.status === "issued") {
+    try {
+      await (dependencies.sendTelegramMessage ?? sendTelegramMessage)(
+        env,
+        user.chatId,
+        `Your Finance Dash sign-in code is ${generatedCode}. It expires in 5 minutes. If you didn’t request this code, you can ignore this message.`,
+        true
+      );
+    } catch {
+      await state.cancelOtp(result.challengeId, now);
+      return loginHtmlResponse(
+        { mode: "telegram-username", returnTo, error: "We couldn’t send the Telegram code. Please try again." },
+        { status: 503 }
+      );
+    }
+  }
+
+  const token = await createLoginToken(
+    config.sessionSecret,
+    url.hostname,
+    user.normalizedUsername,
+    result.challengeId,
+    result.expiresAt,
+    now
+  );
+  return loginHtmlResponse(
+    { mode: "telegram-code", returnTo, username: user.username },
+    {},
+    [loginCookie(token, result.expiresAt, now)]
+  );
+}
+
+async function verifyTelegramOtp(
+  request: Request,
+  env: AuthEnv,
+  config: TelegramAuthConfig,
+  url: URL,
+  code: string,
+  returnTo: string,
+  dependencies: AuthDependencies
+): Promise<Response> {
+  const now = dependencies.now?.() ?? Date.now();
+  const loginToken = cookieValue(request, LOGIN_COOKIE_NAME);
+  const challenge = loginToken
+    ? await verifyLoginToken(loginToken, config.sessionSecret, url.hostname, now)
+    : null;
+  const user = challenge ? telegramUser(config, challenge.username) : undefined;
+  if (!challenge || !user || !/^[0-9]{6}$/u.test(code)) {
+    return loginHtmlResponse(
+      {
+        mode: challenge && user ? "telegram-code" : "telegram-username",
+        returnTo,
+        ...(user ? { username: user.username } : {}),
+        error: "That code is invalid or has expired. Request a new code."
+      },
+      { status: 401 },
+      challenge ? [] : [expiredCookie(LOGIN_COOKIE_NAME)]
+    );
+  }
+
+  const codeHash = await otpCodeHash(
+    config.sessionSecret,
+    user.normalizedUsername,
+    challenge.challengeId,
+    code
+  );
+  const result = await env.TELEGRAM_OTP_STATE
+    .getByName(`telegram-otp:${user.normalizedUsername}`)
+    .verifyOtp(challenge.challengeId, codeHash, now);
+  if (result.status === "verified") {
+    const sessionToken = await createAuthSessionToken(
+      config.sessionSecret,
+      url.hostname,
+      user.normalizedUsername,
+      now
+    );
+    return redirect(returnTo, [sessionCookie(sessionToken), expiredCookie(LOGIN_COOKIE_NAME)]);
+  }
+  if (result.status === "invalid") {
+    return loginHtmlResponse(
+      {
+        mode: "telegram-code",
+        returnTo,
+        username: user.username,
+        error: `Incorrect code. ${result.attemptsRemaining} attempts remaining.`
+      },
+      { status: 401 }
+    );
+  }
+  return loginHtmlResponse(
+    { mode: "telegram-username", returnTo, error: "That code has expired. Request a new code." },
+    { status: 401 },
+    [expiredCookie(LOGIN_COOKIE_NAME)]
+  );
+}
+
+async function enforceTelegramAuth(
+  request: Request,
+  env: AuthEnv,
+  url: URL,
+  dependencies: AuthDependencies
+): Promise<Response | null> {
+  const config = telegramConfig(env);
+  if (!config) return authUnavailable(url.pathname);
+  if (url.pathname === "/logout") {
+    return redirect("/login", [expiredCookie(AUTH_COOKIE_NAME), expiredCookie(LOGIN_COOKIE_NAME)]);
+  }
+  if (url.pathname === "/login") {
+    const returnTo = safeReturnTo(request.method === "GET" ? url.searchParams.get("returnTo") : null);
+    if (request.method === "GET") {
+      return (await hasValidSession(request, config.sessionSecret, url.hostname))
+        ? redirect(returnTo)
+        : loginHtmlResponse({ mode: "telegram-username", returnTo });
+    }
+    if (request.method !== "POST") {
+      return loginHtmlResponse(
+        { mode: "telegram-username", returnTo },
+        { status: 405, headers: { Allow: "GET, POST" } }
+      );
+    }
+    try {
+      const form = await readLoginForm(request);
+      const formReturnTo = safeReturnTo(form.get("returnTo"));
+      if (form.get("step") === "request") {
+        return requestTelegramOtp(
+          env,
+          config,
+          url,
+          form.get("username") ?? "",
+          formReturnTo,
+          dependencies
+        );
+      }
+      if (form.get("step") === "verify") {
+        return verifyTelegramOtp(
+          request,
+          env,
+          config,
+          url,
+          (form.get("code") ?? "").trim(),
+          formReturnTo,
+          dependencies
+        );
+      }
+      return loginHtmlResponse(
+        { mode: "telegram-username", returnTo: formReturnTo, error: "Invalid sign-in request." },
+        { status: 400 }
+      );
+    } catch (error) {
+      if (!(error instanceof InvalidLoginBodyError)) throw error;
+      return loginHtmlResponse(
+        { mode: "telegram-username", returnTo: "/", error: "Invalid sign-in request." },
+        { status: 400 }
+      );
+    }
+  }
+  if (await hasValidSession(request, config.sessionSecret, url.hostname)) return null;
+  if (url.pathname.startsWith("/api/")) {
+    return Response.json({ message: "Authentication required" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+  }
+  const returnTo = safeReturnTo(`${url.pathname}${url.search}${url.hash}`);
+  return redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+}
+
+export async function enforceSiteAuthentication(
+  request: Request,
+  env: AuthEnv,
+  dependencies: AuthDependencies = {}
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  if ((request.method === "GET" || request.method === "HEAD") && PUBLIC_APP_ASSET_PATHS.has(url.pathname)) {
+    return null;
+  }
+  return url.hostname === SLASH_APP_HOSTNAME
+    ? enforceSlashAuth(request, env, url)
+    : enforceTelegramAuth(request, env, url, dependencies);
 }

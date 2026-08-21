@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "tsx watch server/index.ts",
-    "auth:configure": "tsx scripts/configure-auth.ts",
-    "auth:configure:slash": "tsx scripts/configure-auth.ts --slash",
+    "auth:configure:slash": "tsx scripts/configure-auth.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
     "wise:reset": "tsx scripts/reset-wise.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
@@ -54,7 +53,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
-    "wrangler": "^4.115.0"
+    "wrangler": "^4.125.0"
   },
   "overrides": {
     "ws": "8.21.0"
