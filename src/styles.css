@@ -9213,17 +9213,17 @@ body {
 
 .note-popover {
   position: absolute;
-  top: 11px;
-  right: 11px;
+  top: 9px;
+  right: 9px;
   z-index: 8;
   display: inline-flex;
 }
 
 .note-popover-trigger {
   display: grid;
-  width: 23px;
-  height: 23px;
-  min-height: 23px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
   padding: 0;
   place-items: center;
   border: 1px solid var(--line);
@@ -9775,6 +9775,10 @@ body {
 }
 
 @media (max-width: 760px) {
+  body {
+    min-width: 0;
+  }
+
   .panel-header.bank-reconciliation-header {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -9785,10 +9789,10 @@ body {
   }
 
   .app-shell {
-    width: min(100% - 20px, 1640px);
+    width: 100%;
     grid-template-columns: 1fr;
     gap: 10px;
-    padding-top: 10px;
+    padding: 10px max(10px, env(safe-area-inset-right)) 24px max(10px, env(safe-area-inset-left));
   }
 
   .sidebar {
@@ -9813,7 +9817,11 @@ body {
   }
 
   .mobile-command-bar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 122px;
+  }
+
+  .mobile-nav-trigger {
+    min-height: 44px;
   }
 
   .mobile-sidebar-actions {
@@ -9821,12 +9829,25 @@ body {
   }
 
   .mobile-sidebar-actions .sidebar-actions-trigger {
-    min-height: 42px;
-    width: 108px;
+    grid-template-columns: 18px minmax(0, 1fr) 15px;
+    column-gap: 8px;
+    min-height: 44px;
+    width: 122px;
     padding-inline: 9px;
     border-color: var(--line);
     background: var(--control-bg);
     font-size: 0.8rem;
+  }
+
+  .mobile-sidebar-actions .sidebar-actions-trigger > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-sidebar-actions .sidebar-actions-trigger > svg:last-child {
+    justify-self: end;
   }
 
   .mobile-sidebar-actions .sidebar-actions-list {
@@ -9850,6 +9871,16 @@ body {
 
   .sidebar-footer {
     display: none;
+  }
+
+  .modal-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+    width: 100%;
+  }
+
+  .modal-actions > button {
+    min-width: 0;
   }
 
   .list-toolbar,
@@ -10286,10 +10317,21 @@ body {
 }
 
 @media (max-width: 440px) {
+  .management-report-page-controls.with-period {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .toolbar-filter-group > div,
   .toolbar-date-range,
   .list-toolbar-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 360px) {
+  .modal-actions,
+  .invoice-editor-modal .modal-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
