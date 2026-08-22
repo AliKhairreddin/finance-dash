@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseTelegramAuthUsers, pollTelegramUpdates } from "./telegram";
+import { buildTelegramOtpMessage, parseTelegramAuthUsers, pollTelegramUpdates } from "./telegram";
 
 const baseEnv = {
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
@@ -36,6 +36,22 @@ test("Telegram user mappings normalize login names, including internal spaces", 
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264", ali: "123456789" })), null);
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ "Ali M": "5518715264", "ali  m": "123456789" })), null);
   assert.equal(parseTelegramAuthUsers(JSON.stringify({ Ali: "5518715264", Amin: "5518715264" })), null);
+});
+
+test("Telegram OTP messages lead with a formatted code and provide a native copy button", () => {
+  assert.deepEqual(buildTelegramOtpMessage("6064572340", "123456"), {
+    chat_id: "6064572340",
+    text: "123456 — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.",
+    entities: [{ type: "code", offset: 0, length: 6 }],
+    reply_markup: {
+      inline_keyboard: [[{
+        text: "Copy code",
+        copy_text: { text: "123456" }
+      }]]
+    },
+    protect_content: true
+  });
+  assert.throws(() => buildTelegramOtpMessage("6064572340", "12345"), /OTP was invalid/);
 });
 
 test("an unmapped coworker receives their chat ID after messaging the bot", async () => {

@@ -35,6 +35,19 @@ interface TelegramPollingDependencies {
   sendMessage?: typeof sendTelegramMessage;
 }
 
+interface TelegramOtpMessagePayload {
+  chat_id: string;
+  text: string;
+  entities: Array<{ type: "code"; offset: number; length: number }>;
+  reply_markup: {
+    inline_keyboard: Array<Array<{
+      text: string;
+      copy_text: { text: string };
+    }>>;
+  };
+  protect_content: true;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -157,6 +170,30 @@ export async function sendTelegramMessage(
     text,
     ...(protectContent ? { protect_content: true } : {})
   });
+}
+
+export function buildTelegramOtpMessage(chatId: string, code: string): TelegramOtpMessagePayload {
+  if (!/^[0-9]{6}$/u.test(code)) throw new Error("Telegram OTP was invalid");
+  return {
+    chat_id: chatId,
+    text: `${code} — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.`,
+    entities: [{ type: "code", offset: 0, length: code.length }],
+    reply_markup: {
+      inline_keyboard: [[{
+        text: "Copy code",
+        copy_text: { text: code }
+      }]]
+    },
+    protect_content: true
+  };
+}
+
+export async function sendTelegramOtp(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
+  chatId: string,
+  code: string
+): Promise<void> {
+  await telegramApi(env, "sendMessage", { ...buildTelegramOtpMessage(chatId, code) });
 }
 
 export async function deleteTelegramWebhook(

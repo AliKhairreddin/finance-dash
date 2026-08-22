@@ -205,14 +205,14 @@ test("unauthenticated requests redirect pages and reject APIs", async () => {
 });
 
 test("Telegram OTP creates a secure session that authenticates the next request", async () => {
-  const now = Date.parse("2026-08-21T20:00:00.000Z");
+  const now = Date.now();
   const env = telegramEnv();
-  const delivered: Array<{ chatId: string; text: string; protected: boolean }> = [];
+  const delivered: Array<{ chatId: string; code: string }> = [];
   const dependencies = {
     now: () => now,
     generateOtp: () => "123456",
-    async sendTelegramMessage(_env: unknown, chatId: string, text: string, protectContent = false) {
-      delivered.push({ chatId, text, protected: protectContent });
+    async sendTelegramOtp(_env: unknown, chatId: string, code: string) {
+      delivered.push({ chatId, code });
     }
   };
 
@@ -228,8 +228,7 @@ test("Telegram OTP creates a secure session that authenticates the next request"
   assert.equal(requestResponse?.status, 200);
   assert.deepEqual(delivered, [{
     chatId: "6064572340",
-    text: "Your Finance Dash sign-in code is 123456. It expires in 5 minutes. If you didn’t request this code, you can ignore this message.",
-    protected: true
+    code: "123456"
   }]);
   assert.match(await requestResponse?.text() ?? "", /Enter the 6-digit code sent to Ali M on Telegram/);
   const loginCookie = cookieFrom(requestResponse as Response, "__Host-finance_login");
@@ -263,7 +262,7 @@ test("wrong Telegram codes are rejected and decrement the remaining attempts", a
   const dependencies = {
     now: () => now,
     generateOtp: () => "123456",
-    async sendTelegramMessage() {}
+    async sendTelegramOtp() {}
   };
   const requestResponse = await enforceSiteAuthentication(
     formRequest("https://finance.example/login", { step: "request", username: "ali" }),
@@ -288,7 +287,7 @@ test("unknown usernames do not send a message or reveal whether an account exist
     {
       now: () => Date.parse("2026-08-21T20:00:00.000Z"),
       generateOtp: () => "123456",
-      async sendTelegramMessage() { messages += 1; }
+      async sendTelegramOtp() { messages += 1; }
     } as never
   );
   assert.equal(response?.status, 200);

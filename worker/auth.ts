@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
-  sendTelegramMessage,
+  sendTelegramOtp,
   type TelegramAuthUser
 } from "./telegram";
 import { TELEGRAM_OTP_EXPIRY_MS } from "./telegramOtp";
@@ -58,7 +58,7 @@ interface LoginChallenge {
 interface AuthDependencies {
   now?: () => number;
   generateOtp?: () => string;
-  sendTelegramMessage?: typeof sendTelegramMessage;
+  sendTelegramOtp?: typeof sendTelegramOtp;
 }
 
 type LoginMode = "telegram-username" | "telegram-code" | "password";
@@ -622,11 +622,10 @@ async function requestTelegramOtp(
   }
   if (result.status === "issued") {
     try {
-      await (dependencies.sendTelegramMessage ?? sendTelegramMessage)(
+      await (dependencies.sendTelegramOtp ?? sendTelegramOtp)(
         env,
         user.chatId,
-        `Your Finance Dash sign-in code is ${generatedCode}. It expires in 5 minutes. If you didn’t request this code, you can ignore this message.`,
-        true
+        generatedCode
       );
     } catch {
       await state.cancelOtp(result.challengeId, now);
