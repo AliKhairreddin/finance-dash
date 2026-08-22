@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTelegramOtpMessage, parseTelegramAuthUsers, pollTelegramUpdates } from "./telegram";
+import {
+  buildTelegramOtpMessage,
+  buildTelegramSignInAlertMessage,
+  parseTelegramAuthUsers,
+  pollTelegramUpdates
+} from "./telegram";
 
 const baseEnv = {
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
@@ -52,6 +57,19 @@ test("Telegram OTP messages lead with a formatted code and provide a native copy
     protect_content: true
   });
   assert.throws(() => buildTelegramOtpMessage("6064572340", "12345"), /OTP was invalid/);
+});
+
+test("passwordless sign-in alerts include the security details and revocation instruction", () => {
+  assert.deepEqual(buildTelegramSignInAlertMessage("6064572340", {
+    username: "Ali M",
+    occurredAt: "2026-08-22 20:15:00 UTC",
+    ipAddress: "203.0.113.42",
+    device: "Safari on iPhone"
+  }), {
+    chat_id: "6064572340",
+    text: "Finance Dash sign-in detected for Ali M.\n\nTime: 2026-08-22 20:15:00 UTC\nIP address: 203.0.113.42\nDevice: Safari on iPhone\n\nIf this wasn’t you, contact your dashboard administrator immediately to re-enable OTP and revoke this passwordless session.",
+    protect_content: true
+  });
 });
 
 test("an unmapped coworker receives their chat ID after messaging the bot", async () => {

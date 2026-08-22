@@ -13,6 +13,7 @@ import {
   verifyTelegramOtpTransition,
   type TelegramOtpStoredState
 } from "./telegramOtp";
+import type { TelegramSignInAlertDetails } from "./telegram";
 
 const testSessionSecret = "test-session-secret-with-enough-entropy";
 const testSalt = Buffer.from("0123456789abcdef", "utf8");
@@ -48,7 +49,7 @@ class FakeTelegramOtpState {
   }
 }
 
-function telegramEnv(state = new FakeTelegramOtpState()) {
+function telegramEnv(state = new FakeTelegramOtpState(), passwordlessUsers: string[] = []) {
   return {
     AUTH_SESSION_SECRET: testSessionSecret,
     TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
@@ -56,6 +57,7 @@ function telegramEnv(state = new FakeTelegramOtpState()) {
       Ali: "5518715264",
       "Ali M": "6064572340"
     }),
+    TELEGRAM_PASSWORDLESS_USERS_JSON: JSON.stringify(passwordlessUsers),
     TELEGRAM_OTP_STATE: { getByName: () => state }
   } as never;
 }
@@ -131,6 +133,15 @@ test("authentication fails closed when Telegram secrets are missing or malformed
     { ...(telegramEnv() as unknown as Record<string, unknown>), TELEGRAM_AUTH_USERS_JSON: "not-json" } as never
   );
   assert.equal(malformedResponse?.status, 503);
+
+  const malformedPasswordlessResponse = await enforceSiteAuthentication(
+    new Request("https://finance.example/login"),
+    {
+      ...(telegramEnv() as unknown as Record<string, unknown>),
+      TELEGRAM_PASSWORDLESS_USERS_JSON: JSON.stringify(["Unknown"])
+    } as never
+  );
+  assert.equal(malformedPasswordlessResponse?.status, 503);
 });
 
 test("login page matches the dashboard theme and requests a Telegram username", async () => {
@@ -148,7 +159,7 @@ test("login page matches the dashboard theme and requests a Telegram username", 
 
   const body = await response?.text() ?? "";
   assert.match(body, /Sign in to Finance/);
-  assert.match(body, /send a code to your Telegram/);
+  assert.match(body, /Enter your username to continue/);
   assert.match(body, /name="step" value="request"/);
   assert.match(body, /data-theme-toggle/);
   assert.match(body, new RegExp(`<script nonce="${nonce}">`));
@@ -254,6 +265,125 @@ test("Telegram OTP creates a secure session that authenticates the next request"
     dependencies as never
   );
   assert.equal(authenticatedResponse, null);
+});
+
+test("configured passwordless user signs in immediately after the mandatory Telegram alert", async () => {
+  const now = Date.parse("2026-08-22T20:15:00.000Z");
+  const env = telegramEnv(new FakeTelegramOtpState(), ["Ali M"]);
+  const alerts: Array<{ chatId: string; details: TelegramSignInAlertDetails }> = [];
+  let otpMessages = 0;
+  const dependencies = {
+    now: () => now,
+    async sendTelegramOtp() { otpMessages += 1; },
+    async sendTelegramSignInAlert(
+      _env: unknown,
+      chatId: string,
+      details: TelegramSignInAlertDetails
+    ) {
+      alerts.push({ chatId, details });
+    }
+  };
+  const response = await enforceSiteAuthentication(
+    formRequest("https://finance.example/login", {
+      step: "request",
+      username: "  ALI   M ",
+      returnTo: "/income"
+    }),
+    env,
+    dependencies as never
+  );
+
+  assert.equal(response?.status, 303);
+  assert.equal(response?.headers.get("Location"), "/income");
+  assert.equal(otpMessages, 0);
+  assert.deepEqual(alerts, [{
+    chatId: "6064572340",
+    details: {
+      username: "Ali M",
+      occurredAt: "2026-08-22 20:15:00 UTC",
+      ipAddress: "Unavailable",
+      device: "Unknown browser on unknown device"
+    }
+  }]);
+  assert.match(response?.headers.get("Set-Cookie") ?? "", /__Host-finance_session=/);
+});
+
+test("passwordless alert includes trusted edge IP and a short device description", async () => {
+  const alerts: TelegramSignInAlertDetails[] = [];
+  await enforceSiteAuthentication(
+    new Request("https://finance.example/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "CF-Connecting-IP": "203.0.113.42",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+      },
+      body: new URLSearchParams({ step: "request", username: "Ali M" })
+    }),
+    telegramEnv(new FakeTelegramOtpState(), ["Ali M"]),
+    {
+      now: () => Date.parse("2026-08-22T20:15:00.000Z"),
+      async sendTelegramSignInAlert(
+        _env: unknown,
+        _chatId: string,
+        details: TelegramSignInAlertDetails
+      ) {
+        alerts.push(details);
+      }
+    } as never
+  );
+
+  assert.deepEqual(alerts, [{
+    username: "Ali M",
+    occurredAt: "2026-08-22 20:15:00 UTC",
+    ipAddress: "203.0.113.42",
+    device: "Safari on iPhone"
+  }]);
+});
+
+test("passwordless login fails closed when its Telegram alert cannot be delivered", async () => {
+  const response = await enforceSiteAuthentication(
+    formRequest("https://finance.example/login", { step: "request", username: "Ali M" }),
+    telegramEnv(new FakeTelegramOtpState(), ["Ali M"]),
+    {
+      now: () => Date.parse("2026-08-22T20:15:00.000Z"),
+      async sendTelegramSignInAlert() { throw new Error("Telegram unavailable"); }
+    } as never
+  );
+
+  assert.equal(response?.status, 503);
+  assert.doesNotMatch(response?.headers.get("Set-Cookie") ?? "", /__Host-finance_session=/);
+  assert.match(await response?.text() ?? "", /Access wasn’t granted/);
+});
+
+test("removing the passwordless exception immediately revokes its active sessions", async () => {
+  const now = Date.now();
+  const passwordlessEnv = telegramEnv(new FakeTelegramOtpState(), ["Ali M"]);
+  const loginResponse = await enforceSiteAuthentication(
+    formRequest("https://finance.example/login", { step: "request", username: "Ali M" }),
+    passwordlessEnv,
+    {
+      now: () => now,
+      async sendTelegramSignInAlert() {}
+    } as never
+  );
+  const session = cookieFrom(loginResponse as Response, "__Host-finance_session");
+
+  assert.equal(
+    await enforceSiteAuthentication(
+      new Request("https://finance.example/income", { headers: { Cookie: session } }),
+      passwordlessEnv
+    ),
+    null
+  );
+
+  const otpEnv = telegramEnv(new FakeTelegramOtpState());
+  const revokedResponse = await enforceSiteAuthentication(
+    new Request("https://finance.example/income", { headers: { Cookie: session } }),
+    otpEnv
+  );
+  assert.equal(revokedResponse?.status, 303);
+  assert.equal(revokedResponse?.headers.get("Location"), "/login?returnTo=%2Fincome");
 });
 
 test("wrong Telegram codes are rejected and decrement the remaining attempts", async () => {

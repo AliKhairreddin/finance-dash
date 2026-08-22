@@ -3,6 +3,7 @@ import {
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
   sendTelegramOtp,
+  sendTelegramSignInAlert,
   type TelegramAuthUser
 } from "./telegram";
 import { TELEGRAM_OTP_EXPIRY_MS } from "./telegramOtp";
@@ -13,6 +14,7 @@ const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
+const PASSWORDLESS_SESSION_SUBJECT_PREFIX = "passwordless:";
 const SLASH_APP_HOSTNAME = "slash.thatcanadian.dev";
 const textEncoder = new TextEncoder();
 const PUBLIC_APP_ASSET_PATHS = new Set([
@@ -32,6 +34,7 @@ type AuthEnv = Pick<
   | "TELEGRAM_AUTH_USERS_JSON"
   | "TELEGRAM_BOT_TOKEN"
   | "TELEGRAM_OTP_STATE"
+  | "TELEGRAM_PASSWORDLESS_USERS_JSON"
 >;
 
 interface AuthCredential {
@@ -47,6 +50,7 @@ interface PasswordVerifier {
 
 interface TelegramAuthConfig {
   users: TelegramAuthUser[];
+  passwordlessUsernames: Set<string>;
   sessionSecret: string;
 }
 
@@ -59,6 +63,7 @@ interface AuthDependencies {
   now?: () => number;
   generateOtp?: () => string;
   sendTelegramOtp?: typeof sendTelegramOtp;
+  sendTelegramSignInAlert?: typeof sendTelegramSignInAlert;
 }
 
 type LoginMode = "telegram-username" | "telegram-code" | "password";
@@ -124,7 +129,33 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   const botToken = env.TELEGRAM_BOT_TOKEN?.trim();
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   if (!sessionSecret || !botToken || !users || !env.TELEGRAM_OTP_STATE) return null;
-  return { users, sessionSecret };
+  const passwordlessUsernames = parsePasswordlessTelegramUsers(env.TELEGRAM_PASSWORDLESS_USERS_JSON, users);
+  if (!passwordlessUsernames) return null;
+  return { users, passwordlessUsernames, sessionSecret };
+}
+
+function parsePasswordlessTelegramUsers(
+  value: string | undefined,
+  users: TelegramAuthUser[]
+): Set<string> | null {
+  if (!value?.trim()) return new Set();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const configuredUsers = new Set(users.map((user) => user.normalizedUsername));
+  const passwordlessUsernames = new Set<string>();
+  for (const username of parsed) {
+    if (typeof username !== "string") return null;
+    const normalizedUsername = normalizeFinanceUsername(username);
+    if (!configuredUsers.has(normalizedUsername) || passwordlessUsernames.has(normalizedUsername)) return null;
+    passwordlessUsernames.add(normalizedUsername);
+  }
+  return passwordlessUsernames;
 }
 
 async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {
@@ -189,12 +220,12 @@ export async function createAuthSessionToken(
   return `${payload}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
-export async function verifyAuthSessionToken(
+async function verifiedAuthSessionSubject(
   token: string,
   secret: string,
   expectedAudience: string,
   nowMilliseconds = Date.now()
-): Promise<boolean> {
+): Promise<string | null> {
   const [version, issuedValue, expiresValue, audienceValue, subjectValue, nonce, signatureValue, extra] =
     token.split(".");
   const issuedAt = Number(issuedValue);
@@ -220,13 +251,23 @@ export async function verifyAuthSessionToken(
     expiresAt <= issuedAt ||
     expiresAt - issuedAt > AUTH_SESSION_SECONDS
   ) {
-    return false;
+    return null;
   }
   const payload = `${version}.${issuedAt}.${expiresAt}.${audienceValue}.${subjectValue}.${nonce}`;
-  return (
-    (await crypto.subtle.verify("HMAC", await sessionKey(secret), signature, textEncoder.encode(payload))) &&
-    new TextDecoder().decode(audience) === expectedAudience
-  );
+  if (!(await crypto.subtle.verify("HMAC", await sessionKey(secret), signature, textEncoder.encode(payload)))) {
+    return null;
+  }
+  if (new TextDecoder().decode(audience) !== expectedAudience) return null;
+  return new TextDecoder().decode(subject);
+}
+
+export async function verifyAuthSessionToken(
+  token: string,
+  secret: string,
+  expectedAudience: string,
+  nowMilliseconds = Date.now()
+): Promise<boolean> {
+  return (await verifiedAuthSessionSubject(token, secret, expectedAudience, nowMilliseconds)) !== null;
 }
 
 async function createLoginToken(
@@ -410,12 +451,12 @@ function loginForm(options: LoginPageOptions): string {
         <button class="submit" type="submit">Sign in</button>
       </form>`;
   }
-  return `<p class="subhead">Enter your username and we’ll send a code to your Telegram.</p>
+  return `<p class="subhead">Enter your username to continue.</p>
       <form method="post" action="/login">
         <input type="hidden" name="step" value="request">
         <input type="hidden" name="returnTo" value="${returnTo}">
         <div class="field"><label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
-        <button class="submit" type="submit">Send Telegram code</button>
+        <button class="submit" type="submit">Continue</button>
       </form>`;
 }
 
@@ -523,6 +564,20 @@ async function hasValidSession(request: Request, secret: string, audience: strin
   return token ? verifyAuthSessionToken(token, secret, audience) : false;
 }
 
+async function hasValidTelegramSession(
+  request: Request,
+  config: TelegramAuthConfig,
+  audience: string
+): Promise<boolean> {
+  const token = cookieValue(request, AUTH_COOKIE_NAME);
+  const subject = token
+    ? await verifiedAuthSessionSubject(token, config.sessionSecret, audience)
+    : null;
+  if (!subject) return false;
+  if (!subject.startsWith(PASSWORDLESS_SESSION_SUBJECT_PREFIX)) return true;
+  return config.passwordlessUsernames.has(subject.slice(PASSWORDLESS_SESSION_SUBJECT_PREFIX.length));
+}
+
 function telegramUser(config: TelegramAuthConfig, username: string): TelegramAuthUser | undefined {
   const normalized = normalizeFinanceUsername(username);
   return config.users.find((user) => user.normalizedUsername === normalized);
@@ -575,7 +630,46 @@ async function enforceSlashAuth(request: Request, env: AuthEnv, url: URL): Promi
   return redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`);
 }
 
-async function requestTelegramOtp(
+function requestIpAddress(request: Request): string {
+  const ipAddress = request.headers.get("CF-Connecting-IP")?.trim();
+  return ipAddress && ipAddress.length <= 45 && /^[0-9A-Fa-f:.]+$/u.test(ipAddress)
+    ? ipAddress
+    : "Unavailable";
+}
+
+function requestDevice(request: Request): string {
+  const userAgent = request.headers.get("User-Agent") ?? "";
+  const platform = /iPhone/iu.test(userAgent)
+    ? "iPhone"
+    : /iPad/iu.test(userAgent)
+      ? "iPad"
+      : /Android/iu.test(userAgent)
+        ? "Android"
+        : /Windows/iu.test(userAgent)
+          ? "Windows"
+          : /Macintosh|Mac OS X/iu.test(userAgent)
+            ? "Mac"
+            : /Linux/iu.test(userAgent)
+              ? "Linux"
+              : "unknown device";
+  const browser = /Edg(?:e|A|iOS)?\//iu.test(userAgent)
+    ? "Edge"
+    : /(?:Chrome|CriOS)\//iu.test(userAgent)
+      ? "Chrome"
+      : /(?:Firefox|FxiOS)\//iu.test(userAgent)
+        ? "Firefox"
+        : /Safari\//iu.test(userAgent) && /Version\//iu.test(userAgent)
+          ? "Safari"
+          : "Unknown browser";
+  return `${browser} on ${platform}`;
+}
+
+function requestOccurredAt(now: number): string {
+  return new Date(now).toISOString().replace("T", " ").replace(/\.\d{3}Z$/u, " UTC");
+}
+
+async function requestTelegramLogin(
+  request: Request,
   env: AuthEnv,
   config: TelegramAuthConfig,
   url: URL,
@@ -586,10 +680,9 @@ async function requestTelegramOtp(
   const now = dependencies.now?.() ?? Date.now();
   const normalizedUsername = normalizeFinanceUsername(usernameInput);
   const user = telegramUser(config, usernameInput);
-  const generatedChallengeId = crypto.randomUUID();
-  const generatedCode = dependencies.generateOtp?.() ?? generateTelegramOtp();
 
   if (!user) {
+    const generatedChallengeId = crypto.randomUUID();
     const expiresAt = now + TELEGRAM_OTP_EXPIRY_MS;
     const token = await createLoginToken(
       config.sessionSecret,
@@ -605,6 +698,36 @@ async function requestTelegramOtp(
       [loginCookie(token, expiresAt, now)]
     );
   }
+
+  if (config.passwordlessUsernames.has(user.normalizedUsername)) {
+    try {
+      await (dependencies.sendTelegramSignInAlert ?? sendTelegramSignInAlert)(env, user.chatId, {
+        username: user.username,
+        occurredAt: requestOccurredAt(now),
+        ipAddress: requestIpAddress(request),
+        device: requestDevice(request)
+      });
+    } catch {
+      return loginHtmlResponse(
+        {
+          mode: "telegram-username",
+          returnTo,
+          error: "We couldn’t send the Telegram sign-in alert. Access wasn’t granted. Try again."
+        },
+        { status: 503 }
+      );
+    }
+    const sessionToken = await createAuthSessionToken(
+      config.sessionSecret,
+      url.hostname,
+      `${PASSWORDLESS_SESSION_SUBJECT_PREFIX}${user.normalizedUsername}`,
+      now
+    );
+    return redirect(returnTo, [sessionCookie(sessionToken), expiredCookie(LOGIN_COOKIE_NAME)]);
+  }
+
+  const generatedChallengeId = crypto.randomUUID();
+  const generatedCode = dependencies.generateOtp?.() ?? generateTelegramOtp();
 
   const codeHash = await otpCodeHash(
     config.sessionSecret,
@@ -729,7 +852,7 @@ async function enforceTelegramAuth(
   if (url.pathname === "/login") {
     const returnTo = safeReturnTo(request.method === "GET" ? url.searchParams.get("returnTo") : null);
     if (request.method === "GET") {
-      return (await hasValidSession(request, config.sessionSecret, url.hostname))
+      return (await hasValidTelegramSession(request, config, url.hostname))
         ? redirect(returnTo)
         : loginHtmlResponse({ mode: "telegram-username", returnTo });
     }
@@ -743,7 +866,8 @@ async function enforceTelegramAuth(
       const form = await readLoginForm(request);
       const formReturnTo = safeReturnTo(form.get("returnTo"));
       if (form.get("step") === "request") {
-        return requestTelegramOtp(
+        return requestTelegramLogin(
+          request,
           env,
           config,
           url,
@@ -775,7 +899,7 @@ async function enforceTelegramAuth(
       );
     }
   }
-  if (await hasValidSession(request, config.sessionSecret, url.hostname)) return null;
+  if (await hasValidTelegramSession(request, config, url.hostname)) return null;
   if (url.pathname.startsWith("/api/")) {
     return Response.json({ message: "Authentication required" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }

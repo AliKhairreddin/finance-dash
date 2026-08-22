@@ -48,6 +48,19 @@ interface TelegramOtpMessagePayload {
   protect_content: true;
 }
 
+export interface TelegramSignInAlertDetails {
+  username: string;
+  occurredAt: string;
+  ipAddress: string;
+  device: string;
+}
+
+interface TelegramSignInAlertPayload {
+  chat_id: string;
+  text: string;
+  protect_content: true;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -194,6 +207,25 @@ export async function sendTelegramOtp(
   code: string
 ): Promise<void> {
   await telegramApi(env, "sendMessage", { ...buildTelegramOtpMessage(chatId, code) });
+}
+
+export function buildTelegramSignInAlertMessage(
+  chatId: string,
+  details: TelegramSignInAlertDetails
+): TelegramSignInAlertPayload {
+  return {
+    chat_id: chatId,
+    text: `Finance Dash sign-in detected for ${details.username}.\n\nTime: ${details.occurredAt}\nIP address: ${details.ipAddress}\nDevice: ${details.device}\n\nIf this wasn’t you, contact your dashboard administrator immediately to re-enable OTP and revoke this passwordless session.`,
+    protect_content: true
+  };
+}
+
+export async function sendTelegramSignInAlert(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
+  chatId: string,
+  details: TelegramSignInAlertDetails
+): Promise<void> {
+  await telegramApi(env, "sendMessage", { ...buildTelegramSignInAlertMessage(chatId, details) });
 }
 
 export async function deleteTelegramWebhook(
