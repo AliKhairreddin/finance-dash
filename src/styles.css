@@ -9779,7 +9779,8 @@ body {
     min-width: 0;
   }
 
-  .panel-header.bank-reconciliation-header {
+  .panel-header.bank-reconciliation-header,
+  .panel-header.unified-bank-header {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -9967,14 +9968,16 @@ body {
     height: 14px;
   }
 
-  .reconciliation-toolbar {
+  .reconciliation-toolbar,
+  .unified-bank-toolbar {
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr);
     align-items: center;
     gap: 6px;
   }
 
-  .reconciliation-toolbar .list-toolbar-main {
+  .reconciliation-toolbar .list-toolbar-main,
+  .unified-bank-toolbar .list-toolbar-main {
     display: contents;
   }
 
@@ -9984,20 +9987,23 @@ body {
     width: 100%;
   }
 
-  .reconciliation-toolbar .toolbar-popover-trigger {
+  .reconciliation-toolbar .toolbar-popover-trigger,
+  .unified-bank-toolbar .toolbar-popover-trigger {
     grid-column: 2;
     grid-row: 2;
     width: 36px;
     padding: 0;
   }
 
-  .reconciliation-toolbar .bank-activity-view-toggle {
+  .reconciliation-toolbar .bank-activity-view-toggle,
+  .unified-bank-toolbar .bank-activity-view-toggle {
     grid-column: 1;
     grid-row: 2;
     width: fit-content;
   }
 
-  .reconciliation-toolbar .toolbar-popover-trigger > span:not(.toolbar-filter-count) {
+  .reconciliation-toolbar .toolbar-popover-trigger > span:not(.toolbar-filter-count),
+  .unified-bank-toolbar .toolbar-popover-trigger > span:not(.toolbar-filter-count) {
     display: none;
   }
 
@@ -10007,27 +10013,40 @@ body {
     width: 100%;
   }
 
-  .reconciliation-toolbar .toolbar-search-field {
+  .reconciliation-toolbar .toolbar-search-field,
+  .unified-bank-toolbar .bank-toolbar-search {
     grid-column: 1 / -1;
     grid-row: 1;
+    width: 100%;
+    max-width: none;
   }
 
-  .reconciliation-toolbar .list-toolbar-actions {
+  .reconciliation-toolbar .list-toolbar-actions,
+  .unified-bank-toolbar .list-toolbar-actions {
     grid-column: 1 / -1;
     grid-row: 3;
+    display: flex;
     width: 100%;
     justify-content: flex-start;
   }
 
-  .reconciliation-toolbar .list-toolbar-actions .bank-date-controls {
+  .reconciliation-toolbar .list-toolbar-actions .bank-date-controls,
+  .unified-bank-toolbar .list-toolbar-actions .bank-date-controls {
     flex: 1 1 auto;
     width: auto;
   }
 
-  .reconciliation-toolbar .bank-date-range-trigger {
+  .reconciliation-toolbar .bank-date-range-trigger,
+  .unified-bank-toolbar .bank-date-range-trigger {
     flex: 1 1 auto;
     width: 100%;
     max-width: none;
+  }
+
+  .unified-bank-toolbar .list-toolbar-actions > .icon-button {
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
   }
 
   .wise-entity-nav .wise-entity-tabs {

@@ -1059,3 +1059,67 @@ No actionable P0, P1, or P2 issues remain.
 No P3 polish items are required for this change.
 
 final result: passed
+
+---
+
+# Design QA: Banks All Mobile Toolbar
+
+## Comparison target
+
+- Source visual truth: `/tmp/codex-remote-attachments/01a02a38-3a7a-7253-89ec-04659b272b54/1A68B4DE-6D0E-491B-AC4F-3C291E249B56/3-Pasted-Image-3.jpg` (Wise mobile toolbar reference).
+- Original All-view evidence: `/tmp/codex-remote-attachments/01a02a38-3a7a-7253-89ec-04659b272b54/1A68B4DE-6D0E-491B-AC4F-3C291E249B56/1-Pasted-Image-1.jpg`.
+- Implementation screenshot: `/tmp/finance-dash-all-bank-mobile-final.png`.
+- Full-view normalized comparison: `/tmp/finance-dash-wise-target-vs-all-mobile.png`.
+- Focused toolbar comparison: `/tmp/finance-dash-bank-toolbar-focused-comparison.png`.
+- Viewport: 393 × 852 CSS pixels, device scale factor 1.
+- State: Banks → All, transaction list selected, no active filters, default date period, empty search.
+
+## Density normalization
+
+- Source pixels: 590 × 1280. The 590 × 1092 app-content region below the captured status bar was normalized to 393 × 728 for comparison.
+- Implementation pixels: 393 × 852 at a 393 × 852 CSS viewport. The top 393 × 728 app-content region was used in the full-view comparison.
+- Focused comparison: the source toolbar region was normalized to 393 × 360 and compared with the implementation's top 393 × 360 region.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain in the requested toolbar composition.
+- Fonts and typography: the implementation keeps the existing Geist typography, weights, truncation, and All-specific labels. Search and period text remain on one line without clipping.
+- Spacing and layout rhythm: search spans the full available toolbar width. The view toggle and compact icon-only filter share row two. The period control, information control, and compact export action share row three with 6–8px gaps and no overlap.
+- Colors and visual tokens: borders, backgrounds, radii, shadows, active state, and muted icon colors reuse the same shared components and tokens as the Wise/Revolut toolbar.
+- Image quality and asset fidelity: this toolbar contains no raster product imagery. Existing Lucide icons are reused consistently; no replacement CSS or inline-SVG artwork was introduced.
+- Copy and content: All-specific copy (`Search transactions`, `All bank activity`) is intentionally preserved while the control hierarchy matches the provider pages.
+- Accessibility: search, filter, period, information, export, and view buttons retain accessible names. Filter and period popovers remain inside the 393 × 852 viewport. The 320px-width check found zero page overflow and no control intersections.
+- Responsiveness: verified at 320 × 700, 393 × 852, and 760 × 900. Search width equals toolbar width at each breakpoint; the period/action and toggle/filter gaps remain positive.
+
+## Interaction checks
+
+- Search filtering reduced the table to the matching row and the clear-search control restored the default query.
+- The filter popover opened with its title visible and stayed within the mobile viewport.
+- The period picker opened as an accessible dialog and stayed within the mobile viewport.
+- View controls retained pressed-state semantics.
+- Browser console errors checked: none.
+
+## Comparison history
+
+1. Initial implementation capture: `/tmp/finance-dash-all-bank-mobile-after.png`.
+   - Finding: the toolbar content was still limited to 267.8px inside a 343px content area because the unified panel header retained an intrinsic grid column.
+   - Severity: P1 for the requested mobile layout because search and period controls still looked left-weighted and under-filled.
+   - Fix: gave the unified bank header the same `minmax(0, 1fr)` mobile grid track as provider reconciliation headers.
+2. Post-fix capture: `/tmp/finance-dash-all-bank-mobile-final.png`.
+   - Evidence: the toolbar, search, and action row each measure 343px across the full 343px available content width. The focused reference comparison shows the same three-row hierarchy as Wise.
+   - Result: no actionable P0/P1/P2 findings.
+
+## Implementation checklist
+
+- [x] Full-width mobile search.
+- [x] Compact view-toggle and filter row.
+- [x] Shared period, info, and export action row.
+- [x] No stacked full-width export row below 440px.
+- [x] No icon/text collisions or page overflow at narrow mobile widths.
+- [x] Core controls and browser console verified.
+
+## Follow-up polish
+
+- None required for this requested alignment.
+
+final result: passed
