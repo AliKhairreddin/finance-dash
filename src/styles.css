@@ -5470,6 +5470,23 @@ th.amount .sortable-table-heading {
   display: block;
 }
 
+.invoice-control-table .invoice-status-stack {
+  width: 100%;
+  min-width: 0;
+}
+
+.invoice-control-table .invoice-status-stack > span {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+}
+
+.invoice-control-table .invoice-status-stack small,
+.invoice-control-table td:nth-child(7) > small {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .invoice-row-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -5479,8 +5496,14 @@ th.amount .sortable-table-heading {
 
 .invoice-row-actions > .icon-text-button {
   width: 100%;
+  min-width: 0;
   min-height: 32px;
-  padding: 0 8px;
+  gap: 6px;
+  padding: 6px;
+  font-size: 0.78rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .forecast-copy {
@@ -5495,8 +5518,14 @@ th.amount .sortable-table-heading {
 }
 
 .invoice-control-table .forecast-copy {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
+}
+
+.invoice-control-table .forecast-copy > * {
+  min-width: 0;
 }
 
 .forecast-copy svg {

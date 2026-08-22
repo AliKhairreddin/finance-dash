@@ -1123,3 +1123,67 @@ final result: passed
 - None required for this requested alignment.
 
 final result: passed
+
+---
+
+# Design QA: Invoice Row Column Containment
+
+## Comparison target
+
+- Source visual truth: `/tmp/codex-remote-attachments/01a02a38-3a7a-7253-89ec-04659b272b54/5FC3C2DB-4FE8-4060-AFFD-5B2EF2F43EBB/1-Pasted-Image-1.jpg`.
+- Browser-rendered mobile implementation: `/tmp/finance-dash-invoice-table-mobile-final.png`.
+- Browser-rendered desktop implementation: `/tmp/finance-dash-invoice-table-desktop-final.png`.
+- Final Invoices page capture: `/tmp/finance-dash-invoices-page-mobile-final.png`.
+- Focused same-input comparison: `/tmp/finance-dash-invoice-table-comparison.png`.
+- Mobile viewport: 393 × 852 CSS pixels at device scale factor 1.
+- Desktop viewport: 1280 × 720 CSS pixels at device scale factor 1.
+- State: representative open and draft invoice rows covering learning, issue-date, and predicted payment forecasts plus the longest row actions.
+
+## Density normalization
+
+- Source pixels: 590 × 1280. The reported 590 × 587 table region was cropped from the source and normalized to 392 × 390 pixels.
+- Mobile implementation pixels: 393 × 852. Its top 393 × 488 table region was retained at 1× density.
+- The normalized source and implementation regions were placed together in a 785 × 488 comparison image. Phone status and browser chrome were excluded from the comparison.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain in the requested status, forecast, and action columns.
+- Fonts and typography: existing Geist typography, weights, labels, and numeric hierarchy are unchanged. Long status metadata and action labels now wrap within their own cells instead of crossing adjacent text.
+- Spacing and layout rhythm: the existing 90px status, 142px forecast, and 123px action tracks are preserved. Status metadata stacks vertically, forecast content is constrained to its track, and action buttons keep consistent gaps and row alignment.
+- Colors and visual tokens: status pills, forecast tones, borders, shadows, and button surfaces continue using the existing dashboard tokens.
+- Image quality and asset fidelity: the affected surface contains no raster imagery. Existing Lucide icons remain unchanged and aligned with their labels.
+- Copy and content: invoice status, Merit state, forecast explanations, and action labels remain complete; no text is hidden or replaced with abbreviations.
+- Accessibility: table semantics, sortable headers, accessible button names, and horizontal scrolling are preserved. Wrapping prevents content from visually obscuring adjacent controls at zoomed and narrow layouts.
+- Responsiveness: measured representative rows at 393 × 852 and 1280 × 720. Every status, forecast, action container, and action button reported zero horizontal overflow and zero intersection with adjacent columns. The document itself had zero horizontal overflow.
+
+## Comparison history
+
+1. Reported problem state.
+   - Severity: P1.
+   - Evidence: status metadata, forecast copy, and forecast icons painted across adjacent columns in the supplied mobile screenshot.
+   - Cause: the status stack used `width: max-content`, while action buttons enforced unbreakable labels inside fixed-width table columns.
+2. Final implementation.
+   - Fix: constrain the status and forecast stacks to their cells, stack status metadata vertically, allow long action labels to wrap, and keep each action button within its column width.
+   - Post-fix evidence: `/tmp/finance-dash-invoice-table-comparison.png` plus measured mobile and desktop layout checks.
+   - Result: no actionable P0/P1/P2 findings.
+
+## Interaction and runtime checks
+
+- Horizontally scrolled the invoice table through the affected status, forecast, and action columns at mobile width.
+- Verified open, draft, learning forecast, issue-date forecast, predicted-date forecast, duplicate, retry delivery, mark paid, edit, and send states.
+- Verified the same representative rows at desktop width.
+- Browser console errors checked on the final Invoices page: none.
+
+## Implementation checklist
+
+- [x] Keep status metadata inside the status column.
+- [x] Keep forecast icons and copy inside the forecast column.
+- [x] Keep every action button inside the action column.
+- [x] Preserve sortable columns and horizontal table scrolling.
+- [x] Verify mobile and desktop layouts.
+
+## Follow-up polish
+
+- None required for this requested containment fix.
+
+final result: passed
