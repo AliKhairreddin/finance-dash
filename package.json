@@ -8,6 +8,7 @@
     "server": "tsx watch server/index.ts",
     "auth:configure:slash": "tsx scripts/configure-auth.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
+    "import:wise-statements": "tsx scripts/import-wise-statements.ts",
     "wise:reset": "tsx scripts/reset-wise.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
     "ledger:cutover": "tsx scripts/migrate-bank-ledger.ts",

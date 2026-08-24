@@ -308,6 +308,27 @@ const wiseStatementImport = v.object({
   importedAt: v.string()
 });
 
+const cashFlowLine = v.object({
+  id: v.string(),
+  name: v.string(),
+  amount: v.number(),
+  currency: v.string(),
+  notes: v.optional(v.string()),
+  dueDate: v.optional(v.string())
+});
+
+const cashFlowSnapshot = v.object({
+  id: v.string(),
+  asOfDate: v.string(),
+  cashAccounts: v.array(cashFlowLine),
+  receivables: v.array(cashFlowLine),
+  openBalances: v.array(cashFlowLine),
+  payables: v.array(cashFlowLine),
+  investments: v.array(cashFlowLine),
+  createdAt: v.string(),
+  updatedAt: v.string()
+});
+
 const revenueRun = v.object({
   id: v.string(),
   partnerId: v.string(),
@@ -547,6 +568,7 @@ export default defineSchema({
     profitDistributionCache: v.optional(profitDistributionSnapshot),
     meritTaxes: v.optional(v.array(meritTax)),
     aiSettings: v.optional(aiSettings),
+    cashFlowSnapshots: v.optional(v.array(cashFlowSnapshot)),
     updatedAt: v.string()
   }).index("by_key", ["key"]),
   transactionCategories: defineTable({

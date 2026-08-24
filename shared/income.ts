@@ -270,12 +270,12 @@ export function openInvoiceReceivables(invoices: Invoice[], allocations: Payment
 
 export function applyPaymentState(invoices: Invoice[], allocations: PaymentAllocation[]): Invoice[] {
   return invoices.map((invoice) => {
-    if (invoice.status === "draft") return invoice;
     const invoiceAllocations = allocations.filter((allocation) => allocation.invoiceId === invoice.id);
+    if (invoice.status === "draft" && invoiceAllocations.length === 0) return invoice;
     const outstanding = invoiceOutstanding(invoice, allocations);
     if (outstanding > 0) {
       const { paidAt: _paidAt, ...withoutPaidAt } = invoice;
-      return { ...withoutPaidAt, status: "open" };
+      return invoice.status === "draft" ? withoutPaidAt : { ...withoutPaidAt, status: "open" };
     }
     const paidAt = invoiceAllocations.reduce(
       (latest, allocation) => (allocation.paidAt > latest ? allocation.paidAt : latest),

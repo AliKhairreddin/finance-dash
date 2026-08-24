@@ -348,17 +348,16 @@ test("bulk dashboard payments are idempotent and manual invoice matching can be 
 
     const store = await import("./store");
     await store.initializeStore();
-    await assert.rejects(
-      store.recordBulkInvoicePayments({
-        invoiceIds: ["bulk-1", "draft-1"],
-        operationId: "invalid-draft-batch",
-        paidAt: "2026-07-20",
-        source: "wise",
-        confirmation: "RECORD_DASHBOARD_PAYMENTS"
-      }),
-      /not an open sales invoice/
-    );
-    assert.equal(store.getSnapshot().paymentAllocations.length, 0);
+    const paidDraft = await store.recordBulkInvoicePayments({
+      invoiceIds: ["draft-1"],
+      operationId: "draft-payment-operation",
+      paidAt: "2026-07-20",
+      source: "wise",
+      confirmation: "RECORD_DASHBOARD_PAYMENTS"
+    });
+    assert.equal(paidDraft.invoices.find((invoice) => invoice.id === "draft-1")?.status, "paid");
+    assert.equal(paidDraft.invoices.find((invoice) => invoice.id === "draft-1")?.meritStatus, undefined);
+    assert.equal(paidDraft.paymentAllocations.length, 1);
 
     const payload = {
       invoiceIds: ["bulk-1", "bulk-2"],
@@ -368,7 +367,7 @@ test("bulk dashboard payments are idempotent and manual invoice matching can be 
       confirmation: "RECORD_DASHBOARD_PAYMENTS" as const
     };
     const firstBulk = await store.recordBulkInvoicePayments(payload);
-    assert.equal(firstBulk.paymentAllocations.length, 2);
+    assert.equal(firstBulk.paymentAllocations.length, 3);
     assert.deepEqual(
       firstBulk.invoices.filter((invoice) => payload.invoiceIds.includes(invoice.id)).map((invoice) => invoice.status),
       ["paid", "paid"]
@@ -378,7 +377,7 @@ test("bulk dashboard payments are idempotent and manual invoice matching can be 
       ["open", "open"]
     );
     const retriedBulk = await store.recordBulkInvoicePayments(payload);
-    assert.equal(retriedBulk.paymentAllocations.length, 2);
+    assert.equal(retriedBulk.paymentAllocations.length, 3);
 
     const matched = await store.matchInvoicePayment("wise-manual-payment", {
       invoiceId: "manual-1",

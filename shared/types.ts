@@ -68,6 +68,39 @@ export interface CreateManualReceivablePayload {
   name: string;
   amount: number;
   currency: string;
+  notes?: string;
+  dueDate?: string;
+}
+
+export interface CashFlowLine {
+  id: string;
+  name: string;
+  amount: number;
+  currency: string;
+  notes?: string;
+  dueDate?: string;
+}
+
+export interface CashFlowSnapshot {
+  id: string;
+  asOfDate: string;
+  cashAccounts: CashFlowLine[];
+  receivables: CashFlowLine[];
+  openBalances: CashFlowLine[];
+  payables: CashFlowLine[];
+  investments: CashFlowLine[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveCashFlowSnapshotPayload {
+  id?: string;
+  asOfDate: string;
+  cashAccounts: CashFlowLine[];
+  receivables: CashFlowLine[];
+  openBalances: CashFlowLine[];
+  payables: CashFlowLine[];
+  investments: CashFlowLine[];
 }
 
 export interface Payable {
@@ -641,6 +674,7 @@ export interface DashboardSnapshot {
   integrationStatus: IntegrationStatus[];
   metrics: Metrics;
   profitDistribution: ProfitDistributionSnapshot;
+  cashFlowSnapshots: CashFlowSnapshot[];
   lastSync: string;
 }
 

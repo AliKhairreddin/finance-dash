@@ -114,6 +114,8 @@ import type {
   RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SaveCashFlowSnapshotPayload,
+  CashFlowSnapshot,
   SendInvoicesPayload,
   SendInvoicesResult,
   SyncRevenuePayload,
@@ -138,6 +140,7 @@ import type {
   BankMerchantGroupSummary
 } from "../shared/bankMerchantGroups";
 import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
+import { financeOperatingDate, shiftFinanceOperatingDate } from "../shared/operatingDate";
 import {
   isRequiredTransactionCategory,
   isReviewOnlyTransactionCategory,
@@ -212,9 +215,10 @@ import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
+import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "revenue", "invoices", "expenses", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -331,13 +335,7 @@ type AnalyticsCategoryCompanyView = {
 };
 
 function localIsoDate(daysFromToday = 0): string {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() + daysFromToday);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return shiftFinanceOperatingDate(financeOperatingDate(), daysFromToday);
 }
 
 function defaultBankTransactionDateRange(windowDays: number): BankTransactionDateRange {
@@ -1870,6 +1868,28 @@ function App() {
     setNotice(`${payload.name.trim()} added to receivables.`);
   }
 
+  async function deleteManualReceivable(receivableId: string) {
+    const response = await fetch(`${apiBase}/receivables/${encodeURIComponent(receivableId)}`, {
+      method: "DELETE"
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Manual receivable could not be removed"));
+    await loadDashboard();
+    setNotice("Manual receivable removed.");
+  }
+
+  async function saveCashFlowSnapshot(payload: SaveCashFlowSnapshotPayload): Promise<CashFlowSnapshot> {
+    const response = await fetch(`${apiBase}/cash-flow/snapshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Cash flow snapshot could not be saved"));
+    const snapshot = (await response.json()) as CashFlowSnapshot;
+    await loadDashboard();
+    setNotice(`Cash flow snapshot saved for ${snapshot.asOfDate}.`);
+    return snapshot;
+  }
+
   async function updateInvoiceDraft(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
     const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoiceId)}`, {
       method: "PUT",
@@ -2219,6 +2239,18 @@ function App() {
       )}
 
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
+
+      {activeTab === "cash-flow" && (
+        <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} />
+      )}
+
+      {activeTab === "cash-flow-invoices" && (
+        <CashFlowOpenInvoicesView
+          dashboard={dashboard}
+          onCreateManualReceivable={createManualReceivable}
+          onDeleteManualReceivable={deleteManualReceivable}
+        />
+      )}
 
       {activeTab === "banks" && (
         <BanksView
@@ -2622,11 +2654,15 @@ function Sidebar({
     { id: "invoices", label: "Invoices", icon: <FileText size={17} /> },
     { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> }
   ];
+  const cashFlowItems: SidebarItem[] = [
+    { id: "cash-flow", label: "Position", icon: <WalletCards size={17} /> },
+    { id: "cash-flow-invoices", label: "Open invoices", icon: <FileText size={17} /> }
+  ];
   const workspaceItems: SidebarItem[] = [
     { id: "providers", label: "Companies", icon: <Building2 size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
-  const activeItem = [...primaryItems, ...accountingItems, ...operationsItems, ...workspaceItems]
+  const activeItem = [...primaryItems, ...cashFlowItems, ...accountingItems, ...operationsItems, ...workspaceItems]
     .find((item) => item.id === activeTab) ?? primaryItems[0];
 
   useEffect(() => {
@@ -2708,6 +2744,8 @@ function Sidebar({
               {primaryItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label">Accounting</div>
               {accountingItems.map((item) => navigationButton(item, false, true))}
+              <div className="mobile-nav-group-label">Cash Flow</div>
+              {cashFlowItems.map((item) => navigationButton(item, false, true))}
               <div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
@@ -2741,6 +2779,10 @@ function Sidebar({
         <div className="sidebar-section-label">Accounting</div>
         <div className="sidebar-income-group">
           {accountingItems.map((item) => navigationButton(item, true))}
+        </div>
+        <div className="sidebar-section-label">Cash Flow</div>
+        <div className="sidebar-income-group">
+          {cashFlowItems.map((item) => navigationButton(item, true))}
         </div>
         <div className="sidebar-section-label has-badge">
           <span>Operations</span>

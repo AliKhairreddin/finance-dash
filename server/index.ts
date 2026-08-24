@@ -25,6 +25,7 @@ import type {
   RecordInvoicePaymentPayload,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SaveCashFlowSnapshotPayload,
   SendInvoicesPayload,
   SyncRevenuePayload,
   TransactionMatchFilter,
@@ -36,6 +37,7 @@ import type {
 } from "../shared/types";
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import { transactionBusinessCategory } from "../shared/categories";
+import { financeOperatingDate } from "../shared/operatingDate";
 import {
   assignTransactionTeam,
   autoMatchInvoicePayments,
@@ -53,6 +55,7 @@ import {
   deleteRevenuePartner,
   deleteTransactionCategoryDefinition,
   deleteHolding,
+  deleteManualReceivable,
   draftRevenueRun,
   getSnapshot,
   getBankActivitySummary,
@@ -74,6 +77,7 @@ import {
   runIncomeAutomation,
   runAiPrompt,
   saveAiSettings,
+  saveCashFlowSnapshot,
   saveProfitDistributionAdjustment,
   sendInvoices,
   syncExternalActivity,
@@ -127,7 +131,7 @@ app.get("/api/analytics", (request, response, next) => {
   try {
     const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
     const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
-    const today = new Date().toISOString().slice(0, 10);
+    const today = financeOperatingDate();
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
       || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
@@ -147,7 +151,7 @@ app.get("/api/analytics/category-companies", (request, response, next) => {
   try {
     const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
     const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
-    const today = new Date().toISOString().slice(0, 10);
+    const today = financeOperatingDate();
     const direction = request.query.direction;
     const currency = typeof request.query.currency === "string" ? request.query.currency.trim().toUpperCase() : "";
     const rawCategory = typeof request.query.category === "string" ? request.query.category.trim() : "";
@@ -204,7 +208,7 @@ app.post("/api/sync", async (request, response, next) => {
 function localTransactionPageOptions(request: express.Request): Parameters<typeof getTransactionPage>[0] {
     const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
     const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate) || fromDate > toDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate) || fromDate > toDate || toDate > financeOperatingDate()) {
       throw new ClientRequestError("Transaction date range is invalid");
     }
     const rawSource = typeof request.query.source === "string" ? request.query.source : undefined;
@@ -629,6 +633,23 @@ app.get("/api/invoices/:invoiceId/duplicate-preview", async (request, response, 
 app.post("/api/receivables", async (request, response, next) => {
   try {
     response.status(201).json(await createManualReceivable(request.body as CreateManualReceivablePayload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/receivables/:receivableId", async (request, response, next) => {
+  try {
+    await deleteManualReceivable(request.params.receivableId);
+    response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/cash-flow/snapshots", async (request, response, next) => {
+  try {
+    response.status(201).json(await saveCashFlowSnapshot(request.body as SaveCashFlowSnapshotPayload));
   } catch (error) {
     next(error);
   }

@@ -4,6 +4,8 @@ import type {
   AiPromptResult,
   AssignTransactionTeamPayload,
   AutomationRun,
+  CashFlowLine,
+  CashFlowSnapshot,
   AutoMatchInvoicePaymentsResult,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
@@ -45,6 +47,7 @@ import type {
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SaveCashFlowSnapshotPayload,
   SendInvoicesPayload,
   SendInvoicesResult,
   StoredAiSettings,
@@ -96,6 +99,15 @@ import {
   transactionNeedsCategoryReview
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import { financeOperatingDate } from "../shared/operatingDate";
+import {
+  maximumCashFlowLineIdLength,
+  maximumCashFlowLineNameLength,
+  maximumCashFlowLineNotesLength,
+  maximumCashFlowLinesPerSection,
+  maximumCashFlowLinesPerSnapshot,
+  maximumCashFlowSnapshots
+} from "../shared/cashFlow";
 import {
   expensePayables,
   nextExpenseRecordNumber,
@@ -214,6 +226,7 @@ let transactionCategoryRules: TransactionCategoryRule[] = [];
 let revenuePartners: RevenuePartner[] = [];
 let revenueRuns: RevenueRun[] = [];
 let revenueAccruals: RevenueAccrual[] = [];
+let cashFlowSnapshots: CashFlowSnapshot[] = [];
 let aiSettings: PersistedAiSettings = { ...defaultAiSettings };
 let transactionTeamAssignments: Array<{ transactionId: string; teamId: string; updatedAt: string }> = [];
 let wiseCardHolderTeamAssignments: WiseCardHolderTeamAssignment[] = [];
@@ -363,6 +376,7 @@ export async function initializeStore(): Promise<void> {
   }));
   revenueRuns = persisted.revenueRuns ?? [];
   revenueAccruals = persisted.revenueAccruals ?? [];
+  cashFlowSnapshots = persisted.cashFlowSnapshots ?? [];
   aiSettings = persisted.aiSettings ?? { ...defaultAiSettings };
   transactionTeamAssignments = normalizedTeamAssignments(persisted.transactionTeamAssignments);
   wiseCardHolderTeamAssignments = mergeWiseCardHolderTeamAssignments(persisted.wiseCardHolderTeamAssignments ?? []);
@@ -410,6 +424,7 @@ async function persist(): Promise<void> {
     profitDistributionAdjustments,
     revenueRuns,
     revenueAccruals,
+    cashFlowSnapshots,
     aiSettings
   });
 }
@@ -789,8 +804,68 @@ export function getSnapshot(): DashboardSnapshot {
     ),
     metrics,
     profitDistribution: calculateProfitDistribution(matchedTransactions, profitDistributionAdjustments),
+    cashFlowSnapshots,
     lastSync
   };
+}
+
+function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine {
+  const name = line.name?.trim();
+  if (!name) throw new Error(`${field} name is required`);
+  if (name.length > maximumCashFlowLineNameLength) throw new Error(`${field} name is too long`);
+  if (!Number.isFinite(line.amount)) throw new Error(`${field} amount must be a number`);
+  const id = line.id?.trim() || `cash-flow-line-${crypto.randomUUID()}`;
+  if (id.length > maximumCashFlowLineIdLength) throw new Error(`${field} ID is too long`);
+  const notes = cleanOptional(line.notes);
+  if (notes && notes.length > maximumCashFlowLineNotesLength) throw new Error(`${field} note is too long`);
+  return {
+    id,
+    name,
+    amount: Number(line.amount.toFixed(2)),
+    currency: normalizedCurrency(line.currency),
+    notes,
+    dueDate: line.dueDate ? normalizedDate(line.dueDate, `${field} due date`) : undefined
+  };
+}
+
+export async function saveCashFlowSnapshot(
+  payload: SaveCashFlowSnapshotPayload
+): Promise<CashFlowSnapshot> {
+  const sections = [
+    ["cashAccounts", payload.cashAccounts],
+    ["receivables", payload.receivables],
+    ["openBalances", payload.openBalances],
+    ["payables", payload.payables],
+    ["investments", payload.investments]
+  ] as const;
+  if (sections.some(([, lines]) => !Array.isArray(lines) || lines.length > maximumCashFlowLinesPerSection)) {
+    throw new Error(`Each cash flow section is limited to ${maximumCashFlowLinesPerSection} rows`);
+  }
+  if (sections.reduce((total, [, lines]) => total + lines.length, 0) > maximumCashFlowLinesPerSnapshot) {
+    throw new Error(`A cash flow snapshot is limited to ${maximumCashFlowLinesPerSnapshot} rows`);
+  }
+  const asOfDate = normalizedDate(payload.asOfDate, "Cash flow date");
+  if (asOfDate > financeOperatingDate()) throw new Error("Cash flow date cannot be in the future");
+  const existing = cashFlowSnapshots.find((snapshot) =>
+    snapshot.id === payload.id || snapshot.asOfDate === asOfDate
+  );
+  const updatedAt = new Date().toISOString();
+  const snapshot: CashFlowSnapshot = {
+    id: existing?.id ?? `cash-flow-${crypto.randomUUID()}`,
+    asOfDate,
+    cashAccounts: payload.cashAccounts.map((line, index) => normalizedCashFlowLine(line, `Cash account ${index + 1}`)),
+    receivables: payload.receivables.map((line, index) => normalizedCashFlowLine(line, `Receivable ${index + 1}`)),
+    openBalances: payload.openBalances.map((line, index) => normalizedCashFlowLine(line, `Open balance ${index + 1}`)),
+    payables: payload.payables.map((line, index) => normalizedCashFlowLine(line, `Payable ${index + 1}`)),
+    investments: payload.investments.map((line, index) => normalizedCashFlowLine(line, `Investment ${index + 1}`)),
+    createdAt: existing?.createdAt ?? updatedAt,
+    updatedAt
+  };
+  cashFlowSnapshots = [snapshot, ...cashFlowSnapshots.filter((item) => item.id !== snapshot.id)]
+    .sort((left, right) => right.asOfDate.localeCompare(left.asOfDate))
+    .slice(0, maximumCashFlowSnapshots);
+  await persist();
+  return snapshot;
 }
 
 function wiseImportId(payload: ImportWiseStatementPayload): string {
@@ -1312,11 +1387,20 @@ export async function createManualReceivable(payload: CreateManualReceivablePayl
     name,
     balance: validateInvoiceAmount(payload.amount),
     currency: normalizedCurrency(payload.currency),
-    source: "manual"
+    source: "manual",
+    notes: cleanOptional(payload.notes),
+    dueDate: payload.dueDate ? normalizedDate(payload.dueDate, "Expected payment date") : undefined
   };
   manualReceivables = [receivable, ...manualReceivables];
   await persist();
   return receivable;
+}
+
+export async function deleteManualReceivable(receivableId: string): Promise<void> {
+  const existing = manualReceivables.find((item) => item.id === receivableId);
+  if (!existing) throw new Error("Manual receivable not found");
+  manualReceivables = manualReceivables.filter((item) => item.id !== receivableId);
+  await persist();
 }
 
 function validateExpensePayload(payload: CreateExpensePayload): {
@@ -1690,8 +1774,8 @@ export async function recordBulkInvoicePayments(
     const allocationId = bulkPaymentAllocationId(payload.operationId, invoiceId);
     const existingAllocation = paymentAllocations.find((allocation) => allocation.id === allocationId);
     if (existingAllocation) return { invoice, allocationId, outstanding: 0, alreadyRecorded: true };
-    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") {
-      throw new Error(`Invoice ${invoice.invoiceNumber} is not an open sales invoice`);
+    if (invoice.documentType !== "sales_invoice" || (invoice.status !== "open" && invoice.status !== "draft")) {
+      throw new Error(`Invoice ${invoice.invoiceNumber} is not an unpaid sales invoice`);
     }
     const outstanding = invoiceOutstanding(invoice, paymentAllocations);
     if (outstanding <= 0) throw new Error(`Invoice ${invoice.invoiceNumber} has no outstanding balance`);
@@ -1810,7 +1894,6 @@ export async function recordInvoicePayment(
 ): Promise<DashboardSnapshot> {
   const invoice = invoices.find((item) => item.id === invoiceId);
   if (!invoice) throw new Error("Invoice not found");
-  if (invoice.status === "draft") throw new Error("A draft invoice cannot receive payments");
   const outstanding = invoiceOutstanding(invoice, paymentAllocations);
   const amount = validateInvoiceAmount(payload.amount);
   if (amount - outstanding > 0.01) throw new Error("Payment allocation exceeds the invoice outstanding amount");

@@ -4,6 +4,8 @@ import type {
   AiPromptPayload,
   AssignTransactionTeamPayload,
   AutomationRun,
+  CashFlowLine,
+  CashFlowSnapshot,
   AutoMatchInvoicePaymentsResult,
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
@@ -49,6 +51,7 @@ import type {
   RevenueRun,
   SaveProfitDistributionAdjustmentPayload,
   SaveAiSettingsPayload,
+  SaveCashFlowSnapshotPayload,
   SendInvoicesPayload,
   SendInvoicesResult,
   StoredAiSettings,
@@ -97,6 +100,15 @@ import {
   transactionNeedsCategoryReview
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import { financeOperatingDate } from "../shared/operatingDate";
+import {
+  maximumCashFlowLineIdLength,
+  maximumCashFlowLineNameLength,
+  maximumCashFlowLineNotesLength,
+  maximumCashFlowLinesPerSection,
+  maximumCashFlowLinesPerSnapshot,
+  maximumCashFlowSnapshots
+} from "../shared/cashFlow";
 import {
   expensePayables,
   nextExpenseRecordNumber,
@@ -232,6 +244,7 @@ interface PersistedState {
   invoices: Invoice[];
   expenses: ExpenseRecord[];
   manualReceivables: LedgerItem[];
+  cashFlowSnapshots: CashFlowSnapshot[];
   teams: Team[];
   transactionCategories: TransactionCategory[];
   transactionCategoryRules: TransactionCategoryRule[];
@@ -1641,7 +1654,7 @@ function isoDateShift(value: string, days: number): string {
 }
 
 function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
-  const toDate = new Date(now).toISOString().slice(0, 10);
+  const toDate = financeOperatingDate(now);
   return {
     fromDate: isoDateShift(toDate, 1 - bankActivityWindowDays),
     toDate
@@ -1950,7 +1963,7 @@ function bankAnalyticsDateRange(url: URL): BankAnalyticsDateRange {
     !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
     || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
     || fromDate > toDate
-    || toDate > new Date().toISOString().slice(0, 10)
+    || toDate > financeOperatingDate()
   ) {
     throw new ApiError(400, "Analytics date range is invalid");
   }
@@ -2318,6 +2331,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     invoices: stored?.invoices ?? [],
     expenses: stored ? stored.expenses : [],
     manualReceivables: stored?.manualReceivables ?? [],
+    cashFlowSnapshots: stored?.cashFlowSnapshots ?? [],
     teams: mergeTeamDirectory(stored?.teams ?? []),
     transactionCategories: storedTransactionCategories,
     transactionCategoryRules: sanitizeStoredTransactionCategoryRules(storedCategoryRules),
@@ -3643,6 +3657,7 @@ async function getSnapshot(
     ),
     metrics: calculateMetrics(accounts, receivables, [], payables, []),
     profitDistribution,
+    cashFlowSnapshots: state.cashFlowSnapshots,
     lastSync: new Date().toISOString()
   };
 }
@@ -4872,6 +4887,9 @@ async function createManualReceivable(env: Env, payload: CreateManualReceivableP
   if (!currency || !/^[A-Z0-9]{2,12}$/.test(currency)) {
     throw new ApiError(400, "Receivable currency is invalid");
   }
+  if (payload.dueDate && !isIsoCalendarDate(payload.dueDate)) {
+    throw new ApiError(400, "Expected payment date is invalid");
+  }
 
   const state = await loadPersisted(env);
   const receivable: LedgerItem = {
@@ -4879,11 +4897,91 @@ async function createManualReceivable(env: Env, payload: CreateManualReceivableP
     name,
     balance: Number(payload.amount.toFixed(2)),
     currency,
-    source: "manual"
+    source: "manual",
+    notes: cleanOptional(payload.notes),
+    dueDate: payload.dueDate
   };
   state.manualReceivables = [receivable, ...state.manualReceivables];
   await savePersisted(env, state);
   return receivable;
+}
+
+async function deleteManualReceivable(env: Env, receivableId: string): Promise<void> {
+  const state = await loadPersisted(env);
+  if (!state.manualReceivables.some((item) => item.id === receivableId)) {
+    throw new ApiError(404, "Manual receivable not found");
+  }
+  state.manualReceivables = state.manualReceivables.filter((item) => item.id !== receivableId);
+  await savePersisted(env, state);
+}
+
+function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine {
+  const name = line.name?.trim();
+  const currency = line.currency?.trim().toUpperCase();
+  if (!name || !Number.isFinite(line.amount) || !/^[A-Z0-9]{2,12}$/.test(currency)) {
+    throw new ApiError(400, `${field} needs a name, numeric amount, and currency`);
+  }
+  if (name.length > maximumCashFlowLineNameLength) throw new ApiError(400, `${field} name is too long`);
+  const id = line.id?.trim() || `cash-flow-line-${crypto.randomUUID()}`;
+  if (id.length > maximumCashFlowLineIdLength) throw new ApiError(400, `${field} ID is too long`);
+  const notes = cleanOptional(line.notes);
+  if (notes && notes.length > maximumCashFlowLineNotesLength) throw new ApiError(400, `${field} note is too long`);
+  if (line.dueDate && !isIsoCalendarDate(line.dueDate)) {
+    throw new ApiError(400, `${field} due date is invalid`);
+  }
+  return {
+    id,
+    name,
+    amount: Number(line.amount.toFixed(2)),
+    currency,
+    notes,
+    dueDate: line.dueDate
+  };
+}
+
+async function saveCashFlowSnapshot(
+  env: Env,
+  payload: SaveCashFlowSnapshotPayload
+): Promise<CashFlowSnapshot> {
+  if (!isIsoCalendarDate(payload.asOfDate) || payload.asOfDate > financeOperatingDate()) {
+    throw new ApiError(400, "Cash flow date is invalid");
+  }
+  const sections = [
+    ["Cash account", payload.cashAccounts],
+    ["Receivable", payload.receivables],
+    ["Open balance", payload.openBalances],
+    ["Payable", payload.payables],
+    ["Investment", payload.investments]
+  ] as const;
+  if (sections.some(([, lines]) => !Array.isArray(lines) || lines.length > maximumCashFlowLinesPerSection)) {
+    throw new ApiError(400, `Each cash flow section is limited to ${maximumCashFlowLinesPerSection} rows`);
+  }
+  if (sections.reduce((total, [, lines]) => total + lines.length, 0) > maximumCashFlowLinesPerSnapshot) {
+    throw new ApiError(400, `A cash flow snapshot is limited to ${maximumCashFlowLinesPerSnapshot} rows`);
+  }
+  const state = await loadPersisted(env);
+  const existing = state.cashFlowSnapshots.find((snapshot) =>
+    snapshot.id === payload.id || snapshot.asOfDate === payload.asOfDate
+  );
+  const updatedAt = new Date().toISOString();
+  const normalized = (label: string, lines: CashFlowLine[]) =>
+    lines.map((line, index) => normalizedCashFlowLine(line, `${label} ${index + 1}`));
+  const snapshot: CashFlowSnapshot = {
+    id: existing?.id ?? `cash-flow-${crypto.randomUUID()}`,
+    asOfDate: payload.asOfDate,
+    cashAccounts: normalized("Cash account", payload.cashAccounts),
+    receivables: normalized("Receivable", payload.receivables),
+    openBalances: normalized("Open balance", payload.openBalances),
+    payables: normalized("Payable", payload.payables),
+    investments: normalized("Investment", payload.investments),
+    createdAt: existing?.createdAt ?? updatedAt,
+    updatedAt
+  };
+  state.cashFlowSnapshots = [snapshot, ...state.cashFlowSnapshots.filter((item) => item.id !== snapshot.id)]
+    .sort((left, right) => right.asOfDate.localeCompare(left.asOfDate))
+    .slice(0, maximumCashFlowSnapshots);
+  await savePersisted(env, state);
+  return snapshot;
 }
 
 async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
@@ -5272,8 +5370,8 @@ async function recordBulkInvoicePayments(
     const allocationId = bulkPaymentAllocationId(payload.operationId, invoiceId);
     const existingAllocation = state.paymentAllocations.find((allocation) => allocation.id === allocationId);
     if (existingAllocation) return { invoice, allocationId, outstanding: 0, alreadyRecorded: true };
-    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") {
-      throw new ApiError(409, `Invoice ${invoice.invoiceNumber} is not an open sales invoice`);
+    if (invoice.documentType !== "sales_invoice" || (invoice.status !== "open" && invoice.status !== "draft")) {
+      throw new ApiError(409, `Invoice ${invoice.invoiceNumber} is not an unpaid sales invoice`);
     }
     const outstanding = invoiceOutstanding(invoice, state.paymentAllocations);
     if (outstanding <= 0) throw new ApiError(409, `Invoice ${invoice.invoiceNumber} has no outstanding balance`);
@@ -5406,7 +5504,6 @@ async function recordInvoicePayment(
   const state = await loadPersisted(env);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found");
-  if (invoice.status === "draft") throw new ApiError(409, "Save the invoice to Merit before recording payment");
   const outstanding = invoiceOutstanding(invoice, state.paymentAllocations);
   if (payload.amount - outstanding > 0.01) throw new ApiError(409, `Payment exceeds the ${outstanding.toFixed(2)} ${invoice.currency} outstanding balance`);
   const transaction = payload.transactionId
@@ -5908,7 +6005,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)
     || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
     || fromDate > toDate
-    || toDate > new Date().toISOString().slice(0, 10)
+    || toDate > financeOperatingDate()
   ) {
     throw new ApiError(400, "Transaction date range is invalid");
   }
@@ -6419,6 +6516,16 @@ async function handleApi(
 
     if (url.pathname === "/api/receivables" && request.method === "POST") {
       return json(await createManualReceivable(env, (await request.json()) as CreateManualReceivablePayload), { status: 201 });
+    }
+
+    const receivableMatch = url.pathname.match(/^\/api\/receivables\/([^/]+)$/);
+    if (receivableMatch && request.method === "DELETE") {
+      await deleteManualReceivable(env, decodeURIComponent(receivableMatch[1]));
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === "/api/cash-flow/snapshots" && request.method === "POST") {
+      return json(await saveCashFlowSnapshot(env, (await request.json()) as SaveCashFlowSnapshotPayload), { status: 201 });
     }
 
     if (url.pathname === "/api/invoices/send" && request.method === "POST") {

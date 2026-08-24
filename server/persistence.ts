@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type {
   AutomationRun,
+  CashFlowSnapshot,
   ExpenseRecord,
   FxRate,
   Holding,
@@ -54,6 +55,7 @@ export interface PersistedState {
   revenueAccruals: RevenueAccrual[];
   profitDistributionAdjustments: ProfitDistributionAdjustment[];
   aiSettings?: PersistedAiSettings;
+  cashFlowSnapshots: CashFlowSnapshot[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -9,7 +9,10 @@ import {
   sanitizeStoredTransactionCategoryRules
 } from "../shared/categories";
 import { canonicalTeamId } from "../shared/business";
-import { maximumWiseStatementImportHistory } from "../shared/wiseEntities";
+import {
+  maximumWiseStatementImportHistory,
+  migrateLegacyWiseStatementImports
+} from "../shared/wiseEntities";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -271,6 +274,27 @@ const wiseStatementImport = v.object({
   fileName: v.string(),
   transactionCount: v.number(),
   importedAt: v.string()
+});
+
+const cashFlowLine = v.object({
+  id: v.string(),
+  name: v.string(),
+  amount: v.number(),
+  currency: v.string(),
+  notes: v.optional(v.string()),
+  dueDate: v.optional(v.string())
+});
+
+const cashFlowSnapshot = v.object({
+  id: v.string(),
+  asOfDate: v.string(),
+  cashAccounts: v.array(cashFlowLine),
+  receivables: v.array(cashFlowLine),
+  openBalances: v.array(cashFlowLine),
+  payables: v.array(cashFlowLine),
+  investments: v.array(cashFlowLine),
+  createdAt: v.string(),
+  updatedAt: v.string()
 });
 const revenueRun = v.object({
   id: v.string(),
@@ -877,6 +901,7 @@ export const getState = query({
       profitDistributionCache: v.optional(profitDistributionSnapshot),
       meritTaxes: v.optional(v.array(meritTax)),
       aiSettings: v.optional(aiSettings),
+      cashFlowSnapshots: v.optional(v.array(cashFlowSnapshot)),
       updatedAt: v.string()
     })
   ),
@@ -909,6 +934,7 @@ export const getState = query({
       profitDistributionCache: state.profitDistributionCache,
       meritTaxes: state.meritTaxes,
       aiSettings: state.aiSettings,
+      cashFlowSnapshots: state.cashFlowSnapshots,
       updatedAt: state.updatedAt
     };
   }
@@ -1188,6 +1214,7 @@ export const saveState = mutation({
     profitDistributionCache: v.optional(profitDistributionSnapshot),
     meritTaxes: v.optional(v.array(meritTax)),
     aiSettings: v.optional(aiSettings),
+    cashFlowSnapshots: v.optional(v.array(cashFlowSnapshot)),
     serviceToken: v.string(),
     expectedUpdatedAt: v.union(v.string(), v.null())
   },
@@ -1228,10 +1255,34 @@ export const saveState = mutation({
       profitDistributionCache: args.profitDistributionCache,
       meritTaxes: args.meritTaxes ?? existing?.meritTaxes ?? [],
       aiSettings: args.aiSettings,
+      cashFlowSnapshots: args.cashFlowSnapshots ?? existing?.cashFlowSnapshots ?? [],
       updatedAt
     };
     if (existing) await ctx.db.patch(existing._id, dashboardState);
     else await ctx.db.insert("dashboardState", { key: "default", ...dashboardState });
+    return { updatedAt };
+  }
+});
+
+export const recordWiseStatementImport = mutation({
+  args: {
+    serviceToken: v.string(),
+    importRecord: wiseStatementImport
+  },
+  returns: v.object({ updatedAt: v.string() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) throw new ConvexError({ code: "DASHBOARD_STATE_MISSING" });
+    const wiseStatementImports = migrateLegacyWiseStatementImports([
+      args.importRecord,
+      ...state.wiseStatementImports.filter((item) => item.id !== args.importRecord.id)
+    ]);
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    await ctx.db.patch(state._id, { wiseStatementImports, updatedAt });
     return { updatedAt };
   }
 });

@@ -37,19 +37,29 @@ test("copying an invoice creates an unsaved payload with only editable invoice d
   };
 
   assert.deepEqual(
-    invoiceCopyPayload(source),
+    invoiceCopyPayload(source, "2026-08-24"),
     {
       providerId: "provider-1",
       documentType: "sales_invoice",
       customerName: "Example Client",
       amount: 1250,
       currency: "USD",
-      issueDate: "2026-07-01",
-      dueDate: "2026-07-31",
+      issueDate: "2026-08-24",
+      dueDate: "2026-09-23",
       description: "Consulting services",
       periodStart: "2026-06-01",
       periodEnd: "2026-06-30",
       taxId: "tax-zero"
     }
   );
+});
+
+test("copying preserves the original payment-term interval", () => {
+  const source = {
+    issueDate: "2026-08-01",
+    dueDate: "2026-08-15"
+  } as Invoice;
+  const copied = invoiceCopyPayload(source, "2026-08-24");
+  assert.equal(copied.issueDate, "2026-08-24");
+  assert.equal(copied.dueDate, "2026-09-07");
 });

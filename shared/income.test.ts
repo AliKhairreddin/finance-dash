@@ -430,6 +430,31 @@ test("partial allocations keep an invoice open until fully covered", () => {
   );
 });
 
+test("a dashboard payment can fully settle a local draft without changing Merit state", () => {
+  const draft = openInvoice({
+    id: "local-draft-payment",
+    status: "draft",
+    meritStatus: undefined,
+    meritDeliveryStatus: "not-sent",
+    externalId: undefined,
+    sentAt: undefined
+  });
+  const allocation: PaymentAllocation = {
+    id: "draft-payment",
+    invoiceId: draft.id,
+    amount: draft.amount,
+    currency: draft.currency,
+    source: "wise",
+    mode: "manual",
+    paidAt: "2026-08-24",
+    createdAt: "2026-08-24T14:00:00.000Z"
+  };
+  const paid = applyPaymentState([draft], [allocation])[0];
+  assert.equal(paid.status, "paid");
+  assert.equal(paid.meritStatus, undefined);
+  assert.equal(paid.paidAt, "2026-08-24");
+});
+
 test("invoice summary totals describe only the supplied visible rows", () => {
   const visibleOpenInvoice = openInvoice({ amount: 1000 });
   const visibleDraft = openInvoice({

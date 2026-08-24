@@ -42,6 +42,7 @@ import {
 } from "../shared/bankMerchantGroups";
 import type { CurrencyTotals, DashboardSnapshot, Transaction, TransactionPage } from "../shared/types";
 import { slashDefaultActivityWindowDays } from "../shared/slashApi";
+import { financeOperatingDate } from "../shared/operatingDate";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const themeStorageKey = "finance-dash-theme";
@@ -50,13 +51,8 @@ type ThemeMode = "light" | "dark";
 type SlashDirectionFilter = "all" | "in" | "out";
 type SlashGroupSortKey = "accounts" | "credits" | "firstDate" | "lastDate" | "merchant" | "net" | "spend" | "transactions";
 
-function localIsoDate(date = new Date()): string {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
-}
-
 function defaultSlashPeriod(): UrlDateRange {
-  const toDate = localIsoDate();
+  const toDate = financeOperatingDate();
   return { fromDate: `${toDate.slice(0, 7)}-01`, toDate };
 }
 

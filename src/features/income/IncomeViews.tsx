@@ -61,9 +61,10 @@ import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../shared/income";
 import { dashboardInvoiceDeletionBlockReason } from "../../../shared/invoiceDeletion";
 import { bankPeriodPresetLabel, bankPeriodPresetRange, bankPeriodPresets, type BankPeriodPreset } from "../../../shared/bankPeriods";
+import { financeOperatingDate } from "../../../shared/operatingDate";
 
 type InvoiceTab = "all" | "pending" | "paid";
-type InvoiceStatusFilter = "all" | "draft" | "open" | "accruing";
+type InvoiceStatusFilter = "all" | "draft" | "open";
 type InvoiceDeliveryFilter = "all" | MeritDeliveryStatus;
 type RevenueRunSortKey = "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
 type RevenueAccrualSortKey = "accruedThrough" | "amount" | "cadence" | "company" | "period" | "status";
@@ -293,7 +294,7 @@ export function RevenueView({
     "asc",
     { allowedValues: ["asc", "desc"] }
   );
-  const revenuePeriodToday = new Date().toISOString().slice(0, 10);
+  const revenuePeriodToday = financeOperatingDate();
   const revenueDateRange = periodPreset === "custom" && periodStart && periodEnd
     ? { fromDate: periodStart, toDate: periodEnd }
     : bankPeriodPresetRange(periodPreset === "custom" ? "last-week" : periodPreset, revenuePeriodToday);
@@ -631,9 +632,12 @@ function IncomeSummary({ label, value, detail, breakdown, tone = "" }: { label: 
   );
 }
 
-type DisplayInvoiceRow =
-  | { kind: "invoice"; id: string; status: "draft" | "open" | "paid"; invoice: Invoice; accrual?: never }
-  | { kind: "accrual"; id: string; status: "accruing"; invoice?: never; accrual: RevenueAccrual };
+type DisplayInvoiceRow = {
+  kind: "invoice";
+  id: string;
+  status: "draft" | "open" | "paid";
+  invoice: Invoice;
+};
 
 export function InvoicesView({
   dashboard,
@@ -664,7 +668,7 @@ export function InvoicesView({
   const [companyId, setCompanyId] = useUrlState("invoiceCompany", "all");
   const [currency, setCurrency] = useUrlState("invoiceCurrency", "all");
   const [statusFilter, setStatusFilter] = useUrlState<InvoiceStatusFilter>("invoiceStatus", "all", {
-    allowedValues: ["all", "draft", "open", "accruing"]
+    allowedValues: ["all", "draft", "open"]
   });
   const [deliveryFilter, setDeliveryFilter] = useUrlState<InvoiceDeliveryFilter>("invoiceDelivery", "all", {
     allowedValues: ["all", "not-sent", "saved", "delivered", "delivery-failed"]
@@ -674,15 +678,15 @@ export function InvoicesView({
   });
   const [createdDateFrom, setCreatedDateFrom] = useUrlState("invoiceCreatedFrom", "", { isValid: isIsoDate });
   const [createdDateTo, setCreatedDateTo] = useUrlState("invoiceCreatedTo", "", { isValid: isIsoDate });
-  const invoiceFilterToday = new Date().toISOString().slice(0, 10);
+  const invoiceFilterToday = financeOperatingDate();
   const createdDateRange = {
     fromDate: createdDateFrom || createdDateTo || invoiceFilterToday,
     toDate: createdDateTo || createdDateFrom || invoiceFilterToday
   };
-  const [sortKey, setSortKey] = useUrlState<InvoiceSortKey>("invoiceSort", "period", {
+  const [sortKey, setSortKey] = useUrlState<InvoiceSortKey>("invoiceSort", "created", {
     allowedValues: ["amount", "cadence", "company", "created", "forecast", "period", "status"]
   });
-  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("invoiceOrder", "asc", {
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("invoiceOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -695,59 +699,49 @@ export function InvoicesView({
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   const salesInvoices = dashboard.invoices.filter((invoice) => invoice.documentType === "sales_invoice");
-  const activeAccruals = dashboard.revenueAccruals.filter((row) => row.status === "accruing");
   const allRows: DisplayInvoiceRow[] = [
-    ...salesInvoices.map((invoice): DisplayInvoiceRow => ({ kind: "invoice", id: invoice.id, status: invoice.status, invoice })),
-    ...activeAccruals.map((accrual): DisplayInvoiceRow => ({ kind: "accrual", id: accrual.id, status: "accruing", accrual }))
+    ...salesInvoices.map((invoice): DisplayInvoiceRow => ({ kind: "invoice", id: invoice.id, status: invoice.status, invoice }))
   ];
-  const currencies = [...new Set(allRows.map((row) => row.kind === "invoice" ? row.invoice.currency : row.accrual.currency))].sort();
+  const currencies = [...new Set(allRows.map((row) => row.invoice.currency))].sort();
   const providers = dashboard.providers.filter((provider) => provider.type === "client").sort((left, right) => left.name.localeCompare(right.name));
   const meritIntegration = dashboard.integrationStatus.find((integration) => integration.id === "merit");
   const meritWriteEnabled = meritIntegration?.writeEnabled === true;
 
   function rowProviderId(row: DisplayInvoiceRow): string | undefined {
-    return row.kind === "invoice" ? row.invoice.providerId : row.accrual.providerId;
+    return row.invoice.providerId;
   }
 
   function rowCadence(row: DisplayInvoiceRow): BillingCadence | "manual" {
-    if (row.kind === "accrual") return row.accrual.billingCadence;
     return revenuePartnerForInvoice(row.invoice, dashboard)?.billingCadence ?? "manual";
   }
 
   function invoiceSortValue(row: DisplayInvoiceRow): number | string | undefined {
-    if (sortKey === "amount") return row.kind === "invoice" ? row.invoice.amount : row.accrual.amount;
+    if (sortKey === "amount") return row.invoice.amount;
     if (sortKey === "cadence") return rowCadence(row);
     if (sortKey === "company") {
-      if (row.kind === "accrual") return row.accrual.partnerName;
       return (row.invoice.providerId ? providersById.get(row.invoice.providerId)?.name : undefined)
         ?? row.invoice.customerName
         ?? row.invoice.invoiceNumber;
     }
-    if (sortKey === "created") return row.kind === "invoice" ? row.invoice.createdAt : undefined;
-    if (sortKey === "forecast") {
-      return row.kind === "invoice"
-        ? dashboard.invoicePredictions.find((prediction) => prediction.invoiceId === row.invoice.id)?.predictedDate
-        : undefined;
-    }
-    if (sortKey === "period") return row.kind === "invoice" ? row.invoice.periodStart : row.accrual.periodStart;
-    return row.kind === "invoice"
-      ? `${row.status}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`
-      : row.status;
+    if (sortKey === "created") return row.invoice.createdAt;
+    if (sortKey === "forecast") return dashboard.invoicePredictions.find((prediction) => prediction.invoiceId === row.invoice.id)?.predictedDate;
+    if (sortKey === "period") return row.invoice.periodStart;
+    return `${row.status}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`;
   }
 
   const filteredRows = allRows
     .filter((row) => {
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
-      if (deliveryFilter !== "all" && (row.kind !== "invoice" || row.invoice.meritDeliveryStatus !== deliveryFilter)) return false;
+      if (deliveryFilter !== "all" && row.invoice.meritDeliveryStatus !== deliveryFilter) return false;
       if (companyId !== "all" && rowProviderId(row) !== companyId) return false;
-      const rowCurrency = row.kind === "invoice" ? row.invoice.currency : row.accrual.currency;
+      const rowCurrency = row.invoice.currency;
       if (currency !== "all" && rowCurrency !== currency) return false;
       if (cadence !== "all" && rowCadence(row) !== cadence) return false;
-      if ((createdDateFrom || createdDateTo) && (row.kind !== "invoice" || !matchesCreatedDateRange(row.invoice.createdAt, createdDateFrom, createdDateTo))) return false;
+      if ((createdDateFrom || createdDateTo) && !matchesCreatedDateRange(row.invoice.createdAt, createdDateFrom, createdDateTo)) return false;
       const searchTerms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
       if (searchTerms.length === 0) return true;
       const provider = rowProviderId(row) ? providersById.get(rowProviderId(row) ?? "") : undefined;
-      const rowAmount = row.kind === "invoice" ? row.invoice.amount : row.accrual.amount;
+      const rowAmount = row.invoice.amount;
       const groupedAmount = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(rowAmount);
       const amountTerms = [
         String(rowAmount),
@@ -758,53 +752,36 @@ export function InvoicesView({
         `${rowCurrency} ${rowAmount.toFixed(2)}`,
         `${rowCurrency} ${groupedAmount}`
       ];
-      const searchableValues = row.kind === "invoice"
-        ? [
-            row.invoice.customerName,
-            row.invoice.description,
-            row.invoice.invoiceNumber,
-            provider?.name,
-            ...amountTerms,
-            row.invoice.currency,
-            row.invoice.status,
-            row.invoice.meritStatus ? `Merit ${row.invoice.meritStatus}` : undefined,
-            invoiceDeliveryLabel(row.invoice.meritDeliveryStatus),
-            rowCadence(row) === "manual" ? "Manual" : cadenceLabel(rowCadence(row)),
-            row.invoice.source,
-            row.invoice.origin,
-            row.invoice.issueDate,
-            dateLabel(row.invoice.issueDate),
-            row.invoice.dueDate,
-            dateLabel(row.invoice.dueDate),
-            row.invoice.periodStart,
-            row.invoice.periodStart ? dateLabel(row.invoice.periodStart) : undefined,
-            row.invoice.periodEnd,
-            row.invoice.periodEnd ? dateLabel(row.invoice.periodEnd) : undefined,
-            row.invoice.createdAt,
-            dateTimeLabel(row.invoice.createdAt)
-          ]
-        : [
-            row.accrual.partnerName,
-            provider?.name,
-            ...amountTerms,
-            row.accrual.currency,
-            "Accruing",
-            "Future invoice",
-            cadenceLabel(row.accrual.billingCadence),
-            row.accrual.periodStart,
-            dateLabel(row.accrual.periodStart),
-            row.accrual.periodEnd,
-            dateLabel(row.accrual.periodEnd),
-            row.accrual.accruedThrough,
-            dateLabel(row.accrual.accruedThrough),
-            "Monday automation"
-          ];
+      const searchableValues = [
+        row.invoice.customerName,
+        row.invoice.description,
+        row.invoice.invoiceNumber,
+        provider?.name,
+        ...amountTerms,
+        row.invoice.currency,
+        row.invoice.status,
+        row.invoice.meritStatus ? `Merit ${row.invoice.meritStatus}` : undefined,
+        invoiceDeliveryLabel(row.invoice.meritDeliveryStatus),
+        rowCadence(row) === "manual" ? "Manual" : cadenceLabel(rowCadence(row)),
+        row.invoice.source,
+        row.invoice.origin,
+        row.invoice.issueDate,
+        dateLabel(row.invoice.issueDate),
+        row.invoice.dueDate,
+        dateLabel(row.invoice.dueDate),
+        row.invoice.periodStart,
+        row.invoice.periodStart ? dateLabel(row.invoice.periodStart) : undefined,
+        row.invoice.periodEnd,
+        row.invoice.periodEnd ? dateLabel(row.invoice.periodEnd) : undefined,
+        row.invoice.createdAt,
+        dateTimeLabel(row.invoice.createdAt)
+      ];
       const searchableText = searchableValues.filter(Boolean).join(" ").toLowerCase();
       return searchTerms.every((term) => searchableText.includes(term));
     });
   const visibleRows = filteredRows
     .filter((row) => {
-      if (tab === "pending") return ["draft", "open", "accruing"].includes(row.status);
+      if (tab === "pending") return row.status === "draft" || row.status === "open";
       if (tab === "paid") return row.status === "paid";
       return true;
     })
@@ -823,20 +800,18 @@ export function InvoicesView({
   }
 
   const summaryTotals = calculateInvoiceSummaryTotals(
-    visibleRows.flatMap((row) => row.kind === "invoice" ? [row.invoice] : []),
-    visibleRows.flatMap((row) => row.kind === "accrual" ? [row.accrual] : []),
+    visibleRows.map((row) => row.invoice),
+    [],
     dashboard.paymentAllocations
   );
 
   const actionableVisibleIds = visibleRows
     .filter(
-      (row): row is Extract<DisplayInvoiceRow, { kind: "invoice" }> =>
-        row.kind === "invoice"
-        && (
-          invoiceCanBeSelected(row.invoice, providersById)
-          || row.invoice.status === "open"
-          || !dashboardInvoiceDeletionBlockReason(row.invoice, dashboard.paymentAllocations)
-        )
+      (row) =>
+        invoiceCanBeSelected(row.invoice, providersById)
+        || row.invoice.status === "open"
+        || row.invoice.status === "draft"
+        || !dashboardInvoiceDeletionBlockReason(row.invoice, dashboard.paymentAllocations)
     )
     .map((row) => row.invoice.id);
   const allActionableSelected = actionableVisibleIds.length > 0 && actionableVisibleIds.every((id) => selectedIds.includes(id));
@@ -848,7 +823,7 @@ export function InvoicesView({
     && selectedInvoices.length === selectedIds.length
     && selectedInvoices.every((invoice) => !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations));
   const selectedDraftCount = selectedInvoices.filter((invoice) => invoice.status === "draft").length;
-  const selectedPayableInvoices = selectedInvoices.filter((invoice) => invoice.status === "open");
+  const selectedPayableInvoices = selectedInvoices.filter((invoice) => invoice.status === "open" || invoice.status === "draft");
   const selectedDeliveryCount = selectedInvoices.filter(invoiceCanBeDelivered).length;
 
   useEffect(() => {
@@ -858,6 +833,7 @@ export function InvoicesView({
           (invoice) =>
             invoiceCanBeSelected(invoice, providersById)
             || invoice.status === "open"
+            || invoice.status === "draft"
             || !dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations)
         )
         .map((invoice) => invoice.id)
@@ -887,24 +863,6 @@ export function InvoicesView({
       "Source"
     ];
     const rows = visibleRows.map((row) => {
-      if (row.kind === "accrual") {
-        return [
-          "",
-          (row.accrual.providerId ? providersById.get(row.accrual.providerId)?.name : undefined) ?? row.accrual.partnerName,
-          `Future invoice · current through ${row.accrual.accruedThrough}`,
-          "",
-          row.accrual.periodStart,
-          row.accrual.periodEnd,
-          "",
-          "",
-          row.accrual.currency,
-          row.accrual.amount,
-          "Accruing",
-          "",
-          cadenceLabel(row.accrual.billingCadence),
-          "tune"
-        ];
-      }
       const provider = row.invoice.providerId ? providersById.get(row.invoice.providerId) : undefined;
       return [
         row.invoice.invoiceNumber,
@@ -927,7 +885,7 @@ export function InvoicesView({
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `invoices-${financeOperatingDate()}.csv`;
     document.body.append(link);
     link.click();
     link.remove();
@@ -951,7 +909,7 @@ export function InvoicesView({
     }]),
     ...(statusFilter === "all" ? [] : [{
       key: "status",
-      label: `Status: ${statusFilter === "draft" ? "Draft" : statusFilter === "open" ? "Open" : "Accruing"}`,
+      label: `Status: ${statusFilter === "draft" ? "Draft" : "Open"}`,
       onRemove: () => setStatusFilter("all")
     }]),
     ...(deliveryFilter === "all" ? [] : [{
@@ -998,8 +956,7 @@ export function InvoicesView({
       <section className="invoice-total-band" aria-label="Invoice totals">
         <IncomeSummary label="Open" value={formatUsdTotal(summaryTotals.open, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.open)} detail="Visible sent invoices, less recorded payments" tone="open" />
         <IncomeSummary label="Drafts" value={formatUsdTotal(summaryTotals.drafts, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.drafts)} detail="Visible drafts not yet in Merit" tone="draft" />
-        <IncomeSummary label="Accruing" value={formatUsdTotal(summaryTotals.accruing, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.accruing)} detail="Visible current-period invoice previews" tone="accruing" />
-        <IncomeSummary label="Expected income" value={formatUsdTotal(summaryTotals.expected, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.expected)} detail="Visible open + drafts + accruing" tone="expected" />
+        <IncomeSummary label="Expected income" value={formatUsdTotal(summaryTotals.expected, dashboard.fxRates)} breakdown={nativeBreakdown(summaryTotals.expected)} detail="Visible open invoices and drafts" tone="expected" />
       </section>
 
       <section className="panel">
@@ -1015,7 +972,7 @@ export function InvoicesView({
           <div className="segmented-control invoice-tabs" aria-label="Invoice view">
             {([
               ["all", `All ${filteredRows.length}`],
-              ["pending", `Pending ${filteredRows.filter((row) => ["draft", "open", "accruing"].includes(row.status)).length}`],
+              ["pending", `Pending ${filteredRows.filter((row) => row.status === "draft" || row.status === "open").length}`],
               ["paid", `Paid ${filteredRows.filter((row) => row.status === "paid").length}`]
             ] as Array<[InvoiceTab, string]>).map(([id, label]) => (
               <Button
@@ -1041,7 +998,7 @@ export function InvoicesView({
               <Button
                 className="icon-text-button"
                 type="button"
-                title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only open invoices can be recorded as paid"}
+                title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only unpaid drafts or open invoices can be recorded as paid"}
                 onClick={() => setBulkPaymentInvoices(selectedPayableInvoices)}
                 disabled={selectedPayableInvoices.length === 0}
               >
@@ -1105,7 +1062,6 @@ export function InvoicesView({
                     <NativeSelectOption value="all">All active statuses</NativeSelectOption>
                     <NativeSelectOption value="draft">Draft</NativeSelectOption>
                     <NativeSelectOption value="open">Open</NativeSelectOption>
-                    <NativeSelectOption value="accruing">Accruing</NativeSelectOption>
                   </NativeSelect>
                 </label>
                 <label>
@@ -1177,7 +1133,7 @@ export function InvoicesView({
         )}
         <div className="invoice-selection-help">
           <Check size={15} />
-          <span>Select open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.</span>
+          <span>Select unpaid drafts or open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.</span>
         </div>
         {duplicateError && <div className="inline-error">{duplicateError}</div>}
 
@@ -1207,9 +1163,6 @@ export function InvoicesView({
             </tr></thead>
             <tbody>
               {visibleRows.length > 0 ? visibleRows.map((row) => {
-                if (row.kind === "accrual") {
-                  return <tr key={row.id} className="accrual-row"><td className="selection-column"><Checkbox disabled aria-label="Accrual cannot be selected" /></td><td className="counterparty-cell"><strong>{row.accrual.partnerName}</strong><small>Future invoice · current through {dateLabel(row.accrual.accruedThrough)}</small></td><td className="muted-cell">—</td><td>{periodLabel(row.accrual.periodStart, row.accrual.periodEnd)}</td><td className="amount">{money(row.accrual.amount, row.accrual.currency)}</td><td><span className="cadence-badge">{cadenceLabel(row.accrual.billingCadence)}</span></td><td><span className="status-pill invoice-status-accruing">Accruing</span></td><td><span className="forecast-copy"><Clock3 size={14} /> Starts after invoice is sent</span></td><td><span className="muted-cell">Monday automation</span></td></tr>;
-                }
                 const invoice = row.invoice;
                 const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
                 const invoiceCadence = revenuePartnerForInvoice(invoice, dashboard)?.billingCadence;
@@ -1228,7 +1181,7 @@ export function InvoicesView({
                 const canDeliverExisting = invoiceCanBeDelivered(invoice);
                 const deleteBlockReason = dashboardInvoiceDeletionBlockReason(invoice, dashboard.paymentAllocations);
                 const canDelete = !deleteBlockReason;
-                const selectable = ready || canDeliverExisting || canDelete || invoice.status === "open";
+                const selectable = ready || canDeliverExisting || canDelete || invoice.status === "open" || invoice.status === "draft";
                 return (
                   <tr key={invoice.id}>
                     <td className="selection-column"><Checkbox aria-label={`Select ${invoice.invoiceNumber}`} checked={selectedIds.includes(invoice.id)} disabled={!selectable} title={invoice.status === "open" ? "Select open invoice for payment or delivery actions" : ready ? "Select draft to save, deliver, or delete" : canDeliverExisting ? "Select existing Merit invoice for delivery" : canDelete ? "Select dashboard draft to delete" : sendBlockReason} onCheckedChange={(checked) => toggleSelected(invoice.id, checked === true)} /></td>
@@ -1292,7 +1245,7 @@ export function InvoicesView({
                       )}
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Send size={14} /> Send</Button>}
                       {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
-                      {invoice.status === "open" && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
+                      {(invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
                       {invoice.status === "paid" && (
                         <div className="paid-allocation-list">
                           {allocations.length > 0 ? allocations.map((allocation) => (
@@ -1394,7 +1347,7 @@ function InvoiceEditorDialog({
   onClose: () => void;
   onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<Invoice>;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = financeOperatingDate();
   const initialProviderId = invoice?.providerId ?? initialDraft?.providerId ?? "";
   const [providerId, setProviderId] = useState(initialProviderId);
   const initialProvider = initialProviderId ? dashboard.providers.find((provider) => provider.id === initialProviderId) : undefined;
@@ -1689,7 +1642,7 @@ function BulkMarkPaidDialog({
   onSubmit: (payload: BulkRecordInvoicePaymentsPayload) => Promise<void>;
 }) {
   const [operationId] = useState(() => crypto.randomUUID());
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [paidAt, setPaidAt] = useState(financeOperatingDate());
   const [source, setSource] = useState<PaymentSource>("wise");
   const [accountName, setAccountName] = useState("");
   const [note, setNote] = useState("");
@@ -1731,7 +1684,7 @@ function BulkMarkPaidDialog({
         <div className="modal-header"><div><p className="eyebrow">Bulk dashboard payment</p><h2 id="bulk-mark-paid-title">Record {invoices.length} invoices as paid</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="merit-unchanged-banner"><CircleAlert size={18} /><div><strong>Merit will stay unchanged</strong><span>This records each invoice’s full outstanding balance in the dashboard. It does not mark invoices paid in Merit.</span></div></div>
         {error && <div className="inline-error">{error}</div>}
-        <div className="payment-balance-line"><span>{invoices.length} open invoice{invoices.length === 1 ? "" : "s"}</span>{Object.entries(totals).sort().map(([currency, amount]) => <strong key={currency}>{money(amount, currency)}</strong>)}</div>
+        <div className="payment-balance-line"><span>{invoices.length} unpaid invoice{invoices.length === 1 ? "" : "s"}</span>{Object.entries(totals).sort().map(([currency, amount]) => <strong key={currency}>{money(amount, currency)}</strong>)}</div>
         <div className="form-grid"><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label><label>Paid in / source<NativeSelect value={source} onValueChange={(value) => setSource(value as PaymentSource)}>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label></div>
         <label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Optional" /></label>
         <label>Payment note<Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context applied to every payment" /></label>
@@ -1753,7 +1706,7 @@ function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit }: { pa
   const [candidateIsDone, setCandidateIsDone] = useState(false);
   const candidateAbortRef = useRef<AbortController | null>(null);
   const [amount, setAmount] = useState(String(remaining));
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [paidAt, setPaidAt] = useState(financeOperatingDate());
   const [source, setSource] = useState<PaymentSource>("wise");
   const [transactionId, setTransactionId] = useState("");
   const [accountName, setAccountName] = useState("");

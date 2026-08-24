@@ -1090,7 +1090,10 @@ test("bank upserts and deletes maintain facts, classification, and ledger revisi
     const original = bankTransactionValue("revenue", 100_000, "USD", "in", "Revenue", {
       categorySource: "manual",
       categoryConfidence: 1,
-      categoryReason: "Reviewed"
+      categoryReason: "Reviewed",
+      matchedInvoiceId: "invoice-reviewed",
+      invoiceMatchSource: "manual",
+      teamId: "team-reviewed"
     });
 
     assert.deepEqual(await upsert(ctx, {
@@ -1124,6 +1127,9 @@ test("bank upserts and deletes maintain facts, classification, and ledger revisi
     assert.equal(ctx.tables.bankTransactions[0].category, "Revenue");
     assert.equal(ctx.tables.bankTransactions[0].categorySource, "manual");
     assert.equal(ctx.tables.bankTransactions[0].categoryReason, "Reviewed");
+    assert.equal(ctx.tables.bankTransactions[0].matchedInvoiceId, "invoice-reviewed");
+    assert.equal(ctx.tables.bankTransactions[0].invoiceMatchSource, "manual");
+    assert.equal(ctx.tables.bankTransactions[0].teamId, "team-reviewed");
     assert.equal(ctx.tables.profitDistributionFacts[0].revenue, 120_000);
     assert.equal(ctx.tables.bankLedgerRevision[0].revision, 2);
 
