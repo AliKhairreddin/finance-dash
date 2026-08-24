@@ -9,6 +9,17 @@ import {
   sanitizeStoredTransactionCategoryRules
 } from "../shared/categories";
 import { canonicalTeamId } from "../shared/business";
+import type { CashFlowLine } from "../shared/types";
+import {
+  maximumCashFlowLineIdLength,
+  maximumCashFlowLineNameLength,
+  maximumCashFlowLineNotesLength,
+  maximumCashFlowLinesPerSection,
+  maximumCashFlowLinesPerSnapshot,
+  maximumCashFlowSnapshotNotesLength,
+  maximumCashFlowSnapshots
+} from "../shared/cashFlow";
+import { financeOperatingDate } from "../shared/operatingDate";
 import {
   maximumWiseStatementImportHistory,
   migrateLegacyWiseStatementImports
@@ -282,7 +293,8 @@ const cashFlowLine = v.object({
   amount: v.number(),
   currency: v.string(),
   notes: v.optional(v.string()),
-  dueDate: v.optional(v.string())
+  dueDate: v.optional(v.string()),
+  excludedFromTotals: v.optional(v.boolean())
 });
 
 const cashFlowSnapshot = v.object({
@@ -293,8 +305,26 @@ const cashFlowSnapshot = v.object({
   openBalances: v.array(cashFlowLine),
   payables: v.array(cashFlowLine),
   investments: v.array(cashFlowLine),
+  cashGrowthPercent: v.optional(v.number()),
+  spendGrowthPercent: v.optional(v.number()),
+  profitGrowthPercent: v.optional(v.number()),
+  notes: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string()
+});
+
+const cashFlowSnapshotInput = v.object({
+  id: v.optional(v.string()),
+  asOfDate: v.string(),
+  cashAccounts: v.array(cashFlowLine),
+  receivables: v.array(cashFlowLine),
+  openBalances: v.array(cashFlowLine),
+  payables: v.array(cashFlowLine),
+  investments: v.array(cashFlowLine),
+  cashGrowthPercent: v.optional(v.number()),
+  spendGrowthPercent: v.optional(v.number()),
+  profitGrowthPercent: v.optional(v.number()),
+  notes: v.optional(v.string())
 });
 const revenueRun = v.object({
   id: v.string(),
@@ -495,6 +525,37 @@ function requireServiceToken(serviceToken: string): void {
 function nextUpdatedAt(previous?: string): string {
   const previousTimestamp = previous ? Date.parse(previous) : 0;
   return new Date(Math.max(Date.now(), previousTimestamp + 1)).toISOString();
+}
+
+function normalizedCashFlowLine(line: CashFlowLine): CashFlowLine {
+  const id = line.id.trim();
+  const name = line.name.trim();
+  const currency = line.currency.trim().toUpperCase();
+  const notes = line.notes?.trim() || undefined;
+  if (!id || id.length > maximumCashFlowLineIdLength) {
+    throw new ConvexError({ code: "INVALID_CASH_FLOW_LINE_ID" });
+  }
+  if (!name || name.length > maximumCashFlowLineNameLength) {
+    throw new ConvexError({ code: "INVALID_CASH_FLOW_LINE_NAME" });
+  }
+  if (!Number.isFinite(line.amount) || !/^[A-Z0-9]{2,12}$/.test(currency)) {
+    throw new ConvexError({ code: "INVALID_CASH_FLOW_LINE_VALUE" });
+  }
+  if (notes && notes.length > maximumCashFlowLineNotesLength) {
+    throw new ConvexError({ code: "CASH_FLOW_LINE_NOTE_TOO_LONG" });
+  }
+  if (line.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(line.dueDate)) {
+    throw new ConvexError({ code: "INVALID_CASH_FLOW_LINE_DATE" });
+  }
+  return {
+    id,
+    name,
+    amount: Number(line.amount.toFixed(2)),
+    currency,
+    notes,
+    dueDate: line.dueDate,
+    excludedFromTotals: line.excludedFromTotals || undefined
+  };
 }
 
 async function bumpBankLedgerRevision(ctx: MutationCtx, dates: Iterable<string>): Promise<void> {
@@ -1261,6 +1322,77 @@ export const saveState = mutation({
     if (existing) await ctx.db.patch(existing._id, dashboardState);
     else await ctx.db.insert("dashboardState", { key: "default", ...dashboardState });
     return { updatedAt };
+  }
+});
+
+export const upsertCashFlowSnapshot = mutation({
+  args: {
+    serviceToken: v.string(),
+    snapshot: cashFlowSnapshotInput
+  },
+  returns: cashFlowSnapshot,
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.snapshot.asOfDate) || args.snapshot.asOfDate > financeOperatingDate()) {
+      throw new ConvexError({ code: "INVALID_CASH_FLOW_DATE" });
+    }
+    const sections = [
+      args.snapshot.cashAccounts,
+      args.snapshot.receivables,
+      args.snapshot.openBalances,
+      args.snapshot.payables,
+      args.snapshot.investments
+    ];
+    if (sections.some((lines) => lines.length > maximumCashFlowLinesPerSection)) {
+      throw new ConvexError({ code: "CASH_FLOW_SECTION_LIMIT" });
+    }
+    if (sections.reduce((total, lines) => total + lines.length, 0) > maximumCashFlowLinesPerSnapshot) {
+      throw new ConvexError({ code: "CASH_FLOW_SNAPSHOT_LIMIT" });
+    }
+    const notes = args.snapshot.notes?.trim() || undefined;
+    if (notes && notes.length > maximumCashFlowSnapshotNotesLength) {
+      throw new ConvexError({ code: "CASH_FLOW_SNAPSHOT_NOTE_TOO_LONG" });
+    }
+    const growthValues = [
+      args.snapshot.cashGrowthPercent,
+      args.snapshot.spendGrowthPercent,
+      args.snapshot.profitGrowthPercent
+    ];
+    if (growthValues.some((value) => value !== undefined && !Number.isFinite(value))) {
+      throw new ConvexError({ code: "INVALID_CASH_FLOW_GROWTH" });
+    }
+    const state = await ctx.db
+      .query("dashboardState")
+      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .unique();
+    if (!state) throw new ConvexError({ code: "DASHBOARD_STATE_MISSING" });
+    const existing = (state.cashFlowSnapshots ?? []).find((snapshot) =>
+      snapshot.id === args.snapshot.id || snapshot.asOfDate === args.snapshot.asOfDate
+    );
+    const updatedAt = nextUpdatedAt(state.updatedAt);
+    const snapshot = {
+      id: existing?.id ?? args.snapshot.id ?? `cash-flow-${args.snapshot.asOfDate}`,
+      asOfDate: args.snapshot.asOfDate,
+      cashAccounts: args.snapshot.cashAccounts.map(normalizedCashFlowLine),
+      receivables: args.snapshot.receivables.map(normalizedCashFlowLine),
+      openBalances: args.snapshot.openBalances.map(normalizedCashFlowLine),
+      payables: args.snapshot.payables.map(normalizedCashFlowLine),
+      investments: args.snapshot.investments.map(normalizedCashFlowLine),
+      cashGrowthPercent: args.snapshot.cashGrowthPercent,
+      spendGrowthPercent: args.snapshot.spendGrowthPercent,
+      profitGrowthPercent: args.snapshot.profitGrowthPercent,
+      notes,
+      createdAt: existing?.createdAt ?? updatedAt,
+      updatedAt
+    };
+    const cashFlowSnapshots = [
+      snapshot,
+      ...(state.cashFlowSnapshots ?? []).filter((item) => item.id !== snapshot.id)
+    ]
+      .sort((left, right) => right.asOfDate.localeCompare(left.asOfDate))
+      .slice(0, maximumCashFlowSnapshots);
+    await ctx.db.patch(state._id, { cashFlowSnapshots, updatedAt });
+    return snapshot;
   }
 });
 

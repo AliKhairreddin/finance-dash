@@ -4,3 +4,4 @@ export const maximumCashFlowLinesPerSnapshot = 120;
 export const maximumCashFlowLineIdLength = 200;
 export const maximumCashFlowLineNameLength = 200;
 export const maximumCashFlowLineNotesLength = 256;
+export const maximumCashFlowSnapshotNotesLength = 1_000;

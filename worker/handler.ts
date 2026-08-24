@@ -107,6 +107,7 @@ import {
   maximumCashFlowLineNotesLength,
   maximumCashFlowLinesPerSection,
   maximumCashFlowLinesPerSnapshot,
+  maximumCashFlowSnapshotNotesLength,
   maximumCashFlowSnapshots
 } from "../shared/cashFlow";
 import {
@@ -4935,8 +4936,15 @@ function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine
     amount: Number(line.amount.toFixed(2)),
     currency,
     notes,
-    dueDate: line.dueDate
+    dueDate: line.dueDate,
+    excludedFromTotals: line.excludedFromTotals || undefined
   };
+}
+
+function normalizedCashFlowGrowth(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) throw new ApiError(400, `${field} must be a number`);
+  return Number(value.toFixed(4));
 }
 
 async function saveCashFlowSnapshot(
@@ -4959,6 +4967,10 @@ async function saveCashFlowSnapshot(
   if (sections.reduce((total, [, lines]) => total + lines.length, 0) > maximumCashFlowLinesPerSnapshot) {
     throw new ApiError(400, `A cash flow snapshot is limited to ${maximumCashFlowLinesPerSnapshot} rows`);
   }
+  const notes = cleanOptional(payload.notes);
+  if (notes && notes.length > maximumCashFlowSnapshotNotesLength) {
+    throw new ApiError(400, "Cash flow snapshot note is too long");
+  }
   const state = await loadPersisted(env);
   const existing = state.cashFlowSnapshots.find((snapshot) =>
     snapshot.id === payload.id || snapshot.asOfDate === payload.asOfDate
@@ -4974,6 +4986,10 @@ async function saveCashFlowSnapshot(
     openBalances: normalized("Open balance", payload.openBalances),
     payables: normalized("Payable", payload.payables),
     investments: normalized("Investment", payload.investments),
+    cashGrowthPercent: normalizedCashFlowGrowth(payload.cashGrowthPercent, "Cash growth"),
+    spendGrowthPercent: normalizedCashFlowGrowth(payload.spendGrowthPercent, "Spend growth"),
+    profitGrowthPercent: normalizedCashFlowGrowth(payload.profitGrowthPercent, "Profit growth"),
+    notes,
     createdAt: existing?.createdAt ?? updatedAt,
     updatedAt
   };

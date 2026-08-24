@@ -79,6 +79,7 @@ export interface CashFlowLine {
   currency: string;
   notes?: string;
   dueDate?: string;
+  excludedFromTotals?: boolean;
 }
 
 export interface CashFlowSnapshot {
@@ -89,6 +90,10 @@ export interface CashFlowSnapshot {
   openBalances: CashFlowLine[];
   payables: CashFlowLine[];
   investments: CashFlowLine[];
+  cashGrowthPercent?: number;
+  spendGrowthPercent?: number;
+  profitGrowthPercent?: number;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,6 +106,10 @@ export interface SaveCashFlowSnapshotPayload {
   openBalances: CashFlowLine[];
   payables: CashFlowLine[];
   investments: CashFlowLine[];
+  cashGrowthPercent?: number;
+  spendGrowthPercent?: number;
+  profitGrowthPercent?: number;
+  notes?: string;
 }
 
 export interface Payable {

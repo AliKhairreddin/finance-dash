@@ -10473,7 +10473,7 @@ body {
 
 .cash-flow-metric-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -10489,8 +10489,12 @@ body {
   border-right: 1px solid var(--line);
 }
 
-.cash-flow-metric:last-child {
+.cash-flow-metric:nth-child(4n) {
   border-right: 0;
+}
+
+.cash-flow-metric:nth-child(n + 5) {
+  border-top: 1px solid var(--line);
 }
 
 .cash-flow-metric::before {
@@ -10502,8 +10506,11 @@ body {
 }
 
 .cash-flow-metric.receivable::before { background: #8b5cf6; }
+.cash-flow-metric.open-balance::before { background: #f59e0b; }
+.cash-flow-metric.approximate::before { background: #2563eb; }
 .cash-flow-metric.payable::before { background: #ef4444; }
 .cash-flow-metric.profit::before { background: #16a34a; }
+.cash-flow-metric.investment::before { background: #059669; }
 .cash-flow-metric.assets::before { background: #0f766e; }
 
 .cash-flow-metric span {
@@ -10520,6 +10527,46 @@ body {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.025em;
   text-overflow: ellipsis;
+}
+
+.cash-flow-snapshot-details {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px 14px;
+}
+
+.cash-flow-snapshot-details .panel-header {
+  padding: 0;
+}
+
+.cash-flow-snapshot-details h2 {
+  font-size: 0.92rem;
+}
+
+.cash-flow-growth-inputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cash-flow-growth-inputs label,
+.cash-flow-snapshot-note {
+  display: grid;
+  gap: 5px;
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  font-weight: 680;
+  text-transform: uppercase;
+}
+
+.cash-flow-snapshot-note textarea {
+  min-height: 64px;
+  resize: vertical;
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-transform: none;
 }
 
 .cash-flow-editor-grid {
@@ -10551,7 +10598,7 @@ body {
 }
 
 .cash-flow-entry-table {
-  min-width: 650px;
+  min-width: 1040px;
 }
 
 .cash-flow-entry-table th,
@@ -10559,10 +10606,12 @@ body {
   padding: 6px 8px;
 }
 
-.cash-flow-entry-table th:nth-child(1) { width: 34%; }
-.cash-flow-entry-table th:nth-child(2) { width: 20%; }
-.cash-flow-entry-table th:nth-child(3) { width: 13%; }
-.cash-flow-entry-table th:nth-child(4) { width: 23%; }
+.cash-flow-entry-table th:nth-child(1) { width: 22%; }
+.cash-flow-entry-table th:nth-child(2) { width: 14%; }
+.cash-flow-entry-table th:nth-child(3) { width: 10%; }
+.cash-flow-entry-table th:nth-child(4) { width: 30%; }
+.cash-flow-entry-table th:nth-child(5) { width: 16%; }
+.cash-flow-entry-table th:nth-child(6) { width: 72px; }
 .cash-flow-entry-table th:last-child { width: 52px; }
 
 .cash-flow-entry-table input {
@@ -10575,6 +10624,15 @@ body {
 .cash-flow-entry-table .amount input {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.cash-flow-include-checkbox {
+  display: block;
+  width: 16px;
+  min-height: 16px !important;
+  height: 16px !important;
+  margin: 0 auto;
+  accent-color: var(--accent);
 }
 
 .cash-flow-chart-grid {
@@ -10832,14 +10890,18 @@ body {
 
 @media (max-width: 1100px) {
   .cash-flow-metric-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cash-flow-metric:nth-child(3) {
+  .cash-flow-metric:nth-child(odd) {
+    border-right: 1px solid var(--line);
+  }
+
+  .cash-flow-metric:nth-child(even) {
     border-right: 0;
   }
 
-  .cash-flow-metric:nth-child(n + 4) {
+  .cash-flow-metric:nth-child(n + 3) {
     border-top: 1px solid var(--line);
   }
 
@@ -10873,17 +10935,22 @@ body {
   }
 
   .cash-flow-metric,
-  .cash-flow-metric:nth-child(3) {
+  .cash-flow-metric:nth-child(odd),
+  .cash-flow-metric:nth-child(even) {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
-  .cash-flow-metric:nth-child(n + 4) {
+  .cash-flow-metric:nth-child(n + 3) {
     border-top: 0;
   }
 
   .cash-flow-metric:last-child {
     border-bottom: 0;
+  }
+
+  .cash-flow-growth-inputs {
+    grid-template-columns: 1fr;
   }
 
   .cash-flow-open-summary {

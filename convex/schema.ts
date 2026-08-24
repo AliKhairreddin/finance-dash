@@ -314,7 +314,8 @@ const cashFlowLine = v.object({
   amount: v.number(),
   currency: v.string(),
   notes: v.optional(v.string()),
-  dueDate: v.optional(v.string())
+  dueDate: v.optional(v.string()),
+  excludedFromTotals: v.optional(v.boolean())
 });
 
 const cashFlowSnapshot = v.object({
@@ -325,6 +326,10 @@ const cashFlowSnapshot = v.object({
   openBalances: v.array(cashFlowLine),
   payables: v.array(cashFlowLine),
   investments: v.array(cashFlowLine),
+  cashGrowthPercent: v.optional(v.number()),
+  spendGrowthPercent: v.optional(v.number()),
+  profitGrowthPercent: v.optional(v.number()),
+  notes: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string()
 });

@@ -106,6 +106,7 @@ import {
   maximumCashFlowLineNotesLength,
   maximumCashFlowLinesPerSection,
   maximumCashFlowLinesPerSnapshot,
+  maximumCashFlowSnapshotNotesLength,
   maximumCashFlowSnapshots
 } from "../shared/cashFlow";
 import {
@@ -824,8 +825,15 @@ function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine
     amount: Number(line.amount.toFixed(2)),
     currency: normalizedCurrency(line.currency),
     notes,
-    dueDate: line.dueDate ? normalizedDate(line.dueDate, `${field} due date`) : undefined
+    dueDate: line.dueDate ? normalizedDate(line.dueDate, `${field} due date`) : undefined,
+    excludedFromTotals: line.excludedFromTotals || undefined
   };
+}
+
+function normalizedCashFlowGrowth(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) throw new Error(`${field} must be a number`);
+  return Number(value.toFixed(4));
 }
 
 export async function saveCashFlowSnapshot(
@@ -846,6 +854,10 @@ export async function saveCashFlowSnapshot(
   }
   const asOfDate = normalizedDate(payload.asOfDate, "Cash flow date");
   if (asOfDate > financeOperatingDate()) throw new Error("Cash flow date cannot be in the future");
+  const notes = cleanOptional(payload.notes);
+  if (notes && notes.length > maximumCashFlowSnapshotNotesLength) {
+    throw new Error("Cash flow snapshot note is too long");
+  }
   const existing = cashFlowSnapshots.find((snapshot) =>
     snapshot.id === payload.id || snapshot.asOfDate === asOfDate
   );
@@ -858,6 +870,10 @@ export async function saveCashFlowSnapshot(
     openBalances: payload.openBalances.map((line, index) => normalizedCashFlowLine(line, `Open balance ${index + 1}`)),
     payables: payload.payables.map((line, index) => normalizedCashFlowLine(line, `Payable ${index + 1}`)),
     investments: payload.investments.map((line, index) => normalizedCashFlowLine(line, `Investment ${index + 1}`)),
+    cashGrowthPercent: normalizedCashFlowGrowth(payload.cashGrowthPercent, "Cash growth"),
+    spendGrowthPercent: normalizedCashFlowGrowth(payload.spendGrowthPercent, "Spend growth"),
+    profitGrowthPercent: normalizedCashFlowGrowth(payload.profitGrowthPercent, "Profit growth"),
+    notes,
     createdAt: existing?.createdAt ?? updatedAt,
     updatedAt
   };

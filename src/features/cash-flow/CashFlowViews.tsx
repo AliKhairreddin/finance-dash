@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
+import { Textarea } from "@/components/ui/textarea";
 import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { useUrlState } from "@/lib/url-state";
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
@@ -34,7 +35,7 @@ import type {
 } from "../../../shared/types";
 
 type CashFlowSectionKey = "cashAccounts" | "receivables" | "openBalances" | "payables" | "investments";
-type CashFlowLineSortKey = "amount" | "currency" | "dueDate" | "name";
+type CashFlowLineSortKey = "amount" | "currency" | "dueDate" | "included" | "name" | "notes";
 type OpenReceivableSortKey = "amount" | "dueDate" | "name" | "source" | "status";
 
 const sectionDefinitions: Array<{ key: CashFlowSectionKey; label: string }> = [
@@ -75,7 +76,7 @@ function line(id: string, name: string, amount: number, currency: string, notes?
 }
 
 function nativeTotals(lines: CashFlowLine[]): CurrencyTotals {
-  return lines.reduce<CurrencyTotals>((totals, item) => ({
+  return lines.filter((item) => !item.excludedFromTotals).reduce<CurrencyTotals>((totals, item) => ({
     ...totals,
     [item.currency]: (totals[item.currency] ?? 0) + item.amount
   }), {});
@@ -91,8 +92,9 @@ function snapshotTotals(snapshot: Pick<CashFlowSnapshot, CashFlowSectionKey>, ra
   const openBalances = usdTotal(snapshot.openBalances, rates);
   const payables = usdTotal(snapshot.payables, rates);
   const investments = usdTotal(snapshot.investments, rates);
+  const approximateCash = cash + receivables + openBalances;
   const profit = cash + receivables + openBalances - payables;
-  return { cash, receivables, openBalances, payables, investments, profit, assets: profit + investments };
+  return { cash, receivables, openBalances, approximateCash, payables, investments, profit, assets: profit + investments };
 }
 
 function invoiceCashFlowLine(invoice: Invoice, dashboard: DashboardSnapshot): CashFlowLine | null {
@@ -171,7 +173,11 @@ function snapshotPayload(snapshot: CashFlowSnapshot): SaveCashFlowSnapshotPayloa
     receivables: snapshot.receivables,
     openBalances: snapshot.openBalances,
     payables: snapshot.payables,
-    investments: snapshot.investments
+    investments: snapshot.investments,
+    cashGrowthPercent: snapshot.cashGrowthPercent,
+    spendGrowthPercent: snapshot.spendGrowthPercent,
+    profitGrowthPercent: snapshot.profitGrowthPercent,
+    notes: snapshot.notes
   };
 }
 
@@ -189,13 +195,14 @@ function EditableCashFlowSection({
   onChange: (lines: CashFlowLine[]) => void;
 }) {
   const [sortKey, setSortKey] = useUrlState<CashFlowLineSortKey>(`cashFlow${sectionKey}Sort`, "name", {
-    allowedValues: ["amount", "currency", "dueDate", "name"]
+    allowedValues: ["amount", "currency", "dueDate", "included", "name", "notes"]
   });
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>(`cashFlow${sectionKey}Order`, "asc", {
     allowedValues: ["asc", "desc"]
   });
+  const sortValue = (item: CashFlowLine) => sortKey === "included" ? !item.excludedFromTotals : item[sortKey];
   const visibleLines = [...lines].sort((left, right) =>
-    compareTableValues(left[sortKey], right[sortKey], sortDirection) || left.id.localeCompare(right.id)
+    compareTableValues(sortValue(left), sortValue(right), sortDirection) || left.id.localeCompare(right.id)
   );
 
   function requestSort(next: CashFlowLineSortKey) {
@@ -228,7 +235,9 @@ function EditableCashFlowSection({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Name</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="currency">Currency</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="notes">Notes</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="dueDate">Due</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="included">Included</SortableTableHead>
             <th scope="col">Actions</th>
           </tr></thead>
           <tbody>
@@ -237,10 +246,12 @@ function EditableCashFlowSection({
                 <td><Input aria-label={`${title} name`} value={item.name} onChange={(event) => update(item.id, { name: event.target.value })} /></td>
                 <td className="amount"><Input aria-label={`${item.name || title} amount`} type="number" step="0.01" value={item.amount} onChange={(event) => update(item.id, { amount: Number(event.target.value) })} /></td>
                 <td><Input aria-label={`${item.name || title} currency`} maxLength={12} value={item.currency} onChange={(event) => update(item.id, { currency: event.target.value.toUpperCase() })} /></td>
+                <td><Input aria-label={`${item.name || title} notes`} maxLength={256} value={item.notes ?? ""} onChange={(event) => update(item.id, { notes: event.target.value || undefined })} /></td>
                 <td><Input aria-label={`${item.name || title} due date`} type="date" value={item.dueDate ?? ""} onChange={(event) => update(item.id, { dueDate: event.target.value || undefined })} /></td>
+                <td><input aria-label={`Include ${item.name || "row"} in totals`} checked={!item.excludedFromTotals} className="cash-flow-include-checkbox" type="checkbox" onChange={(event) => update(item.id, { excludedFromTotals: event.target.checked ? undefined : true })} /></td>
                 <td><Button className="icon-button destructive-icon-button" type="button" aria-label={`Remove ${item.name || "row"}`} onClick={() => onChange(lines.filter((lineItem) => lineItem.id !== item.id))}><Trash2 size={14} /></Button></td>
               </tr>
-            )) : <tr><td colSpan={5}>No rows</td></tr>}
+            )) : <tr><td colSpan={7}>No rows</td></tr>}
           </tbody>
         </table>
       </div>
@@ -292,10 +303,25 @@ function CompositionChart({ snapshot, rates }: { snapshot: Pick<CashFlowSnapshot
   return <div className="cash-flow-composition" role="img" aria-label="Current cash flow composition">{rows.map((row) => <div key={row.label}><span>{row.label}</span><div><i style={{ background: row.color, width: `${Math.max(2, Math.abs(row.value) / maximum * 100)}%` }} /></div><strong>{money(row.value)}</strong></div>)}</div>;
 }
 
+function canvasLines(context: CanvasRenderingContext2D, text: string, maximumWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && context.measureText(candidate).width > maximumWidth) {
+      lines.push(current);
+      current = word;
+    } else current = candidate;
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
 function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]) {
   const width = 1800;
   const sectionRows = sectionDefinitions.reduce((count, section) => count + Math.max(1, snapshot[section.key].length), 0);
-  const height = Math.min(12000, 940 + sectionRows * 34 + 680);
+  const height = Math.min(12000, 1120 + sectionRows * 34 + 680);
   const canvas = document.createElement("canvas");
   canvas.width = width * 2;
   canvas.height = height * 2;
@@ -314,29 +340,56 @@ function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapsh
   const metrics = [
     ["Cash", totals.cash, "#0ea5e9"],
     ["Receivables", totals.receivables, "#8b5cf6"],
+    ["Open balances", totals.openBalances, "#f59e0b"],
+    ["Approximate cash", totals.approximateCash, "#2563eb"],
     ["Payables", totals.payables, "#ef4444"],
     ["Profit", totals.profit, "#16a34a"],
+    ["Investments", totals.investments, "#059669"],
     ["Total assets", totals.assets, "#0f766e"]
   ] as const;
   metrics.forEach(([label, value, color], index) => {
-    const cardX = 80 + index * 330;
+    const cardX = 80 + index % 4 * 410;
+    const cardY = 164 + Math.floor(index / 4) * 126;
     context.fillStyle = "#ffffff";
     context.strokeStyle = "#dbe3ef";
     context.lineWidth = 2;
     context.beginPath();
-    context.roundRect(cardX, 164, 292, 116, 18);
+    context.roundRect(cardX, cardY, 370, 112, 18);
     context.fill();
     context.stroke();
     context.fillStyle = color;
-    context.fillRect(cardX, 164, 8, 116);
+    context.fillRect(cardX, cardY, 8, 112);
     context.fillStyle = "#64748b";
     context.font = "600 17px Inter, Arial, sans-serif";
-    context.fillText(label, cardX + 26, 202);
+    context.fillText(label, cardX + 26, cardY + 38);
     context.fillStyle = "#0f172a";
     context.font = "700 27px Inter, Arial, sans-serif";
-    context.fillText(money(value), cardX + 26, 247);
+    context.fillText(money(value), cardX + 26, cardY + 82);
   });
-  let cursorY = 330;
+  let cursorY = 455;
+  context.fillStyle = "#ffffff";
+  context.strokeStyle = "#dbe3ef";
+  context.beginPath();
+  context.roundRect(80, cursorY - 20, width - 160, 150, 18);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#0f172a";
+  context.font = "700 22px Inter, Arial, sans-serif";
+  context.fillText("Snapshot details", 104, cursorY + 16);
+  const growth = [
+    `Cash growth ${snapshot.cashGrowthPercent === undefined ? "—" : `${snapshot.cashGrowthPercent.toFixed(2)}%`}`,
+    `Spend growth ${snapshot.spendGrowthPercent === undefined ? "—" : `${snapshot.spendGrowthPercent.toFixed(2)}%`}`,
+    `Profit growth ${snapshot.profitGrowthPercent === undefined ? "—" : `${snapshot.profitGrowthPercent.toFixed(2)}%`}`
+  ];
+  context.fillStyle = "#475569";
+  context.font = "600 17px Inter, Arial, sans-serif";
+  growth.forEach((value, index) => context.fillText(value, 104 + index * 330, cursorY + 54));
+  context.fillStyle = "#64748b";
+  context.font = "500 16px Inter, Arial, sans-serif";
+  canvasLines(context, snapshot.notes ?? "No snapshot notes", width - 220).slice(0, 2).forEach((value, index) => {
+    context.fillText(value, 104, cursorY + 88 + index * 22);
+  });
+  cursorY += 185;
   for (const section of sectionDefinitions) {
     const rows = snapshot[section.key];
     context.fillStyle = "#0f172a";
@@ -348,7 +401,8 @@ function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapsh
     context.font = "600 15px Inter, Arial, sans-serif";
     context.fillStyle = "#64748b";
     context.fillText("NAME", 98, cursorY);
-    context.fillText("DUE", 1030, cursorY);
+    context.fillText("NOTES", 540, cursorY);
+    context.fillText("DUE", 1160, cursorY);
     context.textAlign = "right";
     context.fillText("NATIVE AMOUNT", width - 100, cursorY);
     context.textAlign = "left";
@@ -361,9 +415,10 @@ function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapsh
       }
       context.fillStyle = "#1e293b";
       context.font = "500 17px Inter, Arial, sans-serif";
-      context.fillText(item.name, 98, cursorY + 3);
+      context.fillText(item.name, 98, cursorY + 3, 410);
       context.fillStyle = "#64748b";
-      context.fillText(item.dueDate ? dateLabel(item.dueDate) : "—", 1030, cursorY + 3);
+      context.fillText(`${item.excludedFromTotals ? "Excluded · " : ""}${item.notes ?? "—"}`, 540, cursorY + 3, 590);
+      context.fillText(item.dueDate ? dateLabel(item.dueDate) : "—", 1160, cursorY + 3);
       context.fillStyle = "#0f172a";
       context.font = "600 17px Inter, Arial, sans-serif";
       context.textAlign = "right";
@@ -507,9 +562,21 @@ export function CashFlowPositionView({
       <section className="cash-flow-metric-grid" aria-label="Cash flow totals">
         <CashFlowMetric label="Cash" value={totals.cash} tone="cash" />
         <CashFlowMetric label="Receivables" value={totals.receivables} tone="receivable" />
+        <CashFlowMetric label="Open balances" value={totals.openBalances} tone="open-balance" />
+        <CashFlowMetric label="Approximate cash" value={totals.approximateCash} tone="approximate" />
         <CashFlowMetric label="Payables" value={totals.payables} tone="payable" />
         <CashFlowMetric label="Profit" value={totals.profit} tone="profit" />
+        <CashFlowMetric label="Investments" value={totals.investments} tone="investment" />
         <CashFlowMetric label="Total assets" value={totals.assets} tone="assets" />
+      </section>
+      <section className="panel cash-flow-snapshot-details">
+        <div className="panel-header compact-panel-header"><div><p className="eyebrow">Snapshot</p><h2>Details</h2></div></div>
+        <div className="cash-flow-growth-inputs">
+          <label>Cash growth (%)<Input aria-label="Cash growth percent" type="number" step="0.01" value={draft.cashGrowthPercent ?? ""} onChange={(event) => setDraft((current) => ({ ...current, cashGrowthPercent: event.target.value === "" ? undefined : Number(event.target.value) }))} /></label>
+          <label>Spend growth (%)<Input aria-label="Spend growth percent" type="number" step="0.01" value={draft.spendGrowthPercent ?? ""} onChange={(event) => setDraft((current) => ({ ...current, spendGrowthPercent: event.target.value === "" ? undefined : Number(event.target.value) }))} /></label>
+          <label>Profit growth (%)<Input aria-label="Profit growth percent" type="number" step="0.01" value={draft.profitGrowthPercent ?? ""} onChange={(event) => setDraft((current) => ({ ...current, profitGrowthPercent: event.target.value === "" ? undefined : Number(event.target.value) }))} /></label>
+        </div>
+        <label className="cash-flow-snapshot-note">Snapshot notes<Textarea aria-label="Cash flow snapshot notes" maxLength={1000} value={draft.notes ?? ""} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value || undefined }))} /></label>
       </section>
       <div className="cash-flow-editor-grid">
         {sectionDefinitions.map((section) => <EditableCashFlowSection key={section.key} sectionKey={section.key} title={section.label} lines={draft[section.key]} rates={dashboard.fxRates} onChange={(lines) => setSection(section.key, lines)} />)}
