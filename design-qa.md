@@ -37,6 +37,61 @@ No actionable P0, P1, or P2 differences remain.
 - Pass 3: the information trigger inherited an absolute metric-card position; a scoped override returned it beside the breakdown heading. The final focused capture has no visible P0/P1/P2 issue.
 
 final result: passed
+
+---
+
+# Cash Flow wide PNG export design QA
+
+## Comparison target
+
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-ec07f102-6a55-4aa5-8d53-696c77145fb0.png`.
+- Browser-generated implementation, normalized numerical-layout capture: `/tmp/cash-flow-wide-export-implementation.png`.
+- Same-input focused comparison: `/tmp/cash-flow-design-qa-comparison.png`.
+- Source pixels: 1280 × 490.
+- Export canvas: 3200 × 1800 CSS pixels rendered at 2× density, producing a 6400 × 3600 PNG.
+- State: Cash Flow snapshot dated August 24, 2026 with Cash in Accounts, Receivables, Open Balance, Payables by month, Investments, growth metrics, and graphs.
+
+## Density normalization
+
+- The source remained at its original 1280 × 490 density and was proportionally contained in a 1500 × 570 comparison region.
+- The numerical sheet region of the 6400 × 3600 implementation was cropped to 6400 × 2400, then proportionally contained in a second 1500 × 570 comparison region.
+- Both regions were placed on the same white 3024 × 570 canvas. The export's graph band was evaluated separately at full-view scale because the reference establishes the numerical sheet layout and the user explicitly requested numbers before graphs.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain.
+- Fonts and typography: the export uses a compact Arial/Inter-compatible spreadsheet hierarchy with centered section bands, right-aligned tabular currency, and legible row labels. Text remains sharp at 2× export density.
+- Spacing and layout rhythm: the implementation preserves the reference's wide structure—Cash and Receivables stacked on the left, Open Balance in the middle, Payables and month columns across the right, then summary blocks, Investments, Total Assets, and growth rows. Graphs start only after the numerical layout.
+- Colors and visual tokens: orange account/receivable/open-balance headers, red payable headers, dark-red month headers, green/red summary rows, blue assets, and cyan growth rows mirror the source hierarchy.
+- Image quality and asset fidelity: this is a native high-density canvas export with no raster substitutions, placeholder assets, or blurred screen capture. Grid borders and chart marks remain sharp at full resolution.
+- Copy and content: Notes and Due columns are absent from the entry tables and the export. Snapshot notes, the source sentence/link, and generated-source copy are absent. All financial sections and summary figures remain visible.
+- Accessibility and behavior: the four remaining meaningful entry-table columns—Name, Amount, Currency, and Included—retain shared accessible ascending/descending sort controls and URL-persisted sort state. The Export PNG control produced the expected landscape image.
+- Responsive/export behavior: the exported file is 16:9 and 6400 × 3600 pixels. No numerical table or graph is clipped.
+
+## Full-view and focused comparison evidence
+
+- The full implementation export confirms the numerical sheet occupies the upper wide band and both graphs occupy a single horizontal band underneath.
+- The same-input comparison confirms section order, column grouping, summary placement, spreadsheet color hierarchy, and white-space distribution against the supplied Google Sheet screenshot.
+- A separate narrow crop was unnecessary because the original-resolution export made account names, currency values, month allocations, totals, and growth figures legible.
+
+## Comparison history
+
+1. First browser-generated pass: the source and implementation showed no actionable P0/P1/P2 mismatch. The implementation intentionally adds the requested graph band below the source-matched numerical layout, and no visual fix was required after comparison.
+
+## Interaction and runtime checks
+
+- Loaded a representative 52-row snapshot in the in-app browser.
+- Confirmed Snapshot Details contains only the three growth inputs.
+- Confirmed every Cash Flow entry table omits Notes and Due while retaining sortable Name, Amount, Currency, and Included columns.
+- Triggered Export PNG and verified its pixel dimensions and landscape ratio.
+- Browser console warnings and errors: none.
+
+## Follow-up polish
+
+- None required for this request.
+
+final result: passed
+
 ---
 
 **Comparison Target**

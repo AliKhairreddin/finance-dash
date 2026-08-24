@@ -10549,24 +10549,13 @@ body {
   gap: 10px;
 }
 
-.cash-flow-growth-inputs label,
-.cash-flow-snapshot-note {
+.cash-flow-growth-inputs label {
   display: grid;
   gap: 5px;
   color: var(--app-muted);
   font-size: 0.72rem;
   font-weight: 680;
   text-transform: uppercase;
-}
-
-.cash-flow-snapshot-note textarea {
-  min-height: 64px;
-  resize: vertical;
-  color: var(--ink);
-  font-size: 0.8rem;
-  font-weight: 500;
-  line-height: 1.4;
-  text-transform: none;
 }
 
 .cash-flow-editor-grid {
@@ -10598,7 +10587,7 @@ body {
 }
 
 .cash-flow-entry-table {
-  min-width: 1040px;
+  min-width: 720px;
 }
 
 .cash-flow-entry-table th,
@@ -10606,12 +10595,10 @@ body {
   padding: 6px 8px;
 }
 
-.cash-flow-entry-table th:nth-child(1) { width: 22%; }
-.cash-flow-entry-table th:nth-child(2) { width: 14%; }
-.cash-flow-entry-table th:nth-child(3) { width: 10%; }
-.cash-flow-entry-table th:nth-child(4) { width: 30%; }
-.cash-flow-entry-table th:nth-child(5) { width: 16%; }
-.cash-flow-entry-table th:nth-child(6) { width: 72px; }
+.cash-flow-entry-table th:nth-child(1) { width: 38%; }
+.cash-flow-entry-table th:nth-child(2) { width: 24%; }
+.cash-flow-entry-table th:nth-child(3) { width: 18%; }
+.cash-flow-entry-table th:nth-child(4) { width: 90px; }
 .cash-flow-entry-table th:last-child { width: 52px; }
 
 .cash-flow-entry-table input {
