@@ -870,5 +870,38 @@ export default defineSchema({
     .index("by_import", ["importId"])
     .index("by_import_entry", ["importId", "entryId"])
     .index("by_import_date", ["importId", "date"])
-    .index("by_import_segment_date", ["importId", "segment", "date"])
+    .index("by_import_segment_date", ["importId", "segment", "date"]),
+  mediaSpendDaily: defineTable({
+    key: v.string(),
+    source: v.literal("lemonmax"),
+    workspace: v.number(),
+    date: v.string(),
+    platform: v.string(),
+    businessManagerId: v.string(),
+    businessManagerName: v.string(),
+    accountId: v.string(),
+    accountName: v.string(),
+    spend: v.number(),
+    currency: v.string(),
+    syncedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_date", ["date"])
+    .index("by_account_and_date", ["accountId", "date"])
+    .index("by_business_manager_and_date", ["businessManagerId", "date"]),
+  mediaSpendSyncState: defineTable({
+    key: v.string(),
+    source: v.literal("lemonmax"),
+    status: v.union(v.literal("running"), v.literal("healthy"), v.literal("failed")),
+    attemptId: v.optional(v.string()),
+    requestedFrom: v.string(),
+    requestedTo: v.string(),
+    lastAttemptAt: v.string(),
+    lastSuccessAt: v.optional(v.string()),
+    coveredThrough: v.optional(v.string()),
+    rowCount: v.optional(v.number()),
+    totalSpend: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    updatedAt: v.string()
+  }).index("by_key", ["key"])
 });

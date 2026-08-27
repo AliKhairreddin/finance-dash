@@ -216,9 +216,10 @@ import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } 
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
+import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -2240,6 +2241,8 @@ function App() {
 
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
+      {activeTab === "media-spend" && <MediaSpendView apiBase={apiBase} />}
+
       {activeTab === "cash-flow" && (
         <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} />
       )}
@@ -2647,6 +2650,7 @@ function Sidebar({
   ];
   const operationsItems: SidebarItem[] = [
     { id: "management", label: "Management", icon: <BookOpen size={17} /> },
+    { id: "media-spend", label: "Media spend", icon: <BadgeDollarSign size={17} /> },
     { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
   ];
   const accountingItems: SidebarItem[] = [

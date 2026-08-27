@@ -104,6 +104,9 @@ interface __BaseEnv_WorkerEnv {
 	KISSTERRA_TUNE_API_KEY: string;
 	KISSTERRA_TUNE_API_BASE_URL: string;
 	COINBASE_SPOT_PRICES_URL: string;
+	LEMONMAX_AUTH_TOKEN: string;
+	LEMONMAX_BEARER_TOKEN: string;
+	LEMONMAX_SPEND_CURRENCY: string;
 	TELEGRAM_OTP_STATE: DurableObjectNamespace<import("./worker/index").TelegramOtpState>;
 }
 declare namespace Cloudflare {

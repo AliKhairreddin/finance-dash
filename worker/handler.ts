@@ -181,6 +181,14 @@ import {
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
+  mediaSpendYesterdayInIndia,
+  parseLemonMaxSpendSummaryRange,
+  summarizeMediaSpend,
+  validateMediaSpendDateRange,
+  type MediaSpendApiResponse,
+  type MediaSpendRow
+} from "../shared/mediaSpend";
+import {
   addProfitDistributionFactPage,
   createProfitDistributionAccumulator,
   finalizeProfitDistribution,
@@ -734,6 +742,181 @@ async function fetchBankJson<T>(
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
   return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+const lemonMaxSpendEndpoint = "https://api.lemonmaxx.com/api/v1/account-spend/summary";
+const lemonMaxConfigurationNames = [
+  "LEMONMAX_AUTH_TOKEN",
+  "LEMONMAX_BEARER_TOKEN",
+  "LEMONMAX_SPEND_CURRENCY"
+] as const;
+
+function lemonMaxMissingConfiguration(env: Env): string[] {
+  return lemonMaxConfigurationNames.filter((name) => !envString(env, name));
+}
+
+function lemonMaxSpendCurrency(env: Env): string {
+  const currency = envString(env, "LEMONMAX_SPEND_CURRENCY");
+  if (!currency || !/^[A-Z0-9]{2,12}$/.test(currency)) {
+    throw new ApiError(503, "LemonMax spend currency is not configured");
+  }
+  return currency;
+}
+
+function requireLemonMaxCredentials(env: Env): {
+  authToken: string;
+  bearerToken: string;
+  currency: string;
+} {
+  const missing = lemonMaxMissingConfiguration(env);
+  if (missing.length > 0) {
+    throw new ApiError(503, `LemonMax spend sync is missing ${missing.join(", ")}`);
+  }
+  return {
+    authToken: envString(env, "LEMONMAX_AUTH_TOKEN") as string,
+    bearerToken: envString(env, "LEMONMAX_BEARER_TOKEN") as string,
+    currency: lemonMaxSpendCurrency(env)
+  };
+}
+
+function cleanLemonMaxError(error: unknown, credentials: { authToken: string; bearerToken: string }): string {
+  const message = error instanceof Error ? error.message : "Unknown LemonMax sync error";
+  return message
+    .replaceAll(credentials.authToken, "[redacted]")
+    .replaceAll(credentials.bearerToken, "[redacted]")
+    .replace(/\s+/g, " ")
+    .slice(0, 500);
+}
+
+function mediaSpendRange(fromDate: string | undefined, toDate: string | undefined): {
+  fromDate: string;
+  toDate: string;
+} {
+  if (!fromDate || !toDate) throw new ApiError(400, "Media spend fromDate and toDate are required");
+  try {
+    validateMediaSpendDateRange(fromDate, toDate);
+  } catch (error) {
+    throw new ApiError(400, error instanceof Error ? error.message : "Media spend date range is invalid", { cause: error });
+  }
+  return { fromDate, toDate };
+}
+
+function mediaSpendDates(fromDate: string, toDate: string): string[] {
+  const dates: string[] = [];
+  for (let date = fromDate; date <= toDate; date = isoDateShift(date, 1)) dates.push(date);
+  return dates;
+}
+
+async function fetchLemonMaxSpend(
+  env: Env,
+  fromDate: string,
+  toDate: string,
+  syncedAt: string,
+  credentials: ReturnType<typeof requireLemonMaxCredentials>
+): Promise<MediaSpendRow[]> {
+  const url = new URL(lemonMaxSpendEndpoint);
+  url.searchParams.set("start_date", fromDate);
+  url.searchParams.set("end_date", toDate);
+  url.searchParams.set("auth_token", credentials.authToken);
+  const response = await fetchJson<unknown>(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${credentials.bearerToken}`
+    },
+    signal: AbortSignal.timeout(45_000)
+  });
+  return parseLemonMaxSpendSummaryRange(
+    response,
+    fromDate,
+    toDate,
+    credentials.currency,
+    syncedAt
+  );
+}
+
+async function readMediaSpend(
+  env: Env,
+  fromDate: string,
+  toDate: string
+): Promise<MediaSpendApiResponse> {
+  const result = await getConvexClient(env).query(api.mediaSpend.listRange, {
+    serviceToken: getConvexServiceToken(env),
+    fromDate,
+    toDate
+  });
+  const missingConfiguration = lemonMaxMissingConfiguration(env);
+  return {
+    version: 1,
+    fromDate,
+    toDate,
+    currency: lemonMaxSpendCurrency(env),
+    configured: missingConfiguration.length === 0,
+    missingConfiguration,
+    rows: result.rows,
+    summary: summarizeMediaSpend(result.rows),
+    sync: result.sync ?? { status: "never" }
+  };
+}
+
+async function syncMediaSpend(
+  env: Env,
+  fromDate: string,
+  toDate: string
+): Promise<MediaSpendApiResponse> {
+  const credentials = requireLemonMaxCredentials(env);
+  const serviceToken = getConvexServiceToken(env);
+  const convex = getConvexClient(env);
+  const attemptId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  await convex.mutation(api.mediaSpend.startSync, {
+    serviceToken,
+    attemptId,
+    fromDate,
+    toDate,
+    startedAt
+  });
+
+  try {
+    const rows = await fetchLemonMaxSpend(env, fromDate, toDate, startedAt, credentials);
+    const rowsByDate = new Map<string, MediaSpendRow[]>();
+    for (const row of rows) {
+      const dateRows = rowsByDate.get(row.date) ?? [];
+      dateRows.push(row);
+      rowsByDate.set(row.date, dateRows);
+    }
+    for (const date of mediaSpendDates(fromDate, toDate)) {
+      await convex.mutation(api.mediaSpend.replaceDate, {
+        serviceToken,
+        date,
+        rows: rowsByDate.get(date) ?? []
+      });
+    }
+    const completedAt = new Date().toISOString();
+    await convex.mutation(api.mediaSpend.completeSync, {
+      serviceToken,
+      attemptId,
+      completedAt,
+      coveredThrough: toDate,
+      rowCount: rows.length,
+      totalSpend: rows.reduce((total, row) => total + row.spend, 0)
+    });
+    console.log(JSON.stringify({
+      event: "media_spend_sync_completed",
+      fromDate,
+      toDate,
+      rows: rows.length
+    }));
+    return readMediaSpend(env, fromDate, toDate);
+  } catch (error) {
+    const message = cleanLemonMaxError(error, credentials);
+    await convex.mutation(api.mediaSpend.failSync, {
+      serviceToken,
+      attemptId,
+      failedAt: new Date().toISOString(),
+      error: message
+    }).catch(() => false);
+    throw new ApiError(502, `LemonMax spend sync failed: ${message}`, { cause: error });
+  }
 }
 
 function wiseBaseUrl(env: Env): string {
@@ -6145,6 +6328,20 @@ async function handleApi(
       return json(await getSnapshot(env));
     }
 
+    if (url.pathname === "/api/media-spend" && request.method === "GET") {
+      const range = mediaSpendRange(
+        url.searchParams.get("fromDate") ?? undefined,
+        url.searchParams.get("toDate") ?? undefined
+      );
+      return json(await readMediaSpend(env, range.fromDate, range.toDate));
+    }
+
+    if (url.pathname === "/api/media-spend/sync" && request.method === "POST") {
+      const body = (await request.json().catch(() => null)) as { fromDate?: string; toDate?: string } | null;
+      const range = mediaSpendRange(body?.fromDate, body?.toDate);
+      return json(await syncMediaSpend(env, range.fromDate, range.toDate));
+    }
+
     if (url.pathname === "/api/analytics" && request.method === "GET") {
       const range = bankAnalyticsDateRange(url);
       const coverage = await getConvexClient(env).query(api.banking.getActivityCoverage, {
@@ -6716,6 +6913,20 @@ export default {
         console.error(JSON.stringify({
           event: "pending_bank_reconciliation_failed",
           scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+    }
+    if (controller.cron === "30 8 * * *") {
+      const yesterday = mediaSpendYesterdayInIndia(controller.scheduledTime);
+      try {
+        await syncMediaSpend(env, yesterday, yesterday);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "media_spend_sync_failed",
+          scheduledTime: controller.scheduledTime,
+          date: yesterday,
           error: error instanceof Error ? error.message : String(error)
         }));
         failures.push(error);

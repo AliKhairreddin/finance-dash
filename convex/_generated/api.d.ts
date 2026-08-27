@@ -14,6 +14,7 @@ import type * as bankSync from "../bankSync.js";
 import type * as banking from "../banking.js";
 import type * as dashboard from "../dashboard.js";
 import type * as managementReport from "../managementReport.js";
+import type * as mediaSpend from "../mediaSpend.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   banking: typeof banking;
   dashboard: typeof dashboard;
   managementReport: typeof managementReport;
+  mediaSpend: typeof mediaSpend;
 }>;
 
 /**

@@ -54,6 +54,7 @@
     "MERIT_WRITES_ENABLED": "true",
     "REVENUE_TIMEZONE": "Asia/Beirut",
     "COINBASE_SPOT_PRICES_URL": "https://api.coinbase.com/v2/prices",
+    "LEMONMAX_SPEND_CURRENCY": "USD",
     "PUBLIC_APP_URL": "https://finance.thatcanadian.dev"
   },
   "triggers": {
@@ -62,6 +63,7 @@
       "0 6,7 * * 1",
       "17 * * * *",
       "23 3 * * *",
+      "30 8 * * *",
       "*/15 * * * *",
       "*/5 * * * *"
     ]
