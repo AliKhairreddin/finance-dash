@@ -11,9 +11,9 @@ const mediaSpendRow = v.object({
   date: v.string(),
   platform: v.string(),
   businessManagerId: v.string(),
-  businessManagerName: v.string(),
+  businessManagerName: v.optional(v.string()),
   accountId: v.string(),
-  accountName: v.string(),
+  accountName: v.optional(v.string()),
   spend: v.number(),
   currency: v.string(),
   syncedAt: v.string()
@@ -92,9 +92,9 @@ export const listRange = query({
         date: row.date,
         platform: row.platform,
         businessManagerId: row.businessManagerId,
-        businessManagerName: row.businessManagerName,
+        ...(row.businessManagerName ? { businessManagerName: row.businessManagerName } : {}),
         accountId: row.accountId,
-        accountName: row.accountName,
+        ...(row.accountName ? { accountName: row.accountName } : {}),
         spend: row.spend,
         currency: row.currency,
         syncedAt: row.syncedAt

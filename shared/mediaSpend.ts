@@ -9,9 +9,9 @@ export interface MediaSpendRow {
   date: string;
   platform: string;
   businessManagerId: string;
-  businessManagerName: string;
+  businessManagerName?: string;
   accountId: string;
-  accountName: string;
+  accountName?: string;
   spend: number;
   currency: string;
   syncedAt: string;
@@ -89,6 +89,25 @@ function requiredString(
   return value;
 }
 
+function optionalDisplayString(
+  row: Record<string, unknown>,
+  field: string,
+  rowNumber: number,
+  maximumLength = 500
+): string | undefined {
+  const value = row[field];
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`LemonMax row ${rowNumber} has an invalid ${field}`);
+  }
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  if (normalized.length > maximumLength || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
+    throw new Error(`LemonMax row ${rowNumber} has an invalid ${field}`);
+  }
+  return normalized;
+}
+
 function mediaSpendRowKey(row: Pick<
   MediaSpendRow,
   "accountId" | "businessManagerId" | "date" | "platform" | "workspace"
@@ -147,6 +166,8 @@ export function parseLemonMaxSpendSummaryRange(
       throw new Error(`LemonMax row ${rowNumber} does not match the requested date range`);
     }
 
+    const businessManagerName = optionalDisplayString(item, "BM Name", rowNumber);
+    const accountName = optionalDisplayString(item, "Account Name", rowNumber);
     const parsed: MediaSpendRow = {
       key: "",
       source: mediaSpendSource,
@@ -154,9 +175,9 @@ export function parseLemonMaxSpendSummaryRange(
       date,
       platform: requiredString(item, "Platform", rowNumber, 80),
       businessManagerId: requiredString(item, "BM ID", rowNumber, 160),
-      businessManagerName: requiredString(item, "BM Name", rowNumber),
+      ...(businessManagerName ? { businessManagerName } : {}),
       accountId: requiredString(item, "Account ID", rowNumber, 160),
-      accountName: requiredString(item, "Account Name", rowNumber),
+      ...(accountName ? { accountName } : {}),
       spend,
       currency,
       syncedAt

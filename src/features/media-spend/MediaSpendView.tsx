@@ -72,7 +72,7 @@ function dateTimeLabel(value: string): string {
   }).format(new Date(value));
 }
 
-function spendSortValue(row: MediaSpendRow, sortKey: MediaSpendSortKey): number | string {
+function spendSortValue(row: MediaSpendRow, sortKey: MediaSpendSortKey): number | string | undefined {
   if (sortKey === "account") return row.accountName;
   if (sortKey === "businessManager") return row.businessManagerName;
   if (sortKey === "date") return row.date;
@@ -146,7 +146,7 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
           row.businessManagerName,
           row.platform,
           String(row.workspace)
-        ].some((value) => value.toLowerCase().includes(normalizedSearch)))
+        ].some((value) => value?.toLowerCase().includes(normalizedSearch)))
       : [...(data?.rows ?? [])];
     return filtered.sort((left, right) =>
       compareTableValues(spendSortValue(left, sortKey), spendSortValue(right, sortKey), sortDirection)
@@ -324,8 +324,8 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
                     <td>{dateLabel(row.date)}</td>
                     <td><span className="source-pill media-spend-platform">{row.platform}</span></td>
                     <td>{row.workspace}</td>
-                    <td><strong>{row.businessManagerName}</strong><small>{row.businessManagerId}</small></td>
-                    <td><strong>{row.accountName}</strong><small>{row.accountId}</small></td>
+                    <td><strong>{row.businessManagerName ?? "—"}</strong><small>{row.businessManagerId}</small></td>
+                    <td><strong>{row.accountName ?? "—"}</strong><small>{row.accountId}</small></td>
                     <td className="amount media-spend-amount">{money(row.spend, row.currency)}</td>
                   </tr>
                 ))}

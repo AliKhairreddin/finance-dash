@@ -61,6 +61,21 @@ test("rejects data outside the requested day", () => {
   );
 });
 
+test("keeps spend rows when LemonMax omits display names", () => {
+  const rows = parseLemonMaxSpendSummary({
+    ...response,
+    data: [{
+      ...response.data[0],
+      "BM Name": null,
+      "Account Name": "   "
+    }]
+  }, "2026-08-01", "USD", "2026-08-02T08:30:00.000Z");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].businessManagerName, undefined);
+  assert.equal(rows[0].accountName, undefined);
+  assert.equal(rows[0].spend, 3119.71);
+});
+
 test("uses India calendar time when selecting yesterday", () => {
   assert.equal(mediaSpendYesterdayInIndia(new Date("2026-08-27T08:30:00.000Z")), "2026-08-26");
   assert.equal(mediaSpendYesterdayInIndia(new Date("2026-08-26T20:00:00.000Z")), "2026-08-26");

@@ -878,9 +878,9 @@ export default defineSchema({
     date: v.string(),
     platform: v.string(),
     businessManagerId: v.string(),
-    businessManagerName: v.string(),
+    businessManagerName: v.optional(v.string()),
     accountId: v.string(),
-    accountName: v.string(),
+    accountName: v.optional(v.string()),
     spend: v.number(),
     currency: v.string(),
     syncedAt: v.string()
