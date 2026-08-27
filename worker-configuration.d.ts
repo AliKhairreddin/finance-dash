@@ -107,6 +107,7 @@ interface __BaseEnv_WorkerEnv {
 	LEMONMAX_AUTH_TOKEN: string;
 	LEMONMAX_BEARER_TOKEN: string;
 	LEMONMAX_SPEND_CURRENCY: string;
+	LEMONMAX_SYNC_START_DATE: string;
 	TELEGRAM_OTP_STATE: DurableObjectNamespace<import("./worker/index").TelegramOtpState>;
 }
 declare namespace Cloudflare {

@@ -55,6 +55,7 @@
     "REVENUE_TIMEZONE": "Asia/Beirut",
     "COINBASE_SPOT_PRICES_URL": "https://api.coinbase.com/v2/prices",
     "LEMONMAX_SPEND_CURRENCY": "USD",
+    "LEMONMAX_SYNC_START_DATE": "2026-08-01",
     "PUBLIC_APP_URL": "https://finance.thatcanadian.dev"
   },
   "triggers": {
