@@ -29,6 +29,7 @@ export interface MediaSpendSyncState {
   rowCount?: number;
   totalSpend?: number;
   lastError?: string;
+  consecutiveFailures?: number;
 }
 
 export interface MediaSpendSummary {

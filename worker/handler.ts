@@ -889,19 +889,17 @@ async function syncMediaSpend(
   });
 
   try {
-    const rows = await fetchLemonMaxSpend(env, fromDate, toDate, startedAt, credentials);
-    const rowsByDate = new Map<string, MediaSpendRow[]>();
-    for (const row of rows) {
-      const dateRows = rowsByDate.get(row.date) ?? [];
-      dateRows.push(row);
-      rowsByDate.set(row.date, dateRows);
-    }
+    let rowCount = 0;
+    let totalSpend = 0;
     for (const date of mediaSpendDates(fromDate, toDate)) {
+      const rows = await fetchLemonMaxSpend(env, date, date, startedAt, credentials);
       await convex.mutation(api.mediaSpend.replaceDate, {
         serviceToken,
         date,
-        rows: rowsByDate.get(date) ?? []
+        rows
       });
+      rowCount += rows.length;
+      totalSpend += rows.reduce((total, row) => total + row.spend, 0);
     }
     const completedAt = new Date().toISOString();
     await convex.mutation(api.mediaSpend.completeSync, {
@@ -909,14 +907,14 @@ async function syncMediaSpend(
       attemptId,
       completedAt,
       coveredThrough: toDate,
-      rowCount: rows.length,
-      totalSpend: rows.reduce((total, row) => total + row.spend, 0)
+      rowCount,
+      totalSpend
     });
     console.log(JSON.stringify({
       event: "media_spend_sync_completed",
       fromDate,
       toDate,
-      rows: rows.length
+      rows: rowCount
     }));
     return;
   } catch (error) {
@@ -935,7 +933,11 @@ async function bootstrapMediaSpend(env: Env, scheduledTime: number): Promise<boo
   if (lemonMaxMissingConfiguration(env).length > 0) return false;
   const yesterday = mediaSpendYesterdayInIndia(scheduledTime);
   const current = await readMediaSpend(env, yesterday, yesterday);
-  if (current.sync.status !== "never") return false;
+  if (
+    current.sync.status === "healthy"
+    || current.sync.status === "running"
+    || (current.sync.status === "failed" && (current.sync.consecutiveFailures ?? 0) >= 3)
+  ) return false;
   const fromDate = lemonMaxSyncStartDate(env);
   if (fromDate > yesterday) {
     throw new ApiError(503, "LemonMax sync start date is after yesterday");

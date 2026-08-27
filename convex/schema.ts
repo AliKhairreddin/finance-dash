@@ -902,6 +902,7 @@ export default defineSchema({
     rowCount: v.optional(v.number()),
     totalSpend: v.optional(v.number()),
     lastError: v.optional(v.string()),
+    consecutiveFailures: v.optional(v.number()),
     updatedAt: v.string()
   }).index("by_key", ["key"])
 });

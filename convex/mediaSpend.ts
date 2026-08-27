@@ -28,7 +28,8 @@ const publicSyncState = v.object({
   requestedTo: v.string(),
   rowCount: v.optional(v.number()),
   totalSpend: v.optional(v.number()),
-  lastError: v.optional(v.string())
+  lastError: v.optional(v.string()),
+  consecutiveFailures: v.optional(v.number())
 });
 
 const maximumRowsPerDate = 3_500;
@@ -107,7 +108,8 @@ export const listRange = query({
         requestedTo: storedSync.requestedTo,
         rowCount: storedSync.rowCount,
         totalSpend: storedSync.totalSpend,
-        lastError: storedSync.lastError
+        lastError: storedSync.lastError,
+        consecutiveFailures: storedSync.consecutiveFailures
       } : null
     };
   }
@@ -147,6 +149,7 @@ export const startSync = mutation({
       ...(existing?.coveredThrough ? { coveredThrough: existing.coveredThrough } : {}),
       ...(existing?.rowCount !== undefined ? { rowCount: existing.rowCount } : {}),
       ...(existing?.totalSpend !== undefined ? { totalSpend: existing.totalSpend } : {}),
+      ...(existing?.consecutiveFailures !== undefined ? { consecutiveFailures: existing.consecutiveFailures } : {}),
       updatedAt: args.startedAt
     };
     if (existing) await ctx.db.replace(existing._id, next);
@@ -242,6 +245,7 @@ export const completeSync = mutation({
       coveredThrough: args.coveredThrough,
       rowCount: args.rowCount,
       totalSpend: args.totalSpend,
+      consecutiveFailures: 0,
       updatedAt: args.completedAt
     });
     return true;
@@ -276,6 +280,7 @@ export const failSync = mutation({
       ...(existing.rowCount !== undefined ? { rowCount: existing.rowCount } : {}),
       ...(existing.totalSpend !== undefined ? { totalSpend: existing.totalSpend } : {}),
       lastError: args.error.slice(0, 500),
+      consecutiveFailures: (existing.consecutiveFailures ?? 0) + 1,
       updatedAt: args.failedAt
     });
     return true;
