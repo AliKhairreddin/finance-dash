@@ -295,6 +295,25 @@
   width: min(330px, 42vw);
 }
 
+.media-spend-toolbar-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.media-spend-zero-toggle {
+  min-height: 34px;
+  padding-inline: 11px;
+  white-space: nowrap;
+}
+
+.media-spend-zero-toggle[aria-pressed="true"] {
+  color: var(--violet);
+  border-color: var(--info-border);
+  background: var(--blue-soft);
+}
+
 .media-spend-table-wrap {
   max-height: min(66vh, 690px);
 }
@@ -388,8 +407,14 @@
 
   .media-spend-header-actions > *,
   .media-spend-header-actions .bank-date-range-trigger,
+  .media-spend-toolbar-controls,
   .media-spend-toolbar .toolbar-search-field {
     width: 100%;
+  }
+
+  .media-spend-toolbar-controls {
+    align-items: stretch;
+    flex-direction: column-reverse;
   }
 
   .media-spend-summary {

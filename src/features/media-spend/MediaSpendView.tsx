@@ -30,6 +30,7 @@ import type { MediaSpendApiResponse, MediaSpendRow } from "../../../shared/media
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
 type MediaSpendSortKey = "account" | "businessManager" | "date" | "platform" | "spend" | "workspace";
+type ZeroSpendVisibility = "hide" | "include";
 
 const mediaSpendSortKeys: readonly MediaSpendSortKey[] = [
   "account",
@@ -95,11 +96,14 @@ function mediaSpendPreset(value: string): CalendarDateRange {
 export function MediaSpendView({ apiBase }: { apiBase: string }) {
   const defaultRange = useMemo(defaultMediaSpendRange, []);
   const [dateRange, setDateRange] = useUrlDateRangeState("mediaFrom", "mediaTo", defaultRange);
-  const [sortKey, setSortKey] = useUrlState<MediaSpendSortKey>("mediaSort", "date", {
+  const [sortKey, setSortKey] = useUrlState<MediaSpendSortKey>("mediaSort", "spend", {
     allowedValues: mediaSpendSortKeys
   });
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("mediaOrder", "desc", {
     allowedValues: ["asc", "desc"]
+  });
+  const [zeroSpendVisibility, setZeroSpendVisibility] = useUrlState<ZeroSpendVisibility>("mediaZeros", "hide", {
+    allowedValues: ["hide", "include"]
   });
   const [data, setData] = useState<MediaSpendApiResponse | null>(null);
   const [search, setSearch] = useState("");
@@ -130,10 +134,21 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
     return () => controller.abort();
   }, [dateRange.fromDate, dateRange.toDate]);
 
+  const activitySummary = useMemo(() => {
+    const activeRows = (data?.rows ?? []).filter((row) => row.spend !== 0);
+    return {
+      accounts: new Set(activeRows.map((row) => `${row.platform}:${row.accountId}`)).size,
+      businessManagers: new Set(activeRows.map((row) => `${row.platform}:${row.businessManagerId ?? ""}`)).size
+    };
+  }, [data?.rows]);
+  const includeZeroSpend = zeroSpendVisibility === "include";
   const visibleRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
+    const spendRows = includeZeroSpend
+      ? (data?.rows ?? [])
+      : (data?.rows ?? []).filter((row) => row.spend !== 0);
     const filtered = normalizedSearch
-      ? (data?.rows ?? []).filter((row) => [
+      ? spendRows.filter((row) => [
           row.accountId,
           row.accountName,
           row.businessManagerId,
@@ -141,18 +156,18 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
           row.platform,
           String(row.workspace)
         ].some((value) => value?.toLowerCase().includes(normalizedSearch)))
-      : [...(data?.rows ?? [])];
+      : [...spendRows];
     return filtered.sort((left, right) =>
       compareTableValues(spendSortValue(left, sortKey), spendSortValue(right, sortKey), sortDirection)
       || left.key.localeCompare(right.key)
     );
-  }, [data?.rows, search, sortDirection, sortKey]);
+  }, [data?.rows, includeZeroSpend, search, sortDirection, sortKey]);
   const pageCount = Math.max(1, Math.ceil(visibleRows.length / mediaSpendPageSize));
   const pageRows = visibleRows.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
 
   useEffect(() => {
     setPage(0);
-  }, [dateRange.fromDate, dateRange.toDate, search, sortDirection, sortKey]);
+  }, [dateRange.fromDate, dateRange.toDate, includeZeroSpend, search, sortDirection, sortKey]);
 
   useEffect(() => {
     if (page >= pageCount) setPage(pageCount - 1);
@@ -265,11 +280,11 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><WalletCards size={17} /></span>
-          <div><span>Ad accounts</span><strong>{data?.summary.accounts ?? "—"}</strong></div>
+          <div><span>Active accounts</span><strong>{data ? activitySummary.accounts.toLocaleString() : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><BriefcaseBusiness size={17} /></span>
-          <div><span>Business managers</span><strong>{data?.summary.businessManagers ?? "—"}</strong></div>
+          <div><span>Active BMs</span><strong>{data ? activitySummary.businessManagers.toLocaleString() : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><Rows3 size={17} /></span>
@@ -287,12 +302,22 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
                 : "LemonMax account-level delivery"}
             </span>
           </div>
-          <ToolbarSearchField
-            ariaLabel="Search media spend"
-            onChange={setSearch}
-            placeholder="Search BM, account, platform"
-            value={search}
-          />
+          <div className="media-spend-toolbar-controls">
+            <Button
+              aria-pressed={includeZeroSpend}
+              className="secondary-button media-spend-zero-toggle"
+              onClick={() => setZeroSpendVisibility(includeZeroSpend ? "hide" : "include")}
+              type="button"
+            >
+              {includeZeroSpend ? "Hide $0" : "Include $0"}
+            </Button>
+            <ToolbarSearchField
+              ariaLabel="Search media spend"
+              onChange={setSearch}
+              placeholder="Search BM, account, platform"
+              value={search}
+            />
+          </div>
         </div>
 
         {isLoading && !data ? (
@@ -300,7 +325,7 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
         ) : visibleRows.length === 0 ? (
           <div className="empty-state">
             <Database size={22} />
-            <strong>{search ? "No matching accounts" : "No media spend in this period"}</strong>
+            <strong>{search ? `No matching ${includeZeroSpend ? "accounts" : "active accounts"}` : "No media spend in this period"}</strong>
           </div>
         ) : (
           <div className="table-wrap media-spend-table-wrap">
@@ -331,7 +356,7 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
           </div>
         )}
         <footer className="media-spend-table-footer">
-          <span>{visibleRows.length.toLocaleString()} of {(data?.rows.length ?? 0).toLocaleString()} account-day rows · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
+          <span>{visibleRows.length.toLocaleString()} shown · {activitySummary.accounts.toLocaleString()} active · {(data?.rows.length ?? 0).toLocaleString()} total account-day rows · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
           <div className="media-spend-pagination">
             <span>Page {page + 1} of {pageCount}</span>
             <Button className="icon-button" aria-label="Previous media spend page" disabled={page === 0} onClick={() => setPage((current) => current - 1)} type="button">
