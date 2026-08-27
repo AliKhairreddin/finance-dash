@@ -813,6 +813,17 @@ function mediaSpendRange(fromDate: string | undefined, toDate: string | undefine
   return { fromDate, toDate };
 }
 
+function mediaSpendReadDate(fromDate: string | undefined, toDate: string | undefined): {
+  fromDate: string;
+  toDate: string;
+} {
+  const range = mediaSpendRange(fromDate, toDate);
+  if (range.fromDate !== range.toDate) {
+    throw new ApiError(400, "Account-level media spend can be viewed one day at a time");
+  }
+  return range;
+}
+
 function mediaSpendDates(fromDate: string, toDate: string): string[] {
   const dates: string[] = [];
   for (let date = fromDate; date <= toDate; date = isoDateShift(date, 1)) dates.push(date);
@@ -6356,7 +6367,7 @@ async function handleApi(
     }
 
     if (url.pathname === "/api/media-spend" && request.method === "GET") {
-      const range = mediaSpendRange(
+      const range = mediaSpendReadDate(
         url.searchParams.get("fromDate") ?? undefined,
         url.searchParams.get("toDate") ?? undefined
       );

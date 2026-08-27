@@ -42,8 +42,8 @@ const mediaSpendSortKeys: readonly MediaSpendSortKey[] = [
 const mediaSpendPageSize = 200;
 
 function defaultMediaSpendRange(): CalendarDateRange {
-  const toDate = shiftFinanceOperatingDate(financeOperatingDate(), -1);
-  return { fromDate: shiftFinanceOperatingDate(toDate, -29), toDate };
+  const yesterday = shiftFinanceOperatingDate(financeOperatingDate(), -1);
+  return { fromDate: yesterday, toDate: yesterday };
 }
 
 function money(value: number, currency: string): string {
@@ -88,14 +88,8 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
 
 function mediaSpendPreset(value: string): CalendarDateRange {
   const yesterday = shiftFinanceOperatingDate(financeOperatingDate(), -1);
-  if (value === "yesterday") return { fromDate: yesterday, toDate: yesterday };
-  if (value === "last-7-days") {
-    return { fromDate: shiftFinanceOperatingDate(yesterday, -6), toDate: yesterday };
-  }
-  if (value === "month-to-date") {
-    return { fromDate: `${yesterday.slice(0, 7)}-01`, toDate: yesterday };
-  }
-  return { fromDate: shiftFinanceOperatingDate(yesterday, -29), toDate: yesterday };
+  if (value !== "yesterday") throw new Error("Unknown media spend date preset");
+  return { fromDate: yesterday, toDate: yesterday };
 }
 
 export function MediaSpendView({ apiBase }: { apiBase: string }) {
@@ -227,18 +221,21 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
         </div>
         <div className="media-spend-header-actions">
           <CalendarPeriodPicker
-            ariaLabel="Choose media spend period"
+            ariaLabel="Choose media spend date"
             dateRange={dateRange}
             disabled={isLoading || isSyncing}
             isLoading={isLoading}
-            onApply={setDateRange}
+            onApply={(nextRange) => {
+              if (nextRange.fromDate !== nextRange.toDate) {
+                setError("Choose one date for account-level media spend");
+                return;
+              }
+              setDateRange(nextRange);
+            }}
             onSelectPreset={(value) => setDateRange(mediaSpendPreset(value))}
-            presetAriaLabel="Media spend period preset"
+            presetAriaLabel="Media spend date preset"
             presetOptions={[
-              { value: "yesterday", label: "Yesterday" },
-              { value: "last-7-days", label: "Last 7 days" },
-              { value: "last-30-days", label: "Last 30 days" },
-              { value: "month-to-date", label: "Month to date" }
+              { value: "yesterday", label: "Yesterday" }
             ]}
             triggerLabel={calendarDateRangeLabel(dateRange)}
           />
