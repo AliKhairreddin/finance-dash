@@ -5,6 +5,8 @@ import {
   ChevronRight,
   CircleAlert,
   Database,
+  Layers3,
+  List,
   Loader2,
   RefreshCw,
   Rows3,
@@ -18,7 +20,7 @@ import {
   calendarDateRangeLabel,
   type CalendarDateRange
 } from "@/components/ui/calendar-period-picker";
-import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
+import { ActiveFilterBar, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import {
   compareTableValues,
@@ -30,7 +32,21 @@ import type { MediaSpendApiResponse, MediaSpendRow } from "../../../shared/media
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
 type MediaSpendSortKey = "account" | "businessManager" | "date" | "platform" | "spend" | "workspace";
+type BusinessManagerSortKey = "accounts" | "businessManager" | "platform" | "spend" | "workspace";
+type MediaSpendViewMode = "accounts" | "businessManagers";
 type ZeroSpendVisibility = "hide" | "include";
+
+type BusinessManagerSpendGroup = {
+  accountCount: number;
+  businessManagerId: string;
+  businessManagerName?: string;
+  currency: string;
+  key: string;
+  platform: string;
+  searchText: string;
+  spend: number;
+  workspaces: number[];
+};
 
 const mediaSpendSortKeys: readonly MediaSpendSortKey[] = [
   "account",
@@ -40,6 +56,14 @@ const mediaSpendSortKeys: readonly MediaSpendSortKey[] = [
   "spend",
   "workspace"
 ];
+const businessManagerSortKeys: readonly BusinessManagerSortKey[] = [
+  "accounts",
+  "businessManager",
+  "platform",
+  "spend",
+  "workspace"
+];
+const mediaSpendViewModes: readonly MediaSpendViewMode[] = ["accounts", "businessManagers"];
 const mediaSpendPageSize = 200;
 
 function defaultMediaSpendRange(): CalendarDateRange {
@@ -82,6 +106,73 @@ function spendSortValue(row: MediaSpendRow, sortKey: MediaSpendSortKey): number 
   return row.workspace;
 }
 
+function businessManagerKey(row: Pick<MediaSpendRow, "businessManagerId" | "platform">): string {
+  return `${encodeURIComponent(row.platform)}:${encodeURIComponent(row.businessManagerId)}`;
+}
+
+function groupBusinessManagers(rows: readonly MediaSpendRow[]): BusinessManagerSpendGroup[] {
+  const groups = new Map<string, {
+    accountIds: Set<string>;
+    businessManagerId: string;
+    businessManagerName?: string;
+    currency: string;
+    key: string;
+    platform: string;
+    searchTerms: Set<string>;
+    spend: number;
+    workspaces: Set<number>;
+  }>();
+  for (const row of rows) {
+    const key = businessManagerKey(row);
+    const existing = groups.get(key) ?? {
+      accountIds: new Set<string>(),
+      businessManagerId: row.businessManagerId,
+      ...(row.businessManagerName ? { businessManagerName: row.businessManagerName } : {}),
+      currency: row.currency,
+      key,
+      platform: row.platform,
+      searchTerms: new Set<string>(),
+      spend: 0,
+      workspaces: new Set<number>()
+    };
+    if (!existing.businessManagerName && row.businessManagerName) {
+      existing.businessManagerName = row.businessManagerName;
+    }
+    existing.accountIds.add(row.accountId);
+    existing.searchTerms.add(row.accountId);
+    if (row.accountName) existing.searchTerms.add(row.accountName);
+    existing.searchTerms.add(row.businessManagerId);
+    if (row.businessManagerName) existing.searchTerms.add(row.businessManagerName);
+    existing.searchTerms.add(row.platform);
+    existing.searchTerms.add(String(row.workspace));
+    existing.spend += row.spend;
+    existing.workspaces.add(row.workspace);
+    groups.set(key, existing);
+  }
+  return [...groups.values()].map((group) => ({
+    accountCount: group.accountIds.size,
+    businessManagerId: group.businessManagerId,
+    ...(group.businessManagerName ? { businessManagerName: group.businessManagerName } : {}),
+    currency: group.currency,
+    key: group.key,
+    platform: group.platform,
+    searchText: [...group.searchTerms].join(" ").toLowerCase(),
+    spend: group.spend,
+    workspaces: [...group.workspaces].sort((left, right) => left - right)
+  }));
+}
+
+function businessManagerSortValue(
+  group: BusinessManagerSpendGroup,
+  sortKey: BusinessManagerSortKey
+): number | string | undefined {
+  if (sortKey === "accounts") return group.accountCount;
+  if (sortKey === "businessManager") return group.businessManagerName ?? group.businessManagerId;
+  if (sortKey === "platform") return group.platform;
+  if (sortKey === "spend") return group.spend;
+  return group.workspaces[0];
+}
+
 async function apiErrorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => null)) as { message?: string } | null;
   return body?.message || fallback;
@@ -101,6 +192,18 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
   });
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("mediaOrder", "desc", {
     allowedValues: ["asc", "desc"]
+  });
+  const [businessManagerSortKey, setBusinessManagerSortKey] = useUrlState<BusinessManagerSortKey>("mediaBmSort", "spend", {
+    allowedValues: businessManagerSortKeys
+  });
+  const [businessManagerSortDirection, setBusinessManagerSortDirection] = useUrlState<TableSortDirection>("mediaBmOrder", "desc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const [viewMode, setViewMode] = useUrlState<MediaSpendViewMode>("mediaView", "accounts", {
+    allowedValues: mediaSpendViewModes
+  });
+  const [selectedBusinessManagerKey, setSelectedBusinessManagerKey] = useUrlState("mediaBm", "", {
+    isValid: (value) => value.length <= 500
   });
   const [zeroSpendVisibility, setZeroSpendVisibility] = useUrlState<ZeroSpendVisibility>("mediaZeros", "hide", {
     allowedValues: ["hide", "include"]
@@ -142,13 +245,22 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
     };
   }, [data?.rows]);
   const includeZeroSpend = zeroSpendVisibility === "include";
-  const visibleRows = useMemo(() => {
+  const spendRows = useMemo(() => includeZeroSpend
+    ? (data?.rows ?? [])
+    : (data?.rows ?? []).filter((row) => row.spend !== 0), [data?.rows, includeZeroSpend]);
+  const allBusinessManagerGroups = useMemo(() => groupBusinessManagers(data?.rows ?? []), [data?.rows]);
+  const businessManagerGroups = useMemo(() => groupBusinessManagers(spendRows), [spendRows]);
+  const selectedBusinessManager = useMemo(
+    () => allBusinessManagerGroups.find((group) => group.key === selectedBusinessManagerKey),
+    [allBusinessManagerGroups, selectedBusinessManagerKey]
+  );
+  const visibleAccountRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    const spendRows = includeZeroSpend
-      ? (data?.rows ?? [])
-      : (data?.rows ?? []).filter((row) => row.spend !== 0);
+    const selectedRows = selectedBusinessManagerKey
+      ? spendRows.filter((row) => businessManagerKey(row) === selectedBusinessManagerKey)
+      : spendRows;
     const filtered = normalizedSearch
-      ? spendRows.filter((row) => [
+      ? selectedRows.filter((row) => [
           row.accountId,
           row.accountName,
           row.businessManagerId,
@@ -156,18 +268,44 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
           row.platform,
           String(row.workspace)
         ].some((value) => value?.toLowerCase().includes(normalizedSearch)))
-      : [...spendRows];
+      : [...selectedRows];
     return filtered.sort((left, right) =>
       compareTableValues(spendSortValue(left, sortKey), spendSortValue(right, sortKey), sortDirection)
       || left.key.localeCompare(right.key)
     );
-  }, [data?.rows, includeZeroSpend, search, sortDirection, sortKey]);
-  const pageCount = Math.max(1, Math.ceil(visibleRows.length / mediaSpendPageSize));
-  const pageRows = visibleRows.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
+  }, [search, selectedBusinessManagerKey, sortDirection, sortKey, spendRows]);
+  const visibleBusinessManagers = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    const filtered = normalizedSearch
+      ? businessManagerGroups.filter((group) => group.searchText.includes(normalizedSearch))
+      : [...businessManagerGroups];
+    return filtered.sort((left, right) =>
+      compareTableValues(
+        businessManagerSortValue(left, businessManagerSortKey),
+        businessManagerSortValue(right, businessManagerSortKey),
+        businessManagerSortDirection
+      ) || left.key.localeCompare(right.key)
+    );
+  }, [businessManagerGroups, businessManagerSortDirection, businessManagerSortKey, search]);
+  const visibleRowCount = viewMode === "accounts" ? visibleAccountRows.length : visibleBusinessManagers.length;
+  const pageCount = Math.max(1, Math.ceil(visibleRowCount / mediaSpendPageSize));
+  const pageAccountRows = visibleAccountRows.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
+  const pageBusinessManagers = visibleBusinessManagers.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
 
   useEffect(() => {
     setPage(0);
-  }, [dateRange.fromDate, dateRange.toDate, includeZeroSpend, search, sortDirection, sortKey]);
+  }, [
+    businessManagerSortDirection,
+    businessManagerSortKey,
+    dateRange.fromDate,
+    dateRange.toDate,
+    includeZeroSpend,
+    search,
+    selectedBusinessManagerKey,
+    sortDirection,
+    sortKey,
+    viewMode
+  ]);
 
   useEffect(() => {
     if (page >= pageCount) setPage(pageCount - 1);
@@ -180,6 +318,26 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
     }
     setSortKey(nextSortKey);
     setSortDirection(nextSortKey === "date" || nextSortKey === "spend" ? "desc" : "asc");
+  }
+
+  function requestBusinessManagerSort(nextSortKey: BusinessManagerSortKey): void {
+    if (nextSortKey === businessManagerSortKey) {
+      setBusinessManagerSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setBusinessManagerSortKey(nextSortKey);
+    setBusinessManagerSortDirection(nextSortKey === "businessManager" || nextSortKey === "platform" || nextSortKey === "workspace" ? "asc" : "desc");
+  }
+
+  function changeViewMode(nextViewMode: MediaSpendViewMode): void {
+    setViewMode(nextViewMode);
+    if (nextViewMode === "businessManagers") setSelectedBusinessManagerKey("");
+  }
+
+  function openBusinessManager(group: BusinessManagerSpendGroup): void {
+    setSearch("");
+    setSelectedBusinessManagerKey(group.key);
+    setViewMode("accounts");
   }
 
   async function syncYesterday(): Promise<void> {
@@ -303,6 +461,30 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
             </span>
           </div>
           <div className="media-spend-toolbar-controls">
+            <div className="segmented-control bank-activity-view-toggle media-spend-view-toggle" aria-label="Media spend view">
+              <button
+                aria-label="Ad accounts"
+                aria-pressed={viewMode === "accounts"}
+                className={viewMode === "accounts" ? "active" : ""}
+                onClick={() => changeViewMode("accounts")}
+                title="Ad accounts"
+                type="button"
+              >
+                <List aria-hidden="true" size={14} />
+                <span>Ad accounts</span>
+              </button>
+              <button
+                aria-label="Business manager view"
+                aria-pressed={viewMode === "businessManagers"}
+                className={viewMode === "businessManagers" ? "active" : ""}
+                onClick={() => changeViewMode("businessManagers")}
+                title="Business manager view"
+                type="button"
+              >
+                <Layers3 aria-hidden="true" size={14} />
+                <span>BM view</span>
+              </button>
+            </div>
             <Button
               aria-pressed={includeZeroSpend}
               className="secondary-button media-spend-zero-toggle"
@@ -314,20 +496,36 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
             <ToolbarSearchField
               ariaLabel="Search media spend"
               onChange={setSearch}
-              placeholder="Search BM, account, platform"
+              placeholder={viewMode === "accounts" ? "Search BM, account, platform" : "Search BM or ad account"}
               value={search}
             />
           </div>
         </div>
 
+        <ActiveFilterBar
+          filters={viewMode === "accounts" && selectedBusinessManagerKey ? [{
+            key: "businessManager",
+            label: `BM: ${selectedBusinessManager?.businessManagerName ?? selectedBusinessManager?.businessManagerId ?? "Selected"}`,
+            onRemove: () => setSelectedBusinessManagerKey("")
+          }] : []}
+          onClearAll={() => setSelectedBusinessManagerKey("")}
+          resultLabel={viewMode === "accounts"
+            ? `${visibleAccountRows.length.toLocaleString()} ad accounts shown`
+            : `${visibleBusinessManagers.length.toLocaleString()} business managers shown`}
+        />
+
         {isLoading && !data ? (
           <div className="media-spend-loading"><Loader2 className="spin" size={22} /><span>Loading media spend</span></div>
-        ) : visibleRows.length === 0 ? (
+        ) : visibleRowCount === 0 ? (
           <div className="empty-state">
             <Database size={22} />
-            <strong>{search ? `No matching ${includeZeroSpend ? "accounts" : "active accounts"}` : "No media spend in this period"}</strong>
+            <strong>{search
+              ? `No matching ${viewMode === "accounts" ? "ad accounts" : "business managers"}`
+              : selectedBusinessManagerKey
+                ? "No ad accounts match this business manager"
+                : "No media spend in this period"}</strong>
           </div>
-        ) : (
+        ) : viewMode === "accounts" ? (
           <div className="table-wrap media-spend-table-wrap">
             <table className="data-table dense media-spend-table">
               <thead>
@@ -341,7 +539,7 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((row) => (
+                {pageAccountRows.map((row) => (
                   <tr key={row.key}>
                     <td>{dateLabel(row.date)}</td>
                     <td><span className="source-pill media-spend-platform">{row.platform}</span></td>
@@ -354,9 +552,41 @@ export function MediaSpendView({ apiBase }: { apiBase: string }) {
               </tbody>
             </table>
           </div>
+        ) : (
+          <div className="table-wrap media-spend-table-wrap">
+            <table className="data-table dense media-spend-business-manager-table">
+              <thead>
+                <tr>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="businessManager">Business manager</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="platform">Platform</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="workspace">Workspace</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="accounts">Ad accounts</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} className="amount" direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="spend">Spend</SortableTableHead>
+                </tr>
+              </thead>
+              <tbody>
+                {pageBusinessManagers.map((group) => (
+                  <tr key={group.key}>
+                    <td className="counterparty-cell">
+                      <button className="bank-group-drilldown" onClick={() => openBusinessManager(group)} type="button">
+                        <span><strong>{group.businessManagerName ?? "—"}</strong><small>{group.businessManagerId}</small></span>
+                        <ChevronRight aria-hidden="true" size={15} />
+                      </button>
+                    </td>
+                    <td><span className="source-pill media-spend-platform">{group.platform}</span></td>
+                    <td>{group.workspaces.join(", ")}</td>
+                    <td>{group.accountCount.toLocaleString()}</td>
+                    <td className="amount media-spend-amount">{money(group.spend, group.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         <footer className="media-spend-table-footer">
-          <span>{visibleRows.length.toLocaleString()} shown · {activitySummary.accounts.toLocaleString()} active · {(data?.rows.length ?? 0).toLocaleString()} total account-day rows · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
+          <span>{viewMode === "accounts"
+            ? `${visibleAccountRows.length.toLocaleString()} shown · ${activitySummary.accounts.toLocaleString()} active · ${(data?.rows.length ?? 0).toLocaleString()} total account-day rows`
+            : `${visibleBusinessManagers.length.toLocaleString()} shown · ${activitySummary.businessManagers.toLocaleString()} active · ${(data?.summary.businessManagers ?? 0).toLocaleString()} total BMs`} · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
           <div className="media-spend-pagination">
             <span>Page {page + 1} of {pageCount}</span>
             <Button className="icon-button" aria-label="Previous media spend page" disabled={page === 0} onClick={() => setPage((current) => current - 1)} type="button">

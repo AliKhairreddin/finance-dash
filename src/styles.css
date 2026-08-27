@@ -302,6 +302,10 @@
   gap: 7px;
 }
 
+.media-spend-view-toggle {
+  align-self: center;
+}
+
 .media-spend-zero-toggle {
   min-height: 34px;
   padding-inline: 11px;
@@ -320,6 +324,14 @@
 
 .media-spend-table {
   min-width: 980px;
+}
+
+.media-spend-business-manager-table {
+  min-width: 780px;
+}
+
+.media-spend-business-manager-table .counterparty-cell {
+  min-width: 260px;
 }
 
 .media-spend-table td strong {
