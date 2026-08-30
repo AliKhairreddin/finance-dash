@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
-    "server": "tsx watch server/index.ts",
+    "dev": "concurrently -k \"DOTENV_CONFIG_PATH=.env.local tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
+    "server": "DOTENV_CONFIG_PATH=.env.local tsx watch server/index.ts",
     "auth:configure:slash": "tsx scripts/configure-auth.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
     "import:wise-statements": "tsx scripts/import-wise-statements.ts",

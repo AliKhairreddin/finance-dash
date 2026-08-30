@@ -216,10 +216,11 @@ import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } 
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
+import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -2072,6 +2073,21 @@ function App() {
     setBankActivityView("transactions");
   }
 
+  function openProviderBankFunding(companyName?: string, fromDate?: string): void {
+    setActiveTab("banks");
+    setBankTab("all");
+    setBankActivityView("transactions");
+    clearBankGroupDrilldown();
+    setAllBankSource("all");
+    setBankAccountFilter("all");
+    setTeamFilter("all");
+    setMatchFilter("all");
+    setBankDirection("out");
+    setBankCategoryFilter("Ad account funding");
+    setSearchTerm(companyName ?? "");
+    if (fromDate) setAllBankDateRange({ fromDate, toDate: financeOperatingDate() });
+  }
+
   if (isLoading) {
     return (
       <main className="loading-screen" role="status" aria-live="polite">
@@ -2241,7 +2257,17 @@ function App() {
 
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
-      {activeTab === "media-spend" && <MediaSpendView apiBase={apiBase} />}
+      {activeTab === "media-spend" && <MediaSpendView apiBase={apiBase} onOpenProviderBalances={() => setActiveTab("media-funding")} />}
+
+      {activeTab === "media-funding" && (
+        <MediaFundingView
+          apiBase={apiBase}
+          companies={dashboard.providers}
+          onOpenBankFunding={openProviderBankFunding}
+          onOpenCompanies={() => setActiveTab("providers")}
+          onOpenMediaSpend={() => setActiveTab("media-spend")}
+        />
+      )}
 
       {activeTab === "cash-flow" && (
         <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} />
@@ -2646,11 +2672,11 @@ function Sidebar({
   const primaryItems: SidebarItem[] = [
     { id: "overview", label: "Overview", icon: <Home size={17} /> },
     { id: "analytics", label: "Analytics", icon: <PieChart size={17} /> },
+    { id: "media-spend", label: "Media spend", icon: <BadgeDollarSign size={17} /> },
     { id: "banks", label: "Banks", icon: <Landmark size={17} /> },
   ];
   const operationsItems: SidebarItem[] = [
     { id: "management", label: "Management", icon: <BookOpen size={17} /> },
-    { id: "media-spend", label: "Media spend", icon: <BadgeDollarSign size={17} /> },
     { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
   ];
   const accountingItems: SidebarItem[] = [
@@ -2660,7 +2686,8 @@ function Sidebar({
   ];
   const cashFlowItems: SidebarItem[] = [
     { id: "cash-flow", label: "Position", icon: <WalletCards size={17} /> },
-    { id: "cash-flow-invoices", label: "Open invoices", icon: <FileText size={17} /> }
+    { id: "cash-flow-invoices", label: "Open invoices", icon: <FileText size={17} /> },
+    { id: "media-funding", label: "Provider funds", icon: <CircleDollarSign size={17} /> }
   ];
   const workspaceItems: SidebarItem[] = [
     { id: "providers", label: "Companies", icon: <Building2 size={17} /> },

@@ -391,6 +391,345 @@
   height: 26px;
 }
 
+.media-funding-page {
+  display: grid;
+  gap: 10px;
+}
+
+.media-funding-panel,
+.media-funding-detail {
+  padding: 0;
+  overflow: hidden;
+}
+
+.media-funding-panel-header,
+.media-funding-detail-header,
+.media-funding-section-title,
+.media-funding-selection-bar,
+.media-funding-selection-bar > div,
+.media-funding-detail-actions,
+.media-funding-credit-preview {
+  display: flex;
+  align-items: center;
+}
+
+.media-funding-panel-header,
+.media-funding-detail-header {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.media-funding-panel-header > div:first-child,
+.media-funding-detail-header > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.media-funding-panel-header > div:first-child > strong,
+.media-funding-detail-header > div > strong {
+  font-size: 0.88rem;
+}
+
+.media-funding-panel-header > div:first-child > span,
+.media-funding-detail-header > div > span,
+.media-funding-section-title > span {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+}
+
+.media-funding-table-wrap {
+  max-height: min(55vh, 560px);
+}
+
+.media-funding-table {
+  min-width: 980px;
+}
+
+.media-funding-table tbody tr.selected td {
+  background: var(--active-bg);
+}
+
+.media-funding-table td:first-child {
+  min-width: 220px;
+}
+
+.media-funding-balance {
+  color: var(--green);
+  font-weight: 780;
+}
+
+.negative,
+.media-funding-balance.negative {
+  color: var(--red) !important;
+}
+
+.funding-provider-badge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 240px;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  padding: 3px 8px;
+  color: #164e63;
+  border: 1px solid #a5d8e5;
+  border-radius: 999px;
+  background: #ecfeff;
+  font-size: 0.72rem;
+  font-weight: 730;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.funding-provider-badge[data-accent="1"] {
+  color: #1e4e2b;
+  border-color: #b6dfc0;
+  background: #effbf1;
+}
+
+.funding-provider-badge[data-accent="2"] {
+  color: #5b3b0b;
+  border-color: #ead39b;
+  background: #fff9e9;
+}
+
+.funding-provider-badge[data-accent="3"] {
+  color: #58328a;
+  border-color: #d9c1f2;
+  background: #faf5ff;
+}
+
+.funding-provider-badge[data-accent="4"] {
+  color: #7c2d12;
+  border-color: #fdba9a;
+  background: #fff7ed;
+}
+
+.funding-provider-badge[data-accent="5"] {
+  color: #334155;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.media-funding-detail {
+  display: grid;
+}
+
+.media-funding-detail-actions {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.media-funding-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.media-funding-detail-metrics > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.media-funding-detail-metrics > div:last-child {
+  border-right: 0;
+}
+
+.media-funding-detail-metrics span {
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 720;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.media-funding-detail-metrics strong {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-funding-detail-section {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.media-funding-detail-section:last-child {
+  border-bottom: 0;
+}
+
+.media-funding-section-title {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.media-funding-section-title strong {
+  font-size: 0.82rem;
+}
+
+.media-funding-ledger-wrap {
+  max-height: 330px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.media-funding-ledger-table {
+  min-width: 880px;
+}
+
+.media-funding-assignment-list {
+  display: grid;
+  gap: 5px;
+}
+
+.media-funding-assignment-item {
+  display: grid;
+  grid-template-columns: 90px minmax(180px, 1fr) minmax(170px, auto) 30px;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.media-funding-assignment-item > span:nth-child(2) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.media-funding-assignment-item strong,
+.media-funding-assignment-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-funding-assignment-item strong {
+  font-size: 0.78rem;
+}
+
+.media-funding-assignment-item small,
+.media-funding-assignment-item > span:nth-child(3) {
+  color: var(--app-muted);
+  font-size: 0.68rem;
+}
+
+.media-funding-selection-bar {
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 7px 11px;
+  color: var(--info-text);
+  border-bottom: 1px solid var(--info-border);
+  background: var(--info-bg);
+  font-size: 0.78rem;
+}
+
+.media-funding-selection-bar > div {
+  gap: 6px;
+}
+
+.media-funding-select-cell {
+  width: 42px;
+  min-width: 42px;
+  padding-right: 4px !important;
+  padding-left: 12px !important;
+}
+
+.media-funding-assigned-row td {
+  background: color-mix(in srgb, var(--info-bg) 70%, var(--panel));
+}
+
+.media-funding-provider-cell {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+}
+
+.media-funding-provider-cell small,
+.media-funding-unassigned {
+  color: var(--app-muted);
+  font-size: 0.7rem;
+}
+
+.source-pill.warning {
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.media-funding-empty {
+  min-height: 230px;
+}
+
+.empty-state.compact {
+  min-height: 110px;
+}
+
+.media-funding-modal {
+  width: min(500px, calc(100vw - 30px));
+}
+
+.media-funding-modal .modal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.media-funding-credit-preview {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  color: var(--app-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  font-size: 0.76rem;
+}
+
+.media-funding-credit-preview strong {
+  margin-left: 5px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.media-funding-assignment-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.media-funding-assignment-summary strong {
+  font-size: 1.1rem;
+}
+
+.media-funding-assignment-summary span {
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
+.media-spend-table {
+  min-width: 1180px;
+}
+
+.media-spend-business-manager-table {
+  min-width: 960px;
+}
+
 @media (max-width: 900px) {
   .media-spend-page-header {
     align-items: stretch;
@@ -403,6 +742,14 @@
 
   .media-spend-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .media-funding-detail-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .media-funding-detail-metrics > div:nth-child(2) {
+    border-right: 0;
   }
 }
 
@@ -440,6 +787,31 @@
   .media-spend-table-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .media-funding-panel-header,
+  .media-funding-detail-header,
+  .media-funding-selection-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .media-funding-detail-actions,
+  .media-funding-selection-bar > div {
+    width: 100%;
+  }
+
+  .media-funding-detail-actions > *,
+  .media-funding-selection-bar > div > * {
+    flex: 1;
+  }
+
+  .media-funding-assignment-item {
+    grid-template-columns: 82px minmax(0, 1fr) 30px;
+  }
+
+  .media-funding-assignment-item > span:nth-child(3) {
+    grid-column: 2;
   }
 }
 

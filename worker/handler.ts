@@ -188,6 +188,14 @@ import {
   type MediaSpendApiResponse,
   type MediaSpendRow
 } from "../shared/mediaSpend";
+import type {
+  AssignMediaFundingTargetsPayload,
+  CreateMediaFundingEntryPayload,
+  CreateMediaFundingProviderPayload,
+  MediaFundingApiResponse,
+  MediaFundingMutationResult,
+  UpdateMediaFundingProviderPayload
+} from "../shared/mediaFunding";
 import {
   addProfitDistributionFactPage,
   createProfitDistributionAccumulator,
@@ -226,6 +234,7 @@ import {
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
 import { calculateMetrics } from "../server/calculations";
 import {
   aiProviderDirectoryForTransactions,
@@ -909,6 +918,11 @@ async function syncMediaSpend(
         date,
         rows
       });
+      await convex.mutation(api.mediaFunding.rebuildDate, {
+        serviceToken,
+        date,
+        updatedAt: startedAt
+      });
       rowCount += rows.length;
       totalSpend += rows.reduce((total, row) => total + row.spend, 0);
     }
@@ -937,6 +951,169 @@ async function syncMediaSpend(
       error: message
     }).catch(() => false);
     throw new ApiError(502, `LemonMax spend sync failed: ${message}`, { cause: error });
+  }
+}
+
+function mediaFundingStorageError(error: unknown): never {
+  if (error instanceof ApiError) throw error;
+  if (error instanceof ConvexError && isRecord(error.data)) {
+    const message = typeof error.data.message === "string"
+      ? error.data.message
+      : "Media funding update failed";
+    const code = typeof error.data.code === "string" ? error.data.code : "";
+    const status = code === "MEDIA_FUNDING_NOT_FOUND"
+      ? 404
+      : code === "INVALID_MEDIA_FUNDING"
+        ? 400
+        : code.includes("CONFLICT") || code === "MEDIA_FUNDING_STATE"
+          ? 409
+          : 503;
+    throw new ApiError(status, message, { cause: error });
+  }
+  throw new ApiError(503, "Media funding storage is temporarily unavailable", { cause: error });
+}
+
+async function readMediaFunding(env: Env): Promise<MediaFundingApiResponse> {
+  try {
+    return await getConvexClient(env).query(api.mediaFunding.listOverview, {
+      serviceToken: getConvexServiceToken(env)
+    }) as MediaFundingApiResponse;
+  } catch (error) {
+    return mediaFundingStorageError(error);
+  }
+}
+
+async function rebuildMediaFundingRange(
+  env: Env,
+  range: MediaFundingMutationResult
+): Promise<void> {
+  if (!range.rebuildFrom || !range.rebuildTo) return;
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const updatedAt = new Date().toISOString();
+  for (const date of mediaSpendDates(range.rebuildFrom, range.rebuildTo)) {
+    await convex.mutation(api.mediaFunding.rebuildDate, {
+      serviceToken,
+      date,
+      updatedAt
+    });
+  }
+}
+
+async function createMediaFundingProvider(
+  env: Env,
+  payload: CreateMediaFundingProviderPayload
+): Promise<{ id: string }> {
+  try {
+    const id = await getConvexClient(env).mutation(api.mediaFunding.createProvider, {
+      serviceToken: getConvexServiceToken(env),
+      companyProviderId: payload.companyProviderId,
+      defaultFeePercent: payload.defaultFeePercent,
+      openingBalance: payload.openingBalance,
+      openingBalanceDate: payload.openingBalanceDate,
+      createdAt: new Date().toISOString()
+    });
+    return { id };
+  } catch (error) {
+    return mediaFundingStorageError(error);
+  }
+}
+
+async function updateMediaFundingProvider(
+  env: Env,
+  providerId: string,
+  payload: UpdateMediaFundingProviderPayload
+): Promise<void> {
+  try {
+    await getConvexClient(env).mutation(api.mediaFunding.updateProvider, {
+      serviceToken: getConvexServiceToken(env),
+      providerId: providerId as Id<"mediaFundingProviders">,
+      companyProviderId: payload.companyProviderId,
+      defaultFeePercent: payload.defaultFeePercent,
+      openingBalance: payload.openingBalance,
+      openingBalanceDate: payload.openingBalanceDate,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    mediaFundingStorageError(error);
+  }
+}
+
+async function deleteMediaFundingProvider(env: Env, providerId: string): Promise<void> {
+  try {
+    await getConvexClient(env).mutation(api.mediaFunding.deleteProvider, {
+      serviceToken: getConvexServiceToken(env),
+      providerId: providerId as Id<"mediaFundingProviders">
+    });
+  } catch (error) {
+    mediaFundingStorageError(error);
+  }
+}
+
+async function createMediaFundingEntry(
+  env: Env,
+  payload: CreateMediaFundingEntryPayload
+): Promise<{ id: string }> {
+  try {
+    const id = await getConvexClient(env).mutation(api.mediaFunding.createEntry, {
+      serviceToken: getConvexServiceToken(env),
+      providerId: payload.providerId as Id<"mediaFundingProviders">,
+      type: payload.type,
+      date: payload.date,
+      adjustmentAmount: payload.adjustmentAmount,
+      note: payload.note,
+      createdAt: new Date().toISOString()
+    });
+    return { id };
+  } catch (error) {
+    return mediaFundingStorageError(error);
+  }
+}
+
+async function deleteMediaFundingEntry(env: Env, entryId: string): Promise<void> {
+  try {
+    await getConvexClient(env).mutation(api.mediaFunding.deleteEntry, {
+      serviceToken: getConvexServiceToken(env),
+      entryId: entryId as Id<"mediaFundingEntries">,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    mediaFundingStorageError(error);
+  }
+}
+
+async function assignMediaFundingTargets(
+  env: Env,
+  payload: AssignMediaFundingTargetsPayload
+): Promise<MediaFundingMutationResult> {
+  try {
+    const result = await getConvexClient(env).mutation(api.mediaFunding.assignTargets, {
+      serviceToken: getConvexServiceToken(env),
+      providerId: payload.providerId as Id<"mediaFundingProviders">,
+      effectiveFrom: payload.effectiveFrom,
+      targets: payload.targets,
+      updatedAt: new Date().toISOString()
+    });
+    await rebuildMediaFundingRange(env, result);
+    return result;
+  } catch (error) {
+    return mediaFundingStorageError(error);
+  }
+}
+
+async function deleteMediaFundingAssignment(
+  env: Env,
+  assignmentId: string
+): Promise<MediaFundingMutationResult> {
+  try {
+    const result = await getConvexClient(env).mutation(api.mediaFunding.deleteAssignment, {
+      serviceToken: getConvexServiceToken(env),
+      assignmentId: assignmentId as Id<"mediaFundingAssignments">
+    });
+    await rebuildMediaFundingRange(env, result);
+    return result;
+  } catch (error) {
+    return mediaFundingStorageError(error);
   }
 }
 
@@ -3930,6 +4107,13 @@ async function updateProvider(env: Env, providerId: string, payload: UpdateProvi
 
 async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
   const state = await loadPersisted(env);
+  const mediaFundingProvider = await getConvexClient(env).query(api.mediaFunding.providerForCompany, {
+    serviceToken: getConvexServiceToken(env),
+    companyProviderId: providerId
+  });
+  if (mediaFundingProvider) {
+    throw new ApiError(409, "Remove this company's funding-provider setup before deleting the company");
+  }
   const deletion = deleteProviderReferences(
     {
       providers: state.providers,
@@ -6379,6 +6563,64 @@ async function handleApi(
       const range = mediaSpendRange(body?.fromDate, body?.toDate);
       await syncMediaSpend(env, range.fromDate, range.toDate);
       return json(await readMediaSpend(env, range.fromDate, range.toDate));
+    }
+
+    if (url.pathname === "/api/media-funding" && request.method === "GET") {
+      return json(await readMediaFunding(env));
+    }
+
+    if (url.pathname === "/api/media-funding/providers" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!isRecord(body)) throw new ApiError(400, "Funding provider details are required");
+      return json(
+        await createMediaFundingProvider(env, body as unknown as CreateMediaFundingProviderPayload),
+        { status: 201 }
+      );
+    }
+
+    const mediaFundingProviderMatch = url.pathname.match(/^\/api\/media-funding\/providers\/([^/]+)$/);
+    if (mediaFundingProviderMatch && request.method === "PATCH") {
+      const body = await request.json().catch(() => null);
+      if (!isRecord(body)) throw new ApiError(400, "Funding provider details are required");
+      await updateMediaFundingProvider(
+        env,
+        decodeURIComponent(mediaFundingProviderMatch[1]),
+        body as unknown as UpdateMediaFundingProviderPayload
+      );
+      return json({ ok: true });
+    }
+    if (mediaFundingProviderMatch && request.method === "DELETE") {
+      await deleteMediaFundingProvider(env, decodeURIComponent(mediaFundingProviderMatch[1]));
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/api/media-funding/entries" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!isRecord(body)) throw new ApiError(400, "Funding entry details are required");
+      return json(
+        await createMediaFundingEntry(env, body as unknown as CreateMediaFundingEntryPayload),
+        { status: 201 }
+      );
+    }
+
+    const mediaFundingEntryMatch = url.pathname.match(/^\/api\/media-funding\/entries\/([^/]+)$/);
+    if (mediaFundingEntryMatch && request.method === "DELETE") {
+      await deleteMediaFundingEntry(env, decodeURIComponent(mediaFundingEntryMatch[1]));
+      return json({ ok: true });
+    }
+
+    if (url.pathname === "/api/media-funding/assignments" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!isRecord(body)) throw new ApiError(400, "Funding assignment details are required");
+      return json(await assignMediaFundingTargets(env, body as unknown as AssignMediaFundingTargetsPayload));
+    }
+
+    const mediaFundingAssignmentMatch = url.pathname.match(/^\/api\/media-funding\/assignments\/([^/]+)$/);
+    if (mediaFundingAssignmentMatch && request.method === "DELETE") {
+      return json(await deleteMediaFundingAssignment(
+        env,
+        decodeURIComponent(mediaFundingAssignmentMatch[1])
+      ));
     }
 
     if (url.pathname === "/api/analytics" && request.method === "GET") {

@@ -627,6 +627,7 @@ export default defineSchema({
     .index("by_direction_currency_date_id", ["direction", "currency", "date", "id"])
     .index("by_category_direction_currency_date_id", ["category", "direction", "currency", "date", "id"])
     .index("by_direction_currency_status_date_id", ["direction", "currency", "status", "date", "id"])
+    .index("by_category_direction_status_date_id", ["category", "direction", "status", "date", "id"])
     .index("by_source_date_id", ["source", "date", "id"])
     .index("by_source_direction_date_id", ["source", "direction", "date", "id"])
     .index("by_classification_complete", ["classificationComplete"])
@@ -636,6 +637,7 @@ export default defineSchema({
     .index("by_source_connection_identity_version", ["source", "connectionKey", "identityVersion"])
     .index("by_merchant_direction", ["merchantKey", "direction"])
     .index("by_matched_provider", ["matchedProviderId"])
+    .index("by_matched_provider_category_date_id", ["matchedProviderId", "category", "date", "id"])
     .index("by_category", ["category"]),
   profitDistributionFacts: defineTable({
     key: v.string(),
@@ -904,5 +906,64 @@ export default defineSchema({
     lastError: v.optional(v.string()),
     consecutiveFailures: v.optional(v.number()),
     updatedAt: v.string()
-  }).index("by_key", ["key"])
+  }).index("by_key", ["key"]),
+  mediaFundingProviders: defineTable({
+    companyProviderId: v.string(),
+    defaultFeePercent: v.number(),
+    currency: v.string(),
+    openingBalance: v.number(),
+    openingBalanceDate: v.string(),
+    createdAt: v.string(),
+    updatedAt: v.string()
+  }).index("by_company_provider_id", ["companyProviderId"]),
+  mediaFundingEntries: defineTable({
+    providerId: v.id("mediaFundingProviders"),
+    type: v.literal("adjustment"),
+    date: v.string(),
+    netAmount: v.number(),
+    note: v.optional(v.string()),
+    createdAt: v.string(),
+    updatedAt: v.string()
+  })
+    .index("by_provider_and_date", ["providerId", "date"])
+    .index("by_provider_and_type_and_date", ["providerId", "type", "date"]),
+  mediaFundingAssignments: defineTable({
+    providerId: v.id("mediaFundingProviders"),
+    scope: v.union(v.literal("business_manager"), v.literal("ad_account")),
+    targetKey: v.string(),
+    businessManagerKey: v.string(),
+    platform: v.string(),
+    businessManagerId: v.string(),
+    businessManagerName: v.optional(v.string()),
+    accountId: v.optional(v.string()),
+    accountName: v.optional(v.string()),
+    effectiveFrom: v.string(),
+    effectiveTo: v.optional(v.string()),
+    createdAt: v.string(),
+    updatedAt: v.string()
+  })
+    .index("by_target_and_effective_from", ["targetKey", "effectiveFrom"])
+    .index("by_business_manager_and_effective_from", ["businessManagerKey", "effectiveFrom"])
+    .index("by_provider_and_effective_from", ["providerId", "effectiveFrom"])
+    .index("by_effective_from", ["effectiveFrom"]),
+  mediaFundingSpendDaily: defineTable({
+    key: v.string(),
+    providerId: v.id("mediaFundingProviders"),
+    date: v.string(),
+    currency: v.string(),
+    spend: v.number(),
+    accountCount: v.number(),
+    businessManagerCount: v.number(),
+    updatedAt: v.string()
+  })
+    .index("by_key", ["key"])
+    .index("by_date", ["date"])
+    .index("by_provider_and_date", ["providerId", "date"]),
+  mediaFundingProviderTotals: defineTable({
+    providerId: v.id("mediaFundingProviders"),
+    currency: v.string(),
+    adjustments: v.number(),
+    spend: v.number(),
+    updatedAt: v.string()
+  }).index("by_provider", ["providerId"])
 });

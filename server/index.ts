@@ -1,6 +1,9 @@
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
+import { ConvexHttpClient } from "convex/browser";
+import type { Id } from "../convex/_generated/dataModel";
+import { api } from "../convex/_generated/api";
 import type {
   AssignTransactionTeamPayload,
   AiPromptPayload,
@@ -35,6 +38,17 @@ import type {
   UpdateTransactionCategoryDefinitionPayload,
   UpdateTransactionCategoryPayload
 } from "../shared/types";
+import type {
+  AssignMediaFundingTargetsPayload,
+  CreateMediaFundingEntryPayload,
+  CreateMediaFundingProviderPayload,
+  MediaFundingMutationResult,
+  UpdateMediaFundingProviderPayload
+} from "../shared/mediaFunding";
+import {
+  summarizeMediaSpend,
+  type MediaSpendApiResponse
+} from "../shared/mediaSpend";
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import { transactionBusinessCategory } from "../shared/categories";
 import { financeOperatingDate } from "../shared/operatingDate";
@@ -100,6 +114,34 @@ const port = Number(process.env.PORT ?? 8787);
 
 class ClientRequestError extends Error {}
 
+function localConvexClient(): ConvexHttpClient {
+  const url = process.env.CONVEX_URL?.trim();
+  if (!url) throw new Error("Dashboard storage is not configured");
+  return new ConvexHttpClient(url);
+}
+
+function localConvexServiceToken(): string {
+  const token = process.env.CONVEX_SERVICE_TOKEN?.trim();
+  if (!token) throw new Error("Dashboard storage authentication is not configured");
+  return token;
+}
+
+function localIsoDateShift(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+async function rebuildLocalMediaFunding(range: MediaFundingMutationResult): Promise<void> {
+  if (!range.rebuildFrom || !range.rebuildTo) return;
+  const convex = localConvexClient();
+  const serviceToken = localConvexServiceToken();
+  const updatedAt = new Date().toISOString();
+  for (let date = range.rebuildFrom; date <= range.rebuildTo; date = localIsoDateShift(date, 1)) {
+    await convex.mutation(api.mediaFunding.rebuildDate, { serviceToken, date, updatedAt });
+  }
+}
+
 app.use(cors());
 app.post(
   "/api/expense-documents/upload",
@@ -125,6 +167,148 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/dashboard", (_request, response) => {
   response.json(getSnapshot());
+});
+
+app.get("/api/media-spend", async (request, response, next) => {
+  try {
+    const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
+    const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || fromDate !== toDate) {
+      response.status(400).json({ message: "Account-level media spend can be viewed one day at a time" });
+      return;
+    }
+    const result = await localConvexClient().query(api.mediaSpend.listRange, {
+      serviceToken: localConvexServiceToken(),
+      fromDate,
+      toDate
+    });
+    const payload: MediaSpendApiResponse = {
+      version: 1,
+      fromDate,
+      toDate,
+      currency: "USD",
+      configured: false,
+      missingConfiguration: ["LemonMax sync is available from the deployed dashboard"],
+      rows: result.rows,
+      summary: summarizeMediaSpend(result.rows),
+      sync: result.sync ?? { status: "never" }
+    };
+    response.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/media-funding", async (_request, response, next) => {
+  try {
+    response.json(await localConvexClient().query(api.mediaFunding.listOverview, {
+      serviceToken: localConvexServiceToken()
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/media-funding/providers", async (request, response, next) => {
+  try {
+    const payload = request.body as CreateMediaFundingProviderPayload;
+    const id = await localConvexClient().mutation(api.mediaFunding.createProvider, {
+      serviceToken: localConvexServiceToken(),
+      ...payload,
+      createdAt: new Date().toISOString()
+    });
+    response.status(201).json({ id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/media-funding/providers/:providerId", async (request, response, next) => {
+  try {
+    const payload = request.body as UpdateMediaFundingProviderPayload;
+    await localConvexClient().mutation(api.mediaFunding.updateProvider, {
+      serviceToken: localConvexServiceToken(),
+      providerId: request.params.providerId as Id<"mediaFundingProviders">,
+      ...payload,
+      updatedAt: new Date().toISOString()
+    });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/media-funding/providers/:providerId", async (request, response, next) => {
+  try {
+    await localConvexClient().mutation(api.mediaFunding.deleteProvider, {
+      serviceToken: localConvexServiceToken(),
+      providerId: request.params.providerId as Id<"mediaFundingProviders">
+    });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/media-funding/entries", async (request, response, next) => {
+  try {
+    const payload = request.body as CreateMediaFundingEntryPayload;
+    const id = await localConvexClient().mutation(api.mediaFunding.createEntry, {
+      serviceToken: localConvexServiceToken(),
+      providerId: payload.providerId as Id<"mediaFundingProviders">,
+      type: payload.type,
+      date: payload.date,
+      adjustmentAmount: payload.adjustmentAmount,
+      note: payload.note,
+      createdAt: new Date().toISOString()
+    });
+    response.status(201).json({ id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/media-funding/entries/:entryId", async (request, response, next) => {
+  try {
+    await localConvexClient().mutation(api.mediaFunding.deleteEntry, {
+      serviceToken: localConvexServiceToken(),
+      entryId: request.params.entryId as Id<"mediaFundingEntries">,
+      updatedAt: new Date().toISOString()
+    });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/media-funding/assignments", async (request, response, next) => {
+  try {
+    const payload = request.body as AssignMediaFundingTargetsPayload;
+    const result = await localConvexClient().mutation(api.mediaFunding.assignTargets, {
+      serviceToken: localConvexServiceToken(),
+      providerId: payload.providerId as Id<"mediaFundingProviders">,
+      effectiveFrom: payload.effectiveFrom,
+      targets: payload.targets,
+      updatedAt: new Date().toISOString()
+    });
+    await rebuildLocalMediaFunding(result);
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/media-funding/assignments/:assignmentId", async (request, response, next) => {
+  try {
+    const result = await localConvexClient().mutation(api.mediaFunding.deleteAssignment, {
+      serviceToken: localConvexServiceToken(),
+      assignmentId: request.params.assignmentId as Id<"mediaFundingAssignments">
+    });
+    await rebuildLocalMediaFunding(result);
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/analytics", (request, response, next) => {
@@ -374,6 +558,14 @@ app.put("/api/providers/:providerId", async (request, response, next) => {
 
 app.delete("/api/providers/:providerId", async (request, response, next) => {
   try {
+    const mediaFundingProvider = await localConvexClient().query(api.mediaFunding.providerForCompany, {
+      serviceToken: localConvexServiceToken(),
+      companyProviderId: request.params.providerId
+    });
+    if (mediaFundingProvider) {
+      response.status(409).json({ message: "Remove this company's funding-provider setup before deleting the company" });
+      return;
+    }
     response.json(await deleteProvider(request.params.providerId));
   } catch (error) {
     next(error);
