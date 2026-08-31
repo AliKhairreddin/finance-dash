@@ -274,7 +274,7 @@ export function MediaFundingView({
         {isLoading && !data ? (
           <div className="media-spend-loading"><Loader2 className="spin" size={22} /><span>Loading provider balances</span></div>
         ) : providers.length === 0 ? (
-          <div className="empty-state media-funding-empty"><CircleDollarSign size={24} /><strong>No funding providers yet</strong><Button className="primary-button" onClick={() => setProviderDialog("new")} type="button"><Plus size={15} /> Add provider</Button></div>
+          <div className="empty-state media-funding-empty"><CircleDollarSign size={24} /><strong>No funding providers yet</strong></div>
         ) : (
           <div className="table-wrap media-funding-table-wrap">
             <table className="data-table dense media-funding-table">
