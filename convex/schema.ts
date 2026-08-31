@@ -900,6 +900,7 @@ export default defineSchema({
     requestedTo: v.string(),
     lastAttemptAt: v.string(),
     lastSuccessAt: v.optional(v.string()),
+    coveredFrom: v.optional(v.string()),
     coveredThrough: v.optional(v.string()),
     rowCount: v.optional(v.number()),
     totalSpend: v.optional(v.number()),

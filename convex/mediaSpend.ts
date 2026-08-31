@@ -23,6 +23,7 @@ const publicSyncState = v.object({
   status: syncStatus,
   lastAttemptAt: v.string(),
   lastSuccessAt: v.optional(v.string()),
+  coveredFrom: v.optional(v.string()),
   coveredThrough: v.optional(v.string()),
   requestedFrom: v.string(),
   requestedTo: v.string(),
@@ -108,6 +109,7 @@ export const getSyncState = query({
       status: storedSync.status,
       lastAttemptAt: storedSync.lastAttemptAt,
       lastSuccessAt: storedSync.lastSuccessAt,
+      coveredFrom: storedSync.coveredFrom,
       coveredThrough: storedSync.coveredThrough,
       requestedFrom: storedSync.requestedFrom,
       requestedTo: storedSync.requestedTo,
@@ -150,6 +152,7 @@ export const startSync = mutation({
       requestedTo: args.toDate,
       lastAttemptAt: args.startedAt,
       ...(existing?.lastSuccessAt ? { lastSuccessAt: existing.lastSuccessAt } : {}),
+      ...(existing?.coveredFrom ? { coveredFrom: existing.coveredFrom } : {}),
       ...(existing?.coveredThrough ? { coveredThrough: existing.coveredThrough } : {}),
       ...(existing?.rowCount !== undefined ? { rowCount: existing.rowCount } : {}),
       ...(existing?.totalSpend !== undefined ? { totalSpend: existing.totalSpend } : {}),
@@ -159,6 +162,68 @@ export const startSync = mutation({
     if (existing) await ctx.db.replace(existing._id, next);
     else await ctx.db.insert("mediaSpendSyncState", next);
     return null;
+  }
+});
+
+export const initializeCoverageFromStorage = mutation({
+  args: { serviceToken: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const storedSync = await ctx.db
+      .query("mediaSpendSyncState")
+      .withIndex("by_key", (q) => q.eq("key", syncStateKey))
+      .unique();
+    if (!storedSync) return null;
+    if (storedSync.coveredFrom) return storedSync.coveredFrom;
+
+    const earliestRow = await ctx.db
+      .query("mediaSpendDaily")
+      .withIndex("by_date")
+      .order("asc")
+      .first();
+    if (!earliestRow) return null;
+    await ctx.db.patch(storedSync._id, {
+      coveredFrom: earliestRow.date,
+      updatedAt: new Date().toISOString()
+    });
+    return earliestRow.date;
+  }
+});
+
+export const advanceCoverage = mutation({
+  args: {
+    serviceToken: v.string(),
+    attemptId: v.string(),
+    date: v.string(),
+    direction: v.union(v.literal("backward"), v.literal("forward")),
+    updatedAt: v.string()
+  },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    requireIsoDate(args.date);
+    requireTimestamp(args.updatedAt);
+    const storedSync = await ctx.db
+      .query("mediaSpendSyncState")
+      .withIndex("by_key", (q) => q.eq("key", syncStateKey))
+      .unique();
+    if (!storedSync || storedSync.attemptId !== args.attemptId) return false;
+    await ctx.db.patch(storedSync._id, {
+      ...(args.direction === "backward"
+        ? {
+            coveredFrom: !storedSync.coveredFrom || args.date < storedSync.coveredFrom
+              ? args.date
+              : storedSync.coveredFrom
+          }
+        : {
+            coveredThrough: !storedSync.coveredThrough || args.date > storedSync.coveredThrough
+              ? args.date
+              : storedSync.coveredThrough
+          }),
+      updatedAt: args.updatedAt
+    });
+    return true;
   }
 });
 
@@ -246,7 +311,10 @@ export const completeSync = mutation({
       requestedTo: existing.requestedTo,
       lastAttemptAt: existing.lastAttemptAt,
       lastSuccessAt: args.completedAt,
-      coveredThrough: args.coveredThrough,
+      ...(existing.coveredFrom ? { coveredFrom: existing.coveredFrom } : {}),
+      coveredThrough: existing.coveredThrough && existing.coveredThrough > args.coveredThrough
+        ? existing.coveredThrough
+        : args.coveredThrough,
       rowCount: args.rowCount,
       totalSpend: args.totalSpend,
       consecutiveFailures: 0,
@@ -280,6 +348,7 @@ export const failSync = mutation({
       requestedTo: existing.requestedTo,
       lastAttemptAt: existing.lastAttemptAt,
       ...(existing.lastSuccessAt ? { lastSuccessAt: existing.lastSuccessAt } : {}),
+      ...(existing.coveredFrom ? { coveredFrom: existing.coveredFrom } : {}),
       ...(existing.coveredThrough ? { coveredThrough: existing.coveredThrough } : {}),
       ...(existing.rowCount !== undefined ? { rowCount: existing.rowCount } : {}),
       ...(existing.totalSpend !== undefined ? { totalSpend: existing.totalSpend } : {}),

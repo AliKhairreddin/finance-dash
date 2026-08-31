@@ -181,6 +181,7 @@ import {
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
+  mediaSpendMaximumRangeDays,
   mediaSpendMaximumResultRows,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummaryRange,
@@ -902,7 +903,8 @@ async function readMediaSpend(
 async function syncMediaSpend(
   env: Env,
   fromDate: string,
-  toDate: string
+  toDate: string,
+  dateOrder: "ascending" | "descending" = "ascending"
 ): Promise<void> {
   const credentials = requireLemonMaxCredentials(env);
   const serviceToken = getConvexServiceToken(env);
@@ -920,7 +922,9 @@ async function syncMediaSpend(
   try {
     let rowCount = 0;
     let totalSpend = 0;
-    for (const date of mediaSpendDates(fromDate, toDate)) {
+    const dates = mediaSpendDates(fromDate, toDate);
+    if (dateOrder === "descending") dates.reverse();
+    for (const date of dates) {
       const rows = await fetchLemonMaxSpend(env, date, date, startedAt, credentials);
       await convex.mutation(api.mediaSpend.replaceDate, {
         serviceToken,
@@ -932,6 +936,14 @@ async function syncMediaSpend(
         date,
         updatedAt: startedAt
       });
+      const coverageAdvanced = await convex.mutation(api.mediaSpend.advanceCoverage, {
+        serviceToken,
+        attemptId,
+        date,
+        direction: dateOrder === "descending" ? "backward" : "forward",
+        updatedAt: new Date().toISOString()
+      });
+      if (!coverageAdvanced) throw new Error("Media spend sync attempt was superseded");
       rowCount += rows.length;
       totalSpend += rows.reduce((total, row) => total + row.spend, 0);
     }
@@ -1131,15 +1143,19 @@ async function bootstrapMediaSpend(env: Env, scheduledTime: number): Promise<boo
   const yesterday = mediaSpendYesterdayInIndia(scheduledTime);
   const current = await readMediaSpend(env, yesterday, yesterday);
   if (
-    current.sync.status === "healthy"
-    || current.sync.status === "running"
+    current.sync.status === "running"
     || (current.sync.status === "failed" && (current.sync.consecutiveFailures ?? 0) >= 3)
   ) return false;
-  const fromDate = lemonMaxSyncStartDate(env);
-  if (fromDate > yesterday) {
+  const syncStartDate = lemonMaxSyncStartDate(env);
+  if (syncStartDate > yesterday) {
     throw new ApiError(503, "LemonMax sync start date is after yesterday");
   }
-  await syncMediaSpend(env, fromDate, yesterday);
+  if (!current.sync.coveredFrom) {
+    throw new ApiError(503, "LemonMax stored coverage start is not initialized");
+  }
+  const range = mediaSpendHistoricalBackfillRange(syncStartDate, current.sync.coveredFrom);
+  if (!range) return false;
+  await syncMediaSpend(env, range.fromDate, range.toDate, "descending");
   return true;
 }
 
@@ -2059,6 +2075,21 @@ function isoDateShift(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+export function mediaSpendHistoricalBackfillRange(
+  syncStartDate: string,
+  coveredFrom: string
+): { fromDate: string; toDate: string } | null {
+  if (coveredFrom <= syncStartDate) return null;
+  const toDate = isoDateShift(coveredFrom, -1);
+  const boundedFromDate = isoDateShift(toDate, 1 - mediaSpendMaximumRangeDays);
+  return {
+    fromDate: boundedFromDate < syncStartDate
+      ? syncStartDate
+      : boundedFromDate,
+    toDate
+  };
 }
 
 function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {

@@ -13,6 +13,7 @@ import worker, {
   fetchMeritVendors,
   hasSavedWiseBalanceAccounts,
   incrementalBankDateRange,
+  mediaSpendHistoricalBackfillRange,
   missingBankActivityRanges,
   mergeInvoices
 } from "./handler";
@@ -42,6 +43,22 @@ test("saved Wise balance accounts do not depend on a transaction sync record", (
     updatedAt: "2026-07-31T00:00:00.000Z",
     status: "live"
   }]), true);
+});
+
+test("media spend history backfills backward in bounded contiguous chunks", () => {
+  assert.deepEqual(
+    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-08-01"),
+    { fromDate: "2026-05-01", toDate: "2026-07-31" }
+  );
+  assert.deepEqual(
+    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-05-01"),
+    { fromDate: "2026-01-29", toDate: "2026-04-30" }
+  );
+  assert.deepEqual(
+    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-01-29"),
+    { fromDate: "2026-01-01", toDate: "2026-01-28" }
+  );
+  assert.equal(mediaSpendHistoricalBackfillRange("2026-01-01", "2026-01-01"), null);
 });
 
 const workerTestAuth = {

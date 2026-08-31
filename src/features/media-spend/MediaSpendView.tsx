@@ -618,7 +618,11 @@ export function MediaSpendView({
             <span className={`status-pill ${statusTone}`}><Database size={12} />{statusLabel}</span>
             <span>
               {sync?.lastSuccessAt
-                ? `Last synced ${dateTimeLabel(sync.lastSuccessAt)}${sync.coveredThrough ? ` · through ${dateLabel(sync.coveredThrough)}` : ""}`
+                ? `Last synced ${dateTimeLabel(sync.lastSuccessAt)}${sync.coveredFrom && sync.coveredThrough
+                  ? ` · coverage ${calendarDateRangeLabel({ fromDate: sync.coveredFrom, toDate: sync.coveredThrough })}`
+                  : sync.coveredThrough
+                    ? ` · through ${dateLabel(sync.coveredThrough)}`
+                    : ""}`
                 : "LemonMax account-level delivery"}
             </span>
           </div>

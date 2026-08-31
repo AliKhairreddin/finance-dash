@@ -24,6 +24,7 @@ export interface MediaSpendSyncState {
   status: MediaSpendSyncStatus;
   lastAttemptAt?: string;
   lastSuccessAt?: string;
+  coveredFrom?: string;
   coveredThrough?: string;
   requestedFrom?: string;
   requestedTo?: string;
