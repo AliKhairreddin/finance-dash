@@ -181,6 +181,7 @@ import {
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
+  mediaSpendMaximumResultRows,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummaryRange,
   summarizeMediaSpend,
@@ -822,17 +823,6 @@ function mediaSpendRange(fromDate: string | undefined, toDate: string | undefine
   return { fromDate, toDate };
 }
 
-function mediaSpendReadDate(fromDate: string | undefined, toDate: string | undefined): {
-  fromDate: string;
-  toDate: string;
-} {
-  const range = mediaSpendRange(fromDate, toDate);
-  if (range.fromDate !== range.toDate) {
-    throw new ApiError(400, "Account-level media spend can be viewed one day at a time");
-  }
-  return range;
-}
-
 function mediaSpendDates(fromDate: string, toDate: string): string[] {
   const dates: string[] = [];
   for (let date = fromDate; date <= toDate; date = isoDateShift(date, 1)) dates.push(date);
@@ -871,11 +861,30 @@ async function readMediaSpend(
   fromDate: string,
   toDate: string
 ): Promise<MediaSpendApiResponse> {
-  const result = await getConvexClient(env).query(api.mediaSpend.listRange, {
-    serviceToken: getConvexServiceToken(env),
-    fromDate,
-    toDate
-  });
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const includeZeroSpend = fromDate === toDate;
+  const syncPromise = convex.query(api.mediaSpend.getSyncState, { serviceToken });
+  const dates = mediaSpendDates(fromDate, toDate);
+  const rows: MediaSpendRow[] = [];
+  let reportedDays = 0;
+  for (let index = 0; index < dates.length; index += 6) {
+    const results = await Promise.all(dates.slice(index, index + 6).map((date) =>
+      convex.query(api.mediaSpend.listDate, { serviceToken, date, includeZeroSpend })
+    ));
+    for (const result of results) {
+      if (result.storedRowCount > 0) reportedDays += 1;
+      rows.push(...result.rows);
+      if (rows.length > mediaSpendMaximumResultRows) {
+        throw new ApiError(
+          400,
+          `Media spend period exceeds ${mediaSpendMaximumResultRows.toLocaleString("en-US")} active account-day rows; choose a shorter period`
+        );
+      }
+    }
+  }
+  const summary = summarizeMediaSpend(rows);
+  summary.days = reportedDays;
   const missingConfiguration = lemonMaxMissingConfiguration(env);
   return {
     version: 1,
@@ -884,9 +893,9 @@ async function readMediaSpend(
     currency: lemonMaxSpendCurrency(env),
     configured: missingConfiguration.length === 0,
     missingConfiguration,
-    rows: result.rows,
-    summary: summarizeMediaSpend(result.rows),
-    sync: result.sync ?? { status: "never" }
+    rows,
+    summary,
+    sync: (await syncPromise) ?? { status: "never" }
   };
 }
 
@@ -6551,7 +6560,7 @@ async function handleApi(
     }
 
     if (url.pathname === "/api/media-spend" && request.method === "GET") {
-      const range = mediaSpendReadDate(
+      const range = mediaSpendRange(
         url.searchParams.get("fromDate") ?? undefined,
         url.searchParams.get("toDate") ?? undefined
       );

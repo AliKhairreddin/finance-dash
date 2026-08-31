@@ -1,6 +1,7 @@
 export const mediaSpendSource = "lemonmax" as const;
 export const mediaSpendCurrency = "USD" as const;
 export const mediaSpendMaximumRangeDays = 92;
+export const mediaSpendMaximumResultRows = 6_000;
 
 export interface MediaSpendRow {
   key: string;

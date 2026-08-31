@@ -173,12 +173,12 @@ test("legacy bank activity API is removed", async () => {
   assert.deepEqual(await response.json(), { message: "Not found" });
 });
 
-test("media spend API keeps account-level reads to one exact day", async () => {
+test("media spend API accepts bounded periods and rejects invalid ranges before storage", async () => {
   const requests = [
     { query: "", message: "Media spend fromDate and toDate are required" },
     {
-      query: "fromDate=2026-08-01&toDate=2026-08-02",
-      message: "Account-level media spend can be viewed one day at a time"
+      query: "fromDate=2026-01-01&toDate=2026-08-02",
+      message: "Media spend date range cannot exceed 92 days"
     }
   ];
   for (const item of requests) {
@@ -189,6 +189,13 @@ test("media spend API keeps account-level reads to one exact day", async () => {
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { message: item.message });
   }
+
+  const periodResponse = await worker.fetch(
+    await authenticatedRequest("https://finance.example/api/media-spend?fromDate=2026-08-01&toDate=2026-08-30"),
+    authenticatedEnv({ ASSETS: { fetch: async () => new Response("asset") } })
+  );
+  assert.equal(periodResponse.status, 503);
+  assert.deepEqual(await periodResponse.json(), { message: "Dashboard storage is not configured" });
 });
 
 test("transaction page API validates every bound before reading storage", async () => {

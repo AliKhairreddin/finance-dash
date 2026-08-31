@@ -33,7 +33,6 @@ const publicSyncState = v.object({
 });
 
 const maximumRowsPerDate = 3_500;
-const maximumRowsPerRange = 6_000;
 const syncStateKey = "lemonmax";
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -53,39 +52,31 @@ function requireTimestamp(value: string): void {
   if (Number.isNaN(Date.parse(value))) throw new ConvexError({ code: "INVALID_MEDIA_SPEND_TIMESTAMP" });
 }
 
-export const listRange = query({
+export const listDate = query({
   args: {
     serviceToken: v.string(),
-    fromDate: v.string(),
-    toDate: v.string()
+    date: v.string(),
+    includeZeroSpend: v.boolean()
   },
   returns: v.object({
     rows: v.array(mediaSpendRow),
-    sync: v.union(publicSyncState, v.null())
+    storedRowCount: v.number()
   }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
-    requireIsoDate(args.fromDate);
-    requireIsoDate(args.toDate);
-    if (args.fromDate > args.toDate) throw new ConvexError({ code: "INVALID_MEDIA_SPEND_RANGE" });
+    requireIsoDate(args.date);
 
     const rows = await ctx.db
       .query("mediaSpendDaily")
-      .withIndex("by_date", (q) => q.gte("date", args.fromDate).lte("date", args.toDate))
-      .take(maximumRowsPerRange + 1);
-    if (rows.length > maximumRowsPerRange) {
-      throw new ConvexError({
-        code: "MEDIA_SPEND_RANGE_TOO_LARGE",
-        message: "Narrow the media spend date range to load account-level rows"
-      });
+      .withIndex("by_date", (q) => q.eq("date", args.date))
+      .take(maximumRowsPerDate + 1);
+    if (rows.length > maximumRowsPerDate) {
+      throw new ConvexError({ code: "MEDIA_SPEND_DAY_TOO_LARGE" });
     }
 
-    const storedSync = await ctx.db
-      .query("mediaSpendSyncState")
-      .withIndex("by_key", (q) => q.eq("key", syncStateKey))
-      .unique();
+    const publicRows = args.includeZeroSpend ? rows : rows.filter((row) => row.spend !== 0);
     return {
-      rows: rows.map((row) => ({
+      rows: publicRows.map((row) => ({
         key: row.key,
         source: row.source,
         workspace: row.workspace,
@@ -99,19 +90,32 @@ export const listRange = query({
         currency: row.currency,
         syncedAt: row.syncedAt
       })),
-      sync: storedSync ? {
-        status: storedSync.status,
-        lastAttemptAt: storedSync.lastAttemptAt,
-        lastSuccessAt: storedSync.lastSuccessAt,
-        coveredThrough: storedSync.coveredThrough,
-        requestedFrom: storedSync.requestedFrom,
-        requestedTo: storedSync.requestedTo,
-        rowCount: storedSync.rowCount,
-        totalSpend: storedSync.totalSpend,
-        lastError: storedSync.lastError,
-        consecutiveFailures: storedSync.consecutiveFailures
-      } : null
+      storedRowCount: rows.length
     };
+  }
+});
+
+export const getSyncState = query({
+  args: { serviceToken: v.string() },
+  returns: v.union(publicSyncState, v.null()),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const storedSync = await ctx.db
+      .query("mediaSpendSyncState")
+      .withIndex("by_key", (q) => q.eq("key", syncStateKey))
+      .unique();
+    return storedSync ? {
+      status: storedSync.status,
+      lastAttemptAt: storedSync.lastAttemptAt,
+      lastSuccessAt: storedSync.lastSuccessAt,
+      coveredThrough: storedSync.coveredThrough,
+      requestedFrom: storedSync.requestedFrom,
+      requestedTo: storedSync.requestedTo,
+      rowCount: storedSync.rowCount,
+      totalSpend: storedSync.totalSpend,
+      lastError: storedSync.lastError,
+      consecutiveFailures: storedSync.consecutiveFailures
+    } : null;
   }
 });
 

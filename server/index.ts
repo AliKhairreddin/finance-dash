@@ -46,8 +46,11 @@ import type {
   UpdateMediaFundingProviderPayload
 } from "../shared/mediaFunding";
 import {
+  mediaSpendMaximumResultRows,
   summarizeMediaSpend,
-  type MediaSpendApiResponse
+  validateMediaSpendDateRange,
+  type MediaSpendApiResponse,
+  type MediaSpendRow
 } from "../shared/mediaSpend";
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import { transactionBusinessCategory } from "../shared/categories";
@@ -132,6 +135,46 @@ function localIsoDateShift(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+function localMediaSpendDates(fromDate: string, toDate: string): string[] {
+  const dates: string[] = [];
+  for (let date = fromDate; date <= toDate; date = localIsoDateShift(date, 1)) dates.push(date);
+  return dates;
+}
+
+async function readLocalMediaSpendRange(
+  fromDate: string,
+  toDate: string
+): Promise<Pick<MediaSpendApiResponse, "rows" | "summary" | "sync">> {
+  const convex = localConvexClient();
+  const serviceToken = localConvexServiceToken();
+  const includeZeroSpend = fromDate === toDate;
+  const syncPromise = convex.query(api.mediaSpend.getSyncState, { serviceToken });
+  const dates = localMediaSpendDates(fromDate, toDate);
+  const rows: MediaSpendRow[] = [];
+  let reportedDays = 0;
+  for (let index = 0; index < dates.length; index += 6) {
+    const results = await Promise.all(dates.slice(index, index + 6).map((date) =>
+      convex.query(api.mediaSpend.listDate, { serviceToken, date, includeZeroSpend })
+    ));
+    for (const result of results) {
+      if (result.storedRowCount > 0) reportedDays += 1;
+      rows.push(...result.rows);
+      if (rows.length > mediaSpendMaximumResultRows) {
+        throw new ClientRequestError(
+          `Media spend period exceeds ${mediaSpendMaximumResultRows.toLocaleString("en-US")} active account-day rows; choose a shorter period`
+        );
+      }
+    }
+  }
+  const summary = summarizeMediaSpend(rows);
+  summary.days = reportedDays;
+  return {
+    rows,
+    summary,
+    sync: (await syncPromise) ?? { status: "never" }
+  };
+}
+
 async function rebuildLocalMediaFunding(range: MediaFundingMutationResult): Promise<void> {
   if (!range.rebuildFrom || !range.rebuildTo) return;
   const convex = localConvexClient();
@@ -173,15 +216,15 @@ app.get("/api/media-spend", async (request, response, next) => {
   try {
     const fromDate = typeof request.query.fromDate === "string" ? request.query.fromDate : "";
     const toDate = typeof request.query.toDate === "string" ? request.query.toDate : "";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || fromDate !== toDate) {
-      response.status(400).json({ message: "Account-level media spend can be viewed one day at a time" });
+    try {
+      validateMediaSpendDateRange(fromDate, toDate);
+    } catch (error) {
+      response.status(400).json({
+        message: error instanceof Error ? error.message : "Media spend date range is invalid"
+      });
       return;
     }
-    const result = await localConvexClient().query(api.mediaSpend.listRange, {
-      serviceToken: localConvexServiceToken(),
-      fromDate,
-      toDate
-    });
+    const result = await readLocalMediaSpendRange(fromDate, toDate);
     const payload: MediaSpendApiResponse = {
       version: 1,
       fromDate,
@@ -190,8 +233,8 @@ app.get("/api/media-spend", async (request, response, next) => {
       configured: false,
       missingConfiguration: ["LemonMax sync is available from the deployed dashboard"],
       rows: result.rows,
-      summary: summarizeMediaSpend(result.rows),
-      sync: result.sync ?? { status: "never" }
+      summary: result.summary,
+      sync: result.sync
     };
     response.json(payload);
   } catch (error) {

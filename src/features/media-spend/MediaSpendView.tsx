@@ -45,7 +45,11 @@ import {
   type MediaFundingAssignmentTarget,
   type MediaFundingProvider
 } from "../../../shared/mediaFunding";
-import type { MediaSpendApiResponse, MediaSpendRow } from "../../../shared/mediaSpend";
+import {
+  validateMediaSpendDateRange,
+  type MediaSpendApiResponse,
+  type MediaSpendRow
+} from "../../../shared/mediaSpend";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
 type MediaSpendSortKey = "account" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
@@ -206,8 +210,17 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
 
 function mediaSpendPreset(value: string): CalendarDateRange {
   const yesterday = shiftFinanceOperatingDate(financeOperatingDate(), -1);
-  if (value !== "yesterday") throw new Error("Unknown media spend date preset");
-  return { fromDate: yesterday, toDate: yesterday };
+  if (value === "yesterday") return { fromDate: yesterday, toDate: yesterday };
+  if (value === "last7") {
+    return { fromDate: shiftFinanceOperatingDate(yesterday, -6), toDate: yesterday };
+  }
+  if (value === "last30") {
+    return { fromDate: shiftFinanceOperatingDate(yesterday, -29), toDate: yesterday };
+  }
+  if (value === "monthToDate") {
+    return { fromDate: `${yesterday.slice(0, 8)}01`, toDate: yesterday };
+  }
+  throw new Error("Unknown media spend date preset");
 }
 
 export function MediaSpendView({
@@ -284,7 +297,8 @@ export function MediaSpendView({
       businessManagers: new Set(activeRows.map((row) => `${row.platform}:${row.businessManagerId ?? ""}`)).size
     };
   }, [data?.rows]);
-  const includeZeroSpend = zeroSpendVisibility === "include";
+  const canIncludeZeroSpend = dateRange.fromDate === dateRange.toDate;
+  const includeZeroSpend = canIncludeZeroSpend && zeroSpendVisibility === "include";
   const providersById = useMemo(
     () => new Map((funding?.providers ?? []).map((provider) => [provider.id, provider])),
     [funding?.providers]
@@ -537,21 +551,26 @@ export function MediaSpendView({
         </div>
         <div className="media-spend-header-actions">
           <CalendarPeriodPicker
-            ariaLabel="Choose media spend date"
+            ariaLabel="Choose media spend period"
             dateRange={dateRange}
             disabled={isLoading || isSyncing}
             isLoading={isLoading}
             onApply={(nextRange) => {
-              if (nextRange.fromDate !== nextRange.toDate) {
-                setError("Choose one date for account-level media spend");
-                return;
+              try {
+                validateMediaSpendDateRange(nextRange.fromDate, nextRange.toDate);
+                setError(null);
+                setDateRange(nextRange);
+              } catch (rangeError) {
+                setError(rangeError instanceof Error ? rangeError.message : "Media spend date range is invalid");
               }
-              setDateRange(nextRange);
             }}
             onSelectPreset={(value) => setDateRange(mediaSpendPreset(value))}
-            presetAriaLabel="Media spend date preset"
+            presetAriaLabel="Media spend period preset"
             presetOptions={[
-              { value: "yesterday", label: "Yesterday" }
+              { value: "yesterday", label: "Yesterday" },
+              { value: "last7", label: "Last 7 days" },
+              { value: "last30", label: "Last 30 days" },
+              { value: "monthToDate", label: "Month to date" }
             ]}
             triggerLabel={calendarDateRangeLabel(dateRange)}
           />
@@ -628,14 +647,16 @@ export function MediaSpendView({
                 <span>BM view</span>
               </button>
             </div>
-            <Button
-              aria-pressed={includeZeroSpend}
-              className="secondary-button media-spend-zero-toggle"
-              onClick={() => setZeroSpendVisibility(includeZeroSpend ? "hide" : "include")}
-              type="button"
-            >
-              {includeZeroSpend ? "Hide $0" : "Include $0"}
-            </Button>
+            {canIncludeZeroSpend && (
+              <Button
+                aria-pressed={includeZeroSpend}
+                className="secondary-button media-spend-zero-toggle"
+                onClick={() => setZeroSpendVisibility(includeZeroSpend ? "hide" : "include")}
+                type="button"
+              >
+                {includeZeroSpend ? "Hide $0" : "Include $0"}
+              </Button>
+            )}
             <ToolbarSearchField
               ariaLabel="Search media spend"
               onChange={setSearch}
