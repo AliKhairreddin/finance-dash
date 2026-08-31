@@ -7766,117 +7766,6 @@ th.amount .sortable-table-heading {
   padding-block: 11px;
 }
 
-.wise-statement-coverage {
-  display: grid;
-  grid-template-columns: 145px minmax(0, 1fr);
-  border-top: 1px solid var(--line-soft);
-  background: var(--subtle-bg);
-}
-
-.wise-statement-coverage-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  padding: 10px 12px;
-  border-right: 1px solid var(--line-soft);
-  color: var(--app-muted);
-}
-
-.wise-statement-coverage-heading > span {
-  font-size: 0.66rem;
-  font-weight: 760;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-}
-
-.wise-statement-coverage-heading .note-popover {
-  position: relative;
-  top: auto;
-  right: auto;
-}
-
-.wise-statement-coverage-heading .note-popover-trigger {
-  width: 21px;
-  height: 21px;
-  min-height: 21px;
-  box-shadow: none;
-}
-
-.wise-statement-coverage-accounts {
-  display: flex;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.wise-statement-coverage-account {
-  display: grid;
-  flex: 1 0 min(430px, 100%);
-  grid-template-columns: minmax(125px, 0.75fr) minmax(220px, 1.4fr);
-  min-width: 350px;
-  gap: 10px;
-  padding: 9px 12px;
-  align-items: center;
-}
-
-.wise-statement-coverage-account + .wise-statement-coverage-account {
-  border-left: 1px solid var(--line-soft);
-}
-
-.wise-statement-coverage-account-name {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-}
-
-.wise-statement-coverage-account-name strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 0.76rem;
-  font-weight: 720;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wise-statement-coverage-account dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-}
-
-.wise-statement-coverage-account dl > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.wise-statement-coverage-account dt {
-  color: var(--app-muted);
-  font-size: 0.62rem;
-  font-weight: 720;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
-}
-
-.wise-statement-coverage-account dd {
-  overflow: hidden;
-  margin: 0;
-  color: var(--label-text);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wise-statement-coverage-empty {
-  padding: 13px 12px;
-  color: var(--app-muted);
-  font-size: 0.74rem;
-}
-
 .bank-overview-title {
   min-width: 0;
 }
@@ -8150,6 +8039,64 @@ th.amount .sortable-table-heading {
   white-space: nowrap;
 }
 
+.bank-details-account-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.bank-details-account-name > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bank-details-account-name .note-popover {
+  position: relative;
+  top: auto;
+  right: auto;
+  flex: 0 0 auto;
+}
+
+.bank-details-account-name .note-popover-trigger {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.wise-account-coverage-popover {
+  display: grid;
+  gap: 8px;
+}
+
+.wise-account-coverage-popover > div {
+  display: grid;
+  gap: 2px;
+}
+
+.wise-account-coverage-popover > div + div {
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.wise-account-coverage-popover span {
+  color: var(--app-muted);
+  font-size: 0.64rem;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wise-account-coverage-popover strong {
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
 .bank-details-summary-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -8184,33 +8131,6 @@ th.amount .sortable-table-heading {
   .bank-overview-header {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
-  }
-
-  .wise-statement-coverage {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .wise-statement-coverage-heading {
-    padding-block: 7px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
-
-  .wise-statement-coverage-account {
-    grid-template-columns: minmax(0, 1fr);
-    min-width: 0;
-    gap: 6px;
-    padding-block: 8px;
-  }
-
-  .wise-statement-coverage-accounts {
-    display: grid;
-    overflow-x: visible;
-  }
-
-  .wise-statement-coverage-account + .wise-statement-coverage-account {
-    border-top: 1px solid var(--line-soft);
-    border-left: 0;
   }
 
   .bank-header-controls {
@@ -10084,6 +10004,10 @@ body {
   display: inline-flex;
 }
 
+.note-popover-positioner {
+  z-index: 500;
+}
+
 .note-popover-trigger {
   display: grid;
   width: 28px;
@@ -10107,12 +10031,9 @@ body {
 }
 
 .note-popover-panel {
-  position: absolute;
-  top: calc(100% + 7px);
-  right: 0;
+  position: relative;
   width: min(260px, calc(100vw - 48px));
   padding: 10px 11px;
-  visibility: hidden;
   border: 1px solid var(--line);
   border-radius: 11px;
   color: var(--ink);
@@ -10122,16 +10043,12 @@ body {
   font-weight: 520;
   letter-spacing: 0;
   line-height: 1.45;
-  opacity: 0;
-  pointer-events: none;
   text-align: left;
   text-transform: none;
-  transform: translateY(-5px) scale(0.98);
-  transform-origin: top right;
+  transform-origin: var(--transform-origin);
   transition:
     opacity 0.15s ease,
-    transform 0.15s ease,
-    visibility 0.15s ease;
+    transform 0.15s ease;
 }
 
 .note-popover-panel > span {
@@ -10145,12 +10062,10 @@ body {
   color: var(--app-muted);
 }
 
-.note-popover:hover .note-popover-panel,
-.note-popover:focus-within .note-popover-panel {
-  visibility: visible;
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0) scale(1);
+.note-popover-panel[data-starting-style],
+.note-popover-panel[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
 }
 
 .overview-grid {

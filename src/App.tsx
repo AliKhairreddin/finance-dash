@@ -3203,7 +3203,19 @@ function BankDetailsAccountTable({
   secondaryLabel
 }: {
   emptyLabel: string;
-  rows: Array<{ id: string; name: string; title: string; amount: number; currency: string; source: string }>;
+  rows: Array<{
+    id: string;
+    name: string;
+    title: string;
+    amount: number;
+    currency: string;
+    source: string;
+    statementCoverage?: {
+      importedAt?: string;
+      periodEnd?: string;
+      periodStart?: string;
+    };
+  }>;
   secondaryLabel: string;
 }) {
   const [sortKey, setSortKey] = useUrlState<BankDetailAccountSortKey>("bankDetailSort", "name", {
@@ -3240,7 +3252,29 @@ function BankDetailsAccountTable({
         <tbody>
           {sortedRows.map((row) => (
             <tr key={row.id}>
-              <td title={row.title}><strong>{row.name}</strong></td>
+              <td>
+                <div className="bank-details-account-name">
+                  <strong title={row.title}>{row.name}</strong>
+                  {row.statementCoverage && (
+                    <InfoPopover label={`${row.name} statement coverage`}>
+                      <div className="wise-account-coverage-popover">
+                        <div>
+                          <span>Transactions cover</span>
+                          <strong>{row.statementCoverage.periodStart && row.statementCoverage.periodEnd
+                            ? dateRangeLabel(row.statementCoverage.periodStart, row.statementCoverage.periodEnd)
+                            : "No CSV uploaded"}</strong>
+                        </div>
+                        <div>
+                          <span>Last uploaded</span>
+                          <strong>{row.statementCoverage.importedAt
+                            ? dateTimeLabel(row.statementCoverage.importedAt)
+                            : "Never"}</strong>
+                        </div>
+                      </div>
+                    </InfoPopover>
+                  )}
+                </div>
+              </td>
               <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
               <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
             </tr>
@@ -3504,6 +3538,13 @@ function BanksView({
       )
     )
     : [];
+  const wiseStatementCoverageByBalanceId = new Map(
+    wiseStatementAccountCoverage(
+      dashboard.accounts,
+      dashboard.wiseStatementImports,
+      wiseEntityView
+    ).map((coverage) => [coverage.balanceId, coverage])
+  );
   const activeBankLabel = activeSource
     ? activeSource.id === "wise" && wiseEntityView !== "all"
       ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
@@ -3640,16 +3681,25 @@ function BanksView({
         </div>
         <BankDetailsAccountTable
           secondaryLabel={activeSource.id === "slash" ? "Type" : "Source"}
-          rows={detailAccounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            title: account.name,
-            amount: account.balance,
-            currency: account.currency,
-            source: activeSource.id === "slash"
-              ? account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
-              : activeSource.label
-          }))}
+          rows={detailAccounts.map((account) => {
+            const wiseBalanceId = activeSource.id === "wise"
+              ? account.id.match(/^wise-\d+-(\d+)$/)?.[1]
+              : undefined;
+            const statementCoverage = wiseBalanceId
+              ? wiseStatementCoverageByBalanceId.get(wiseBalanceId)
+              : undefined;
+            return {
+              id: account.id,
+              name: account.name,
+              title: account.name,
+              amount: account.balance,
+              currency: account.currency,
+              source: activeSource.id === "slash"
+                ? account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
+                : activeSource.label,
+              ...(statementCoverage ? { statementCoverage } : {})
+            };
+          })}
           emptyLabel={`No ${activeSource.label} accounts available`}
         />
       </section>
@@ -3729,9 +3779,6 @@ function BanksView({
             </div>
           </div>
         </div>
-        {activeBank === "wise" && (
-          <WiseStatementCoverage dashboard={dashboard} wiseEntityView={wiseEntityView} />
-        )}
       </section>
 
       {activeBank === "all" && (
@@ -4456,62 +4503,6 @@ function BankReconciliationView({
       )}
       {tableFooter}
     </section>
-  );
-}
-
-function WiseStatementCoverage({
-  dashboard,
-  wiseEntityView
-}: {
-  dashboard: DashboardSnapshot;
-  wiseEntityView: WiseEntityView;
-}) {
-  const accountCoverage = wiseStatementAccountCoverage(
-    dashboard.accounts,
-    dashboard.wiseStatementImports,
-    wiseEntityView
-  );
-
-  return (
-    <div className="wise-statement-coverage" aria-label="Wise statement upload coverage">
-      <div className="wise-statement-coverage-heading">
-        <span>Statement coverage</span>
-        <InfoPopover label="Wise statement coverage">
-          Coverage and upload times come from imported Wise CSV statements. Live balance refreshes do not extend transaction coverage.
-        </InfoPopover>
-      </div>
-      <div className="wise-statement-coverage-accounts">
-        {accountCoverage.length > 0 ? accountCoverage.map((coverage) => (
-          <article className="wise-statement-coverage-account" key={coverage.balanceId}>
-            <div className="wise-statement-coverage-account-name">
-              <span
-                className={`wise-entity-badge entity-${coverage.wiseEntity}`}
-                title={wiseEntityLabel(coverage.wiseEntity)}
-              >
-                {wiseEntityShortLabel(coverage.wiseEntity)}
-              </span>
-              <strong title={`${coverage.accountName ? `${coverage.accountName} · ` : ""}Wise balance ${coverage.balanceId}`}>
-                Wise {coverage.currency}
-              </strong>
-            </div>
-            <dl>
-              <div>
-                <dt>Transactions cover</dt>
-                <dd>{coverage.periodStart && coverage.periodEnd
-                  ? dateRangeLabel(coverage.periodStart, coverage.periodEnd)
-                  : "No CSV uploaded"}</dd>
-              </div>
-              <div>
-                <dt>Last uploaded</dt>
-                <dd>{coverage.importedAt ? dateTimeLabel(coverage.importedAt) : "Never"}</dd>
-              </div>
-            </dl>
-          </article>
-        )) : (
-          <span className="wise-statement-coverage-empty">No Wise accounts available</span>
-        )}
-      </div>
-    </div>
   );
 }
 
