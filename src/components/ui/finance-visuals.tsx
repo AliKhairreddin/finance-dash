@@ -1,5 +1,5 @@
 import { Info } from "lucide-react";
-import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
+import { Popover as BasePopover } from "@base-ui/react/popover";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 const completedNumberAnimations = new Set<string>();
@@ -100,21 +100,21 @@ export function InfoPopover({
 }) {
   return (
     <span className="note-popover">
-      <BaseTooltip.Root>
-        <BaseTooltip.Trigger
+      <BasePopover.Root>
+        <BasePopover.Trigger
           aria-label={`About ${label}`}
           className="note-popover-trigger"
         >
           <Info aria-hidden="true" size={13} />
-        </BaseTooltip.Trigger>
-        <BaseTooltip.Portal>
-          <BaseTooltip.Positioner align="end" className="note-popover-positioner" side="bottom" sideOffset={7}>
-            <BaseTooltip.Popup className="note-popover-panel">
+        </BasePopover.Trigger>
+        <BasePopover.Portal>
+          <BasePopover.Positioner align="end" className="note-popover-positioner" side="bottom" sideOffset={7}>
+            <BasePopover.Popup className="note-popover-panel" role="tooltip">
               {children}
-            </BaseTooltip.Popup>
-          </BaseTooltip.Positioner>
-        </BaseTooltip.Portal>
-      </BaseTooltip.Root>
+            </BasePopover.Popup>
+          </BasePopover.Positioner>
+        </BasePopover.Portal>
+      </BasePopover.Root>
     </span>
   );
 }

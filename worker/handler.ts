@@ -926,6 +926,9 @@ async function syncMediaSpend(
     if (dateOrder === "descending") dates.reverse();
     for (const date of dates) {
       const rows = await fetchLemonMaxSpend(env, date, date, startedAt, credentials);
+      if (dateOrder === "descending" && rows.length === 0) {
+        throw new Error(`LemonMax returned no account rows for historical date ${date}`);
+      }
       await convex.mutation(api.mediaSpend.replaceDate, {
         serviceToken,
         date,

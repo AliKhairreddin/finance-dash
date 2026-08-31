@@ -517,15 +517,21 @@ export function MediaSpendView({
   }
 
   const sync = data?.sync;
+  const selectedPeriodCovered = Boolean(
+    sync?.coveredFrom
+    && sync.coveredThrough
+    && dateRange.fromDate >= sync.coveredFrom
+    && dateRange.toDate <= sync.coveredThrough
+  );
   const statusTone = !data?.configured || sync?.status === "failed"
     ? "danger"
-    : sync?.status === "healthy"
+    : sync?.status === "healthy" && selectedPeriodCovered
       ? "good"
       : "warning";
   const statusLabel = !data?.configured
     ? "Not configured"
     : sync?.status === "healthy"
-      ? "Current"
+      ? selectedPeriodCovered ? "Current" : "Not covered"
       : sync?.status === "failed"
         ? "Sync failed"
         : sync?.status === "running"
@@ -702,10 +708,12 @@ export function MediaSpendView({
           <div className="empty-state">
             <Database size={22} />
             <strong>{search
-              ? `No matching ${viewMode === "accounts" ? "ad accounts" : "business managers"}`
+                ? `No matching ${viewMode === "accounts" ? "ad accounts" : "business managers"}`
               : selectedBusinessManagerKey
                 ? "No ad accounts match this business manager"
-                : "No media spend in this period"}</strong>
+                : sync?.coveredFrom && sync.coveredThrough && !selectedPeriodCovered
+                  ? "No stored LemonMax history for this period"
+                  : "No media spend in this period"}</strong>
           </div>
         ) : viewMode === "accounts" ? (
           <div className="table-wrap media-spend-table-wrap">

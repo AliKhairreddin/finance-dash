@@ -40,6 +40,50 @@ final result: passed
 
 ---
 
+# Wise statement coverage design QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-05b5ebf7-6670-4bf2-87f4-4c4cce00d703.png` (358 × 298 px) shows the popup obscured by later UI; `/var/folders/jg/nw_1gzfx3hs3p5jk7s4fnn7c0000gn/T/codex-clipboard-fa489142-401e-44ca-ab39-94c4d830c4ee.png` (2198 × 170 px) shows the persistent horizontal coverage strip.
+- Implementation screenshot: `/Users/alikheireddine/Desktop/GitHub/finance-dash/wise-coverage-popup-implementation.png` (1280 × 720 px).
+- Viewport and density: 1280 × 720 CSS px at 1× density.
+- State: Banks → Wise, right-side details drawer open, first Wise account coverage popup open. Representative local account data was used only to render the component; production financial data was not changed.
+- Same-input comparison: both source images and the implementation screenshot were opened together at original density. The source captures are focused defect references, so the focused region was required and was sufficient; a full-source view was not available.
+- Primary interactions: opened the drawer, opened the account-level information popup, and verified its two account-specific values and overlay position. Browser console errors: none.
+
+## Findings
+
+- No actionable P0, P1, or P2 findings remain.
+- Fonts and typography: Geist, compact uppercase field labels, tabular dates, and the existing account-table hierarchy are preserved.
+- Spacing and layout rhythm: the wide strip and horizontal scrollbar are removed; coverage now occupies only a 20 px info control beside the related account.
+- Colors and tokens: popup surface, border, shadow, muted labels, and Wise pills reuse existing dashboard tokens and remain legible over the modal backdrop.
+- Image quality and assets: no raster assets are required; the existing icon-library info mark remains crisp.
+- Copy: each account popup shows exactly `Transactions cover` and `Last uploaded` with its own values.
+
+## Comparison history
+
+1. The source implementation placed the popup inside the persistent strip, where later controls obscured it and repeated accounts caused horizontal scrolling.
+   - Fix: removed the strip and moved coverage to the matching account row in the details drawer.
+2. The first drawer pass used a portalled tooltip, which did not open reliably inside the modal interaction scope.
+   - Fix: changed the shared control to a click-triggered portalled popover with a stacking level above the drawer.
+   - Post-fix evidence: `wise-coverage-popup-implementation.png` shows the complete popup unobscured above the drawer and table.
+
+## Implementation checklist
+
+- [x] Remove the long statement-coverage row.
+- [x] Add an info control beside each Wise account title in the details drawer.
+- [x] Show account-specific coverage and upload time.
+- [x] Render the popup above the UI.
+- [x] Verify interaction and console state.
+
+## Follow-up polish
+
+- None required for this scope.
+
+final result: passed
+
+---
+
 # Cash Flow wide PNG export design QA
 
 ## Comparison target

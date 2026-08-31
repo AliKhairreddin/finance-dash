@@ -175,7 +175,6 @@ export const initializeCoverageFromStorage = mutation({
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
     if (!storedSync) return null;
-    if (storedSync.coveredFrom) return storedSync.coveredFrom;
 
     const earliestRow = await ctx.db
       .query("mediaSpendDaily")
