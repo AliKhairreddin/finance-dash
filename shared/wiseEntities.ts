@@ -71,6 +71,82 @@ export interface VerifiedWiseStatementAccount {
   wiseEntity: WiseEntity;
 }
 
+export interface WiseStatementAccountCoverage {
+  accountName?: string;
+  balanceId: string;
+  currency: string;
+  wiseEntity: WiseEntity;
+  periodStart?: string;
+  periodEnd?: string;
+  importedAt?: string;
+}
+
+export function wiseStatementAccountCoverage(
+  accounts: readonly AccountBalance[],
+  imports: readonly WiseStatementImport[],
+  expectedEntity: WiseEntityView
+): WiseStatementAccountCoverage[] {
+  const coverageSources = new Map<string, {
+    account?: AccountBalance;
+    imports: WiseStatementImport[];
+  }>();
+  for (const account of accounts) {
+    if (account.source !== "wise" || !account.wiseEntity) continue;
+    const balanceId = accountBalanceId(account.id);
+    if (!balanceId) continue;
+    coverageSources.set(balanceId, { account, imports: [] });
+  }
+  for (const statementImport of imports) {
+    if (!statementImport.wiseEntity) continue;
+    const source = coverageSources.get(statementImport.balanceId);
+    if (source) source.imports.push(statementImport);
+    else coverageSources.set(statementImport.balanceId, { imports: [statementImport] });
+  }
+
+  return [...coverageSources.entries()]
+    .flatMap(([balanceId, source]): WiseStatementAccountCoverage[] => {
+      const latestImport = source.imports.reduce<WiseStatementImport | undefined>(
+        (latest, statementImport) => !latest || statementImport.importedAt > latest.importedAt
+          ? statementImport
+          : latest,
+        undefined
+      );
+      const wiseEntity = source.account?.wiseEntity ?? latestImport?.wiseEntity;
+      if (!wiseEntity || (expectedEntity !== "all" && wiseEntity !== expectedEntity)) return [];
+      const currency = source.account?.currency ?? latestImport?.currency;
+      if (!currency) return [];
+      const accountName = source.account?.name ?? latestImport?.accountName;
+      const periodStart = source.imports.reduce<string | undefined>(
+        (earliest, statementImport) => !earliest || statementImport.periodStart < earliest
+          ? statementImport.periodStart
+          : earliest,
+        undefined
+      );
+      const periodEnd = source.imports.reduce<string | undefined>(
+        (latest, statementImport) => !latest || statementImport.periodEnd > latest
+          ? statementImport.periodEnd
+          : latest,
+        undefined
+      );
+
+      return [{
+        balanceId,
+        currency,
+        wiseEntity,
+        ...(accountName ? { accountName } : {}),
+        ...(periodStart ? { periodStart } : {}),
+        ...(periodEnd ? { periodEnd } : {}),
+        ...(latestImport ? { importedAt: latestImport.importedAt } : {})
+      }];
+    })
+    .sort((left, right) => {
+      const entityOrder = wiseEntityViews.indexOf(left.wiseEntity) - wiseEntityViews.indexOf(right.wiseEntity);
+      return entityOrder
+        || left.currency.localeCompare(right.currency)
+        || (left.accountName ?? "").localeCompare(right.accountName ?? "");
+    });
+}
+
 export function verifyWiseStatementAccount(
   metadata: {
     balanceId: string;

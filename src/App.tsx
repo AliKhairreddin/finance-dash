@@ -200,6 +200,7 @@ import {
   wiseEntityLabel,
   wiseEntityShortLabel,
   wiseEntityViews,
+  wiseStatementAccountCoverage,
   type WiseEntityView
 } from "../shared/wiseEntities";
 import { AllBankTransactionsView, HoldingsView } from "@/features/banking/BankingViews";
@@ -496,6 +497,42 @@ function dateLabel(value: string): string {
     day: "numeric",
     year: "numeric"
   }).format(date);
+}
+
+function dateTimeLabel(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function dateRangeLabel(start: string, end: string): string {
+  if (start === end) return dateLabel(start);
+  const startDate = new Date(`${start}T00:00:00`);
+  const endDate = new Date(`${end}T00:00:00`);
+  if (startDate.getFullYear() !== endDate.getFullYear()) {
+    return `${dateLabel(start)} – ${dateLabel(end)}`;
+  }
+  const compactStart = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric"
+  }).format(startDate);
+  if (startDate.getMonth() === endDate.getMonth()) {
+    const compactEnd = new Intl.DateTimeFormat("en-US", {
+      day: "numeric",
+      year: "numeric"
+    }).format(endDate);
+    return `${compactStart} – ${compactEnd}`;
+  }
+  const compactEnd = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(endDate);
+  return `${compactStart} – ${compactEnd}`;
 }
 
 function monthLabel(value: string): string {
@@ -3692,6 +3729,9 @@ function BanksView({
             </div>
           </div>
         </div>
+        {activeBank === "wise" && (
+          <WiseStatementCoverage dashboard={dashboard} wiseEntityView={wiseEntityView} />
+        )}
       </section>
 
       {activeBank === "all" && (
@@ -4416,6 +4456,62 @@ function BankReconciliationView({
       )}
       {tableFooter}
     </section>
+  );
+}
+
+function WiseStatementCoverage({
+  dashboard,
+  wiseEntityView
+}: {
+  dashboard: DashboardSnapshot;
+  wiseEntityView: WiseEntityView;
+}) {
+  const accountCoverage = wiseStatementAccountCoverage(
+    dashboard.accounts,
+    dashboard.wiseStatementImports,
+    wiseEntityView
+  );
+
+  return (
+    <div className="wise-statement-coverage" aria-label="Wise statement upload coverage">
+      <div className="wise-statement-coverage-heading">
+        <span>Statement coverage</span>
+        <InfoPopover label="Wise statement coverage">
+          Coverage and upload times come from imported Wise CSV statements. Live balance refreshes do not extend transaction coverage.
+        </InfoPopover>
+      </div>
+      <div className="wise-statement-coverage-accounts">
+        {accountCoverage.length > 0 ? accountCoverage.map((coverage) => (
+          <article className="wise-statement-coverage-account" key={coverage.balanceId}>
+            <div className="wise-statement-coverage-account-name">
+              <span
+                className={`wise-entity-badge entity-${coverage.wiseEntity}`}
+                title={wiseEntityLabel(coverage.wiseEntity)}
+              >
+                {wiseEntityShortLabel(coverage.wiseEntity)}
+              </span>
+              <strong title={`${coverage.accountName ? `${coverage.accountName} · ` : ""}Wise balance ${coverage.balanceId}`}>
+                Wise {coverage.currency}
+              </strong>
+            </div>
+            <dl>
+              <div>
+                <dt>Transactions cover</dt>
+                <dd>{coverage.periodStart && coverage.periodEnd
+                  ? dateRangeLabel(coverage.periodStart, coverage.periodEnd)
+                  : "No CSV uploaded"}</dd>
+              </div>
+              <div>
+                <dt>Last uploaded</dt>
+                <dd>{coverage.importedAt ? dateTimeLabel(coverage.importedAt) : "Never"}</dd>
+              </div>
+            </dl>
+          </article>
+        )) : (
+          <span className="wise-statement-coverage-empty">No Wise accounts available</span>
+        )}
+      </div>
+    </div>
   );
 }
 
