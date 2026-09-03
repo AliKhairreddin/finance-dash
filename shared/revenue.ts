@@ -49,9 +49,7 @@ export function bindRevenuePartnerCompany(
   runs: RevenueRun[],
   invoices: Invoice[]
 ): { runs: RevenueRun[]; invoices: Invoice[] } {
-  if (provider.type !== "client" || !provider.meritCustomerId) {
-    throw new Error("Revenue rules require a customer imported from Merit");
-  }
+  if (provider.type !== "client") throw new Error("Revenue rules require a client company");
   const customerName = provider.legalName?.trim() || provider.name;
   const paymentTermsDays = provider.paymentTermsDays ?? partner.invoiceDueDays;
   return {

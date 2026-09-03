@@ -831,7 +831,10 @@ export async function fetchQuinStreetRevenue(
     },
     4 * 1024 * 1024
   );
-  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField);
+  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField, {
+    categoryField: partner.categoryField,
+    categoryValue: partner.categoryValue
+  });
 
   return {
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,

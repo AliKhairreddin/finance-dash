@@ -7634,7 +7634,7 @@ function ProvidersView({
                       <button type="button" className="company-rule-row" onClick={() => onEditRevenuePartner(partner)}>
                         <span>
                           <strong>{partner.name}</strong>
-                          <small>{partner.source === "quinstreet" ? `QuinStreet QMP · ${partner.publisherName}` : "TUNE"} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
+                          <small>{partner.source === "quinstreet" ? `QuinStreet QMP · ${partner.categoryValue}` : "TUNE"} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
                         </span>
                         <span className={`status-pill ${partner.autoDraft ? "good" : ""}`}>{partner.autoDraft ? "Auto-draft" : "Manual draft"}</span>
                       </button>
@@ -8655,10 +8655,12 @@ function RevenuePartnerModal({
   const [affiliateId, setAffiliateId] = useState(tunePartner?.affiliateId ?? "");
   const [externalId, setExternalId] = useState(tunePartner?.externalId ?? "");
   const [publisherName, setPublisherName] = useState(quinStreetPartner?.publisherName ?? "");
-  const [reportKeyEnv, setReportKeyEnv] = useState(quinStreetPartner?.reportKeyEnv ?? "");
+  const [reportKeyEnv, setReportKeyEnv] = useState(quinStreetPartner?.reportKeyEnv ?? "QUINSTREET_QMP_REPORT_KEY");
   const [clientIdEnv, setClientIdEnv] = useState(quinStreetPartner?.clientIdEnv ?? "QUINSTREET_QMP_CLIENT_ID");
   const [clientSecretEnv, setClientSecretEnv] = useState(quinStreetPartner?.clientSecretEnv ?? "QUINSTREET_QMP_CLIENT_SECRET");
-  const [revenueField, setRevenueField] = useState(quinStreetPartner?.revenueField ?? "total_commission");
+  const [revenueField, setRevenueField] = useState(quinStreetPartner?.revenueField ?? "total_earn");
+  const [categoryField, setCategoryField] = useState(quinStreetPartner?.categoryField ?? "category");
+  const [categoryValue, setCategoryValue] = useState(quinStreetPartner?.categoryValue ?? "");
   const [currency, setCurrency] = useState(partner?.currency ?? initialProvider?.defaultCurrency ?? "USD");
   const [timezone, setTimezone] = useState(partner?.timezone ?? "UTC");
   const [networkTimezone, setNetworkTimezone] = useState(tunePartner?.networkTimezone ?? "UTC");
@@ -8716,7 +8718,9 @@ function RevenuePartnerModal({
             reportKeyEnv,
             clientIdEnv,
             clientSecretEnv,
-            revenueField
+            revenueField,
+            categoryField,
+            categoryValue
           };
       await onSubmit(payload);
     } catch (err) {
@@ -8771,7 +8775,7 @@ function RevenuePartnerModal({
             >
               <NativeSelectOption value="">Choose a client</NativeSelectOption>
               {providers
-                .filter((provider) => provider.type === "client" && provider.meritCustomerId)
+                .filter((provider) => provider.type === "client")
                 .map((provider) => (
                   <NativeSelectOption key={provider.id} value={provider.id}>
                     {provider.name}
@@ -8863,13 +8867,23 @@ function RevenuePartnerModal({
               </label>
               <label>
                 Revenue column
-                <Input value={revenueField} onChange={(event) => setRevenueField(event.target.value)} placeholder="total_commission" />
+                <Input value={revenueField} onChange={(event) => setRevenueField(event.target.value)} placeholder="total_earn" />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Category column
+                <Input value={categoryField} onChange={(event) => setCategoryField(event.target.value)} placeholder="category" />
+              </label>
+              <label>
+                Category value
+                <Input value={categoryValue} onChange={(event) => setCategoryValue(event.target.value)} placeholder="Auto Insurance" />
               </label>
             </div>
             <div className="form-grid">
               <label>
                 Saved report key env
-                <Input value={reportKeyEnv} onChange={(event) => setReportKeyEnv(event.target.value)} placeholder="QUINSTREET_QMP_AUTO_REPORT_KEY" />
+                <Input value={reportKeyEnv} onChange={(event) => setReportKeyEnv(event.target.value)} placeholder="QUINSTREET_QMP_REPORT_KEY" />
               </label>
               <label>
                 Client ID env
@@ -8960,7 +8974,7 @@ function RevenuePartnerModal({
               !currency.trim() ||
               !timezone ||
               (source === "tune" && (!networkTimezone || !networkIdEnv.trim() || !apiKeyEnv.trim())) ||
-              (source === "quinstreet" && (!publisherName.trim() || !reportKeyEnv.trim() || !clientIdEnv.trim() || !clientSecretEnv.trim() || !revenueField.trim())) ||
+              (source === "quinstreet" && (!publisherName.trim() || !reportKeyEnv.trim() || !clientIdEnv.trim() || !clientSecretEnv.trim() || !revenueField.trim() || !categoryField.trim() || !categoryValue.trim())) ||
               !Number.isFinite(Number(invoiceDueDays))
             }
           >

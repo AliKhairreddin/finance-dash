@@ -645,6 +645,8 @@ app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
           || !payload.clientIdEnv?.trim()
           || !payload.clientSecretEnv?.trim()
           || !payload.revenueField?.trim()
+          || !payload.categoryField?.trim()
+          || !payload.categoryValue?.trim()
         : true;
     if (
       !payload.name?.trim()

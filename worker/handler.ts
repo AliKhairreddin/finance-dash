@@ -2130,7 +2130,10 @@ async function fetchQuinStreetRevenue(
       }
     }
   );
-  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField);
+  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField, {
+    categoryField: partner.categoryField,
+    categoryValue: partner.categoryValue
+  });
 
   return {
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
@@ -4556,11 +4559,13 @@ function revenuePartnerFields(
     payload.source !== "quinstreet" ||
     !payload.publisherName?.trim() ||
     !payload.revenueField?.trim() ||
+    !payload.categoryField?.trim() ||
+    !payload.categoryValue?.trim() ||
     !isEnvironmentVariableName(payload.reportKeyEnv) ||
     !isEnvironmentVariableName(payload.clientIdEnv) ||
     !isEnvironmentVariableName(payload.clientSecretEnv)
   ) {
-    throw new ApiError(400, "QuinStreet revenue rules require a publisher, revenue column, and valid QMP credential and report-key environment names");
+    throw new ApiError(400, "QuinStreet revenue rules require a publisher, revenue/category columns, category value, and valid QMP credential and report-key environment names");
   }
   return {
     ...common,
@@ -4569,15 +4574,18 @@ function revenuePartnerFields(
     reportKeyEnv: payload.reportKeyEnv.trim(),
     clientIdEnv: payload.clientIdEnv.trim(),
     clientSecretEnv: payload.clientSecretEnv.trim(),
-    revenueField: payload.revenueField.trim()
+    revenueField: payload.revenueField.trim(),
+    categoryField: payload.categoryField.trim(),
+    categoryValue: payload.categoryValue.trim()
   };
 }
 
 async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
   const state = await loadPersisted(env);
   const selectedProvider = state.providers.find((provider) => provider.id === payload.providerId);
-  if (!selectedProvider || selectedProvider.type !== "client" || !selectedProvider.meritCustomerId) {
-    throw new Error("Revenue rules require a customer imported from Merit");
+  if (!selectedProvider || selectedProvider.type !== "client") throw new Error("Revenue rules require a client company");
+  if (payload.autoDraft && !selectedProvider.meritCustomerId) {
+    throw new Error("Automatic revenue drafts require a customer imported from Merit");
   }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue partner owner not found");
@@ -4610,8 +4618,9 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
 async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPayload): Promise<RevenuePartner> {
   const state = await loadPersisted(env);
   const provider = state.providers.find((item) => item.id === payload.providerId);
-  if (!provider || provider.type !== "client" || !provider.meritCustomerId) {
-    throw new ApiError(400, "Revenue rules require a customer imported from Merit");
+  if (!provider || provider.type !== "client") throw new ApiError(400, "Revenue rules require a client company");
+  if (payload.autoDraft && !provider.meritCustomerId) {
+    throw new ApiError(400, "Automatic revenue drafts require a customer imported from Merit");
   }
   if (payload.teamId && !state.teams.some((team) => team.id === payload.teamId)) {
     throw new ApiError(400, "Revenue rule owner not found");

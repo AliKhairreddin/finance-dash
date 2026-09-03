@@ -258,6 +258,8 @@ export interface QuinStreetRevenuePartner extends RevenuePartnerBase {
   clientIdEnv: string;
   clientSecretEnv: string;
   revenueField: string;
+  categoryField: string;
+  categoryValue: string;
 }
 
 export type RevenuePartner = TuneRevenuePartner | QuinStreetRevenuePartner;
@@ -1167,6 +1169,8 @@ export type UpdateRevenuePartnerPayload = RevenuePartnerPayloadBase & (
       clientIdEnv: string;
       clientSecretEnv: string;
       revenueField: string;
+      categoryField: string;
+      categoryValue: string;
     }
 );
 

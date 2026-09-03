@@ -21,7 +21,9 @@ const quinStreetPartner: Extract<RevenuePartner, { source: "quinstreet" }> = {
   reportKeyEnv: "TEST_QMP_REPORT_KEY",
   clientIdEnv: "TEST_QMP_CLIENT_ID",
   clientSecretEnv: "TEST_QMP_CLIENT_SECRET",
-  revenueField: "total_commission",
+  revenueField: "total_earn",
+  categoryField: "category",
+  categoryValue: "Auto Insurance",
   currency: "USD",
   timezone: "America/Toronto",
   invoiceDueDays: 30,
@@ -96,10 +98,17 @@ test("QuinStreet QMP exchanges client credentials and totals the saved report", 
       });
       return url.pathname.endsWith("/oauth/generatetoken")
         ? Response.json({ access_token: "qmp-token" })
-        : Response.json([
-            { date: "2026-08-01", total_commission: "100.25" },
-            { date: "2026-08-02", total_commission: 49.75 }
-          ]);
+        : Response.json({
+            data: {
+              columns: ["date", "category", "total_earn"],
+              numberOfRecords: "3",
+              records: [
+                { "0": "2026-08-01", "1": "Auto Insurance", "2": "100.25" },
+                { "0": "2026-08-01", "1": "Home Insurance", "2": 20 },
+                { "0": "2026-08-02", "1": "Auto Insurance", "2": 49.75 }
+              ]
+            }
+          });
     };
 
     const run = await fetchQuinStreetRevenue(quinStreetPartner, {

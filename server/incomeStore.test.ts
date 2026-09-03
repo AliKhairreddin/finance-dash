@@ -167,6 +167,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
       JSON.stringify({
         providers: [
           { id: "client-1", name: "Acme", type: "client", meritCustomerId: "merit-client-1", tags: [], aliases: [], source: "merit", createdAt },
+          { id: "client-manual", name: "Pull-only client", type: "client", tags: [], aliases: [], source: "manual", createdAt },
           { id: "supplier-1", name: "Supplier", type: "supplier", tags: [], aliases: [], source: "manual", createdAt }
         ],
         invoices: [{
@@ -247,13 +248,38 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
     const secondRule = await store.createRevenuePartner({ ...rulePayload, name: "Acme monthly", billingCadence: "monthly" });
     assert.notEqual(firstRule.id, secondRule.id);
     assert.equal(store.getSnapshot().revenuePartners.filter((rule) => rule.providerId === "client-1").length, 2);
+    const pullOnlyRule = await store.createRevenuePartner({
+      name: "Pull-only QMP",
+      providerId: "client-manual",
+      revenueCategory: "Partner network revenue",
+      source: "quinstreet",
+      publisherName: "Publisher",
+      reportKeyEnv: "QMP_REPORT_KEY",
+      clientIdEnv: "QMP_CLIENT_ID",
+      clientSecretEnv: "QMP_CLIENT_SECRET",
+      revenueField: "total_earn",
+      categoryField: "category",
+      categoryValue: "Auto Insurance",
+      currency: "USD",
+      timezone: "UTC",
+      invoiceDueDays: 30,
+      billingCadence: "monthly",
+      billingTimezone: "UTC",
+      autoDraft: false,
+      enabled: true
+    });
+    assert.equal(pullOnlyRule.providerId, "client-manual");
+    await assert.rejects(
+      store.createRevenuePartner({ ...rulePayload, name: "Manual auto-draft", providerId: "client-manual" }),
+      /Automatic revenue drafts require a customer imported from Merit/
+    );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, providerId: "supplier-1" }),
-      /imported from Merit/
+      /client company/
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, providerId: "missing-client" }),
-      /imported from Merit/
+      /client company/
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, networkIdEnv: "not-valid" }),

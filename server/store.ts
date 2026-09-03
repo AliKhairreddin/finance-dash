@@ -1159,8 +1159,9 @@ function revenuePartnerFields(
     throw new Error("Owner-specific TUNE revenue rules require an affiliate ID");
   }
   const company = providers.find((provider) => provider.id === payload.providerId);
-  if (!company || company.type !== "client" || !company.meritCustomerId) {
-    throw new Error("Revenue rules require a customer imported from Merit");
+  if (!company || company.type !== "client") throw new Error("Revenue rules require a client company");
+  if (payload.autoDraft && !company.meritCustomerId) {
+    throw new Error("Automatic revenue drafts require a customer imported from Merit");
   }
   if (payload.teamId && !teams.some((team) => team.id === payload.teamId)) {
     throw new Error("Revenue rule owner not found");
@@ -1213,8 +1214,11 @@ function revenuePartnerFields(
 
   const publisherName = payload.publisherName?.trim();
   const revenueField = payload.revenueField?.trim();
+  const categoryField = payload.categoryField?.trim();
+  const categoryValue = payload.categoryValue?.trim();
   if (!publisherName) throw new Error("QuinStreet publisher name is required");
   if (!revenueField) throw new Error("QuinStreet revenue column is required");
+  if (!categoryField || !categoryValue) throw new Error("QuinStreet category column and value are required");
   return {
     ...common,
     source: "quinstreet",
@@ -1222,7 +1226,9 @@ function revenuePartnerFields(
     reportKeyEnv: normalizedEnvironmentName(payload.reportKeyEnv, "QMP report key environment name", true)!,
     clientIdEnv: normalizedEnvironmentName(payload.clientIdEnv, "QMP client ID environment name", true)!,
     clientSecretEnv: normalizedEnvironmentName(payload.clientSecretEnv, "QMP client secret environment name", true)!,
-    revenueField
+    revenueField,
+    categoryField,
+    categoryValue
   };
 }
 

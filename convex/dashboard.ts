@@ -395,7 +395,9 @@ const revenuePartner = v.union(
     reportKeyEnv: v.string(),
     clientIdEnv: v.string(),
     clientSecretEnv: v.string(),
-    revenueField: v.string()
+    revenueField: v.string(),
+    categoryField: v.string(),
+    categoryValue: v.string()
   })
 );
 const revenueAccrual = v.object({
