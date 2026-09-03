@@ -182,7 +182,7 @@ export function buildRevenueDraft(
     invoiceNumber,
     issueDate,
     dueDate: addDays(issueDate, Math.max(0, provider.paymentTermsDays ?? partner.invoiceDueDays)),
-    source: "tune",
+    source: run.source,
     description: `${run.revenueCategory || "Revenue"} from ${run.partnerName} for ${run.periodStart} to ${run.periodEnd}`,
     billingRuleId: partner.id,
     revenueRunIds: [run.id],

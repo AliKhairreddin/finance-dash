@@ -230,6 +230,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
       name: "Acme weekly",
       providerId: "client-1",
       revenueCategory: "Partner network revenue",
+      source: "tune" as const,
       affiliateId: "42",
       currency: "USD",
       timezone: "Asia/Beirut",
@@ -260,7 +261,7 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
     );
     await assert.rejects(
       store.createRevenuePartner({ ...rulePayload, teamId: "team-1", affiliateId: "   " }),
-      /Owner-specific revenue rules require an affiliate ID/
+      /Owner-specific TUNE revenue rules require an affiliate ID/
     );
 
     await store.recordInvoicePayment("invoice-open-1", {

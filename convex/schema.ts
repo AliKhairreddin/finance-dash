@@ -8,7 +8,8 @@ const dataSource = v.union(
   v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
-  v.literal("tune")
+  v.literal("tune"),
+  v.literal("quinstreet")
 );
 
 const bankSource = v.union(
@@ -353,7 +354,7 @@ const revenueRun = v.object({
   revenueCategory: v.optional(v.string()),
   teamId: v.optional(v.string()),
   teamName: v.optional(v.string()),
-  source: v.literal("tune"),
+  source: v.union(v.literal("tune"), v.literal("quinstreet")),
   periodStart: v.string(),
   periodEnd: v.string(),
   timezone: v.string(),
@@ -375,20 +376,14 @@ const revenueRun = v.object({
   createdAt: v.string()
 });
 
-const revenuePartner = v.object({
+const revenuePartnerCommon = {
   id: v.string(),
   providerId: v.string(),
   teamId: v.optional(v.string()),
   name: v.string(),
   revenueCategory: v.optional(v.string()),
-  source: v.literal("tune"),
-  affiliateId: v.string(),
-  externalId: v.optional(v.string()),
   currency: v.string(),
   timezone: v.string(),
-  networkTimezone: v.string(),
-  networkIdEnv: v.string(),
-  apiKeyEnv: v.string(),
   apiBaseUrlEnv: v.optional(v.string()),
   meritCustomerName: v.optional(v.string()),
   invoiceDueDays: v.number(),
@@ -399,7 +394,28 @@ const revenuePartner = v.object({
   defaultMeritItemCode: v.optional(v.string()),
   enabled: v.boolean(),
   createdAt: v.string()
-});
+};
+
+const revenuePartner = v.union(
+  v.object({
+    ...revenuePartnerCommon,
+    source: v.literal("tune"),
+    affiliateId: v.string(),
+    externalId: v.optional(v.string()),
+    networkTimezone: v.string(),
+    networkIdEnv: v.string(),
+    apiKeyEnv: v.string()
+  }),
+  v.object({
+    ...revenuePartnerCommon,
+    source: v.literal("quinstreet"),
+    publisherName: v.string(),
+    reportKeyEnv: v.string(),
+    clientIdEnv: v.string(),
+    clientSecretEnv: v.string(),
+    revenueField: v.string()
+  })
+);
 
 const revenueAccrual = v.object({
   id: v.string(),

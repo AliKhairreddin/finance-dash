@@ -36,7 +36,8 @@ import type {
   UpdateHoldingPayload,
   UpdateInvoicePayload,
   UpdateTransactionCategoryDefinitionPayload,
-  UpdateTransactionCategoryPayload
+  UpdateTransactionCategoryPayload,
+  UpdateRevenuePartnerPayload
 } from "../shared/types";
 import type {
   AssignMediaFundingTargetsPayload,
@@ -635,15 +636,23 @@ app.post("/api/revenue-partners", async (request, response, next) => {
 
 app.put("/api/revenue-partners/:partnerId", async (request, response, next) => {
   try {
-    const payload = request.body;
+    const payload = request.body as UpdateRevenuePartnerPayload;
+    const sourceFieldsMissing = payload.source === "tune"
+      ? !payload.networkIdEnv?.trim() || !payload.apiKeyEnv?.trim() || !payload.networkTimezone?.trim()
+      : payload.source === "quinstreet"
+        ? !payload.publisherName?.trim()
+          || !payload.reportKeyEnv?.trim()
+          || !payload.clientIdEnv?.trim()
+          || !payload.clientSecretEnv?.trim()
+          || !payload.revenueField?.trim()
+        : true;
     if (
-      !payload.name?.trim() ||
-      !payload.providerId?.trim() ||
-      !payload.revenueCategory?.trim() ||
-      !payload.networkIdEnv?.trim() ||
-      !payload.apiKeyEnv?.trim()
+      !payload.name?.trim()
+      || !payload.providerId?.trim()
+      || !payload.revenueCategory?.trim()
+      || sourceFieldsMissing
     ) {
-      response.status(400).json({ message: "name, providerId, revenueCategory, networkIdEnv, and apiKeyEnv are required" });
+      response.status(400).json({ message: "Revenue rule source and configuration fields are required" });
       return;
     }
     response.json(await updateRevenuePartner(request.params.partnerId, payload));

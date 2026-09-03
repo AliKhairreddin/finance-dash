@@ -28,7 +28,7 @@ The system follows three rules:
 - Capture Estonia/EU-oriented supplier identity, registry and VAT numbers, economic content, business purpose, supply and due dates, native currency, and VAT treatment, including 24%, 13%, 9%, zero-rated, exempt, and reverse-charge cases.
 - Keep local paid/review state independent from Merit accounting status.
 - Store clients, suppliers, platforms, tags, invoice-ready details, and provider aliases.
-- Preview partner-level or team-attributed revenue through TUNE/HasOffers-compatible integrations without persisting manual searches.
+- Preview partner-level or team-attributed revenue through TUNE/HasOffers and QuinStreet QMP saved reports without persisting manual searches.
 - Run income automation every Monday at 09:00 in `Asia/Beirut`, with DST-aware scheduling, idempotent local drafts, and hourly catch-up retries after the weekly release time.
 - Track weekly and monthly current-period revenue as accruing future invoices without double-counting after drafts are created.
 - Create a Merit invoice only through a separately confirmed action, with distinct “Save in Merit” and “Save & deliver” choices.
@@ -48,7 +48,7 @@ flowchart LR
     API <--> C["Convex durable state"]
     API --> W["Wise CSV and API adapters"]
     API --> R["Revolut / Slash / Amex adapters"]
-    API --> T["TUNE partner revenue"]
+    API --> T["TUNE / QuinStreet partner revenue"]
     API --> M["Merit invoice adapter"]
     API --> D["Protected expense source documents"]
     CRON["Cloudflare scheduled event"] --> API
@@ -127,7 +127,11 @@ npm run auth:configure:transaction-reviewer
 
 The reviewer signs in with the configured username and the one-time code delivered directly to their Telegram chat. Reviewers receive only the transaction-review bootstrap data and may read bank transactions or override a transaction's category, company, and owner. Every other API route is denied at the Worker boundary. Ask the reviewer to message the Finance Dash bot first; the bot replies with the Telegram chat ID needed by the setup command. Never ask the reviewer to share a sign-in code.
 
-The five-minute bank sync also monitors the aggregate live USD balance of every Slash cash subaccount. A protected Telegram alert is sent to the authorized user named by `SLASH_CASH_ALERT_RECIPIENT` when that total first falls below `SLASH_CASH_ALERT_THRESHOLD_USD`, and one recovery message is sent when it returns to or above the threshold. The default deployment threshold is USD 10,000 and the recipient is Ali M. Credit balances are excluded, failed messages retry on a later healthy Slash sync, and repeated checks in the same balance band do not produce duplicate alerts.
+The five-minute bank sync also checks Slash's live virtual-account balances. Each open account named by `SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES` is monitored independently. A protected Telegram alert is sent to every authorized user named by `SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS` when an account first falls below `SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD`, and one recovery message is sent when that account returns to or above the threshold. The default deployment monitors Primary Account, Wagner, and Reservation Account at USD 10,000 for Ali and Ali M. Failed messages retry after a later healthy Slash sync, and repeated checks in the same balance band do not produce duplicate alerts.
+
+The bot installs private, chat-scoped Finance Dash command menus. `TELEGRAM_COMMAND_ADMIN_USERS` receives the complete data and confirmed-action catalog; `TELEGRAM_COMMAND_READ_ONLY_USERS` receives every reporting, document, export, and view command but no mutations. The default full-access users are Ali and Ali M. The CEO read-only aliases are Amin, Sanjin/Sani, and Ben/Beno. Meet remains a transaction-reviewer login and receives no Finance Dash command menu. Every command user must also be mapped to their immutable private Telegram chat ID in `TELEGRAM_AUTH_USERS_JSON`; an unmapped user can message the bot to receive the chat ID an administrator needs to add.
+
+Use `/menu` in Telegram for the role-specific catalog and `/help <command>` for syntax. Responses are protected from forwarding. `/invoice_pdf`, `/expense_document`, and `/export_transactions` deliver the file directly; `/screenshot <page>` uses an authenticated Cloudflare Browser Run capture; and `/open <page>` returns the live authenticated URL. Administrators can manage persistent Slash alert rules and a daily UTC digest with `/alert_add`, `/alert_remove`, `/alert_pause`, `/alert_resume`, `/alert_test`, and `/digest`. All mutation commands require the exact `CONFIRM` marker.
 
 ### Regression Coverage
 
@@ -141,7 +145,7 @@ The current test suite covers currency math, empty-state behavior, service-token
 | Local API | Express 5, TypeScript |
 | Cloud API | Cloudflare Workers |
 | State | Convex |
-| Integrations | Wise, Revolut, Slash, Amex, TUNE/HasOffers, Merit |
+| Integrations | Wise, Revolut, Slash, Amex, TUNE/HasOffers, QuinStreet QMP, Merit |
 | Quality | Node test runner, TypeScript project references |
 
 ## Repository Layout
@@ -176,7 +180,7 @@ Use [`.env.example`](.env.example) as the configuration reference. Integration g
 - Slash API credentials;
 - Amex OAuth, account IDs, and approved API paths;
 - Merit invoice creation and email-delivery settings;
-- TUNE network and revenue-stream credentials;
+- TUNE network credentials and QuinStreet QMP client/report credentials (see [`docs/quinstreet-revenue.md`](docs/quinstreet-revenue.md));
 - Coinbase exchange-rate endpoint for approximate USD conversion;
 - server-only OpenRouter configuration.
 

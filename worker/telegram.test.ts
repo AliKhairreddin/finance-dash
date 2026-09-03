@@ -3,16 +3,26 @@ import test from "node:test";
 import {
   buildTelegramOtpMessage,
   buildTelegramSignInAlertMessage,
+  configureTelegramBotCommands,
   parseTelegramAuthUsers,
   pollTelegramUpdates
 } from "./telegram";
+import { financeTelegramCommands, readOnlyFinanceTelegramCommands } from "./telegramCommandCatalog";
 
 const baseEnv = {
   TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
-  TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" })
+  TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
+  TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M",
+  TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin,Sanjin,Sani,Ben,Beno"
 } as never;
 
-function telegramUpdate(updateId: number, chatId: number, firstName: string, username?: string) {
+function telegramUpdate(
+  updateId: number,
+  chatId: number,
+  firstName: string,
+  username?: string,
+  text = "hello"
+) {
   return {
     update_id: updateId,
     message: {
@@ -24,7 +34,7 @@ function telegramUpdate(updateId: number, chatId: number, firstName: string, use
         ...(username ? { username } : {})
       },
       chat: { id: chatId, first_name: firstName, type: "private" },
-      text: "hello"
+      text
     }
   };
 }
@@ -107,6 +117,129 @@ test("a mapped user receives a connection confirmation", async () => {
   assert.deepEqual(result, { nextOffset: 101, processed: 1 });
   assert.deepEqual(replies, [
     "Hi Ali. You are connected to Finance Dash as Ali. You can receive sign-in codes here."
+  ]);
+});
+
+test("administrator and CEO users receive their assigned command roles while Meet is excluded", async () => {
+  const env = {
+    ...(baseEnv as unknown as Record<string, unknown>),
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({
+      Ali: "5518715264",
+      "Ali M": "6064572340",
+      Amin: "777888999",
+      Sani: "777888998",
+      Ben: "777888997"
+    }),
+    TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "777888996" })
+  } as never;
+  const handled: Array<{ username: string; role: string; text: string }> = [];
+  const replies: Array<{ chatId: string; text: string; protectContent: boolean | undefined }> = [];
+  const updates = [
+    telegramUpdate(200, 5518715264, "Ali", undefined, "/overview"),
+    telegramUpdate(201, 6064572340, "Ali M", undefined, "/sync CONFIRM"),
+    telegramUpdate(202, 777888999, "Amin", undefined, "/balances"),
+    telegramUpdate(203, 777888998, "Sani", undefined, "/analytics this-month"),
+    telegramUpdate(204, 777888997, "Ben", undefined, "/invoices"),
+    telegramUpdate(205, 777888996, "Meet", undefined, "/overview")
+  ];
+
+  const result = await pollTelegramUpdates(env, 200, {
+    async getUpdates() { return updates; },
+    async handleCommand(_env, user, role, text) {
+      handled.push({ username: user.username, role, text });
+      return `${user.username}:${role}`;
+    },
+    async sendMessage(_env, chatId, text, protectContent) {
+      replies.push({ chatId, text, protectContent });
+    }
+  });
+
+  assert.deepEqual(result, { nextOffset: 206, processed: 6 });
+  assert.deepEqual(handled, [
+    { username: "Ali", role: "administrator", text: "/overview" },
+    { username: "Ali M", role: "administrator", text: "/sync CONFIRM" },
+    { username: "Amin", role: "read-only", text: "/balances" },
+    { username: "Sani", role: "read-only", text: "/analytics this-month" },
+    { username: "Ben", role: "read-only", text: "/invoices" }
+  ]);
+  assert.deepEqual(replies.slice(0, 5).map(({ text, protectContent }) => ({ text, protectContent })), [
+    { text: "Ali:administrator", protectContent: true },
+    { text: "Ali M:administrator", protectContent: true },
+    { text: "Amin:read-only", protectContent: true },
+    { text: "Sani:read-only", protectContent: true },
+    { text: "Ben:read-only", protectContent: true }
+  ]);
+  assert.deepEqual(replies[5], {
+    chatId: "777888996",
+    text: "Hi Meet. You are connected to Finance Dash as Meet. You can receive sign-in codes here.",
+    protectContent: false
+  });
+});
+
+test("command documents are delivered to the authorized chat with forwarding protection", async () => {
+  const documents: Array<{ chatId: string; fileName: string; protectContent: boolean | undefined }> = [];
+  let sentMessage = false;
+  const result = await pollTelegramUpdates(baseEnv, 300, {
+    async getUpdates() {
+      return [telegramUpdate(300, 5518715264, "Ali", undefined, "/invoice_pdf 2026-001")];
+    },
+    async handleCommand() {
+      return {
+        document: {
+          bytes: new Uint8Array([37, 80, 68, 70]).buffer,
+          contentType: "application/pdf",
+          fileName: "invoice-2026-001.pdf",
+          caption: "Invoice 2026-001"
+        }
+      };
+    },
+    async sendMessage() { sentMessage = true; },
+    async sendDocument(_env, chatId, document, protectContent) {
+      documents.push({ chatId, fileName: document.fileName, protectContent });
+    }
+  });
+
+  assert.deepEqual(result, { nextOffset: 301, processed: 1 });
+  assert.equal(sentMessage, false);
+  assert.deepEqual(documents, [{
+    chatId: "5518715264",
+    fileName: "invoice-2026-001.pdf",
+    protectContent: true
+  }]);
+});
+
+test("Telegram installs full and CEO menus per chat and removes Meet's menu", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ method: string; payload: Record<string, any> }> = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({
+      method: String(input).split("/").pop() ?? "",
+      payload: JSON.parse(String(init?.body)) as Record<string, any>
+    });
+    return new Response(JSON.stringify({ ok: true, result: true }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }) as typeof fetch;
+  try {
+    await configureTelegramBotCommands({
+      TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
+      TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264", Amin: "777888999" }),
+      TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "777888996" }),
+      TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M",
+      TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin,Sanjin,Sani,Ben,Beno"
+    } as never);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requests.map(({ method, payload }) => ({
+    method,
+    chatId: payload.scope.chat_id,
+    commandCount: Array.isArray(payload.commands) ? payload.commands.length : 0
+  })), [
+    { method: "setMyCommands", chatId: "5518715264", commandCount: financeTelegramCommands.length },
+    { method: "setMyCommands", chatId: "777888999", commandCount: readOnlyFinanceTelegramCommands.length },
+    { method: "deleteMyCommands", chatId: "777888996", commandCount: 0 }
   ]);
 });
 

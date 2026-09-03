@@ -93,6 +93,11 @@ export interface SlashActivityResult {
   transactions: Transaction[];
 }
 
+export interface SlashVirtualAccountBalance extends SlashVirtualAccount {
+  balance: number;
+  currency: "USD";
+}
+
 export interface SlashTransactionDateRange {
   fromDate: string;
   toDate: string;
@@ -135,6 +140,13 @@ interface SlashTransactionOptions {
   apiKey: string;
   legalEntityId: string;
   transactionId: string;
+  fetcher?: typeof fetch;
+}
+
+interface SlashVirtualAccountOptions {
+  baseUrl: string;
+  apiKey: string;
+  legalEntityId: string;
   fetcher?: typeof fetch;
 }
 
@@ -314,22 +326,30 @@ function parseSlashAccount(value: unknown): SlashAccount {
   };
 }
 
-function parseSlashVirtualAccount(value: unknown): SlashVirtualAccount {
+function parseSlashVirtualAccount(value: unknown): SlashVirtualAccountBalance {
   const entry = requiredRecord(value, "virtual account entry");
   const payload = requiredRecord(entry.virtualAccount, "virtual account");
   const accountType = requiredString(payload.accountType, "virtual account.accountType", 16);
   if (accountType !== "primary" && accountType !== "default") {
     throw new Error("Slash API response has unsupported virtual account.accountType");
   }
+  const balance = parseSlashMoney(entry.balance, "virtual account balance");
   return {
     id: requiredString(payload.id, "virtual account.id", maximumSlashProviderIdLength),
     name: requiredString(payload.name, "virtual account.name", 512),
     accountId: requiredString(payload.accountId, "virtual account.accountId", maximumSlashProviderIdLength),
     accountType,
+    balance: balance.amountCents / 100,
+    currency: "USD",
     ...(payload.closedAt === undefined || payload.closedAt === null
       ? {}
       : { closedAt: requiredIsoTimestamp(payload.closedAt, "virtual account.closedAt") })
   };
+}
+
+function slashVirtualAccountMetadata(account: SlashVirtualAccountBalance): SlashVirtualAccount {
+  const { balance: _balance, currency: _currency, ...metadata } = account;
+  return metadata;
 }
 
 function parseSlashCard(value: unknown): SlashCard {
@@ -519,6 +539,34 @@ async function fetchAllSlashPages<T>(
   throw new Error(`Slash API pagination exceeded ${maximumPages} pages`);
 }
 
+async function fetchSlashVirtualAccountBalances(
+  fetcher: typeof fetch,
+  baseUrl: string,
+  headers: HeadersInit
+): Promise<SlashVirtualAccountBalance[]> {
+  const accounts = await fetchAllSlashPages(
+    fetcher,
+    new URL("/virtual-account", baseUrl),
+    headers,
+    parseSlashVirtualAccount,
+    maximumSlashVirtualAccounts,
+    maximumSlashVirtualAccountPages
+  );
+  if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
+    throw new Error("Slash API response contains duplicate virtual account IDs");
+  }
+  return accounts;
+}
+
+export async function fetchSlashVirtualAccountBalancesForLegalEntity({
+  baseUrl,
+  apiKey,
+  legalEntityId,
+  fetcher = fetch
+}: SlashVirtualAccountOptions): Promise<SlashVirtualAccountBalance[]> {
+  return fetchSlashVirtualAccountBalances(fetcher, baseUrl, slashHeaders(apiKey, legalEntityId));
+}
+
 function createSlashCardResolver(
   fetcher: typeof fetch,
   baseUrl: string,
@@ -704,7 +752,7 @@ async function fetchSlashAccountSnapshot(
   accountIdentityByKey: Map<string, SlashAccountIdentity>;
   virtualAccountDirectory: Map<string, SlashVirtualAccount>;
 }> {
-  const [slashAccounts, slashVirtualAccounts] = await Promise.all([
+  const [slashAccounts, slashVirtualAccountBalances] = await Promise.all([
     fetchAllSlashPages(
       fetcher,
       new URL("/account", baseUrl),
@@ -713,18 +761,9 @@ async function fetchSlashAccountSnapshot(
       maximumSlashAccounts,
       maximumSlashAccountPages
     ),
-    fetchAllSlashPages(
-      fetcher,
-      new URL("/virtual-account", baseUrl),
-      headers,
-      parseSlashVirtualAccount,
-      maximumSlashVirtualAccounts,
-      maximumSlashVirtualAccountPages
-    )
+    fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers)
   ]);
-  if (new Set(slashVirtualAccounts.map((account) => account.id)).size !== slashVirtualAccounts.length) {
-    throw new Error("Slash API response contains duplicate virtual account IDs");
-  }
+  const slashVirtualAccounts = slashVirtualAccountBalances.map(slashVirtualAccountMetadata);
   const slashAccountIds = new Set(slashAccounts.map((account) => account.id));
   const unknownVirtualAccount = slashVirtualAccounts.find((account) => !slashAccountIds.has(account.accountId));
   if (unknownVirtualAccount) {
@@ -925,7 +964,7 @@ export async function fetchSlashTransactionForLegalEntity({
   const cardDirectory = transaction.cardId
     ? await createSlashCardResolver(fetcher, baseUrl, headers)([transaction.cardId])
     : undefined;
-  const virtualAccount = transaction.virtualAccountId
+  const virtualAccountBalance = transaction.virtualAccountId
     ? await fetchSlashResource(
         fetcher,
         new URL(`/virtual-account/${encodeURIComponent(transaction.virtualAccountId)}`, baseUrl),
@@ -933,6 +972,9 @@ export async function fetchSlashTransactionForLegalEntity({
         "virtual account",
         parseSlashVirtualAccount
       )
+    : undefined;
+  const virtualAccount = virtualAccountBalance
+    ? slashVirtualAccountMetadata(virtualAccountBalance)
     : undefined;
   return normalizeSlashTransaction(transaction, {
     accountId: transaction.accountId,

@@ -7634,7 +7634,7 @@ function ProvidersView({
                       <button type="button" className="company-rule-row" onClick={() => onEditRevenuePartner(partner)}>
                         <span>
                           <strong>{partner.name}</strong>
-                          <small>{partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
+                          <small>{partner.source === "quinstreet" ? `QuinStreet QMP · ${partner.publisherName}` : "TUNE"} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {partner.billingCadence} · {partner.billingTimezone}</small>
                         </span>
                         <span className={`status-pill ${partner.autoDraft ? "good" : ""}`}>{partner.autoDraft ? "Auto-draft" : "Manual draft"}</span>
                       </button>
@@ -7709,7 +7709,7 @@ function DeleteCompanyDialog({
         <p className="confirmation-copy">
           {target.kind === "provider"
             ? "This removes the company and its revenue rules, stopping future pulls. References are cleared from matched transactions, invoices, and revenue history, but the financial records stay in place."
-            : "This removes the TUNE revenue client and stops future syncs. Existing revenue runs and invoice history stay in place."}
+            : "This removes the revenue rule and stops future syncs. Existing revenue runs and invoice history stay in place."}
         </p>
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions">
@@ -8046,7 +8046,7 @@ function SettingsView({
         <div className="docs-note">
           <strong>Integration shape</strong>
           <span>
-            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE without writing to Merit. Only the
+            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE or QuinStreet QMP without writing to Merit. Only the
             separately confirmed “Send to Merit” action creates an invoice. That action is currently{" "}
             {meritIntegration?.writeEnabled
               ? "enabled and requires both a Merit tax selection and explicit confirmation"
@@ -8645,17 +8645,25 @@ function RevenuePartnerModal({
   onSubmit: (payload: UpdateRevenuePartnerPayload) => Promise<void>;
 }) {
   const initialProvider = providers.find((provider) => provider.id === (partner?.providerId ?? initialProviderId));
+  const tunePartner = partner?.source === "tune" ? partner : undefined;
+  const quinStreetPartner = partner?.source === "quinstreet" ? partner : undefined;
   const [name, setName] = useState(partner?.name ?? initialProvider?.name ?? "");
+  const [source, setSource] = useState<RevenuePartner["source"]>(partner?.source ?? "tune");
   const [providerId, setProviderId] = useState(partner?.providerId ?? initialProviderId ?? "");
   const [teamId, setTeamId] = useState(partner?.teamId ?? "");
   const [revenueCategory, setRevenueCategory] = useState(partner?.revenueCategory ?? "Partner network revenue");
-  const [affiliateId, setAffiliateId] = useState(partner?.affiliateId ?? "");
-  const [externalId, setExternalId] = useState(partner?.externalId ?? "");
+  const [affiliateId, setAffiliateId] = useState(tunePartner?.affiliateId ?? "");
+  const [externalId, setExternalId] = useState(tunePartner?.externalId ?? "");
+  const [publisherName, setPublisherName] = useState(quinStreetPartner?.publisherName ?? "");
+  const [reportKeyEnv, setReportKeyEnv] = useState(quinStreetPartner?.reportKeyEnv ?? "");
+  const [clientIdEnv, setClientIdEnv] = useState(quinStreetPartner?.clientIdEnv ?? "QUINSTREET_QMP_CLIENT_ID");
+  const [clientSecretEnv, setClientSecretEnv] = useState(quinStreetPartner?.clientSecretEnv ?? "QUINSTREET_QMP_CLIENT_SECRET");
+  const [revenueField, setRevenueField] = useState(quinStreetPartner?.revenueField ?? "total_commission");
   const [currency, setCurrency] = useState(partner?.currency ?? initialProvider?.defaultCurrency ?? "USD");
   const [timezone, setTimezone] = useState(partner?.timezone ?? "UTC");
-  const [networkTimezone, setNetworkTimezone] = useState(partner?.networkTimezone ?? "UTC");
-  const [networkIdEnv, setNetworkIdEnv] = useState(partner?.networkIdEnv ?? "");
-  const [apiKeyEnv, setApiKeyEnv] = useState(partner?.apiKeyEnv ?? "");
+  const [networkTimezone, setNetworkTimezone] = useState(tunePartner?.networkTimezone ?? "UTC");
+  const [networkIdEnv, setNetworkIdEnv] = useState(tunePartner?.networkIdEnv ?? "");
+  const [apiKeyEnv, setApiKeyEnv] = useState(tunePartner?.apiKeyEnv ?? "");
   const [apiBaseUrlEnv, setApiBaseUrlEnv] = useState(partner?.apiBaseUrlEnv ?? "");
   const [meritCustomerName, setMeritCustomerName] = useState(partner?.meritCustomerName ?? initialProvider?.legalName ?? initialProvider?.name ?? "");
   const [invoiceDueDays, setInvoiceDueDays] = useState(String(partner?.invoiceDueDays ?? initialProvider?.paymentTermsDays ?? 30));
@@ -8673,18 +8681,13 @@ function RevenuePartnerModal({
     setSubmitting(true);
     setError(null);
     try {
-      await onSubmit({
+      const common = {
         name,
         providerId,
         teamId: teamId || undefined,
         revenueCategory,
-        affiliateId,
-        externalId: externalId.trim() || undefined,
         currency,
         timezone,
-        networkTimezone,
-        networkIdEnv,
-        apiKeyEnv,
         apiBaseUrlEnv: apiBaseUrlEnv.trim() || undefined,
         meritCustomerName: providers.find((provider) => provider.id === providerId)?.legalName
           ?? providers.find((provider) => provider.id === providerId)?.name,
@@ -8695,7 +8698,27 @@ function RevenuePartnerModal({
         defaultMeritTaxId: defaultMeritTaxId || undefined,
         defaultMeritItemCode: defaultMeritItemCode.trim() || undefined,
         enabled
-      });
+      };
+      const payload: UpdateRevenuePartnerPayload = source === "tune"
+        ? {
+            ...common,
+            source: "tune",
+            affiliateId,
+            externalId: externalId.trim() || undefined,
+            networkTimezone,
+            networkIdEnv,
+            apiKeyEnv
+          }
+        : {
+            ...common,
+            source: "quinstreet",
+            publisherName,
+            reportKeyEnv,
+            clientIdEnv,
+            clientSecretEnv,
+            revenueField
+          };
+      await onSubmit(payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Revenue partner could not be saved");
     } finally {
@@ -8722,8 +8745,11 @@ function RevenuePartnerModal({
             <Input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            Affiliate ID {teamId ? "" : "(optional)"}
-            <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} placeholder={teamId ? "Required for an owner-specific stream" : "Blank pulls the full company network"} />
+            Source
+            <NativeSelect value={source} onValueChange={(value) => setSource(value as RevenuePartner["source"])}>
+              <NativeSelectOption value="tune">TUNE / HasOffers</NativeSelectOption>
+              <NativeSelectOption value="quinstreet">QuinStreet QMP</NativeSelectOption>
+            </NativeSelect>
           </label>
         </div>
         <div className="form-grid">
@@ -8777,15 +8803,9 @@ function RevenuePartnerModal({
         </label>
         <div className="form-grid">
           <label>
-            External ID
-            <Input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
-          </label>
-          <label>
             Currency
             <Input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} />
           </label>
-        </div>
-        <div className="form-grid">
           <label>
             Timezone
             <NativeSelect value={timezone} onValueChange={setTimezone}>
@@ -8796,31 +8816,78 @@ function RevenuePartnerModal({
               ))}
             </NativeSelect>
           </label>
-          <label>
-            Network timezone
-            <NativeSelect value={networkTimezone} onValueChange={setNetworkTimezone}>
-              {timezoneOptions.map((option) => (
-                <NativeSelectOption key={option.value} value={option.value}>
-                  {option.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
         </div>
-        <div className="form-grid">
-          <label>
-            Network ID env
-            <Input value={networkIdEnv} onChange={(event) => setNetworkIdEnv(event.target.value)} />
-          </label>
-          <label>
-            API key env
-            <Input value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} />
-          </label>
-        </div>
-        <label>
-          API base URL env
-          <Input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
-        </label>
+        {source === "tune" ? (
+          <>
+            <div className="form-grid">
+              <label>
+                Affiliate ID {teamId ? "" : "(optional)"}
+                <Input value={affiliateId} onChange={(event) => setAffiliateId(event.target.value)} placeholder={teamId ? "Required for an owner-specific stream" : "Blank pulls the full company network"} />
+              </label>
+              <label>
+                External ID
+                <Input value={externalId} onChange={(event) => setExternalId(event.target.value)} />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Network timezone
+                <NativeSelect value={networkTimezone} onValueChange={setNetworkTimezone}>
+                  {timezoneOptions.map((option) => (
+                    <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </label>
+              <label>
+                API base URL env
+                <Input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Network ID env
+                <Input value={networkIdEnv} onChange={(event) => setNetworkIdEnv(event.target.value)} />
+              </label>
+              <label>
+                API key env
+                <Input value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} />
+              </label>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="form-grid">
+              <label>
+                Publisher name
+                <Input value={publisherName} onChange={(event) => setPublisherName(event.target.value)} />
+              </label>
+              <label>
+                Revenue column
+                <Input value={revenueField} onChange={(event) => setRevenueField(event.target.value)} placeholder="total_commission" />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Saved report key env
+                <Input value={reportKeyEnv} onChange={(event) => setReportKeyEnv(event.target.value)} placeholder="QUINSTREET_QMP_AUTO_REPORT_KEY" />
+              </label>
+              <label>
+                Client ID env
+                <Input value={clientIdEnv} onChange={(event) => setClientIdEnv(event.target.value)} />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label>
+                Client secret env
+                <Input value={clientSecretEnv} onChange={(event) => setClientSecretEnv(event.target.value)} />
+              </label>
+              <label>
+                API base URL env (optional)
+                <Input value={apiBaseUrlEnv} onChange={(event) => setApiBaseUrlEnv(event.target.value)} />
+              </label>
+            </div>
+          </>
+        )}
         <div className="form-grid">
           <label>
             Merit customer
@@ -8888,13 +8955,12 @@ function RevenuePartnerModal({
               submitting ||
               !providerId ||
               !name.trim() ||
-              (Boolean(teamId) && !affiliateId.trim()) ||
+              (source === "tune" && Boolean(teamId) && !affiliateId.trim()) ||
               !revenueCategory.trim() ||
               !currency.trim() ||
               !timezone ||
-              !networkTimezone ||
-              !networkIdEnv.trim() ||
-              !apiKeyEnv.trim() ||
+              (source === "tune" && (!networkTimezone || !networkIdEnv.trim() || !apiKeyEnv.trim())) ||
+              (source === "quinstreet" && (!publisherName.trim() || !reportKeyEnv.trim() || !clientIdEnv.trim() || !clientSecretEnv.trim() || !revenueField.trim())) ||
               !Number.isFinite(Number(invoiceDueDays))
             }
           >

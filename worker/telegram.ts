@@ -1,5 +1,12 @@
+import {
+  financeTelegramCommands,
+  parseTelegramCommandUsers,
+  readOnlyFinanceTelegramCommands
+} from "./telegramCommandCatalog";
+
 const TELEGRAM_API_BODY_LIMIT_BYTES = 1024 * 1024;
 const TELEGRAM_UPDATE_LIMIT = 100;
+const TELEGRAM_DOCUMENT_LIMIT_BYTES = 10 * 1024 * 1024;
 
 export interface TelegramAuthUser {
   username: string;
@@ -11,6 +18,8 @@ type TelegramEnv = Pick<
   WorkerEnv,
   | "TELEGRAM_AUTH_USERS_JSON"
   | "TELEGRAM_BOT_TOKEN"
+  | "TELEGRAM_COMMAND_ADMIN_USERS"
+  | "TELEGRAM_COMMAND_READ_ONLY_USERS"
   | "TELEGRAM_OTP_STATE"
 > & {
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
@@ -25,6 +34,7 @@ interface TelegramPrivateMessage {
   chatId: string;
   firstName: string;
   telegramUsername?: string;
+  text?: string;
 }
 
 interface TelegramUpdate {
@@ -35,7 +45,32 @@ interface TelegramUpdate {
 interface TelegramPollingDependencies {
   getUpdates?: typeof getTelegramUpdates;
   sendMessage?: typeof sendTelegramMessage;
+  sendDocument?: typeof sendTelegramDocument;
+  handleCommand?: TelegramCommandHandler;
 }
+
+export type TelegramCommandRole = "administrator" | "read-only";
+
+export interface TelegramCommandDocument {
+  bytes: ArrayBuffer;
+  contentType: string;
+  fileName: string;
+  caption?: string;
+}
+
+export interface TelegramCommandDocumentReply {
+  document: TelegramCommandDocument;
+  text?: string;
+}
+
+export type TelegramCommandReply = string | TelegramCommandDocumentReply;
+
+export type TelegramCommandHandler = (
+  env: WorkerEnv,
+  user: TelegramAuthUser,
+  role: TelegramCommandRole,
+  text: string
+) => Promise<TelegramCommandReply>;
 
 interface TelegramOtpMessagePayload {
   chat_id: string;
@@ -187,6 +222,51 @@ export async function sendTelegramMessage(
   });
 }
 
+export async function sendTelegramDocument(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
+  chatId: string,
+  document: TelegramCommandDocument,
+  protectContent = false
+): Promise<void> {
+  const fileName = document.fileName.trim();
+  const contentType = document.contentType.trim().toLowerCase();
+  if (
+    !fileName
+    || fileName.length > 255
+    || /[\\/\u0000-\u001f]/u.test(fileName)
+    || !contentType
+    || contentType.length > 128
+    || document.bytes.byteLength <= 0
+    || document.bytes.byteLength > TELEGRAM_DOCUMENT_LIMIT_BYTES
+    || (document.caption?.length ?? 0) > 1_024
+  ) {
+    throw new Error("Telegram document was invalid");
+  }
+
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  form.set("document", new Blob([document.bytes], { type: contentType }), fileName);
+  if (document.caption) form.set("caption", document.caption);
+  if (protectContent) form.set("protect_content", "true");
+
+  let response: Response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, {
+      method: "POST",
+      body: form
+    });
+  } catch {
+    throw new Error("Telegram sendDocument request failed");
+  }
+  let envelope: TelegramApiEnvelope | null = null;
+  try {
+    envelope = telegramApiEnvelope(await readBoundedResponseJson(response));
+  } catch {
+    // Every Bot API response is expected to use Telegram's bounded JSON envelope.
+  }
+  if (!response.ok || !envelope?.ok) throw new Error("Telegram sendDocument request failed");
+}
+
 export function buildTelegramOtpMessage(chatId: string, code: string): TelegramOtpMessagePayload {
   if (!/^[0-9]{6}$/u.test(code)) throw new Error("Telegram OTP was invalid");
   return {
@@ -236,6 +316,58 @@ export async function deleteTelegramWebhook(
   await telegramApi(env, "deleteWebhook", { drop_pending_updates: false });
 }
 
+export async function configureTelegramBotCommands(
+  env: Pick<
+    TelegramEnv,
+    | "TELEGRAM_AUTH_USERS_JSON"
+    | "TELEGRAM_BOT_TOKEN"
+    | "TELEGRAM_COMMAND_ADMIN_USERS"
+    | "TELEGRAM_COMMAND_READ_ONLY_USERS"
+  > & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string }
+): Promise<void> {
+  const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  const reviewerUsers = env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?.trim()
+    ? parseTelegramAuthUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON)
+    : [];
+  if (!administratorUsers || !reviewerUsers) throw new Error("Telegram user mapping was invalid");
+  const users = [...administratorUsers, ...reviewerUsers];
+  if (
+    new Set(users.map((user) => user.normalizedUsername)).size !== users.length
+    || new Set(users.map((user) => user.chatId)).size !== users.length
+  ) {
+    throw new Error("Telegram user mapping was invalid");
+  }
+  const administratorNames = new Set(
+    parseTelegramCommandUsers(env.TELEGRAM_COMMAND_ADMIN_USERS, "TELEGRAM_COMMAND_ADMIN_USERS")
+      .map(normalizeFinanceUsername)
+  );
+  const readOnlyNames = new Set(
+    parseTelegramCommandUsers(env.TELEGRAM_COMMAND_READ_ONLY_USERS, "TELEGRAM_COMMAND_READ_ONLY_USERS")
+      .map(normalizeFinanceUsername)
+  );
+  if ([...administratorNames].some((name) => readOnlyNames.has(name))) {
+    throw new Error("Telegram command administrator and read-only users overlap");
+  }
+
+  await Promise.all(users.map(async (user) => {
+    const commands = administratorNames.has(user.normalizedUsername)
+      ? financeTelegramCommands
+      : readOnlyNames.has(user.normalizedUsername)
+        ? readOnlyFinanceTelegramCommands
+        : [];
+    if (commands.length === 0) {
+      await telegramApi(env, "deleteMyCommands", {
+        scope: { type: "chat", chat_id: user.chatId }
+      });
+      return;
+    }
+    await telegramApi(env, "setMyCommands", {
+      commands: commands.map(({ command, description }) => ({ command, description })),
+      scope: { type: "chat", chat_id: user.chatId }
+    });
+  }));
+}
+
 async function getTelegramUpdates(
   env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
   offset: number
@@ -262,10 +394,23 @@ function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
   return {
     chatId: String(chatIdValue),
     firstName: message.from.first_name.slice(0, 128),
+    ...(typeof message.text === "string" && message.text.length <= 4_096
+      ? { text: message.text }
+      : {}),
     ...(typeof message.from.username === "string"
       ? { telegramUsername: message.from.username.slice(0, 64) }
       : {})
   };
+}
+
+function telegramCommandRole(
+  user: TelegramAuthUser,
+  administratorNames: ReadonlySet<string>,
+  readOnlyNames: ReadonlySet<string>
+): TelegramCommandRole | null {
+  if (administratorNames.has(user.normalizedUsername)) return "administrator";
+  if (readOnlyNames.has(user.normalizedUsername)) return "read-only";
+  return null;
 }
 
 function telegramUpdate(value: unknown): TelegramUpdate {
@@ -287,7 +432,7 @@ function onboardingReply(message: TelegramPrivateMessage, users: TelegramAuthUse
 }
 
 export async function pollTelegramUpdates(
-  env: Pick<TelegramEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN" | "TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON">,
+  env: WorkerEnv & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string },
   offset: number,
   dependencies: TelegramPollingDependencies = {}
 ): Promise<{ nextOffset: number; processed: number }> {
@@ -304,6 +449,17 @@ export async function pollTelegramUpdates(
   ) {
     throw new Error("Telegram user mapping was invalid");
   }
+  const commandAdministratorNames = new Set(
+    parseTelegramCommandUsers(env.TELEGRAM_COMMAND_ADMIN_USERS, "TELEGRAM_COMMAND_ADMIN_USERS")
+      .map(normalizeFinanceUsername)
+  );
+  const commandReadOnlyNames = new Set(
+    parseTelegramCommandUsers(env.TELEGRAM_COMMAND_READ_ONLY_USERS, "TELEGRAM_COMMAND_READ_ONLY_USERS")
+      .map(normalizeFinanceUsername)
+  );
+  if ([...commandAdministratorNames].some((name) => commandReadOnlyNames.has(name))) {
+    throw new Error("Telegram command administrator and read-only users overlap");
+  }
   const values = await (dependencies.getUpdates ?? getTelegramUpdates)(env, offset);
   let nextOffset = offset;
   let processed = 0;
@@ -312,11 +468,35 @@ export async function pollTelegramUpdates(
     const update = telegramUpdate(value);
     if (update.updateId < nextOffset) continue;
     if (update.message) {
-      await (dependencies.sendMessage ?? sendTelegramMessage)(
-        env,
-        update.message.chatId,
-        onboardingReply(update.message, users)
-      );
+      const configuredUser = administratorUsers.find((user) => user.chatId === update.message?.chatId);
+      const role = configuredUser
+        ? telegramCommandRole(configuredUser, commandAdministratorNames, commandReadOnlyNames)
+        : null;
+      const text = update.message.text?.trim() ?? "";
+      const reply: TelegramCommandReply = configuredUser && role && text.startsWith("/") && dependencies.handleCommand
+        ? await dependencies.handleCommand(env, configuredUser, role, text)
+        : configuredUser && !role && text.startsWith("/")
+          ? "You do not have Telegram command access for Finance Dash."
+          : onboardingReply(update.message, users);
+      const protectContent = Boolean(configuredUser && role);
+      if (typeof reply === "string") {
+        await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, reply, protectContent);
+      } else {
+        if (reply.text) {
+          await (dependencies.sendMessage ?? sendTelegramMessage)(
+            env,
+            update.message.chatId,
+            reply.text,
+            protectContent
+          );
+        }
+        await (dependencies.sendDocument ?? sendTelegramDocument)(
+          env,
+          update.message.chatId,
+          reply.document,
+          protectContent
+        );
+      }
     }
     nextOffset = update.updateId + 1;
     processed += 1;

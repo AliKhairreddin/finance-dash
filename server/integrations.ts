@@ -28,6 +28,7 @@ import {
   meritProvidersFromResponse
 } from "../shared/merit";
 import { decodeMeritInvoicePdf } from "../shared/invoiceFiles";
+import { quinStreetReportingBaseUrl, summarizeQuinStreetReport } from "../shared/quinstreet";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
@@ -114,11 +115,17 @@ export function meritConnectionIssue(error: unknown): string {
   return `Merit read failed: ${message.replace(/\s+/g, " ").slice(0, 180)}`;
 }
 
-function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[], source: RevenuePartner["source"]): string[] {
   const names = new Set<string>();
-  for (const partner of revenuePartners.filter((item) => item.enabled)) {
-    names.add(partner.networkIdEnv);
-    names.add(partner.apiKeyEnv);
+  for (const partner of revenuePartners.filter((item) => item.enabled && item.source === source)) {
+    if (partner.source === "tune") {
+      names.add(partner.networkIdEnv);
+      names.add(partner.apiKeyEnv);
+    } else {
+      names.add(partner.reportKeyEnv);
+      names.add(partner.clientIdEnv);
+      names.add(partner.clientSecretEnv);
+    }
   }
   return [...names].filter(Boolean).sort();
 }
@@ -159,9 +166,12 @@ export function getIntegrationStatus(
   ].filter((name) => !process.env[name]);
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !process.env[name]);
   const meritWriteEnabled = meritWritesEnabled() && meritNeeds.length === 0;
-  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
-  const tuneNeeds = revenueEnvNames.filter((name) => !process.env[name]);
-  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
+  const enabledTunePartners = revenuePartners.filter((partner) => partner.enabled && partner.source === "tune");
+  const enabledQuinStreetPartners = revenuePartners.filter(
+    (partner) => partner.enabled && partner.source === "quinstreet"
+  );
+  const tuneNeeds = requiredRevenueEnvNames(revenuePartners, "tune").filter((name) => !process.env[name]);
+  const quinStreetNeeds = requiredRevenueEnvNames(revenuePartners, "quinstreet").filter((name) => !process.env[name]);
 
   return [
     {
@@ -231,16 +241,29 @@ export function getIntegrationStatus(
     },
     {
       id: "tune",
-      label: "Partner revenue",
-      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
-      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
+      label: "TUNE revenue",
+      configured: enabledTunePartners.length > 0 && tuneNeeds.length === 0,
+      mode: enabledTunePartners.length > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        enabledRevenuePartnerCount === 0
+        enabledTunePartners.length === 0
           ? "Enable at least one owner revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
             ? "Ready to pull owner-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
+    },
+    {
+      id: "quinstreet",
+      label: "QuinStreet revenue",
+      configured: enabledQuinStreetPartners.length > 0 && quinStreetNeeds.length === 0,
+      mode: enabledQuinStreetPartners.length > 0 && quinStreetNeeds.length === 0 ? "live" : "partial",
+      message:
+        enabledQuinStreetPartners.length === 0
+          ? "Add and enable a QuinStreet QMP revenue rule before pulling a saved report."
+          : quinStreetNeeds.length === 0
+            ? "Ready to pull saved QuinStreet QMP reports. Invoice creation remains a separate explicit action."
+            : "QuinStreet revenue stays empty until the QMP client credentials and saved report key are configured.",
+      needs: quinStreetNeeds
     },
     {
       id: "coinbase",
@@ -683,7 +706,10 @@ export async function fetchCoinbaseUsdRates(assets: Iterable<string>): Promise<F
   return rates;
 }
 
-export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+export async function fetchTuneRevenue(
+  partner: Extract<RevenuePartner, { source: "tune" }>,
+  period: RevenuePeriod
+): Promise<RevenueRun> {
   const networkId = process.env[partner.networkIdEnv];
   const apiKey = process.env[partner.apiKeyEnv];
   const now = new Date().toISOString();
@@ -761,6 +787,75 @@ export async function fetchTuneRevenue(partner: RevenuePartner, period: RevenueP
     status: "pulled",
     createdAt: now
   };
+}
+
+export async function fetchQuinStreetRevenue(
+  partner: Extract<RevenuePartner, { source: "quinstreet" }>,
+  period: RevenuePeriod
+): Promise<RevenueRun> {
+  const clientId = process.env[partner.clientIdEnv];
+  const clientSecret = process.env[partner.clientSecretEnv];
+  const reportKey = process.env[partner.reportKeyEnv];
+  const missing = [partner.clientIdEnv, partner.clientSecretEnv, partner.reportKeyEnv].filter(
+    (name) => !process.env[name]
+  );
+  if (!clientId || !clientSecret || !reportKey) throw new Error(`Missing ${missing.join(", ")}`);
+
+  const apiBaseUrl = (process.env[partner.apiBaseUrlEnv ?? ""] || quinStreetReportingBaseUrl).replace(/\/+$/, "");
+  const tokenResponse = await fetchJson<unknown>(
+    `${apiBaseUrl}/oauth/generatetoken?grant_type=client_credentials`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`
+      }
+    },
+    64 * 1024
+  );
+  const accessToken = isRecord(tokenResponse) && typeof tokenResponse.access_token === "string"
+    ? tokenResponse.access_token.trim()
+    : "";
+  if (!accessToken) throw new Error("QuinStreet QMP did not return an access token");
+
+  const params = new URLSearchParams({ startDate: period.periodStart, endDate: period.periodEnd });
+  const reportResponse = await fetchJson<unknown>(
+    `${apiBaseUrl}/api/pub/download/${encodeURIComponent(reportKey)}?${params.toString()}`,
+    {
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`
+      }
+    },
+    4 * 1024 * 1024
+  );
+  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField);
+
+  return {
+    id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    providerId: partner.providerId,
+    ...(partner.teamId ? { teamId: partner.teamId } : {}),
+    revenueCategory: partner.revenueCategory,
+    source: "quinstreet",
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    timezone: period.timezone,
+    revenue: summary.revenue,
+    currency: partner.currency,
+    conversions: summary.rowCount,
+    status: "pulled",
+    createdAt: new Date().toISOString()
+  };
+}
+
+export function fetchRevenuePartnerRevenue(partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+  return partner.source === "tune"
+    ? fetchTuneRevenue(partner, period)
+    : fetchQuinStreetRevenue(partner, period);
 }
 
 function normalizeTuneRows(data: unknown): Array<Record<string, unknown>> {

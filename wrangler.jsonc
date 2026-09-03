@@ -10,6 +10,9 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": true
   },
+  "browser": {
+    "binding": "BROWSER"
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -45,8 +48,11 @@
     "REVOLUT_ISSUER": "finance.thatcanadian.dev",
     "SLASH_BASE_URL": "https://api.slash.com",
     "SLASH_CONNECTION_ID": "primary",
-    "SLASH_CASH_ALERT_THRESHOLD_USD": "10000",
-    "SLASH_CASH_ALERT_RECIPIENT": "Ali M",
+    "SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD": "10000",
+    "SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES": "Primary Account,Wagner,Reservation Account",
+    "SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS": "Ali,Ali M",
+    "TELEGRAM_COMMAND_ADMIN_USERS": "Ali,Ali M",
+    "TELEGRAM_COMMAND_READ_ONLY_USERS": "Amin,Sanjin,Sani,Ben,Beno",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
     "MERIT_CREATE_INVOICE_PATH": "/v2/sendinvoice",

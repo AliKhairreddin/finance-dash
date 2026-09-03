@@ -916,10 +916,20 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
             async pollOnboarding() {
               calls += 1;
               return 0;
+            },
+            async getTelegramAlertSettings() {
+              return {
+                rules: [],
+                digestTimeUtc: null,
+                updatedAt: "2026-08-21T20:00:00.000Z"
+              };
             }
           };
         }
-      }
+      },
+      SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD: "10000",
+      SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary Account,Wagner,Reservation Account",
+      SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Ali,Ali M"
     } as never
   );
   assert.equal(calls, 1);

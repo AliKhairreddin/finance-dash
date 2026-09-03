@@ -4,6 +4,7 @@ import {
   fetchSlashActivityBatch,
   fetchSlashActivityForLegalEntity,
   fetchSlashTransactionForLegalEntity,
+  fetchSlashVirtualAccountBalancesForLegalEntity,
   parseSlashTransactionDateRange
 } from "./slashApi";
 import { bankProviderTransactionId } from "./providerIdentity";
@@ -228,6 +229,68 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
   assert.equal(requests.some((request) => request.url.pathname === "/virtual-account"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/card/card-primary"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
+});
+
+test("Slash virtual-account reads retain the provider's live balances", async () => {
+  const requests: Array<{ url: URL; headers: Headers }> = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    requests.push({ url, headers: new Headers(init?.headers) });
+    if (!url.searchParams.has("cursor")) {
+      return Response.json({
+        items: [{
+          virtualAccount: {
+            id: "virtual-primary",
+            name: "Primary Account",
+            accountId: "account-platinum",
+            accountType: "primary"
+          },
+          balance: { amountCents: 1_250_050 },
+          spend: { amountCents: 25_000 }
+        }],
+        metadata: { nextCursor: "next", count: 1 }
+      });
+    }
+    return Response.json({
+      items: [{
+        virtualAccount: {
+          id: "virtual-wagner",
+          name: "Wagner",
+          accountId: "account-platinum",
+          accountType: "default"
+        },
+        balance: { amountCents: 950_000 },
+        spend: { amountCents: 50_000 }
+      }],
+      metadata: { count: 1 }
+    });
+  };
+
+  assert.deepEqual(await fetchSlashVirtualAccountBalancesForLegalEntity({
+    baseUrl: "https://api.slash.test",
+    apiKey: "slash-key",
+    legalEntityId: "legal-entity-1",
+    fetcher
+  }), [
+    {
+      id: "virtual-primary",
+      name: "Primary Account",
+      accountId: "account-platinum",
+      accountType: "primary",
+      balance: 12_500.5,
+      currency: "USD"
+    },
+    {
+      id: "virtual-wagner",
+      name: "Wagner",
+      accountId: "account-platinum",
+      accountType: "default",
+      balance: 9_500,
+      currency: "USD"
+    }
+  ]);
+  assert.deepEqual(requests.map(({ url }) => url.searchParams.get("cursor")), [null, "next"]);
+  assert.equal(requests.every(({ headers }) => headers.get("x-legal-entity") === "legal-entity-1"), true);
 });
 
 test("Slash charge-card accounts use the available credit balance", async () => {

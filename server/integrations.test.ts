@@ -1,14 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Invoice } from "../shared/types";
+import type { Invoice, RevenuePartner } from "../shared/types";
 import {
   createMeritInvoice,
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
   fetchMeritInvoicePdf,
   fetchMeritInvoices,
+  fetchQuinStreetRevenue,
   getIntegrationStatus
 } from "./integrations";
+
+const quinStreetPartner: Extract<RevenuePartner, { source: "quinstreet" }> = {
+  id: "quinstreet-auto",
+  providerId: "client-quinstreet",
+  name: "QuinStreet Auto",
+  revenueCategory: "Auto insurance revenue",
+  source: "quinstreet",
+  publisherName: "Publisher Inc",
+  reportKeyEnv: "TEST_QMP_REPORT_KEY",
+  clientIdEnv: "TEST_QMP_CLIENT_ID",
+  clientSecretEnv: "TEST_QMP_CLIENT_SECRET",
+  revenueField: "total_commission",
+  currency: "USD",
+  timezone: "America/Toronto",
+  invoiceDueDays: 30,
+  billingCadence: "monthly",
+  billingTimezone: "America/Toronto",
+  autoDraft: false,
+  enabled: true,
+  createdAt: "2026-09-01T00:00:00.000Z"
+};
 
 const invoice: Invoice = {
   id: "invoice-1",
@@ -52,6 +74,88 @@ test("configured Wise reports automatic balance and transaction sync", () => {
     else process.env.WISE_API_TOKEN = previousToken;
     if (previousProfileIds === undefined) delete process.env.WISE_PROFILE_IDS;
     else process.env.WISE_PROFILE_IDS = previousProfileIds;
+  }
+});
+
+test("QuinStreet QMP exchanges client credentials and totals the saved report", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousClientId = process.env.TEST_QMP_CLIENT_ID;
+  const previousClientSecret = process.env.TEST_QMP_CLIENT_SECRET;
+  const previousReportKey = process.env.TEST_QMP_REPORT_KEY;
+  const requests: Array<{ url: URL; method: string; authorization: string | null }> = [];
+  try {
+    process.env.TEST_QMP_CLIENT_ID = "client-id";
+    process.env.TEST_QMP_CLIENT_SECRET = "client-secret";
+    process.env.TEST_QMP_REPORT_KEY = "auto/report";
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({
+        url,
+        method: init?.method ?? "GET",
+        authorization: new Headers(init?.headers).get("Authorization")
+      });
+      return url.pathname.endsWith("/oauth/generatetoken")
+        ? Response.json({ access_token: "qmp-token" })
+        : Response.json([
+            { date: "2026-08-01", total_commission: "100.25" },
+            { date: "2026-08-02", total_commission: 49.75 }
+          ]);
+    };
+
+    const run = await fetchQuinStreetRevenue(quinStreetPartner, {
+      preset: "custom",
+      periodStart: "2026-08-01",
+      periodEnd: "2026-08-31",
+      timezone: "America/Toronto"
+    });
+
+    assert.equal(requests[0]?.method, "POST");
+    assert.equal(requests[0]?.url.pathname, "/oauth/generatetoken");
+    assert.equal(requests[0]?.url.searchParams.get("grant_type"), "client_credentials");
+    assert.equal(requests[0]?.authorization, `Basic ${Buffer.from("client-id:client-secret").toString("base64")}`);
+    assert.equal(requests[1]?.url.pathname, "/api/pub/download/auto%2Freport");
+    assert.equal(requests[1]?.url.searchParams.get("startDate"), "2026-08-01");
+    assert.equal(requests[1]?.url.searchParams.get("endDate"), "2026-08-31");
+    assert.equal(requests[1]?.authorization, "Bearer qmp-token");
+    assert.equal(run.source, "quinstreet");
+    assert.equal(run.revenue, 150);
+    assert.equal(run.conversions, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousClientId === undefined) delete process.env.TEST_QMP_CLIENT_ID;
+    else process.env.TEST_QMP_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.TEST_QMP_CLIENT_SECRET;
+    else process.env.TEST_QMP_CLIENT_SECRET = previousClientSecret;
+    if (previousReportKey === undefined) delete process.env.TEST_QMP_REPORT_KEY;
+    else process.env.TEST_QMP_REPORT_KEY = previousReportKey;
+  }
+});
+
+test("QuinStreet integration status names every missing QMP secret", () => {
+  const previousClientId = process.env.TEST_QMP_CLIENT_ID;
+  const previousClientSecret = process.env.TEST_QMP_CLIENT_SECRET;
+  const previousReportKey = process.env.TEST_QMP_REPORT_KEY;
+  try {
+    delete process.env.TEST_QMP_CLIENT_ID;
+    delete process.env.TEST_QMP_CLIENT_SECRET;
+    delete process.env.TEST_QMP_REPORT_KEY;
+    const integration = getIntegrationStatus(undefined, [quinStreetPartner]).find(
+      (item) => item.id === "quinstreet"
+    );
+
+    assert.equal(integration?.configured, false);
+    assert.deepEqual(integration?.needs, [
+      "TEST_QMP_CLIENT_ID",
+      "TEST_QMP_CLIENT_SECRET",
+      "TEST_QMP_REPORT_KEY"
+    ]);
+  } finally {
+    if (previousClientId === undefined) delete process.env.TEST_QMP_CLIENT_ID;
+    else process.env.TEST_QMP_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.TEST_QMP_CLIENT_SECRET;
+    else process.env.TEST_QMP_CLIENT_SECRET = previousClientSecret;
+    if (previousReportKey === undefined) delete process.env.TEST_QMP_REPORT_KEY;
+    else process.env.TEST_QMP_REPORT_KEY = previousReportKey;
   }
 });
 

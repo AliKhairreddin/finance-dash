@@ -102,6 +102,7 @@ import {
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import { decodeMeritInvoicePdf, invoicePdfFileName } from "../shared/invoiceFiles";
 import { financeOperatingDate } from "../shared/operatingDate";
+import { quinStreetReportingBaseUrl, summarizeQuinStreetReport } from "../shared/quinstreet";
 import {
   maximumCashFlowLineIdLength,
   maximumCashFlowLineNameLength,
@@ -145,6 +146,7 @@ import {
 } from "../shared/revolutApi";
 import {
   fetchSlashActivityBatch,
+  fetchSlashVirtualAccountBalancesForLegalEntity,
   parseSlashTransactionDateRange,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
@@ -216,16 +218,31 @@ import {
   createBankAnalyticsJobIdentity
 } from "../shared/analyticsJob";
 import { transactionReviewBootstrap } from "../shared/transactionReview";
+import { buildTransactionCsv, transactionCsvFileName } from "../shared/transactionCsv";
 import {
+  createAuthSessionToken,
   enforceSiteAuthentication,
   getDashboardSession,
   transactionReviewerCanAccess
 } from "./auth";
-import { pollTelegramOnboarding } from "./telegram";
 import {
-  sendSlashCashBalanceAlert,
-  slashCashAlertThreshold,
-  slashCashBalanceObservation
+  normalizeFinanceUsername,
+  parseTelegramAuthUsers,
+  pollTelegramOnboarding,
+  sendTelegramMessage,
+  type TelegramAuthUser,
+  type TelegramCommandReply,
+  type TelegramCommandRole
+} from "./telegram";
+import { financeTelegramCommands } from "./telegramCommandCatalog";
+import {
+  buildSlashVirtualAccountBalanceAlertMessage,
+  sendSlashVirtualAccountBalanceAlert,
+  slashVirtualAccountAlertNames,
+  slashVirtualAccountAlertRecipients,
+  slashVirtualAccountAlertThreshold,
+  slashVirtualAccountBalanceObservations,
+  type TelegramAlertSettings
 } from "./telegramAlerts";
 import {
   appendAmexCursorFingerprint,
@@ -1989,7 +2006,11 @@ export async function deliverMeritInvoice(env: Env, externalId: string): Promise
   );
 }
 
-async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+async function fetchTuneRevenue(
+  env: Env,
+  partner: Extract<RevenuePartner, { source: "tune" }>,
+  period: RevenuePeriod
+): Promise<RevenueRun> {
   const networkId = envString(env, partner.networkIdEnv);
   const apiKey = envString(env, partner.apiKeyEnv);
   const now = new Date().toISOString();
@@ -2066,6 +2087,74 @@ async function fetchTuneRevenue(env: Env, partner: RevenuePartner, period: Reven
     status: "pulled",
     createdAt: now
   };
+}
+
+async function fetchQuinStreetRevenue(
+  env: Env,
+  partner: Extract<RevenuePartner, { source: "quinstreet" }>,
+  period: RevenuePeriod
+): Promise<RevenueRun> {
+  const clientId = envString(env, partner.clientIdEnv);
+  const clientSecret = envString(env, partner.clientSecretEnv);
+  const reportKey = envString(env, partner.reportKeyEnv);
+  const missing = [partner.clientIdEnv, partner.clientSecretEnv, partner.reportKeyEnv].filter(
+    (name) => !envString(env, name)
+  );
+  if (!clientId || !clientSecret || !reportKey) throw new Error(`Missing ${missing.join(", ")}`);
+
+  const apiBaseUrl = (envString(env, partner.apiBaseUrlEnv) || quinStreetReportingBaseUrl).replace(/\/+$/, "");
+  const tokenResponse = await fetchJson<unknown>(
+    `${apiBaseUrl}/oauth/generatetoken?grant_type=client_credentials`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`
+      }
+    }
+  );
+  const accessToken = isRecord(tokenResponse) && typeof tokenResponse.access_token === "string"
+    ? tokenResponse.access_token.trim()
+    : "";
+  if (!accessToken) throw new Error("QuinStreet QMP did not return an access token");
+
+  const params = new URLSearchParams({ startDate: period.periodStart, endDate: period.periodEnd });
+  const reportResponse = await fetchJson<unknown>(
+    `${apiBaseUrl}/api/pub/download/${encodeURIComponent(reportKey)}?${params.toString()}`,
+    {
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`
+      }
+    }
+  );
+  const summary = summarizeQuinStreetReport(reportResponse, partner.revenueField);
+
+  return {
+    id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    providerId: partner.providerId,
+    ...(partner.teamId ? { teamId: partner.teamId } : {}),
+    revenueCategory: partner.revenueCategory,
+    source: "quinstreet",
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    timezone: period.timezone,
+    revenue: summary.revenue,
+    currency: partner.currency,
+    conversions: summary.rowCount,
+    status: "pulled",
+    createdAt: new Date().toISOString()
+  };
+}
+
+function fetchRevenuePartnerRevenue(env: Env, partner: RevenuePartner, period: RevenuePeriod): Promise<RevenueRun> {
+  return partner.source === "tune"
+    ? fetchTuneRevenue(env, partner, period)
+    : fetchQuinStreetRevenue(env, partner, period);
 }
 
 function envString(env: Env, name?: string): string | undefined {
@@ -3023,11 +3112,17 @@ function runtimeAiSettings(env: Env, settings?: PersistedAiSettings): StoredAiSe
   };
 }
 
-function requiredRevenueEnvNames(revenuePartners: RevenuePartner[]): string[] {
+function requiredRevenueEnvNames(revenuePartners: RevenuePartner[], source: RevenuePartner["source"]): string[] {
   const names = new Set<string>();
-  for (const partner of revenuePartners.filter((item) => item.enabled)) {
-    names.add(partner.networkIdEnv);
-    names.add(partner.apiKeyEnv);
+  for (const partner of revenuePartners.filter((item) => item.enabled && item.source === source)) {
+    if (partner.source === "tune") {
+      names.add(partner.networkIdEnv);
+      names.add(partner.apiKeyEnv);
+    } else {
+      names.add(partner.reportKeyEnv);
+      names.add(partner.clientIdEnv);
+      names.add(partner.clientSecretEnv);
+    }
   }
   return [...names].filter(Boolean).sort();
 }
@@ -3070,9 +3165,14 @@ function integrationStatus(
 
   const meritNeeds = ["MERIT_API_ID", "MERIT_API_KEY"].filter((name) => !env[name as keyof Env]);
   const meritWriteEnabled = meritWritesEnabled(env) && meritNeeds.length === 0;
-  const revenueEnvNames = requiredRevenueEnvNames(revenuePartners);
-  const tuneNeeds = revenueEnvNames.filter((name) => !envString(env, name));
-  const enabledRevenuePartnerCount = revenuePartners.filter((partner) => partner.enabled).length;
+  const enabledTunePartners = revenuePartners.filter((partner) => partner.enabled && partner.source === "tune");
+  const enabledQuinStreetPartners = revenuePartners.filter(
+    (partner) => partner.enabled && partner.source === "quinstreet"
+  );
+  const tuneNeeds = requiredRevenueEnvNames(revenuePartners, "tune").filter((name) => !envString(env, name));
+  const quinStreetNeeds = requiredRevenueEnvNames(revenuePartners, "quinstreet").filter(
+    (name) => !envString(env, name)
+  );
 
   return [
     {
@@ -3142,16 +3242,29 @@ function integrationStatus(
     },
     {
       id: "tune" as DataSource,
-      label: "Partner revenue",
-      configured: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0,
-      mode: enabledRevenuePartnerCount > 0 && tuneNeeds.length === 0 ? "live" : "partial",
+      label: "TUNE revenue",
+      configured: enabledTunePartners.length > 0 && tuneNeeds.length === 0,
+      mode: enabledTunePartners.length > 0 && tuneNeeds.length === 0 ? "live" : "partial",
       message:
-        enabledRevenuePartnerCount === 0
+        enabledTunePartners.length === 0
           ? "Enable at least one owner revenue stream before pulling TUNE/HasOffers revenue."
           : tuneNeeds.length === 0
             ? "Ready to pull owner-attributed partner revenue from TUNE/HasOffers. Invoice creation is a separate explicit action."
             : "Partner revenue stays empty until each enabled stream has its TUNE network ID and API key configured.",
       needs: tuneNeeds
+    },
+    {
+      id: "quinstreet" as DataSource,
+      label: "QuinStreet revenue",
+      configured: enabledQuinStreetPartners.length > 0 && quinStreetNeeds.length === 0,
+      mode: enabledQuinStreetPartners.length > 0 && quinStreetNeeds.length === 0 ? "live" : "partial",
+      message:
+        enabledQuinStreetPartners.length === 0
+          ? "Add and enable a QuinStreet QMP revenue rule before pulling a saved report."
+          : quinStreetNeeds.length === 0
+            ? "Ready to pull saved QuinStreet QMP reports. Invoice creation remains a separate explicit action."
+            : "QuinStreet revenue stays empty until the QMP client credentials and saved report key are configured.",
+      needs: quinStreetNeeds
     },
     {
       id: "coinbase",
@@ -3802,39 +3915,122 @@ async function syncLatestBankActivity(
   if (failures.length > 0) throw failures[0].reason;
 }
 
-async function checkSlashCashBalanceAlert(env: Env): Promise<boolean> {
+async function checkSlashVirtualAccountBalanceAlerts(env: Env): Promise<number> {
   if (
     !env.SLASH_API_KEY?.trim()
     || !env.SLASH_LEGAL_ENTITY_ID?.trim()
     || !env.SLASH_BASE_URL?.trim()
-  ) return false;
+  ) return 0;
 
-  const threshold = slashCashAlertThreshold(env.SLASH_CASH_ALERT_THRESHOLD_USD);
-  const recipient = env.SLASH_CASH_ALERT_RECIPIENT?.trim();
-  if (!recipient) throw new Error("SLASH_CASH_ALERT_RECIPIENT is required");
+  const defaults = telegramAlertDefaults(env);
   const state = await loadPersisted(env);
-  if (state.bankSyncHealth.slash?.status !== "healthy") return false;
-  const observation = slashCashBalanceObservation(
-    state.bankAccounts,
-    threshold,
-    new Date().toISOString()
+  if (state.bankSyncHealth.slash?.status !== "healthy") return 0;
+  const virtualAccounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
+    baseUrl: env.SLASH_BASE_URL,
+    apiKey: env.SLASH_API_KEY,
+    legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+  });
+  const observedAt = new Date().toISOString();
+  const controlState = env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding");
+  const settings = await controlState.getTelegramAlertSettings(
+    defaults.accountNames,
+    defaults.threshold,
+    observedAt
   );
-  if (!observation) throw new Error("Slash cash balance is unavailable for alerting");
+  const observations = settings.rules.filter((rule) => !rule.paused).flatMap((rule) =>
+    slashVirtualAccountBalanceObservations(virtualAccounts, [rule.accountName], rule.threshold, observedAt)
+  );
+  const deliveries = await Promise.all(observations.flatMap((observation) => defaults.recipients.map(async (recipient) => {
+    const recipientKey = normalizeFinanceUsername(recipient);
+    const alertState = env.TELEGRAM_OTP_STATE.getByName(
+      `telegram-slash-virtual-account-balance-alert:${observation.accountId}:${recipientKey}`
+    );
+    const notification = await alertState.prepareSlashVirtualAccountBalanceAlert(
+      observation,
+      crypto.randomUUID()
+    );
+    if (!notification) return false;
+    await sendSlashVirtualAccountBalanceAlert(env, recipient, notification);
+    await alertState.confirmSlashVirtualAccountBalanceAlert(notification.id);
+    await controlState.recordTelegramAlertDelivery({
+      id: `${notification.id}:${recipientKey}`,
+      kind: notification.kind,
+      accountName: notification.accountName,
+      balance: notification.balance,
+      threshold: notification.threshold,
+      currency: notification.currency,
+      recipient,
+      deliveredAt: new Date().toISOString()
+    });
+    console.log(JSON.stringify({
+      event: "slash_virtual_account_balance_alert_sent",
+      kind: notification.kind,
+      accountId: notification.accountId,
+      accountName: notification.accountName,
+      balance: notification.balance,
+      threshold: notification.threshold,
+      currency: notification.currency,
+      recipient
+    }));
+    return true;
+  })));
+  return deliveries.filter(Boolean).length;
+}
 
-  const alertState = env.TELEGRAM_OTP_STATE.getByName("telegram-slash-cash-balance-alert");
-  const notification = await alertState.prepareSlashCashBalanceAlert(observation, crypto.randomUUID());
-  if (!notification) return false;
-  await sendSlashCashBalanceAlert(env, recipient, notification);
-  await alertState.confirmSlashCashBalanceAlert(notification.id);
-  console.log(JSON.stringify({
-    event: "slash_cash_balance_alert_sent",
-    kind: notification.kind,
-    balance: notification.balance,
-    threshold: notification.threshold,
-    currency: notification.currency,
-    recipient
+function telegramAlertDefaults(env: Env): {
+  accountNames: string[];
+  threshold: number;
+  recipients: string[];
+} {
+  return {
+    accountNames: slashVirtualAccountAlertNames(env.SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES),
+    threshold: slashVirtualAccountAlertThreshold(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD),
+    recipients: slashVirtualAccountAlertRecipients(env.SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS)
+  };
+}
+
+async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise<number> {
+  const defaults = telegramAlertDefaults(env);
+  const scheduled = new Date(scheduledTime);
+  const date = scheduled.toISOString().slice(0, 10);
+  const time = scheduled.toISOString().slice(11, 16);
+  const now = scheduled.toISOString();
+  const controlState = env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding");
+  const settings = await controlState.getTelegramAlertSettings(
+    defaults.accountNames,
+    defaults.threshold,
+    now
+  );
+  if (!settings.digestTimeUtc || time < settings.digestTimeUtc) return 0;
+  const snapshot = await getSnapshot(env);
+  const message = [
+    `Finance Dash daily digest · ${date}`,
+    "",
+    `Approx. liquid assets: ${telegramUsd(snapshot.approximateUsdTotals.totalUsd)}`,
+    `Receivables: ${telegramTotals(snapshot.metrics.totalReceivables)}`,
+    `Payables: ${telegramTotals(snapshot.metrics.totalPayables)}`,
+    `Open invoices: ${snapshot.invoices.filter((invoice) => invoice.status !== "paid").length}`,
+    `Unpaid bills: ${snapshot.expenses.filter((expense) => expense.paymentStatus === "unpaid").length}`,
+    `Needs review: ${snapshot.transactionReviewPreview.length}`,
+    `As of: ${snapshot.asOf}`
+  ].join("\n");
+  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  if (!users) throw new Error("Telegram user mapping was invalid");
+  const deliveries = await Promise.all(defaults.recipients.map(async (recipientName) => {
+    const recipient = users.find((user) =>
+      user.normalizedUsername === normalizeFinanceUsername(recipientName)
+    );
+    if (!recipient) throw new Error(`Telegram digest recipient ${recipientName} is not authorized`);
+    const digestState = env.TELEGRAM_OTP_STATE.getByName(
+      `telegram-digest:${recipient.normalizedUsername}`
+    );
+    const notificationId = await digestState.prepareTelegramDigest(date, crypto.randomUUID());
+    if (!notificationId) return false;
+    await sendTelegramMessage(env, recipient.chatId, message, true);
+    await digestState.confirmTelegramDigest(notificationId);
+    return true;
   }));
-  return true;
+  return deliveries.filter(Boolean).length;
 }
 
 async function syncBankSourceRange(
@@ -4290,27 +4486,94 @@ async function deleteProvider(env: Env, providerId: string): Promise<Provider> {
   return deletion.deletedProvider;
 }
 
-async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
+type RevenuePartnerFields = RevenuePartner extends infer Partner
+  ? Partner extends RevenuePartner
+    ? Omit<Partner, "id" | "createdAt">
+    : never
+  : never;
+
+function revenuePartnerFields(
+  payload: CreateRevenuePartnerPayload | UpdateRevenuePartnerPayload,
+  providerId: string,
+  revenueCategory: string
+): RevenuePartnerFields {
   if (
     !payload.name?.trim() ||
-    !payload.providerId?.trim() ||
-    !payload.revenueCategory?.trim() ||
-    (Boolean(payload.teamId) && !payload.affiliateId?.trim()) ||
     !payload.currency?.trim() ||
     !payload.timezone?.trim() ||
-    !payload.networkTimezone?.trim() ||
-    !isEnvironmentVariableName(payload.networkIdEnv) ||
-    !isEnvironmentVariableName(payload.apiKeyEnv) ||
     (Boolean(payload.apiBaseUrlEnv?.trim()) && !isEnvironmentVariableName(payload.apiBaseUrlEnv)) ||
     !isValidTimezone(payload.timezone) ||
-    !isValidTimezone(payload.networkTimezone) ||
     !isValidTimezone(payload.billingTimezone) ||
-    !Number.isFinite(payload.invoiceDueDays) ||
+    !Number.isInteger(payload.invoiceDueDays) ||
     payload.invoiceDueDays < 0 ||
-    (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
+    (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly") ||
+    typeof payload.autoDraft !== "boolean" ||
+    typeof payload.enabled !== "boolean"
   ) {
-    throw new Error("Revenue rule fields are invalid; API environment names must be uppercase and timezones must be valid IANA names");
+    throw new ApiError(400, "Revenue rule fields are invalid; environment names must be uppercase and timezones must be valid IANA names");
   }
+
+  const common = {
+    providerId,
+    teamId: cleanOptional(payload.teamId),
+    name: payload.name.trim(),
+    revenueCategory,
+    currency: payload.currency.trim().toUpperCase(),
+    timezone: payload.timezone.trim(),
+    apiBaseUrlEnv: cleanOptional(payload.apiBaseUrlEnv),
+    meritCustomerName: cleanOptional(payload.meritCustomerName),
+    invoiceDueDays: payload.invoiceDueDays,
+    billingCadence: payload.billingCadence,
+    billingTimezone: payload.billingTimezone.trim(),
+    autoDraft: payload.autoDraft,
+    defaultMeritTaxId: cleanOptional(payload.defaultMeritTaxId),
+    defaultMeritItemCode: cleanOptional(payload.defaultMeritItemCode),
+    enabled: payload.enabled
+  };
+
+  if (payload.source === "tune") {
+    if (
+      (Boolean(payload.teamId) && !payload.affiliateId?.trim()) ||
+      !payload.networkTimezone?.trim() ||
+      !isValidTimezone(payload.networkTimezone) ||
+      !isEnvironmentVariableName(payload.networkIdEnv) ||
+      !isEnvironmentVariableName(payload.apiKeyEnv)
+    ) {
+      throw new ApiError(400, "TUNE revenue rules require valid network environment names and an affiliate ID when an owner is selected");
+    }
+    return {
+      ...common,
+      source: "tune",
+      affiliateId: payload.affiliateId.trim(),
+      externalId: cleanOptional(payload.externalId),
+      networkTimezone: payload.networkTimezone.trim(),
+      networkIdEnv: payload.networkIdEnv.trim(),
+      apiKeyEnv: payload.apiKeyEnv.trim()
+    };
+  }
+
+  if (
+    payload.source !== "quinstreet" ||
+    !payload.publisherName?.trim() ||
+    !payload.revenueField?.trim() ||
+    !isEnvironmentVariableName(payload.reportKeyEnv) ||
+    !isEnvironmentVariableName(payload.clientIdEnv) ||
+    !isEnvironmentVariableName(payload.clientSecretEnv)
+  ) {
+    throw new ApiError(400, "QuinStreet revenue rules require a publisher, revenue column, and valid QMP credential and report-key environment names");
+  }
+  return {
+    ...common,
+    source: "quinstreet",
+    publisherName: payload.publisherName.trim(),
+    reportKeyEnv: payload.reportKeyEnv.trim(),
+    clientIdEnv: payload.clientIdEnv.trim(),
+    clientSecretEnv: payload.clientSecretEnv.trim(),
+    revenueField: payload.revenueField.trim()
+  };
+}
+
+async function updateRevenuePartner(env: Env, partnerId: string, payload: UpdateRevenuePartnerPayload): Promise<RevenuePartner> {
   const state = await loadPersisted(env);
   const selectedProvider = state.providers.find((provider) => provider.id === payload.providerId);
   if (!selectedProvider || selectedProvider.type !== "client" || !selectedProvider.meritCustomerId) {
@@ -4323,36 +4586,15 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
   if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
     throw new Error(`Category "${revenueCategory}" is not valid for money in`);
   }
+  const fields = revenuePartnerFields(payload, selectedProvider.id, revenueCategory);
   let updated: RevenuePartner | undefined;
   state.revenuePartners = state.revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
     const nextPartner: RevenuePartner = {
-      ...partner,
-      name: payload.name.trim(),
-      providerId: payload.providerId,
-      revenueCategory,
-      affiliateId: payload.affiliateId?.trim() ?? "",
-      externalId: payload.externalId?.trim() || undefined,
-      currency: payload.currency.trim().toUpperCase(),
-      timezone: payload.timezone.trim(),
-      networkTimezone: payload.networkTimezone.trim(),
-      networkIdEnv: payload.networkIdEnv.trim(),
-      apiKeyEnv: payload.apiKeyEnv.trim(),
-      apiBaseUrlEnv: payload.apiBaseUrlEnv?.trim() || undefined,
-      meritCustomerName: payload.meritCustomerName?.trim() || undefined,
-      invoiceDueDays: payload.invoiceDueDays,
-      billingCadence: payload.billingCadence,
-      billingTimezone: payload.billingTimezone.trim(),
-      autoDraft: payload.autoDraft,
-      defaultMeritTaxId: payload.defaultMeritTaxId?.trim() || undefined,
-      defaultMeritItemCode: payload.defaultMeritItemCode?.trim() || undefined,
-      enabled: payload.enabled
+      id: partner.id,
+      createdAt: partner.createdAt,
+      ...fields
     };
-    if (payload.teamId) {
-      nextPartner.teamId = payload.teamId;
-    } else {
-      delete nextPartner.teamId;
-    }
     updated = nextPartner;
     return updated;
   });
@@ -4366,26 +4608,6 @@ async function updateRevenuePartner(env: Env, partnerId: string, payload: Update
 }
 
 async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPayload): Promise<RevenuePartner> {
-  if (
-    !payload.name?.trim() ||
-    !payload.providerId?.trim() ||
-    !payload.revenueCategory?.trim() ||
-    (Boolean(payload.teamId) && !payload.affiliateId?.trim()) ||
-    !payload.currency?.trim() ||
-    !payload.timezone?.trim() ||
-    !payload.networkTimezone?.trim() ||
-    !isEnvironmentVariableName(payload.networkIdEnv) ||
-    !isEnvironmentVariableName(payload.apiKeyEnv) ||
-    (Boolean(payload.apiBaseUrlEnv?.trim()) && !isEnvironmentVariableName(payload.apiBaseUrlEnv)) ||
-    !isValidTimezone(payload.timezone) ||
-    !isValidTimezone(payload.networkTimezone) ||
-    !isValidTimezone(payload.billingTimezone) ||
-    !Number.isFinite(payload.invoiceDueDays) ||
-    payload.invoiceDueDays < 0 ||
-    (payload.billingCadence !== "weekly" && payload.billingCadence !== "monthly")
-  ) {
-    throw new ApiError(400, "name, Merit customer, revenue category, API environment names, cadence, and billing timezone are required; owner-specific rules also require an affiliate ID");
-  }
   const state = await loadPersisted(env);
   const provider = state.providers.find((item) => item.id === payload.providerId);
   if (!provider || provider.type !== "client" || !provider.meritCustomerId) {
@@ -4398,29 +4620,10 @@ async function createRevenuePartner(env: Env, payload: CreateRevenuePartnerPaylo
   if (!isTransactionCategoryForDirection(revenueCategory, "in", state.transactionCategories)) {
     throw new ApiError(400, `Category "${revenueCategory}" is not valid for money in`);
   }
+  const fields = revenuePartnerFields(payload, provider.id, revenueCategory);
   const partner: RevenuePartner = {
-    id: revenueRuleId(payload.name, cleanOptional(payload.teamId)),
-    providerId: provider.id,
-    teamId: cleanOptional(payload.teamId),
-    name: payload.name.trim(),
-    revenueCategory,
-    source: "tune",
-    affiliateId: payload.affiliateId?.trim() ?? "",
-    externalId: cleanOptional(payload.externalId),
-    currency: payload.currency.trim().toUpperCase() || "USD",
-    timezone: payload.timezone.trim(),
-    networkTimezone: payload.networkTimezone.trim(),
-    networkIdEnv: payload.networkIdEnv.trim(),
-    apiKeyEnv: payload.apiKeyEnv.trim(),
-    apiBaseUrlEnv: cleanOptional(payload.apiBaseUrlEnv),
-    meritCustomerName: cleanOptional(payload.meritCustomerName),
-    invoiceDueDays: payload.invoiceDueDays,
-    billingCadence: payload.billingCadence,
-    billingTimezone: payload.billingTimezone.trim(),
-    autoDraft: payload.autoDraft,
-    defaultMeritTaxId: cleanOptional(payload.defaultMeritTaxId),
-    defaultMeritItemCode: cleanOptional(payload.defaultMeritItemCode),
-    enabled: payload.enabled,
+    id: revenueRuleId(fields.name, fields.teamId),
+    ...fields,
     createdAt: new Date().toISOString()
   };
   if (state.revenuePartners.some((item) => item.id === partner.id)) {
@@ -5634,7 +5837,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
 
     try {
       const run: RevenueRun = {
-        ...(await fetchTuneRevenue(env, partner, period)),
+        ...(await fetchRevenuePartnerRevenue(env, partner, period)),
         ...(partner.teamId
           ? { teamName: initialState.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
           : {})
@@ -5654,7 +5857,7 @@ async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<
             }
           : {}),
         revenueCategory: partner.revenueCategory,
-        source: "tune",
+        source: partner.source,
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
         timezone: period.timezone,
@@ -5685,7 +5888,7 @@ async function draftRevenueRun(env: Env, payload: DraftRevenueRunPayload): Promi
     timezone: payload.timezone
   });
   const run: RevenueRun = {
-    ...(await fetchTuneRevenue(env, partner, period)),
+    ...(await fetchRevenuePartnerRevenue(env, partner, period)),
     ...(partner.teamId
       ? { teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
       : {})
@@ -6338,7 +6541,7 @@ async function pullAutomatedRevenue(
 ): Promise<RevenueRun> {
   const period: RevenuePeriod = { preset: "custom", periodStart, periodEnd, timezone: partner.timezone };
   try {
-    const run = await fetchTuneRevenue(env, partner, period);
+    const run = await fetchRevenuePartnerRevenue(env, partner, period);
     return partner.teamId
       ? { ...run, teamName: state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
       : run;
@@ -6351,7 +6554,7 @@ async function pullAutomatedRevenue(
       revenueCategory: partner.revenueCategory,
       teamId: partner.teamId,
       teamName: partner.teamId ? state.teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId : undefined,
-      source: "tune",
+      source: partner.source,
       periodStart,
       periodEnd,
       timezone: partner.timezone,
@@ -7256,6 +7459,977 @@ async function handleApi(
   }
 }
 
+const telegramMaximumLines = 18;
+const telegramMaximumDocumentBytes = 10 * 1024 * 1024;
+
+async function telegramBoundedDocumentBytes(response: Response): Promise<ArrayBuffer> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > telegramMaximumDocumentBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new ApiError(413, "Telegram documents cannot exceed 10 MB");
+  }
+  if (!response.body) throw new ApiError(404, "Document file was empty");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > telegramMaximumDocumentBytes) {
+        throw new ApiError(413, "Telegram documents cannot exceed 10 MB");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  if (byteLength === 0) throw new ApiError(404, "Document file was empty");
+  const bytes = new Uint8Array(new ArrayBuffer(byteLength));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+function telegramUsd(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function telegramMoney(value: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function telegramTotals(totals: Record<string, number>): string {
+  const entries = Object.entries(totals).sort(([left], [right]) => left.localeCompare(right));
+  return entries.length === 0
+    ? "—"
+    : entries.map(([currency, value]) => telegramMoney(value, currency)).join(" · ");
+}
+
+function telegramList(heading: string, lines: readonly string[], empty: string): string {
+  if (lines.length === 0) return `${heading}\n\n${empty}`;
+  const visible = lines.slice(0, telegramMaximumLines);
+  return [
+    heading,
+    "",
+    ...visible,
+    ...(lines.length > visible.length ? [`…and ${lines.length - visible.length} more`] : [])
+  ].join("\n");
+}
+
+function telegramCommandParts(text: string): { command: string; args: string } {
+  const [rawCommand = "", ...rest] = text.trim().split(/\s+/u);
+  const command = rawCommand.slice(1).split("@")[0]?.toLowerCase() ?? "";
+  return { command, args: rest.join(" ").trim() };
+}
+
+function telegramDateRange(value: string | undefined): { fromDate: string; toDate: string; label: string } {
+  const today = financeOperatingDate();
+  const requested = value?.trim().toLowerCase() || "this-month";
+  if (requested === "today") return { fromDate: today, toDate: today, label: "today" };
+  if (requested === "yesterday") {
+    const yesterday = isoDateShift(today, -1);
+    return { fromDate: yesterday, toDate: yesterday, label: "yesterday" };
+  }
+  if (requested === "last-7-days") {
+    return { fromDate: isoDateShift(today, -6), toDate: today, label: "last 7 days" };
+  }
+  if (requested === "this-month") {
+    return { fromDate: `${today.slice(0, 7)}-01`, toDate: today, label: "this month" };
+  }
+  if (requested === "last-month") {
+    const thisMonthStart = `${today.slice(0, 7)}-01`;
+    const lastMonthEnd = isoDateShift(thisMonthStart, -1);
+    return {
+      fromDate: `${lastMonthEnd.slice(0, 7)}-01`,
+      toDate: lastMonthEnd,
+      label: "last month"
+    };
+  }
+  const custom = /^(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$/u.exec(requested);
+  if (custom) {
+    const range = parseSlashTransactionDateRange(custom[1], custom[2]);
+    if (!range || range.toDate > today) throw new ApiError(400, "Telegram date range cannot end in the future");
+    return { ...range, label: `${range.fromDate} to ${range.toDate}` };
+  }
+  throw new ApiError(
+    400,
+    "Period must be today, yesterday, last-7-days, this-month, last-month, or YYYY-MM-DD:YYYY-MM-DD"
+  );
+}
+
+function telegramQuestionRange(question: string): { fromDate: string; toDate: string; label: string } {
+  const normalized = question.toLowerCase();
+  if (/\byesterday\b/u.test(normalized)) return telegramDateRange("yesterday");
+  if (/\btoday\b/u.test(normalized)) return telegramDateRange("today");
+  if (/\b(last|past)\s+7\s+days?\b/u.test(normalized)) return telegramDateRange("last-7-days");
+  if (/\blast\s+month\b/u.test(normalized)) return telegramDateRange("last-month");
+  return telegramDateRange("this-month");
+}
+
+function telegramTransactionOptions(
+  args: string,
+  overrides: Partial<TransactionPageOptions> = {}
+): TransactionPageOptions & { periodLabel: string } {
+  const tokens = args.split(/\s+/u).filter(Boolean);
+  const periodTokens = new Set(["today", "yesterday", "last-7-days", "this-month", "last-month"]);
+  const hasCustomPeriod = /^\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/u.test(tokens[0] ?? "");
+  const period = periodTokens.has(tokens[0] ?? "") || hasCustomPeriod ? tokens.shift() : undefined;
+  const sources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex"]);
+  const sourceToken = tokens[0]?.toLowerCase() as BankTransactionSource | undefined;
+  const source = sourceToken && sources.has(sourceToken) ? (tokens.shift() as BankTransactionSource) : undefined;
+  const range = telegramDateRange(period);
+  return {
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    ...(source ? { source } : {}),
+    match: "all",
+    sortKey: "date",
+    order: "desc",
+    cursor: null,
+    limit: 12,
+    ...(tokens.length > 0 ? { search: tokens.join(" ") } : {}),
+    ...overrides,
+    periodLabel: range.label
+  };
+}
+
+function telegramTransactionLine(transaction: Transaction): string {
+  const account = transaction.slashVirtualAccountName ?? transaction.accountName;
+  const sign = transaction.direction === "in" ? "+" : "−";
+  return `${transaction.date} · ${sign}${telegramMoney(transaction.amount, transaction.currency)} · ${transaction.merchantName ?? transaction.counterparty} · ${account} · ${transaction.id}`;
+}
+
+function telegramInvoice(snapshot: DashboardSnapshot, reference: string): Invoice {
+  const normalized = reference.trim().toLowerCase();
+  const invoice = snapshot.invoices.find((item) =>
+    item.id.toLowerCase() === normalized || item.invoiceNumber.toLowerCase() === normalized
+  );
+  if (!invoice) throw new ApiError(404, "Invoice not found");
+  return invoice;
+}
+
+function telegramExpense(snapshot: DashboardSnapshot, reference: string): ExpenseRecord {
+  const normalized = reference.trim().toLowerCase();
+  const expense = snapshot.expenses.find((item) =>
+    item.id.toLowerCase() === normalized || item.recordNumber.toLowerCase() === normalized
+  );
+  if (!expense) throw new ApiError(404, "Expense not found");
+  return expense;
+}
+
+function telegramDashboardLink(env: Env, page = ""): string {
+  const url = new URL(env.PUBLIC_APP_URL);
+  if (page) url.searchParams.set("page", page);
+  return url.toString();
+}
+
+function telegramMenu(role: TelegramCommandRole): string {
+  const commands = financeTelegramCommands.filter((item) => role === "administrator" || item.access === "read");
+  const groups = [
+    ["Core", ["menu", "help", "whoami", "cancel", "ask", "overview", "balances", "cashflow", "receivables", "payables", "holdings", "fx"]],
+    ["Banking", ["transactions", "transaction", "needs_review", "search", "cashback", "export_transactions"]],
+    ["Analysis", ["analytics", "spend", "income", "top_companies", "top_categories"]],
+    ["Documents", ["invoices", "invoice", "overdue", "due_soon", "invoice_pdf", "payment_candidates", "expenses", "expense", "unpaid_bills", "missing_documents", "expense_document"]],
+    ["Operations", ["revenue", "revenue_runs", "media_spend", "provider_funds", "distribution", "management", "companies", "teams", "health"]],
+    ["Alerts & views", ["alerts", "alert_history", "screenshot", "open"]],
+    ["Actions", commands.filter((item) => item.access === "action").map((item) => item.command)]
+  ] as const;
+  const available = new Set(commands.map((item) => item.command));
+  return [
+    `Finance Dash commands · ${role === "administrator" ? "full access" : "CEO read-only"}`,
+    "",
+    ...groups.flatMap(([label, names]) => {
+      const visible = names.filter((name) => available.has(name));
+      return visible.length > 0 ? [`${label}:`, visible.map((name) => `/${name}`).join(" · ")] : [];
+    }),
+    "",
+    "Use /help <command> for syntax."
+  ].join("\n").slice(0, 4_096);
+}
+
+const telegramHelp: Readonly<Record<string, string>> = {
+  balances: "/balances [all|slash|wise|revolut|amex|holdings]",
+  transactions: "/transactions [period] [bank] [search text]",
+  search: "/search <text> [uses this month]",
+  analytics: "/analytics [today|yesterday|last-7-days|this-month|last-month|YYYY-MM-DD:YYYY-MM-DD]",
+  invoice: "/invoice <invoice number or ID>",
+  invoice_pdf: "/invoice_pdf <invoice number or ID>",
+  expense: "/expense <record number or ID>",
+  expense_document: "/expense_document <record number or ID>",
+  open: "/open [overview|bank|analytics|revenue|invoices|expenses|funding|distribution|management]",
+  screenshot: "/screenshot <page>",
+  sync: "/sync CONFIRM",
+  categorize: "/categorize <transaction ID> | <category> | <transaction|merchant> | CONFIRM",
+  assign_company: "/assign_company <transaction ID> | <company ID> | <transaction|merchant> | CONFIRM",
+  assign_team: "/assign_team <transaction ID> | <team ID or none> | CONFIRM",
+  revenue_pull: "/revenue_pull <JSON SyncRevenuePayload> CONFIRM",
+  draft_revenue: "/draft_revenue <JSON DraftRevenueRunPayload> CONFIRM",
+  create_invoice: "/create_invoice <JSON CreateInvoicePayload> CONFIRM",
+  edit_invoice: "/edit_invoice <invoice number or ID> | <JSON UpdateInvoicePayload> | CONFIRM",
+  duplicate_invoice: "/duplicate_invoice <invoice number or ID> CONFIRM",
+  delete_draft: "/delete_draft <invoice number or ID> CONFIRM",
+  match_invoice: "/match_invoice <transaction ID> | <invoice number or ID> | CONFIRM",
+  record_payment: "/record_payment <invoice number or ID> | <JSON RecordInvoicePaymentPayload> | CONFIRM",
+  send_invoice: "/send_invoice <invoice number or ID> | <save|deliver> | CONFIRM",
+  create_expense: "/create_expense <JSON CreateExpensePayload> CONFIRM",
+  upload_receipt: "/upload_receipt <expense number> — then use the secure upload link",
+  match_expense: "/match_expense <expense number or ID> | <transaction ID> | CONFIRM",
+  add_receivable: "/add_receivable <JSON CreateManualReceivablePayload> CONFIRM",
+  add_holding: "/add_holding <JSON CreateHoldingPayload> CONFIRM",
+  update_holding: "/update_holding <holding ID> | <JSON UpdateHoldingPayload> | CONFIRM",
+  save_cashflow: "/save_cashflow <JSON SaveCashFlowSnapshotPayload> CONFIRM",
+  alert_add: "/alert_add <Slash virtual account> | <USD threshold> | CONFIRM",
+  alert_remove: "/alert_remove <Slash virtual account> | CONFIRM",
+  alert_pause: "/alert_pause <Slash virtual account|all> | CONFIRM",
+  alert_resume: "/alert_resume <Slash virtual account|all> | CONFIRM",
+  alert_test: "/alert_test <Slash virtual account> | CONFIRM",
+  digest: "/digest <HH:MM|off> | CONFIRM — time is UTC"
+};
+
+async function telegramStoredAlertSettings(env: Env, now = new Date().toISOString()): Promise<{
+  defaults: ReturnType<typeof telegramAlertDefaults>;
+  settings: TelegramAlertSettings;
+}> {
+  const defaults = telegramAlertDefaults(env);
+  const settings = await env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").getTelegramAlertSettings(
+    defaults.accountNames,
+    defaults.threshold,
+    now
+  );
+  return { defaults, settings };
+}
+
+function telegramPipeParts(args: string, count: number): string[] {
+  const parts = args.split("|").map((part) => part.trim());
+  if (parts.length !== count || parts.some((part) => !part)) throw new ApiError(400, "Command arguments are incomplete");
+  return parts;
+}
+
+function telegramConfirmedJson<T>(args: string): T {
+  if (!/\sCONFIRM$/u.test(args)) throw new ApiError(400, "Add CONFIRM after reviewing the action");
+  const jsonText = args.replace(/\sCONFIRM$/u, "").trim();
+  try {
+    return JSON.parse(jsonText) as T;
+  } catch {
+    throw new ApiError(400, "The command JSON is invalid");
+  }
+}
+
+async function telegramAnalytics(
+  env: Env,
+  range: { fromDate: string; toDate: string }
+): Promise<BankAnalyticsSnapshot | null> {
+  const response = await getBankAnalyticsSnapshot(env, range);
+  if (response.status === 202) return null;
+  if (!response.ok) throw new ApiError(response.status, "Analytics could not be loaded");
+  return await response.json() as BankAnalyticsSnapshot;
+}
+
+async function telegramReadCommand(
+  env: Env,
+  user: TelegramAuthUser,
+  command: string,
+  args: string
+): Promise<TelegramCommandReply> {
+  if (command === "menu") return telegramMenu("read-only");
+  if (command === "help") {
+    const requested = args.toLowerCase();
+    return requested
+      ? telegramHelp[requested] ?? `/${requested} is available. Use /menu to browse commands.`
+      : `${telegramMenu("read-only")}\n\nPeriods: today, yesterday, last-7-days, this-month, last-month, or YYYY-MM-DD:YYYY-MM-DD.`;
+  }
+  if (command === "cancel") return "There is no unfinished Telegram action.";
+  if (command === "open" || command === "screenshot") {
+    const pageNames: Record<string, string> = {
+      overview: "",
+      bank: "banks",
+      analytics: "analytics",
+      revenue: "revenue",
+      invoices: "invoices",
+      expenses: "expenses",
+      funding: "media-funding",
+      distribution: "distribution",
+      management: "management"
+    };
+    const page = args.trim().toLowerCase() || "overview";
+    if (!(page in pageNames)) throw new ApiError(400, telegramHelp.open);
+    const link = telegramDashboardLink(env, pageNames[page]);
+    if (command === "open") return `Open ${page}: ${link}`;
+    const targetUrl = new URL(link);
+    const sessionToken = await createAuthSessionToken(
+      env.AUTH_SESSION_SECRET,
+      targetUrl.hostname,
+      user.normalizedUsername
+    );
+    const response = await env.BROWSER.quickAction("screenshot", {
+      url: targetUrl.toString(),
+      cookies: [{
+        name: "__Host-finance_session",
+        value: sessionToken,
+        domain: targetUrl.hostname,
+        path: "/",
+        httpOnly: true,
+        secure: true,
+        sameSite: "Strict"
+      }],
+      viewport: { width: 1_440, height: 1_000 },
+      gotoOptions: { waitUntil: "networkidle0", timeout: 45_000 },
+      screenshotOptions: { type: "png", fullPage: false }
+    });
+    if (!response.ok) throw new ApiError(503, "Dashboard screenshot is temporarily unavailable");
+    return {
+      document: {
+        bytes: await telegramBoundedDocumentBytes(response),
+        contentType: "image/png",
+        fileName: `finance-${page}-${financeOperatingDate()}.png`,
+        caption: `Finance Dash · ${page} · ${new Date().toISOString()}`
+      }
+    };
+  }
+
+  if (command === "transactions" || command === "search" || command === "needs_review") {
+    const options = telegramTransactionOptions(
+      command === "search" ? `this-month ${args}` : args,
+      command === "needs_review" ? { match: "needs-review" } : {}
+    );
+    if (command === "search" && !args) throw new ApiError(400, "/search requires text");
+    const page = await readScopedTransactionPage(env, options);
+    return telegramList(
+      `${command === "needs_review" ? "Needs review" : "Transactions"} · ${options.periodLabel}${page.totalCount === undefined ? "" : ` · ${page.totalCount} total`}`,
+      page.transactions.map(telegramTransactionLine),
+      "No matching transactions."
+    );
+  }
+  if (command === "transaction") {
+    if (!args) throw new ApiError(400, "/transaction requires a transaction ID");
+    const transaction = await getConvexClient(env).query(api.banking.getTransaction, {
+      serviceToken: getConvexServiceToken(env),
+      id: args
+    });
+    if (!transaction) throw new ApiError(404, "Transaction not found");
+    return [
+      `${transaction.direction === "in" ? "Incoming" : "Outgoing"} transaction`,
+      "",
+      telegramTransactionLine(transaction),
+      `Category: ${transaction.category}`,
+      `Company: ${transaction.matchedProviderId ?? "Unassigned"}`,
+      `Owner: ${transaction.teamId ?? "Unassigned"}`,
+      `Status: ${transaction.status}`
+    ].join("\n");
+  }
+  if (command === "export_transactions") {
+    const options = telegramTransactionOptions(args);
+    const collected = await collectActivityTransactions(env, options);
+    const providersById = new Map(collected.directory.providers.map((provider) => [provider.id, provider]));
+    const teamsById = new Map(collected.directory.teams.map((team) => [team.id, team]));
+    const csv = buildTransactionCsv(collected.transactions, { providersById, teamsById });
+    const bytes = new TextEncoder().encode(csv);
+    if (bytes.byteLength > telegramMaximumDocumentBytes) {
+      throw new ApiError(413, "This CSV exceeds 10 MB; narrow the period or filters");
+    }
+    return {
+      document: {
+        bytes: bytes.buffer,
+        contentType: "text/csv;charset=utf-8",
+        fileName: transactionCsvFileName(options.source ?? "all"),
+        caption: `${collected.transactions.length} transactions · ${options.periodLabel}`
+      }
+    };
+  }
+
+  if (["analytics", "spend", "income", "top_companies", "top_categories", "cashback"].includes(command)) {
+    const range = telegramDateRange(args || undefined);
+    const analytics = await telegramAnalytics(env, range);
+    if (!analytics) return `Analytics for ${range.label} are being prepared. Retry this command in a moment.`;
+    if (command === "spend") return `Spend · ${range.label}\n\n${telegramTotals(analytics.summary.moneyOut)}`;
+    if (command === "income") return `Income · ${range.label}\n\n${telegramTotals(analytics.summary.moneyIn)}`;
+    if (command === "cashback") {
+      const cashback = analytics.bankPeriod.slashCashback;
+      return [
+        `Slash cashback · ${range.label}`,
+        "",
+        `Earned: ${telegramTotals(cashback.earned)}`,
+        `Eligible spend: ${telegramTotals(cashback.eligibleSpend)}`,
+        `Credited: ${telegramTotals(cashback.credited)}`,
+        `Eligible purchases: ${cashback.eligiblePurchaseCount}`
+      ].join("\n");
+    }
+    if (command === "top_companies") {
+      const rows = [...analytics.providers].sort((left, right) =>
+        Object.values(right.moneyOut).reduce((sum, value) => sum + value, 0)
+        - Object.values(left.moneyOut).reduce((sum, value) => sum + value, 0)
+      );
+      return telegramList(`Top companies · ${range.label}`, rows.map((row) =>
+        `${row.providerName}: ${telegramTotals(row.moneyOut)} · ${row.transactionCount} tx`
+      ), "No company activity.");
+    }
+    if (command === "top_categories") {
+      const rows = [...analytics.categories].sort((left, right) =>
+        Object.values(right.moneyOut).reduce((sum, value) => sum + value, 0)
+        - Object.values(left.moneyOut).reduce((sum, value) => sum + value, 0)
+      );
+      return telegramList(`Top categories · ${range.label}`, rows.map((row) =>
+        `${row.category}: ${telegramTotals(row.moneyOut)} · ${row.transactionCount} tx`
+      ), "No category activity.");
+    }
+    return [
+      `Analytics · ${range.label}`,
+      "",
+      `Money in: ${telegramTotals(analytics.summary.moneyIn)}`,
+      `Money out: ${telegramTotals(analytics.summary.moneyOut)}`,
+      `Transactions: ${analytics.summary.transactionCount}`,
+      `Needs review: ${analytics.summary.needsReviewCount}`,
+      `Matched: ${analytics.summary.matchedTransactionCount}`
+    ].join("\n");
+  }
+
+  if (command === "media_spend") {
+    const range = telegramDateRange(args || undefined);
+    const media = await readMediaSpend(env, range.fromDate, range.toDate);
+    return [
+      `Media spend · ${range.label}`,
+      "",
+      `Spend: ${telegramMoney(media.summary.totalSpend, media.currency)}`,
+      `Days reported: ${media.summary.days}`,
+      `Rows: ${media.rows.length}`,
+      `Sync: ${media.sync.status}`
+    ].join("\n");
+  }
+  if (command === "provider_funds") {
+    const funding = await readMediaFunding(env);
+    return telegramList("Provider funds", funding.providers.map((provider) =>
+      `${provider.name}: ${telegramMoney(provider.estimatedBalance, funding.currency)} estimated · ${provider.assignmentCount} assignments`
+    ), "No funding providers configured.");
+  }
+  if (command === "management") {
+    const report = await getManagementReportDashboard(env);
+    if (!isRecord(report) || !isRecord(report.metadata)) throw new ApiError(503, "Management report is unavailable");
+    return [
+      "Management report",
+      "",
+      `Status: ${String(report.status)}`,
+      `Report: ${String(report.metadata.reportName ?? "—")}`,
+      `As of: ${String(report.metadata.asOf ?? "—")}`,
+      `Open: ${telegramDashboardLink(env, "management")}`
+    ].join("\n");
+  }
+
+  const snapshot = await getSnapshot(env);
+  if (command === "ask") {
+    if (!args) throw new ApiError(400, "/ask requires a question");
+    const questionRange = telegramQuestionRange(args);
+    const analytics = await telegramAnalytics(env, questionRange);
+    const compactContext = {
+      asOf: snapshot.asOf,
+      accounts: snapshot.accounts.map(({ name, source, balance, currency, status }) => ({ name, source, balance, currency, status })),
+      metrics: snapshot.metrics,
+      approximateUsdTotals: snapshot.approximateUsdTotals,
+      revenueMetrics: snapshot.revenueMetrics,
+      openInvoices: snapshot.invoices.filter((invoice) => invoice.status !== "paid").map(({ invoiceNumber, customerName, amount, currency, status, dueDate }) => ({ invoiceNumber, customerName, amount, currency, status, dueDate })),
+      unpaidExpenses: snapshot.expenses.filter((expense) => expense.paymentStatus === "unpaid").map(({ recordNumber, supplierName, grossAmount, currency, dueDate }) => ({ recordNumber, supplierName, grossAmount, currency, dueDate })),
+      periodAnalytics: analytics ? {
+        period: questionRange,
+        summary: analytics.summary,
+        companies: analytics.providers,
+        categories: analytics.categories,
+        slashCashback: analytics.bankPeriod.slashCashback
+      } : { period: questionRange, status: "preparing" }
+    };
+    const result = await runAiPrompt(env, {
+      systemPrompt: "Answer only from the supplied Finance Dash facts. Be concise, preserve currencies, and say when the facts do not contain the answer.",
+      prompt: `Finance Dash facts:\n${JSON.stringify(compactContext)}\n\nQuestion: ${args}`
+    });
+    return result.output.slice(0, 4_096);
+  }
+  if (command === "overview") {
+    return [
+      "Finance overview",
+      "",
+      `Approx. liquid assets: ${telegramUsd(snapshot.approximateUsdTotals.totalUsd)}`,
+      `Bank accounts: ${telegramUsd(snapshot.approximateUsdTotals.accountsUsd)}`,
+      `Holdings: ${telegramUsd(snapshot.approximateUsdTotals.holdingsUsd)}`,
+      `Receivables: ${telegramTotals(snapshot.metrics.totalReceivables)}`,
+      `Payables: ${telegramTotals(snapshot.metrics.totalPayables)}`,
+      `Open invoices: ${snapshot.invoices.filter((invoice) => invoice.status !== "paid").length}`,
+      `Needs review: ${snapshot.transactionReviewPreview.length}`,
+      `As of: ${snapshot.asOf}`
+    ].join("\n");
+  }
+  if (command === "balances") {
+    const filter = (args || "all").toLowerCase();
+    if (!["all", "slash", "wise", "revolut", "amex", "holdings"].includes(filter)) {
+      throw new ApiError(400, telegramHelp.balances);
+    }
+    if (filter === "slash") {
+      const accounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
+        baseUrl: env.SLASH_BASE_URL,
+        apiKey: env.SLASH_API_KEY,
+        legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+      });
+      return telegramList("Slash virtual-account balances", accounts.filter((account) => !account.closedAt).map((account) =>
+        `${account.name}: ${telegramMoney(account.balance, account.currency)}`
+      ), "No open Slash virtual accounts.");
+    }
+    const lines = filter === "holdings"
+      ? snapshot.holdings.map((holding) => `${holding.name}: ${holding.balance.toLocaleString("en-US")} ${holding.asset}`)
+      : snapshot.accounts.filter((account) => filter === "all" || account.source === filter).map((account) =>
+          `${account.name}: ${telegramMoney(account.balance, account.currency)} · ${account.source}`
+        );
+    return telegramList("Balances", lines, "No balances match this filter.");
+  }
+  if (command === "cashflow") {
+    return [
+      "Cash flow",
+      "",
+      `Cash: ${telegramTotals(snapshot.metrics.totalCash)}`,
+      `Receivables: ${telegramTotals(snapshot.metrics.totalReceivables)}`,
+      `Payables: ${telegramTotals(snapshot.metrics.totalPayables)}`,
+      `Net operating assets: ${telegramTotals(snapshot.metrics.netOperatingAssets)}`,
+      `Total assets: ${telegramTotals(snapshot.metrics.totalAssets)}`
+    ].join("\n");
+  }
+  if (command === "receivables") return telegramList("Receivables", snapshot.receivables.map((item) =>
+    `${item.name}: ${telegramMoney(item.balance, item.currency)}${item.dueDate ? ` · due ${item.dueDate}` : ""}`
+  ), "No receivables.");
+  if (command === "payables") return telegramList("Payables", snapshot.payables.map((item) =>
+    `${item.supplier}: ${telegramMoney(item.balance, item.currency)}`
+  ), "No payables.");
+  if (command === "holdings") return telegramList("Holdings", snapshot.holdings.map((holding) =>
+    `${holding.name}: ${holding.balance.toLocaleString("en-US")} ${holding.asset} · ${holding.kind}`
+  ), "No holdings.");
+  if (command === "fx") return telegramList("FX rates to USD", snapshot.fxRates.map((rate) =>
+    `${rate.asset}: ${rate.rateUsd.toLocaleString("en-US", { maximumFractionDigits: 8 })}${rate.stale ? " · stale" : ""}`
+  ), "No FX rates.");
+  if (command === "revenue") {
+    return [
+      "Revenue",
+      "",
+      `Total: ${telegramTotals(snapshot.revenueMetrics.totalRevenue)}`,
+      `Invoiced: ${telegramTotals(snapshot.revenueMetrics.invoicedRevenue)}`,
+      `Pending: ${telegramTotals(snapshot.revenueMetrics.pendingRevenue)}`,
+      `Rules: ${snapshot.revenueMetrics.partnerCount}`,
+      `Failed runs: ${snapshot.revenueMetrics.failedRuns}`
+    ].join("\n");
+  }
+  if (command === "revenue_runs") return telegramList("Revenue runs", snapshot.revenueRuns.map((run) =>
+    `${run.periodStart}–${run.periodEnd} · ${run.partnerName}: ${telegramMoney(run.revenue, run.currency)} · ${run.status}`
+  ), "No revenue runs.");
+  if (["invoices", "overdue", "due_soon"].includes(command)) {
+    const today = financeOperatingDate();
+    const dueSoon = isoDateShift(today, 7);
+    const invoices = snapshot.invoices.filter((invoice) => {
+      if (command === "overdue") return invoice.status !== "paid" && invoice.dueDate < today;
+      if (command === "due_soon") return invoice.status !== "paid" && invoice.dueDate >= today && invoice.dueDate <= dueSoon;
+      return true;
+    });
+    return telegramList(command === "overdue" ? "Overdue invoices" : command === "due_soon" ? "Invoices due soon" : "Invoices", invoices.map((invoice) =>
+      `${invoice.invoiceNumber} · ${invoice.customerName} · ${telegramMoney(invoice.amount, invoice.currency)} · ${invoice.status} · due ${invoice.dueDate}`
+    ), "No matching invoices.");
+  }
+  if (command === "invoice" || command === "invoice_pdf") {
+    if (!args) throw new ApiError(400, telegramHelp[command]);
+    const invoice = telegramInvoice(snapshot, args);
+    if (command === "invoice_pdf") {
+      const response = await downloadInvoicePdf(env, invoice.id);
+      return {
+        document: {
+          bytes: await telegramBoundedDocumentBytes(response),
+          contentType: "application/pdf",
+          fileName: invoicePdfFileName(invoice),
+          caption: `Invoice ${invoice.invoiceNumber} · ${invoice.customerName}`
+        }
+      };
+    }
+    const outstanding = invoiceOutstanding(invoice, snapshot.paymentAllocations);
+    return [
+      `Invoice ${invoice.invoiceNumber}`,
+      "",
+      `Customer: ${invoice.customerName}`,
+      `Amount: ${telegramMoney(invoice.amount, invoice.currency)}`,
+      `Outstanding: ${telegramMoney(outstanding, invoice.currency)}`,
+      `Status: ${invoice.status}`,
+      `Issue date: ${invoice.issueDate}`,
+      `Due date: ${invoice.dueDate}`,
+      `Delivery: ${invoice.meritDeliveryStatus}`,
+      `ID: ${invoice.id}`
+    ].join("\n");
+  }
+  if (command === "payment_candidates") {
+    const currency = (args || "USD").toUpperCase();
+    const page = await invoicePaymentCandidates(env, currency, 12, null);
+    return telegramList(`Payment candidates · ${currency}`, page.transactions.map(telegramTransactionLine), "No candidates.");
+  }
+  if (["expenses", "unpaid_bills", "missing_documents"].includes(command)) {
+    const expenses = snapshot.expenses.filter((expense) => {
+      if (command === "unpaid_bills") return expense.paymentStatus === "unpaid";
+      if (command === "missing_documents") return expense.documents.length === 0;
+      return true;
+    });
+    return telegramList(command === "unpaid_bills" ? "Unpaid bills" : command === "missing_documents" ? "Missing documents" : "Expenses", expenses.map((expense) =>
+      `${expense.recordNumber} · ${expense.supplierName} · ${telegramMoney(expense.grossAmount, expense.currency)} · ${expense.paymentStatus}`
+    ), "No matching expenses.");
+  }
+  if (command === "expense" || command === "expense_document") {
+    if (!args) throw new ApiError(400, telegramHelp[command]);
+    const expense = telegramExpense(snapshot, args);
+    if (command === "expense_document") {
+      const document = expense.documents[0];
+      if (!document) throw new ApiError(404, "This expense has no document");
+      const storageUrl = await expenseDocumentUrl(env, document.storageId);
+      if (!storageUrl) throw new ApiError(404, "Expense document file not found");
+      const response = await fetch(storageUrl);
+      if (!response.ok) throw new ApiError(503, "Expense document file is temporarily unavailable");
+      return {
+        document: {
+          bytes: await telegramBoundedDocumentBytes(response),
+          contentType: document.contentType,
+          fileName: document.fileName,
+          caption: `Expense ${expense.recordNumber} · ${expense.supplierName}`
+        }
+      };
+    }
+    return [
+      `Expense ${expense.recordNumber}`,
+      "",
+      `Supplier: ${expense.supplierName}`,
+      `Gross: ${telegramMoney(expense.grossAmount, expense.currency)}`,
+      `VAT: ${telegramMoney(expense.vatAmount, expense.currency)}`,
+      `Status: ${expense.paymentStatus}`,
+      `Category: ${expense.category}`,
+      `Documents: ${expense.documents.length}`,
+      `ID: ${expense.id}`
+    ].join("\n");
+  }
+  if (command === "distribution") return telegramList("Profit distribution", snapshot.profitDistribution.currencies.map((currency) =>
+    `${currency.currency}: ${telegramMoney(currency.remaining, currency.currency)} remaining · ${telegramMoney(currency.totalPaid, currency.currency)} paid`
+  ), "No distribution data.");
+  if (command === "companies") return telegramList("Companies", snapshot.providers.map((provider) =>
+    `${provider.name} · ${provider.type} · ${provider.id}`
+  ), "No companies.");
+  if (command === "teams") return telegramList("Teams", snapshot.teams.map((team) => `${team.name} · ${team.id}`), "No teams.");
+  if (command === "health") return telegramList("Integration health", snapshot.integrationStatus.map((integration) =>
+    `${integration.configured && !integration.issue ? "✅" : "⚠️"} ${integration.label}: ${integration.issue ?? integration.message}`
+  ), "No integrations.");
+  if (command === "alert_history") {
+    const history = await env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").getTelegramAlertHistory();
+    return telegramList("Recent alert deliveries", history.map((item) =>
+      `${item.deliveredAt} · ${item.kind === "low-balance" ? "⚠️" : "✅"} ${item.accountName} · ${telegramMoney(item.balance, item.currency)} · ${item.recipient}`
+    ), "No alert deliveries have been recorded yet.");
+  }
+  if (command === "alerts") {
+    const { defaults, settings } = await telegramStoredAlertSettings(env);
+    const accounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
+      baseUrl: env.SLASH_BASE_URL,
+      apiKey: env.SLASH_API_KEY,
+      legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+    });
+    const observedAt = new Date().toISOString();
+    const observations = settings.rules.map((rule) => ({
+      rule,
+      observation: slashVirtualAccountBalanceObservations(
+        accounts,
+        [rule.accountName],
+        rule.threshold,
+        observedAt
+      )[0]
+    }));
+    return telegramList(
+      `Alert rules · recipients ${defaults.recipients.join(", ")} · digest ${settings.digestTimeUtc ? `${settings.digestTimeUtc} UTC` : "off"}`,
+      observations.map(({ rule, observation }) =>
+        `${rule.paused ? "⏸" : observation.balance < observation.threshold ? "⚠️" : "✅"} ${observation.accountName}: ${telegramMoney(observation.balance, observation.currency)} · threshold ${telegramMoney(observation.threshold, observation.currency)}${rule.paused ? " · paused" : ""}`
+      ),
+      "No alert rules."
+    );
+  }
+  throw new ApiError(400, `/${command} is not available as a read command`);
+}
+
+async function telegramActionCommand(env: Env, command: string, args: string): Promise<string> {
+  if (command === "sync") {
+    if (args.toUpperCase() !== "CONFIRM") throw new ApiError(400, telegramHelp.sync);
+    const results = await Promise.allSettled([syncLatestBankActivity(env), syncMeritActivity(env)]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    await rebuildProfitDistributionCache(env);
+    return "✅ Bank and Merit synchronization completed.";
+  }
+  if (command === "categorize") {
+    const [transactionId, category, scope, confirmation] = telegramPipeParts(args, 4);
+    if (confirmation !== "CONFIRM" || (scope !== "transaction" && scope !== "merchant")) {
+      throw new ApiError(400, telegramHelp.categorize);
+    }
+    const updated = await updateTransactionCategory(env, { transactionId, category, scope });
+    return `✅ ${updated.id} categorized as ${updated.category}.`;
+  }
+  if (command === "assign_company") {
+    const [transactionId, providerId, scope, confirmation] = telegramPipeParts(args, 4);
+    if (confirmation !== "CONFIRM" || (scope !== "transaction" && scope !== "merchant")) {
+      throw new ApiError(400, telegramHelp.assign_company);
+    }
+    const updated = await matchTransaction(env, { transactionId, providerId, scope }, true);
+    return `✅ Company assigned to ${updated.id}.`;
+  }
+  if (command === "assign_team") {
+    const [transactionId, teamId, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.assign_team);
+    const updated = await assignTransactionTeam(env, { transactionId, teamId: teamId === "none" ? undefined : teamId });
+    return `✅ Owner ${updated.teamId ? "assigned" : "cleared"} for ${updated.id}.`;
+  }
+  if (command === "revenue_pull") {
+    const result = await syncRevenue(env, telegramConfirmedJson<SyncRevenuePayload>(args));
+    return telegramList("✅ Revenue pull completed", result.runs.map((run) =>
+      `${run.partnerName}: ${telegramMoney(run.revenue, run.currency)} · ${run.status}`
+    ), "No revenue runs returned.");
+  }
+  if (command === "draft_revenue") {
+    const invoice = await draftRevenueRun(env, telegramConfirmedJson<DraftRevenueRunPayload>(args));
+    return `✅ Draft ${invoice.invoiceNumber} created for ${telegramMoney(invoice.amount, invoice.currency)}.`;
+  }
+  if (command === "create_invoice") {
+    const invoice = await createInvoice(env, telegramConfirmedJson<CreateInvoicePayload>(args));
+    return `✅ Draft ${invoice.invoiceNumber} created.`;
+  }
+
+  const snapshot = await getSnapshot(env);
+  if (command === "edit_invoice") {
+    const [reference, jsonAndConfirmation, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.edit_invoice);
+    const invoice = telegramInvoice(snapshot, reference);
+    let payload: UpdateInvoicePayload;
+    try { payload = JSON.parse(jsonAndConfirmation) as UpdateInvoicePayload; }
+    catch { throw new ApiError(400, "The command JSON is invalid"); }
+    const updated = await updateInvoice(env, invoice.id, payload);
+    return `✅ Invoice ${updated.invoiceNumber} updated.`;
+  }
+  if (command === "duplicate_invoice") {
+    const match = /^(.*?)\s+CONFIRM$/u.exec(args);
+    if (!match) throw new ApiError(400, telegramHelp.duplicate_invoice);
+    const source = telegramInvoice(snapshot, match[1]);
+    const duplicate = await createInvoice(env, await previewInvoiceDuplicate(env, source.id));
+    return `✅ Draft ${duplicate.invoiceNumber} duplicated from ${source.invoiceNumber}.`;
+  }
+  if (command === "delete_draft") {
+    const match = /^(.*?)\s+CONFIRM$/u.exec(args);
+    if (!match) throw new ApiError(400, telegramHelp.delete_draft);
+    const invoice = telegramInvoice(snapshot, match[1]);
+    await deleteInvoiceDrafts(env, [invoice.id]);
+    return `✅ Draft ${invoice.invoiceNumber} deleted.`;
+  }
+  if (command === "match_invoice") {
+    const [transactionId, reference, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.match_invoice);
+    const invoice = telegramInvoice(snapshot, reference);
+    await matchInvoicePayment(env, transactionId, { invoiceId: invoice.id, confirmation: "REVIEWED_INVOICE_MATCH" });
+    return `✅ Transaction matched to ${invoice.invoiceNumber}.`;
+  }
+  if (command === "record_payment") {
+    const [reference, jsonPayload, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.record_payment);
+    const invoice = telegramInvoice(snapshot, reference);
+    let payload: RecordInvoicePaymentPayload;
+    try { payload = JSON.parse(jsonPayload) as RecordInvoicePaymentPayload; }
+    catch { throw new ApiError(400, "The command JSON is invalid"); }
+    await recordInvoicePayment(env, invoice.id, payload);
+    return `✅ Payment recorded for ${invoice.invoiceNumber}.`;
+  }
+  if (command === "send_invoice") {
+    const [reference, mode, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM" || (mode !== "save" && mode !== "deliver")) {
+      throw new ApiError(400, telegramHelp.send_invoice);
+    }
+    const invoice = telegramInvoice(snapshot, reference);
+    const result = await sendInvoices(env, {
+      invoiceIds: [invoice.id],
+      mode,
+      confirmation: "SEND_TO_MERIT"
+    });
+    const outcome = result.outcomes[0];
+    return `${outcome?.status === "failed" ? "⚠️" : "✅"} ${outcome?.message ?? `${invoice.invoiceNumber}: ${outcome?.status ?? "processed"}`}`;
+  }
+  if (command === "create_expense") {
+    const expense = await createExpense(env, telegramConfirmedJson<CreateExpensePayload>(args));
+    return `✅ Expense ${expense.recordNumber} created.`;
+  }
+  if (command === "upload_receipt") {
+    if (!args) throw new ApiError(400, telegramHelp.upload_receipt);
+    const expense = telegramExpense(snapshot, args);
+    return `Open the secure expense editor to upload evidence for ${expense.recordNumber}: ${telegramDashboardLink(env, "expenses")}`;
+  }
+  if (command === "match_expense") {
+    const [reference, transactionId, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.match_expense);
+    const expense = telegramExpense(snapshot, reference);
+    await matchExpensePayment(env, expense.id, { transactionId });
+    return `✅ Payment matched to expense ${expense.recordNumber}.`;
+  }
+  if (command === "add_receivable") {
+    const receivable = await createManualReceivable(env, telegramConfirmedJson<CreateManualReceivablePayload>(args));
+    return `✅ Receivable ${receivable.name} added.`;
+  }
+  if (command === "add_holding") {
+    const payload = telegramConfirmedJson<CreateHoldingPayload>(args);
+    await createHolding(env, payload);
+    return `✅ Holding ${payload.name} added.`;
+  }
+  if (command === "update_holding") {
+    const [holdingId, jsonPayload, confirmation] = telegramPipeParts(args, 3);
+    if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.update_holding);
+    let payload: UpdateHoldingPayload;
+    try { payload = JSON.parse(jsonPayload) as UpdateHoldingPayload; }
+    catch { throw new ApiError(400, "The command JSON is invalid"); }
+    await updateHolding(env, holdingId, payload);
+    return `✅ Holding ${holdingId} updated.`;
+  }
+  if (command === "save_cashflow") {
+    const payload = telegramConfirmedJson<SaveCashFlowSnapshotPayload>(args);
+    await saveCashFlowSnapshot(env, payload);
+    return `✅ Cash-flow snapshot saved for ${payload.asOfDate}.`;
+  }
+  if (["alert_add", "alert_remove", "alert_pause", "alert_resume", "alert_test", "digest"].includes(command)) {
+    const now = new Date().toISOString();
+    const { defaults, settings } = await telegramStoredAlertSettings(env, now);
+    const control = env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding");
+    if (command === "alert_add") {
+      const [accountName, thresholdText, confirmation] = telegramPipeParts(args, 3);
+      const threshold = Number(thresholdText.replace(/[$,]/gu, ""));
+      if (confirmation !== "CONFIRM" || !Number.isFinite(threshold) || threshold <= 0) {
+        throw new ApiError(400, telegramHelp.alert_add);
+      }
+      const accounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
+        baseUrl: env.SLASH_BASE_URL,
+        apiKey: env.SLASH_API_KEY,
+        legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+      });
+      const observation = slashVirtualAccountBalanceObservations(accounts, [accountName], threshold, now)[0];
+      await control.upsertTelegramAlertRule(
+        defaults.accountNames,
+        defaults.threshold,
+        observation.accountName,
+        threshold,
+        now
+      );
+      return `✅ Alert saved for ${observation.accountName} below ${telegramMoney(threshold, "USD")}.`;
+    }
+    if (command === "alert_remove") {
+      const [accountName, confirmation] = telegramPipeParts(args, 2);
+      if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.alert_remove);
+      await control.removeTelegramAlertRule(defaults.accountNames, defaults.threshold, accountName, now);
+      return `✅ Alert removed for ${accountName}.`;
+    }
+    if (command === "alert_pause" || command === "alert_resume") {
+      const [accountName, confirmation] = telegramPipeParts(args, 2);
+      if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp[command]);
+      const paused = command === "alert_pause";
+      await control.pauseTelegramAlertRules(
+        defaults.accountNames,
+        defaults.threshold,
+        accountName,
+        paused,
+        now
+      );
+      return `✅ ${accountName.toLowerCase() === "all" ? "All alerts" : `${accountName} alert`} ${paused ? "paused" : "resumed"}.`;
+    }
+    if (command === "alert_test") {
+      const [accountName, confirmation] = telegramPipeParts(args, 2);
+      if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.alert_test);
+      const rule = settings.rules.find((item) =>
+        item.accountName.toLowerCase() === accountName.toLowerCase()
+      );
+      if (!rule) throw new ApiError(404, `No alert rule exists for ${accountName}`);
+      const accounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
+        baseUrl: env.SLASH_BASE_URL,
+        apiKey: env.SLASH_API_KEY,
+        legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+      });
+      const observation = slashVirtualAccountBalanceObservations(
+        accounts,
+        [rule.accountName],
+        rule.threshold,
+        now
+      )[0];
+      return `TEST ONLY\n\n${buildSlashVirtualAccountBalanceAlertMessage({
+        ...observation,
+        id: crypto.randomUUID(),
+        band: observation.balance < observation.threshold ? "below" : "healthy",
+        kind: observation.balance < observation.threshold ? "low-balance" : "recovered"
+      })}`;
+    }
+    const [time, confirmation] = telegramPipeParts(args, 2);
+    if (confirmation !== "CONFIRM" || (time !== "off" && !/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(time))) {
+      throw new ApiError(400, telegramHelp.digest);
+    }
+    await control.setTelegramDigestTime(
+      defaults.accountNames,
+      defaults.threshold,
+      time === "off" ? null : time,
+      now
+    );
+    return time === "off" ? "✅ Daily Telegram digest disabled." : `✅ Daily Telegram digest scheduled for ${time} UTC.`;
+  }
+  throw new ApiError(400, `/${command} is not available as an action command`);
+}
+
+export async function handleTelegramCommand(
+  env: Env,
+  user: TelegramAuthUser,
+  role: TelegramCommandRole,
+  text: string
+): Promise<TelegramCommandReply> {
+  try {
+    const configuredAdministrators = new Set(
+      env.TELEGRAM_COMMAND_ADMIN_USERS.split(",").map(normalizeFinanceUsername)
+    );
+    const configuredReaders = new Set(
+      env.TELEGRAM_COMMAND_READ_ONLY_USERS.split(",").map(normalizeFinanceUsername)
+    );
+    const expectedRole: TelegramCommandRole | null = configuredAdministrators.has(user.normalizedUsername)
+      ? "administrator"
+      : configuredReaders.has(user.normalizedUsername)
+        ? "read-only"
+        : null;
+    if (!expectedRole || expectedRole !== role) throw new ApiError(403, "Telegram command access denied");
+
+    const { command, args } = telegramCommandParts(text);
+    if (command === "whoami") {
+      return `${user.username} · ${role === "administrator" ? "full administrator commands" : "CEO read-only commands"}`;
+    }
+    if (command === "menu") return telegramMenu(role);
+    if (command === "help" && role === "administrator" && !args) {
+      return `${telegramMenu(role)}\n\nActions require the exact CONFIRM marker. Use /help <command> for syntax.`;
+    }
+    const definition = financeTelegramCommands.find((item) => item.command === command);
+    if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
+    if (definition.access === "action") {
+      if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
+      return (await telegramActionCommand(env, command, args)).slice(0, 4_096);
+    }
+    const reply = await telegramReadCommand(env, user, command, args);
+    return typeof reply === "string" ? reply.slice(0, 4_096) : reply;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Telegram command failed";
+    console.error(JSON.stringify({
+      event: "telegram_command_failed",
+      command: telegramCommandParts(text).command,
+      username: user.username,
+      error: message
+    }));
+    return `⚠️ ${message.slice(0, 3_900)}`;
+  }
+}
+
 export default {
   async fetch(
     request: Request,
@@ -7300,6 +8474,19 @@ export default {
         }));
         failures.push(error);
       }
+      try {
+        const delivered = await sendTelegramDigestIfDue(env, controller.scheduledTime);
+        if (delivered > 0) {
+          console.log(JSON.stringify({ event: "telegram_daily_digest_sent", delivered }));
+        }
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "telegram_daily_digest_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
     }
     if (controller.cron === "*/5 * * * *") {
       try {
@@ -7336,10 +8523,10 @@ export default {
         failures.push(error);
       }
       try {
-        await checkSlashCashBalanceAlert(env);
+        await checkSlashVirtualAccountBalanceAlerts(env);
       } catch (error) {
         console.error(JSON.stringify({
-          event: "slash_cash_balance_alert_failed",
+          event: "slash_virtual_account_balance_alert_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));

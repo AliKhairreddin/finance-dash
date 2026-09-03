@@ -458,7 +458,7 @@ export function RevenueView({
               <NativeSelectOption value="all">All revenue rules</NativeSelectOption>
               {dashboard.revenuePartners.map((partner) => (
                 <NativeSelectOption key={partner.id} value={partner.id}>
-                  {partner.name} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {cadenceLabel(partner.billingCadence)}
+                  {partner.name} · {partner.source === "quinstreet" ? `QuinStreet · ${partner.publisherName}` : "TUNE"} · {partner.teamId ? teamsById.get(partner.teamId)?.name ?? "Unknown owner" : "Company-level"} · {cadenceLabel(partner.billingCadence)}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
@@ -554,10 +554,10 @@ export function RevenueView({
                 );
                 return (
                   <tr key={`${run.id}-${run.createdAt}`}>
-                    <td className="counterparty-cell"><strong>{run.partnerName}</strong><small>{run.revenueCategory || "Revenue"}</small></td>
+                    <td className="counterparty-cell"><strong>{run.partnerName}</strong><small>{run.revenueCategory || "Revenue"} · {run.source === "quinstreet" ? "QuinStreet" : "TUNE"}</small></td>
                     <td>{periodLabel(run.periodStart, run.periodEnd)}</td>
                     <td><span className="cadence-badge">{cadenceLabel(partner?.billingCadence)}</span></td>
-                    <td><span>{run.conversions ?? 0} conversions</span><small>{dateTimeLabel(run.createdAt)}</small></td>
+                    <td><span>{run.conversions ?? 0} {run.source === "quinstreet" ? "report rows" : "conversions"}</span><small>{dateTimeLabel(run.createdAt)}</small></td>
                     <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
                     <td><span className={`status-pill invoice-status-${run.status}`}>{run.status}</span>{run.error && <small>{run.error}</small>}</td>
                     <td>{run.invoiceId

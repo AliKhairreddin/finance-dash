@@ -9,7 +9,7 @@ import {
   resolveRevenuePeriod
 } from "./revenue";
 
-const partner = (id: string, enabled = true): RevenuePartner => ({
+const partner = (id: string, enabled = true): Extract<RevenuePartner, { source: "tune" }> => ({
   id,
   providerId: `provider-${id}`,
   name: id,

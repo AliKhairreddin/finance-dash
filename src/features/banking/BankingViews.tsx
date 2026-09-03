@@ -56,7 +56,8 @@ const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "amex", label: "Amex" },
   { value: "merit", label: "Merit" },
   { value: "manual", label: "Manual" },
-  { value: "tune", label: "TUNE" }
+  { value: "tune", label: "TUNE" },
+  { value: "quinstreet", label: "QuinStreet" }
 ];
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);

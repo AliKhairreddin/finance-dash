@@ -173,7 +173,7 @@ import {
   fetchMeritVendors,
   fetchRevolutActivity,
   fetchSlashActivity,
-  fetchTuneRevenue,
+  fetchRevenuePartnerRevenue,
   fetchWiseActivity,
   fetchCoinbaseUsdRates,
   getIntegrationStatus,
@@ -1148,11 +1148,16 @@ function normalizedEnvironmentName(value: string | undefined, field: string, req
 
 function revenuePartnerFields(
   payload: CreateRevenuePartnerPayload | UpdateRevenuePartnerPayload
-): Omit<RevenuePartner, "id" | "source" | "createdAt"> {
+): RevenuePartner extends infer Partner
+  ? Partner extends RevenuePartner
+    ? Omit<Partner, "id" | "createdAt">
+    : never
+  : never {
   const name = payload.name?.trim();
   if (!name) throw new Error("Revenue rule name is required");
-  const affiliateId = payload.affiliateId?.trim() ?? "";
-  if (payload.teamId && !affiliateId) throw new Error("Owner-specific revenue rules require an affiliate ID");
+  if (payload.source === "tune" && payload.teamId && !payload.affiliateId?.trim()) {
+    throw new Error("Owner-specific TUNE revenue rules require an affiliate ID");
+  }
   const company = providers.find((provider) => provider.id === payload.providerId);
   if (!company || company.type !== "client" || !company.meritCustomerId) {
     throw new Error("Revenue rules require a customer imported from Merit");
@@ -1175,18 +1180,13 @@ function revenuePartnerFields(
     throw new Error(`Category "${revenueCategory}" is not valid for money in`);
   }
 
-  return {
+  const common = {
     name,
     providerId: company.id,
     teamId: cleanOptional(payload.teamId),
     revenueCategory,
-    affiliateId,
-    externalId: cleanOptional(payload.externalId),
     currency: normalizedCurrency(payload.currency),
     timezone: normalizedTimezone(payload.timezone, "Revenue timezone"),
-    networkTimezone: normalizedTimezone(payload.networkTimezone, "Network timezone"),
-    networkIdEnv: normalizedEnvironmentName(payload.networkIdEnv, "Network ID environment name", true)!,
-    apiKeyEnv: normalizedEnvironmentName(payload.apiKeyEnv, "API key environment name", true)!,
     apiBaseUrlEnv: normalizedEnvironmentName(payload.apiBaseUrlEnv, "API base URL environment name", false),
     meritCustomerName: cleanOptional(payload.meritCustomerName),
     invoiceDueDays: payload.invoiceDueDays,
@@ -1197,6 +1197,33 @@ function revenuePartnerFields(
     defaultMeritItemCode: cleanOptional(payload.defaultMeritItemCode),
     enabled: payload.enabled
   };
+
+  if (payload.source === "tune") {
+    const affiliateId = payload.affiliateId?.trim() ?? "";
+    return {
+      ...common,
+      source: "tune",
+      affiliateId,
+      externalId: cleanOptional(payload.externalId),
+      networkTimezone: normalizedTimezone(payload.networkTimezone, "Network timezone"),
+      networkIdEnv: normalizedEnvironmentName(payload.networkIdEnv, "Network ID environment name", true)!,
+      apiKeyEnv: normalizedEnvironmentName(payload.apiKeyEnv, "API key environment name", true)!
+    };
+  }
+
+  const publisherName = payload.publisherName?.trim();
+  const revenueField = payload.revenueField?.trim();
+  if (!publisherName) throw new Error("QuinStreet publisher name is required");
+  if (!revenueField) throw new Error("QuinStreet revenue column is required");
+  return {
+    ...common,
+    source: "quinstreet",
+    publisherName,
+    reportKeyEnv: normalizedEnvironmentName(payload.reportKeyEnv, "QMP report key environment name", true)!,
+    clientIdEnv: normalizedEnvironmentName(payload.clientIdEnv, "QMP client ID environment name", true)!,
+    clientSecretEnv: normalizedEnvironmentName(payload.clientSecretEnv, "QMP client secret environment name", true)!,
+    revenueField
+  };
 }
 
 export async function createRevenuePartner(payload: CreateRevenuePartnerPayload): Promise<RevenuePartner> {
@@ -1204,7 +1231,6 @@ export async function createRevenuePartner(payload: CreateRevenuePartnerPayload)
   const partner: RevenuePartner = {
     id: revenueRuleId(fields.name, fields.teamId),
     ...fields,
-    source: "tune",
     createdAt: new Date().toISOString()
   };
   if (revenuePartners.some((item) => item.id === partner.id)) {
@@ -1224,7 +1250,7 @@ export async function updateRevenuePartner(partnerId: string, payload: UpdateRev
   let updated: RevenuePartner | undefined;
   revenuePartners = revenuePartners.map((partner) => {
     if (partner.id !== partnerId) return partner;
-    updated = { ...partner, ...fields };
+    updated = { id: partner.id, createdAt: partner.createdAt, ...fields };
     return updated;
   });
   if (!updated) throw new Error("Revenue partner not found");
@@ -2188,7 +2214,7 @@ export async function draftRevenueRun(payload: DraftRevenueRunPayload): Promise<
     timezone: payload.timezone
   });
   const run: RevenueRun = {
-    ...(await fetchTuneRevenue(partner, period)),
+    ...(await fetchRevenuePartnerRevenue(partner, period)),
     ...(partner.teamId
       ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
       : {})
@@ -2204,7 +2230,7 @@ async function fetchAutomationRevenue(
   timezone: string
 ): Promise<RevenueRun> {
   const run: RevenueRun = {
-    ...(await fetchTuneRevenue(partner, { ...period, timezone, preset: "custom" })),
+    ...(await fetchRevenuePartnerRevenue(partner, { ...period, timezone, preset: "custom" })),
     ...(partner.teamId
       ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId }
       : {})
@@ -2233,7 +2259,7 @@ function failedAutomationRevenueRun(
         }
       : {}),
     revenueCategory: partner.revenueCategory,
-    source: "tune",
+    source: partner.source,
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
     timezone,
@@ -2557,7 +2583,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Rev
     });
     try {
       const run: RevenueRun = {
-        ...(await fetchTuneRevenue(partner, period)),
+        ...(await fetchRevenuePartnerRevenue(partner, period)),
         ...(partner.teamId ? { teamName: teams.find((team) => team.id === partner.teamId)?.name ?? partner.teamId } : {})
       };
       nextRuns.push(run);
@@ -2574,7 +2600,7 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Rev
             }
           : {}),
         revenueCategory: partner.revenueCategory,
-        source: "tune",
+        source: partner.source,
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
         timezone: period.timezone,

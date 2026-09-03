@@ -1,4 +1,4 @@
-export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "tune";
+export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "tune" | "quinstreet";
 
 export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex">;
 
@@ -15,6 +15,8 @@ export type InvoiceDocumentType = "sales_invoice" | "supplier_bill";
 export type RevenuePeriodPreset = "last-week" | "this-week" | "last-7-days" | "this-month" | "custom";
 
 export type RevenueRunStatus = "pulled" | "drafted" | "invoicing" | "invoiced" | "failed" | "skipped";
+
+export type RevenueSource = Extract<DataSource, "tune" | "quinstreet">;
 
 export type BillingCadence = "weekly" | "monthly";
 
@@ -220,20 +222,14 @@ export interface Team {
   createdAt: string;
 }
 
-export interface RevenuePartner {
+interface RevenuePartnerBase {
   id: string;
   providerId: string;
   teamId?: string;
   name: string;
   revenueCategory?: string;
-  source: "tune";
-  affiliateId: string;
-  externalId?: string;
   currency: string;
   timezone: string;
-  networkTimezone: string;
-  networkIdEnv: string;
-  apiKeyEnv: string;
   apiBaseUrlEnv?: string;
   meritCustomerName?: string;
   invoiceDueDays: number;
@@ -245,6 +241,26 @@ export interface RevenuePartner {
   enabled: boolean;
   createdAt: string;
 }
+
+export interface TuneRevenuePartner extends RevenuePartnerBase {
+  source: "tune";
+  affiliateId: string;
+  externalId?: string;
+  networkTimezone: string;
+  networkIdEnv: string;
+  apiKeyEnv: string;
+}
+
+export interface QuinStreetRevenuePartner extends RevenuePartnerBase {
+  source: "quinstreet";
+  publisherName: string;
+  reportKeyEnv: string;
+  clientIdEnv: string;
+  clientSecretEnv: string;
+  revenueField: string;
+}
+
+export type RevenuePartner = TuneRevenuePartner | QuinStreetRevenuePartner;
 
 export interface AiSettings {
   provider: "openrouter";
@@ -277,7 +293,7 @@ export interface RevenueRun {
   revenueCategory?: string;
   teamId?: string;
   teamName?: string;
-  source: "tune";
+  source: RevenueSource;
   periodStart: string;
   periodEnd: string;
   timezone: string;
@@ -1117,18 +1133,13 @@ export interface CreateProviderPayload {
 
 export interface UpdateProviderPayload extends CreateProviderPayload {}
 
-export interface UpdateRevenuePartnerPayload {
+interface RevenuePartnerPayloadBase {
   name: string;
   providerId: string;
   teamId?: string;
   revenueCategory: string;
-  affiliateId: string;
-  externalId?: string;
   currency: string;
   timezone: string;
-  networkTimezone: string;
-  networkIdEnv: string;
-  apiKeyEnv: string;
   apiBaseUrlEnv?: string;
   meritCustomerName?: string;
   invoiceDueDays: number;
@@ -1140,7 +1151,26 @@ export interface UpdateRevenuePartnerPayload {
   enabled: boolean;
 }
 
-export interface CreateRevenuePartnerPayload extends UpdateRevenuePartnerPayload {}
+export type UpdateRevenuePartnerPayload = RevenuePartnerPayloadBase & (
+  | {
+      source: "tune";
+      affiliateId: string;
+      externalId?: string;
+      networkTimezone: string;
+      networkIdEnv: string;
+      apiKeyEnv: string;
+    }
+  | {
+      source: "quinstreet";
+      publisherName: string;
+      reportKeyEnv: string;
+      clientIdEnv: string;
+      clientSecretEnv: string;
+      revenueField: string;
+    }
+);
+
+export type CreateRevenuePartnerPayload = UpdateRevenuePartnerPayload;
 
 export interface SyncRevenuePayload {
   partnerId?: string;

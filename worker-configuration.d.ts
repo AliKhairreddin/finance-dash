@@ -5,6 +5,27 @@ interface Fetcher {
 	fetch(request: Request): Promise<Response>;
 }
 
+interface BrowserRun {
+	quickAction(
+		name: "screenshot",
+		options: {
+			url: string;
+			cookies?: Array<{
+				name: string;
+				value: string;
+				domain: string;
+				path?: string;
+				httpOnly?: boolean;
+				secure?: boolean;
+				sameSite?: "Strict" | "Lax" | "None";
+			}>;
+			viewport?: { width: number; height: number };
+			gotoOptions?: { waitUntil?: string; timeout?: number };
+			screenshotOptions?: { type?: "png" | "jpeg" | "webp"; fullPage?: boolean };
+		}
+	): Promise<Response>;
+}
+
 interface DurableObjectStorage {
 	get<T>(key: string): Promise<T | undefined>;
 	put<T>(key: string, value: T): Promise<void>;
@@ -45,6 +66,7 @@ interface ExportedHandler<Env> {
 }
 interface __BaseEnv_WorkerEnv {
 	ASSETS: Fetcher;
+	BROWSER: BrowserRun;
 	PUBLIC_APP_URL: "https://finance.thatcanadian.dev";
 	PORT: string;
 	VITE_API_BASE: string;
@@ -76,8 +98,11 @@ interface __BaseEnv_WorkerEnv {
 	SLASH_CONNECTION_ID: string;
 	SLASH_LEGAL_ENTITY_ID: string;
 	SLASH_BASE_URL: string;
-	SLASH_CASH_ALERT_THRESHOLD_USD: string;
-	SLASH_CASH_ALERT_RECIPIENT: string;
+	SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD: string;
+	SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: string;
+	SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: string;
+	TELEGRAM_COMMAND_ADMIN_USERS: string;
+	TELEGRAM_COMMAND_READ_ONLY_USERS: string;
 	AMEX_TOKEN_URL: string;
 	AMEX_CONNECTION_ID: string;
 	AMEX_API_BASE_URL: string;
