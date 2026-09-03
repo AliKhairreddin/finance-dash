@@ -9,6 +9,7 @@ import worker, {
   fetchCoinbaseUsdRates,
   fetchMeritCustomers,
   fetchMeritInvoiceCopyDetails,
+  fetchMeritInvoicePdf,
   fetchMeritInvoiceTaxSample,
   fetchMeritVendors,
   hasSavedWiseBalanceAccounts,
@@ -707,6 +708,36 @@ test("Merit invoice duplication reads the exact single-line template without cre
       path: "/api/v2/getinvoice",
       body: { Id: "sih-duplicate", AddAttachment: false }
     }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("worker Merit invoice PDF download returns decoded PDF bytes", async () => {
+  const originalFetch = globalThis.fetch;
+  let request: { path: string; body: unknown } | undefined;
+  globalThis.fetch = async (input, init) => {
+    request = {
+      path: new URL(String(input)).pathname,
+      body: JSON.parse(String(init?.body)) as unknown
+    };
+    return Response.json({
+      FileContent: Buffer.from("%PDF-1.7\nworker invoice", "utf8").toString("base64")
+    });
+  };
+
+  try {
+    const bytes = await fetchMeritInvoicePdf({
+      MERIT_API_ID: "api-id",
+      MERIT_API_KEY: "api-key",
+      MERIT_API_BASE_URL: "https://merit.example/api"
+    } as never, "sih-pdf");
+
+    assert.equal(new TextDecoder().decode(bytes), "%PDF-1.7\nworker invoice");
+    assert.deepEqual(request, {
+      path: "/api/v2/getsalesinvpdf",
+      body: { Id: "sih-pdf", DelivNote: false }
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

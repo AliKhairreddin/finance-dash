@@ -91,6 +91,20 @@ export interface MediaFundingApiResponse {
   summary: MediaFundingSummary;
 }
 
+export interface MediaFundingProviderSpendGroup {
+  accountCount: number;
+  businessManagerCount: number;
+  currency: string;
+  dayCount: number;
+  key: string;
+  platforms: string[];
+  provider: MediaFundingProvider;
+  rows: MediaSpendRow[];
+  searchText: string;
+  spend: number;
+  workspaces: number[];
+}
+
 export interface CreateMediaFundingProviderPayload {
   companyProviderId: string;
   defaultFeePercent: number;
@@ -238,4 +252,69 @@ export function resolveMediaFundingAssignment(
     `business_manager:${mediaFundingBusinessManagerKey(row.platform, row.businessManagerId)}`,
     row.date
   );
+}
+
+export function groupMediaSpendByFundingProvider(
+  rows: readonly MediaSpendRow[],
+  assignments: readonly MediaFundingAssignment[],
+  providers: readonly MediaFundingProvider[]
+): MediaFundingProviderSpendGroup[] {
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  const groups = new Map<string, {
+    accountKeys: Set<string>;
+    businessManagerKeys: Set<string>;
+    dates: Set<string>;
+    platforms: Set<string>;
+    provider: MediaFundingProvider;
+    rows: MediaSpendRow[];
+    searchTerms: Set<string>;
+    spend: number;
+    workspaces: Set<number>;
+  }>();
+
+  for (const row of rows) {
+    const assignment = resolveMediaFundingAssignment(assignments, row);
+    const provider = assignment ? providersById.get(assignment.providerId) : undefined;
+    if (!provider) continue;
+
+    const existing = groups.get(provider.id) ?? {
+      accountKeys: new Set<string>(),
+      businessManagerKeys: new Set<string>(),
+      dates: new Set<string>(),
+      platforms: new Set<string>(),
+      provider,
+      rows: [],
+      searchTerms: new Set<string>([provider.id, provider.name]),
+      spend: 0,
+      workspaces: new Set<number>()
+    };
+    existing.accountKeys.add(mediaFundingAccountKey(row.platform, row.accountId));
+    existing.businessManagerKeys.add(mediaFundingBusinessManagerKey(row.platform, row.businessManagerId));
+    existing.dates.add(row.date);
+    existing.platforms.add(row.platform);
+    existing.rows.push(row);
+    existing.searchTerms.add(row.accountId);
+    if (row.accountName) existing.searchTerms.add(row.accountName);
+    existing.searchTerms.add(row.businessManagerId);
+    if (row.businessManagerName) existing.searchTerms.add(row.businessManagerName);
+    existing.searchTerms.add(row.platform);
+    existing.searchTerms.add(String(row.workspace));
+    existing.spend += row.spend;
+    existing.workspaces.add(row.workspace);
+    groups.set(provider.id, existing);
+  }
+
+  return [...groups.values()].map((group) => ({
+    accountCount: group.accountKeys.size,
+    businessManagerCount: group.businessManagerKeys.size,
+    currency: group.provider.currency,
+    dayCount: group.dates.size,
+    key: group.provider.id,
+    platforms: [...group.platforms].sort((left, right) => left.localeCompare(right)),
+    provider: group.provider,
+    rows: group.rows,
+    searchText: [...group.searchTerms].join(" ").toLowerCase(),
+    spend: group.spend,
+    workspaces: [...group.workspaces].sort((left, right) => left - right)
+  }));
 }

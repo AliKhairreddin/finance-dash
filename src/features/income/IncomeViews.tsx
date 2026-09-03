@@ -34,6 +34,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { Textarea } from "@/components/ui/textarea";
+import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { isIsoDate, useUrlState } from "@/lib/url-state";
 import type {
   BillingCadence,
@@ -146,27 +147,13 @@ function createdAtLabel(value: string): string {
   }).format(date);
 }
 
-function createdDateKey(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const parts = new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Asia/Beirut"
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-function matchesCreatedDateRange(value: string, from: string, to: string): boolean {
+function matchesDateRange(value: string, from: string, to: string): boolean {
   if (!from && !to) return true;
-  const createdDate = createdDateKey(value);
-  if (!createdDate) return false;
-  if (!from || !to) return createdDate === (from || to);
+  if (!isIsoDate(value)) return false;
+  if (!from || !to) return value === (from || to);
   const rangeStart = from < to ? from : to;
   const rangeEnd = from < to ? to : from;
-  return createdDate >= rangeStart && createdDate <= rangeEnd;
+  return value >= rangeStart && value <= rangeEnd;
 }
 
 function toDateInput(value?: string): string {
@@ -676,12 +663,12 @@ export function InvoicesView({
   const [cadence, setCadence] = useUrlState<"all" | BillingCadence | "manual">("invoiceCadence", "all", {
     allowedValues: ["all", "weekly", "monthly", "manual"]
   });
-  const [createdDateFrom, setCreatedDateFrom] = useUrlState("invoiceCreatedFrom", "", { isValid: isIsoDate });
-  const [createdDateTo, setCreatedDateTo] = useUrlState("invoiceCreatedTo", "", { isValid: isIsoDate });
+  const [issueDateFrom, setIssueDateFrom] = useUrlState("invoiceIssueFrom", "", { isValid: isIsoDate });
+  const [issueDateTo, setIssueDateTo] = useUrlState("invoiceIssueTo", "", { isValid: isIsoDate });
   const invoiceFilterToday = financeOperatingDate();
-  const createdDateRange = {
-    fromDate: createdDateFrom || createdDateTo || invoiceFilterToday,
-    toDate: createdDateTo || createdDateFrom || invoiceFilterToday
+  const issueDateRange = {
+    fromDate: issueDateFrom || issueDateTo || invoiceFilterToday,
+    toDate: issueDateTo || issueDateFrom || invoiceFilterToday
   };
   const [sortKey, setSortKey] = useUrlState<InvoiceSortKey>("invoiceSort", "created", {
     allowedValues: ["amount", "cadence", "company", "created", "forecast", "period", "status"]
@@ -696,7 +683,10 @@ export function InvoicesView({
   const [bulkPaymentInvoices, setBulkPaymentInvoices] = useState<Invoice[] | null>(null);
   const [deleteInvoices, setDeleteInvoices] = useState<Invoice[] | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [invoiceActionError, setInvoiceActionError] = useState<string | null>(null);
 
   const salesInvoices = dashboard.invoices.filter((invoice) => invoice.documentType === "sales_invoice");
   const allRows: DisplayInvoiceRow[] = [
@@ -737,7 +727,7 @@ export function InvoicesView({
       const rowCurrency = row.invoice.currency;
       if (currency !== "all" && rowCurrency !== currency) return false;
       if (cadence !== "all" && rowCadence(row) !== cadence) return false;
-      if ((createdDateFrom || createdDateTo) && !matchesCreatedDateRange(row.invoice.createdAt, createdDateFrom, createdDateTo)) return false;
+      if ((issueDateFrom || issueDateTo) && !matchesDateRange(row.invoice.issueDate, issueDateFrom, issueDateTo)) return false;
       const searchTerms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
       if (searchTerms.length === 0) return true;
       const provider = rowProviderId(row) ? providersById.get(rowProviderId(row) ?? "") : undefined;
@@ -845,6 +835,45 @@ export function InvoicesView({
     setSelectedIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
   }
 
+  async function editInvoice(invoice: Invoice) {
+    setEditingId(invoice.id);
+    setInvoiceActionError(null);
+    try {
+      if (invoice.status === "open" && invoice.origin === "merit") {
+        const details = await onPrepareDuplicate(invoice.id);
+        setEditorRequest({
+          mode: "edit",
+          invoice: {
+            ...invoice,
+            amount: details.amount,
+            description: details.description,
+            periodStart: details.periodStart,
+            periodEnd: details.periodEnd,
+            taxId: details.taxId
+          }
+        });
+      } else {
+        setEditorRequest({ mode: "edit", invoice });
+      }
+    } catch (error) {
+      setInvoiceActionError(error instanceof Error ? error.message : "Invoice details could not be loaded");
+    } finally {
+      setEditingId(null);
+    }
+  }
+
+  async function downloadInvoice(invoice: Invoice) {
+    setDownloadingId(invoice.id);
+    setInvoiceActionError(null);
+    try {
+      await downloadInvoicePdfFile(invoice, apiBase);
+    } catch (error) {
+      setInvoiceActionError(error instanceof Error ? error.message : "Invoice PDF could not be downloaded");
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
   function exportVisibleRows() {
     const headers = [
       "Invoice number",
@@ -885,7 +914,10 @@ export function InvoicesView({
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `invoices-${financeOperatingDate()}.csv`;
+    const rangeSuffix = issueDateFrom || issueDateTo
+      ? `-${issueDateFrom || issueDateTo}-to-${issueDateTo || issueDateFrom}`
+      : "";
+    link.download = `invoices${rangeSuffix}-${financeOperatingDate()}.csv`;
     document.body.append(link);
     link.click();
     link.remove();
@@ -898,7 +930,7 @@ export function InvoicesView({
     statusFilter !== "all",
     deliveryFilter !== "all",
     cadence !== "all",
-    Boolean(createdDateFrom || createdDateTo)
+    Boolean(issueDateFrom || issueDateTo)
   ].filter(Boolean).length;
   const selectedCompany = providers.find((provider) => provider.id === companyId);
   const invoiceActiveFilters: ActiveFilter[] = [
@@ -927,16 +959,16 @@ export function InvoicesView({
       label: `Cadence: ${cadence === "manual" ? "Manual" : cadenceLabel(cadence)}`,
       onRemove: () => setCadence("all")
     }]),
-    ...(!createdDateFrom && !createdDateTo ? [] : [{
-      key: "created",
-      label: createdDateFrom && createdDateTo
-        ? `Created: ${dateLabel(createdDateFrom)}–${dateLabel(createdDateTo)}`
-        : createdDateFrom
-          ? `Created after ${dateLabel(createdDateFrom)}`
-          : `Created before ${dateLabel(createdDateTo)}`,
+    ...(!issueDateFrom && !issueDateTo ? [] : [{
+      key: "issued",
+      label: issueDateFrom && issueDateTo
+        ? `Issued: ${dateLabel(issueDateFrom)}–${dateLabel(issueDateTo)}`
+        : issueDateFrom
+          ? `Issued on ${dateLabel(issueDateFrom)}`
+          : `Issued on ${dateLabel(issueDateTo)}`,
       onRemove: () => {
-        setCreatedDateFrom("");
-        setCreatedDateTo("");
+        setIssueDateFrom("");
+        setIssueDateTo("");
       }
     }])
   ];
@@ -947,8 +979,8 @@ export function InvoicesView({
     setStatusFilter("all");
     setDeliveryFilter("all");
     setCadence("all");
-    setCreatedDateFrom("");
-    setCreatedDateTo("");
+    setIssueDateFrom("");
+    setIssueDateTo("");
   }
 
   return (
@@ -1093,30 +1125,30 @@ export function InvoicesView({
                   </NativeSelect>
                 </label>
               </FilterFieldGroup>
-              <FilterFieldGroup title="Created date">
+              <FilterFieldGroup title="Invoice date">
                 <CalendarPeriodPicker
-                  ariaLabel="Filter invoices by created date"
-                  dateRange={createdDateRange}
+                  ariaLabel="Filter invoices by issue date"
+                  dateRange={issueDateRange}
                   onApply={(range) => {
-                    setCreatedDateFrom(range.fromDate);
-                    setCreatedDateTo(range.toDate);
+                    setIssueDateFrom(range.fromDate);
+                    setIssueDateTo(range.toDate);
                   }}
                   onSelectPreset={(value) => {
                     if (value === "all") {
-                      setCreatedDateFrom("");
-                      setCreatedDateTo("");
+                      setIssueDateFrom("");
+                      setIssueDateTo("");
                       return;
                     }
                     const range = bankPeriodPresetRange(value as BankPeriodPreset, invoiceFilterToday);
-                    setCreatedDateFrom(range.fromDate);
-                    setCreatedDateTo(range.toDate);
+                    setIssueDateFrom(range.fromDate);
+                    setIssueDateTo(range.toDate);
                   }}
-                  presetAriaLabel="Invoice created-date presets"
+                  presetAriaLabel="Invoice issue-date presets"
                   presetOptions={[
                     { value: "all", label: "Any date" },
                     ...bankPeriodPresets.map((value) => ({ value, label: bankPeriodPresetLabel(value) }))
                   ]}
-                  triggerLabel={createdDateFrom || createdDateTo ? calendarDateRangeLabel(createdDateRange) : "Any date"}
+                  triggerLabel={issueDateFrom || issueDateTo ? calendarDateRangeLabel(issueDateRange) : "Any date"}
                 />
               </FilterFieldGroup>
             </FilterPopover>
@@ -1135,7 +1167,7 @@ export function InvoicesView({
           <Check size={15} />
           <span>Select unpaid drafts or open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.</span>
         </div>
-        {duplicateError && <div className="inline-error">{duplicateError}</div>}
+        {(duplicateError || invoiceActionError) && <div className="inline-error">{duplicateError || invoiceActionError}</div>}
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
@@ -1208,7 +1240,8 @@ export function InvoicesView({
                     </td>
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
-                      {invoice.status === "draft" && <Button className="icon-text-button" type="button" onClick={() => setEditorRequest({ mode: "edit", invoice })}><Edit3 size={14} /> Edit</Button>}
+                      {(invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(invoice)}>{editingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>}
+                      {invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(invoice)}>{downloadingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}
                       <Button
                         className="icon-text-button"
                         type="button"
@@ -1276,9 +1309,15 @@ export function InvoicesView({
         duplicateSourceInvoiceNumber={editorRequest.mode === "duplicate" ? editorRequest.sourceInvoiceNumber : undefined}
         onClose={() => setEditorRequest(null)}
         onSubmit={async (payload) => {
-          const savedInvoice = editorRequest.mode === "edit"
-            ? await onUpdateDraft(editorRequest.invoice.id, payload as UpdateInvoicePayload)
-            : await onCreateDraft(payload as CreateInvoicePayload);
+          if (editorRequest.mode === "edit") {
+            const savedInvoice = await onUpdateDraft(editorRequest.invoice.id, payload as UpdateInvoicePayload);
+            setEditorRequest(null);
+            if (savedInvoice.status === "draft") {
+              setSendRequest({ invoiceIds: [savedInvoice.id], invoices: [savedInvoice], afterDraftSave: true });
+            }
+            return savedInvoice;
+          }
+          const savedInvoice = await onCreateDraft(payload as CreateInvoicePayload);
           setEditorRequest(null);
           setSendRequest({ invoiceIds: [savedInvoice.id], invoices: [savedInvoice], afterDraftSave: true });
           return savedInvoice;
@@ -1332,7 +1371,7 @@ function PaymentForecast({ invoice, prediction }: { invoice: Invoice; prediction
   return <span className="forecast-copy"><CalendarClock size={14} /><strong>{dateLabel(prediction.predictedDate)}</strong><small>Median {prediction.medianDays} days · last 5 matched</small></span>;
 }
 
-function InvoiceEditorDialog({
+export function InvoiceEditorDialog({
   dashboard,
   invoice,
   initialDraft,
@@ -1474,9 +1513,9 @@ function InvoiceEditorDialog({
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
           </div>
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
-          <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>
+          <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : invoice?.status === "open" ? "These changes update the dashboard record only. Merit does not support updating an existing sales invoice through its API." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>
         </div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : <FilePlus2 size={16} />} {duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
       </form>
     </div>,
     document.body

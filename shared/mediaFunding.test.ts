@@ -4,12 +4,15 @@ import {
   calculateMediaFundingBalance,
   calculateMediaFundingBankTransactionCredit,
   calculateMediaFundingCredit,
+  groupMediaSpendByFundingProvider,
   mediaFundingAssignmentIsActive,
   mediaFundingBusinessManagerKey,
   mediaFundingTargetKey,
   resolveMediaFundingAssignment,
-  type MediaFundingAssignment
+  type MediaFundingAssignment,
+  type MediaFundingProvider
 } from "./mediaFunding";
+import type { MediaSpendRow } from "./mediaSpend";
 
 function assignment(overrides: Partial<MediaFundingAssignment>): MediaFundingAssignment {
   return {
@@ -23,6 +26,47 @@ function assignment(overrides: Partial<MediaFundingAssignment>): MediaFundingAss
     effectiveFrom: "2026-08-01",
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function provider(id: string, name: string): MediaFundingProvider {
+  return {
+    id,
+    companyProviderId: `company-${id}`,
+    name,
+    defaultFeePercent: 0,
+    currency: "USD",
+    openingBalance: 0,
+    openingBalanceDate: "2026-08-01",
+    grossFunding: 0,
+    fees: 0,
+    netFunding: 0,
+    adjustments: 0,
+    spend: 0,
+    estimatedBalance: 0,
+    assignmentCount: 0,
+    bankFundingCount: 0,
+    excludedFundingCount: 0,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z"
+  };
+}
+
+function spendRow(overrides: Partial<MediaSpendRow>): MediaSpendRow {
+  return {
+    key: "row-1",
+    source: "lemonmax",
+    workspace: 1,
+    date: "2026-08-05",
+    platform: "Facebook",
+    businessManagerId: "bm-1",
+    businessManagerName: "BM One",
+    accountId: "account-1",
+    accountName: "Account One",
+    spend: 100,
+    currency: "USD",
+    syncedAt: "2026-08-06T00:00:00.000Z",
     ...overrides
   };
 }
@@ -108,4 +152,37 @@ test("funding target keys use stable platform and external identifiers", () => {
     businessManagerId: "bm-1",
     accountId: "account/1"
   }), "ad_account:Facebook:account%2F1");
+});
+
+test("groups assigned media spend by the effective provider", () => {
+  const providers = [provider("provider-1", "Alpha Funding"), provider("provider-2", "Beta Funding")];
+  const assignments = [
+    assignment({}),
+    assignment({
+      id: "assignment-2",
+      providerId: "provider-2",
+      scope: "ad_account",
+      targetKey: "ad_account:Facebook:account-2",
+      accountId: "account-2"
+    })
+  ];
+  const groups = groupMediaSpendByFundingProvider([
+    spendRow({}),
+    spendRow({ key: "row-2", date: "2026-08-06", spend: 25 }),
+    spendRow({ key: "row-3", accountId: "account-2", accountName: "Account Two", spend: 50 }),
+    spendRow({ key: "row-4", accountId: "unassigned", spend: 200, businessManagerId: "bm-2" })
+  ], assignments, providers);
+
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((group) => ({
+    provider: group.provider.name,
+    accounts: group.accountCount,
+    businessManagers: group.businessManagerCount,
+    days: group.dayCount,
+    spend: group.spend
+  })), [
+    { provider: "Alpha Funding", accounts: 1, businessManagers: 1, days: 2, spend: 125 },
+    { provider: "Beta Funding", accounts: 1, businessManagers: 1, days: 1, spend: 50 }
+  ]);
+  assert.match(groups[1].searchText, /account two/);
 });

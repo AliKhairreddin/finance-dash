@@ -100,6 +100,7 @@ import {
   transactionNeedsCategoryReview
 } from "../shared/categories";
 import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import { decodeMeritInvoicePdf, invoicePdfFileName } from "../shared/invoiceFiles";
 import { financeOperatingDate } from "../shared/operatingDate";
 import {
   maximumCashFlowLineIdLength,
@@ -1738,6 +1739,19 @@ export async function fetchMeritInvoiceCopyDetails(
       { cause: error }
     );
   }
+}
+
+export async function fetchMeritInvoicePdf(
+  env: Env,
+  externalId: string
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!externalId.trim()) throw new ApiError(409, "A Merit invoice ID is required to download its PDF");
+  const response = await fetchMeritJson<{ FileContent?: unknown }>(
+    env,
+    "/v2/getsalesinvpdf",
+    { Id: externalId, DelivNote: false }
+  );
+  return decodeMeritInvoicePdf(response.FileContent);
 }
 
 async function syncMeritTaxDefaults(env: Env): Promise<{
@@ -5462,8 +5476,10 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
   const state = await loadPersisted(env);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found");
-  if (invoice.status !== "draft" || invoice.externalId) {
-    throw new ApiError(409, "Only local drafts that have not been saved to Merit can be edited");
+  const editableLocalDraft = invoice.status === "draft" && !invoice.externalId;
+  const editableOpenSalesInvoice = invoice.documentType === "sales_invoice" && invoice.status === "open";
+  if (!editableLocalDraft && !editableOpenSalesInvoice) {
+    throw new ApiError(409, "Only local drafts and open sales invoices can be edited");
   }
   const provider = payload.providerId ? state.providers.find((item) => item.id === payload.providerId) : undefined;
   if (payload.providerId && !provider) throw new ApiError(400, "Company not found");
@@ -5488,6 +5504,20 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
   state.invoices = state.invoices.map((item) => item.id === invoiceId ? updated : item);
   await savePersisted(env, state);
   return updated;
+}
+
+async function downloadInvoicePdf(env: Env, invoiceId: string): Promise<Response> {
+  const state = await loadPersisted(env);
+  const invoice = state.invoices.find((item) => item.id === invoiceId);
+  if (!invoice || invoice.documentType !== "sales_invoice") throw new ApiError(404, "Sales invoice not found");
+  if (!invoice.externalId) throw new ApiError(409, "Save this invoice in Merit before downloading its PDF");
+  const bytes = await fetchMeritInvoicePdf(env, invoice.externalId);
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${invoicePdfFileName(invoice)}"`
+    }
+  });
 }
 
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<RevenuePullResult> {
@@ -7049,6 +7079,11 @@ async function handleApi(
     const invoiceDuplicatePreviewMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/duplicate-preview$/);
     if (invoiceDuplicatePreviewMatch && request.method === "GET") {
       return json(await previewInvoiceDuplicate(env, decodeURIComponent(invoiceDuplicatePreviewMatch[1])));
+    }
+
+    const invoicePdfMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/pdf$/);
+    if (invoicePdfMatch && request.method === "GET") {
+      return downloadInvoicePdf(env, decodeURIComponent(invoicePdfMatch[1]));
     }
 
     if (url.pathname === "/api/receivables" && request.method === "POST") {

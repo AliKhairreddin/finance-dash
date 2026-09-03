@@ -117,6 +117,7 @@ import {
 import { generateMissingReceiptDeclarationPdf } from "../shared/missingReceiptPdf";
 import { deleteProviderReferences } from "../shared/providerDeletion";
 import { invoiceCopyPayload } from "../shared/invoiceCopies";
+import { invoicePdfFileName } from "../shared/invoiceFiles";
 import { assignMeritStyleDraftNumbers, nextMeritInvoiceNumber } from "../shared/invoiceNumbers";
 import {
   linkMeritInvoiceProviders,
@@ -165,6 +166,7 @@ import {
   deliverMeritInvoice,
   fetchAmexActivity,
   fetchMeritInvoiceCopyDetails,
+  fetchMeritInvoicePdf,
   fetchMeritInvoices,
   fetchMeritCustomers,
   fetchMeritTaxes,
@@ -1720,8 +1722,10 @@ export async function deleteInvoiceDrafts(invoiceIds: string[]): Promise<Invoice
 export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
   const existing = invoices.find((invoice) => invoice.id === invoiceId);
   if (!existing) throw new Error("Invoice not found");
-  if (existing.status !== "draft" || existing.externalId) {
-    throw new Error("Only local draft invoices can be edited");
+  const editableLocalDraft = existing.status === "draft" && !existing.externalId;
+  const editableOpenSalesInvoice = existing.documentType === "sales_invoice" && existing.status === "open";
+  if (!editableLocalDraft && !editableOpenSalesInvoice) {
+    throw new Error("Only local drafts and open sales invoices can be edited");
   }
   validateInvoiceCompany(payload.providerId, existing.documentType);
   const issueDate = normalizedDate(payload.issueDate, "Issue date");
@@ -1757,6 +1761,19 @@ export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePay
   invoices = invoices.map((invoice) => (invoice.id === invoiceId ? updated : invoice));
   await persist();
   return updated;
+}
+
+export async function downloadInvoicePdf(invoiceId: string): Promise<{
+  bytes: Uint8Array<ArrayBuffer>;
+  fileName: string;
+}> {
+  const invoice = invoices.find((item) => item.id === invoiceId);
+  if (!invoice || invoice.documentType !== "sales_invoice") throw new Error("Sales invoice not found");
+  if (!invoice.externalId) throw new Error("Save this invoice in Merit before downloading its PDF");
+  return {
+    bytes: await fetchMeritInvoicePdf(invoice.externalId),
+    fileName: invoicePdfFileName(invoice)
+  };
 }
 
 function validPaymentSource(source: string): source is PaymentAllocation["source"] {

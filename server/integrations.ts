@@ -27,6 +27,7 @@ import {
   meritProviderId,
   meritProvidersFromResponse
 } from "../shared/merit";
+import { decodeMeritInvoicePdf } from "../shared/invoiceFiles";
 import { calculateTuneHourOffset } from "../shared/revenue";
 import type { RevenuePeriod } from "../shared/revenue";
 import {
@@ -74,9 +75,11 @@ export function assertMeritWriteConfiguration(): void {
   }
 }
 
-async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
+async function fetchJson<T>(url: string, init: RequestInit, maximumBytes?: number): Promise<T> {
   const response = await fetch(url, init);
-  const text = await response.text();
+  const text = maximumBytes === undefined
+    ? await response.text()
+    : await readBoundedResponseText(response, "Merit", maximumBytes);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
@@ -420,7 +423,7 @@ function meritUrl(path: string, body: string): string {
   return `${meritApiBaseUrl}${path}?${params.toString()}`;
 }
 
-async function fetchMeritJson<T>(path: string, payload: unknown): Promise<T> {
+async function fetchMeritJson<T>(path: string, payload: unknown, maximumBytes?: number): Promise<T> {
   const body = JSON.stringify(payload);
   return fetchJson<T>(meritUrl(path, body), {
     method: "POST",
@@ -429,7 +432,7 @@ async function fetchMeritJson<T>(path: string, payload: unknown): Promise<T> {
       Accept: "application/json"
     },
     body
-  });
+  }, maximumBytes);
 }
 
 interface MeritInvoiceRecord {
@@ -510,6 +513,16 @@ export async function fetchMeritInvoiceCopyDetails(
       AddAttachment: false
     })
   );
+}
+
+export async function fetchMeritInvoicePdf(externalId: string): Promise<Uint8Array<ArrayBuffer>> {
+  if (!externalId.trim()) throw new Error("A Merit invoice ID is required to download its PDF");
+  const response = await fetchMeritJson<{ FileContent?: unknown }>(
+    "/v2/getsalesinvpdf",
+    { Id: externalId, DelivNote: false },
+    24 * 1024 * 1024
+  );
+  return decodeMeritInvoicePdf(response.FileContent);
 }
 
 export async function fetchMeritCustomers(): Promise<Provider[]> {

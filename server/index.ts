@@ -73,6 +73,7 @@ import {
   deleteTransactionCategoryDefinition,
   deleteHolding,
   deleteManualReceivable,
+  downloadInvoicePdf,
   draftRevenueRun,
   getSnapshot,
   getBankActivitySummary,
@@ -860,6 +861,17 @@ app.delete("/api/invoices", async (request, response, next) => {
 app.get("/api/invoices/:invoiceId/duplicate-preview", async (request, response, next) => {
   try {
     response.json(await previewInvoiceDuplicate(request.params.invoiceId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/invoices/:invoiceId/pdf", async (request, response, next) => {
+  try {
+    const pdf = await downloadInvoicePdf(request.params.invoiceId);
+    response.setHeader("Content-Type", "application/pdf");
+    response.setHeader("Content-Disposition", `attachment; filename="${pdf.fileName}"`);
+    response.send(Buffer.from(pdf.bytes));
   } catch (error) {
     next(error);
   }

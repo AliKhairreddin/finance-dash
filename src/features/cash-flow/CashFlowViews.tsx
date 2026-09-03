@@ -1,5 +1,6 @@
 import {
   Download,
+  Edit3,
   FileText,
   Loader2,
   Plus,
@@ -17,6 +18,8 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { compareTableValues, SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
+import { InvoiceEditorDialog } from "@/features/income/IncomeViews";
+import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { useUrlState } from "@/lib/url-state";
 import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
 import { financeOperatingDate } from "../../../shared/operatingDate";
@@ -24,18 +27,22 @@ import { invoiceOutstanding, isLiquidAccountBalance } from "../../../shared/inco
 import type {
   CashFlowLine,
   CashFlowSnapshot,
+  CreateInvoicePayload,
   CreateManualReceivablePayload,
   CurrencyTotals,
   DashboardSnapshot,
   FxRate,
   Invoice,
   LedgerItem,
-  SaveCashFlowSnapshotPayload
+  SaveCashFlowSnapshotPayload,
+  UpdateInvoicePayload
 } from "../../../shared/types";
 
 type CashFlowSectionKey = "cashAccounts" | "receivables" | "openBalances" | "payables" | "investments";
 type CashFlowLineSortKey = "amount" | "currency" | "included" | "name";
 type OpenReceivableSortKey = "amount" | "dueDate" | "name" | "source" | "status";
+
+const apiBase = import.meta.env.VITE_API_BASE || "/api";
 
 const sectionDefinitions: Array<{ key: CashFlowSectionKey; label: string }> = [
   { key: "cashAccounts", label: "Cash in accounts" },
@@ -704,11 +711,15 @@ type OpenReceivableRow = {
 export function CashFlowOpenInvoicesView({
   dashboard,
   onCreateManualReceivable,
-  onDeleteManualReceivable
+  onDeleteManualReceivable,
+  onPrepareInvoiceEdit,
+  onUpdateInvoice
 }: {
   dashboard: DashboardSnapshot;
   onCreateManualReceivable: (payload: CreateManualReceivablePayload) => Promise<void>;
   onDeleteManualReceivable: (receivableId: string) => Promise<void>;
+  onPrepareInvoiceEdit: (invoiceId: string) => Promise<CreateInvoicePayload>;
+  onUpdateInvoice: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
 }) {
   const [query, setQuery] = useUrlState("cashFlowOpenQuery", "");
   const [sortKey, setSortKey] = useUrlState<OpenReceivableSortKey>("cashFlowOpenSort", "dueDate", {
@@ -719,6 +730,10 @@ export function CashFlowOpenInvoicesView({
   });
   const [dialogKind, setDialogKind] = useState<"commission" | "receivable" | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const rows = useMemo<OpenReceivableRow[]>(() => [
     ...dashboard.invoices.flatMap((invoice) => {
       const lineItem = invoiceCashFlowLine(invoice, dashboard);
@@ -760,6 +775,42 @@ export function CashFlowOpenInvoicesView({
     }
   }
 
+  async function editInvoice(invoice: Invoice) {
+    setEditingId(invoice.id);
+    setEditError(null);
+    try {
+      if (invoice.status === "open" && invoice.origin === "merit") {
+        const details = await onPrepareInvoiceEdit(invoice.id);
+        setEditingInvoice({
+          ...invoice,
+          amount: details.amount,
+          description: details.description,
+          periodStart: details.periodStart,
+          periodEnd: details.periodEnd,
+          taxId: details.taxId
+        });
+      } else {
+        setEditingInvoice(invoice);
+      }
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Invoice details could not be loaded");
+    } finally {
+      setEditingId(null);
+    }
+  }
+
+  async function downloadInvoice(invoice: Invoice) {
+    setDownloadingId(invoice.id);
+    setEditError(null);
+    try {
+      await downloadInvoicePdfFile(invoice, apiBase);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Invoice PDF could not be downloaded");
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
   return (
     <div className="cash-flow-page-stack">
       <section className="cash-flow-topbar">
@@ -775,6 +826,7 @@ export function CashFlowOpenInvoicesView({
       </section>
       <section className="panel">
         <div className="list-toolbar"><ToolbarSearchField ariaLabel="Search open invoices and receivables" placeholder="Search open items" value={query} onChange={setQuery} /></div>
+        {editError && <div className="inline-error" role="alert">{editError}</div>}
         <div className="table-wrap">
           <table className="data-table cash-flow-open-table">
             <thead><tr>
@@ -791,12 +843,22 @@ export function CashFlowOpenInvoicesView({
               <td><span className={`status-pill invoice-status-${row.invoice?.status ?? "open"}`}>{row.status}</span></td>
               <td>{dateLabel(row.dueDate)}</td>
               <td className="amount"><strong>{money(row.amount, row.currency)}</strong></td>
-              <td>{row.manual ? <Button className="icon-text-button destructive-icon-button" type="button" disabled={deletingId === row.id} onClick={async () => { setDeletingId(row.id); try { await onDeleteManualReceivable(row.id); } finally { setDeletingId(null); } }}>{deletingId === row.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Remove</Button> : <span className="muted-cell">Manage in Invoices</span>}</td>
+              <td>{row.manual ? <Button className="icon-text-button destructive-icon-button" type="button" disabled={deletingId === row.id} onClick={async () => { setDeletingId(row.id); try { await onDeleteManualReceivable(row.id); } finally { setDeletingId(null); } }}>{deletingId === row.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Remove</Button> : row.invoice ? <div className="row-actions"><Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(row.invoice!)}>{editingId === row.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>{row.invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(row.invoice!)}>{downloadingId === row.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}</div> : null}</td>
             </tr>) : <tr><td colSpan={6}>No open items</td></tr>}</tbody>
           </table>
         </div>
       </section>
       {dialogKind && <ManualReceivableDialog kind={dialogKind} onClose={() => setDialogKind(null)} onSubmit={async (payload) => { await onCreateManualReceivable(payload); setDialogKind(null); }} />}
+      {editingInvoice && <InvoiceEditorDialog
+        dashboard={dashboard}
+        invoice={editingInvoice}
+        onClose={() => setEditingInvoice(null)}
+        onSubmit={async (payload) => {
+          const updated = await onUpdateInvoice(editingInvoice.id, payload as UpdateInvoicePayload);
+          setEditingInvoice(null);
+          return updated;
+        }}
+      />}
     </div>
   );
 }

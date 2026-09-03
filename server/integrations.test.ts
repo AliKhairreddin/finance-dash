@@ -5,6 +5,7 @@ import {
   createMeritInvoice,
   deliverMeritInvoice,
   fetchCoinbaseUsdRates,
+  fetchMeritInvoicePdf,
   fetchMeritInvoices,
   getIntegrationStatus
 } from "./integrations";
@@ -167,6 +168,41 @@ test("Merit paid state is exposed read-only and never marks a local invoice paid
     assert.equal(rows[0]?.status, "open");
     assert.equal(rows[0]?.meritStatus, "paid");
     assert.equal(rows[0]?.issueDate, "2026-07-01");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousApiId === undefined) delete process.env.MERIT_API_ID;
+    else process.env.MERIT_API_ID = previousApiId;
+    if (previousApiKey === undefined) delete process.env.MERIT_API_KEY;
+    else process.env.MERIT_API_KEY = previousApiKey;
+  }
+});
+
+test("Merit invoice PDF download uses the dedicated PDF endpoint", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousApiId = process.env.MERIT_API_ID;
+  const previousApiKey = process.env.MERIT_API_KEY;
+  let request: { path: string; body: unknown } | undefined;
+  try {
+    process.env.MERIT_API_ID = "api-id";
+    process.env.MERIT_API_KEY = "api-key";
+    globalThis.fetch = async (input, init) => {
+      request = {
+        path: new URL(String(input)).pathname,
+        body: JSON.parse(String(init?.body)) as unknown
+      };
+      return Response.json({
+        FileName: "original.pdf",
+        FileContent: Buffer.from("%PDF-1.7\ninvoice", "utf8").toString("base64")
+      });
+    };
+
+    const bytes = await fetchMeritInvoicePdf("merit-invoice-id");
+
+    assert.equal(new TextDecoder().decode(bytes), "%PDF-1.7\ninvoice");
+    assert.deepEqual(request, {
+      path: "/api/v2/getsalesinvpdf",
+      body: { Id: "merit-invoice-id", DelivNote: false }
+    });
   } finally {
     globalThis.fetch = previousFetch;
     if (previousApiId === undefined) delete process.env.MERIT_API_ID;
