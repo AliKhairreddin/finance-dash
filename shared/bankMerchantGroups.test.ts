@@ -4,6 +4,7 @@ import {
   bankAccountGroupKey,
   bankCardGroupKey,
   bankMerchantGroupKey,
+  bankVirtualAccountGroupKey,
   bankCardCashbackRate,
   groupBankTransactions,
   groupBankTransactionsByAccount,
@@ -23,6 +24,8 @@ function bankTransaction(
     id,
     source: "slash",
     slashAccountSubtype: "credit",
+    slashVirtualAccountId: "virtual-primary",
+    slashVirtualAccountName: "Primary Account",
     accountId: "slash-platinum",
     accountName: "Slash Platinum Credit",
     date: "2026-08-01",
@@ -63,7 +66,7 @@ test("card and account group keys identify the exact drill-down rows", () => {
     cardLastFour: "8744"
   });
   assert.equal(bankCardGroupKey(transaction), "slash:card:card-primary");
-  assert.equal(bankAccountGroupKey(transaction), "slash:account:slash-platinum");
+  assert.equal(bankAccountGroupKey(transaction), bankVirtualAccountGroupKey("virtual-primary"));
   assert.equal(bankCardGroupKey({ ...transaction, status: "pending" }), undefined);
 });
 
@@ -183,18 +186,26 @@ test("card view uses verified card identity, separates last-four collisions, and
   assert.equal(cards.find((item) => item.cardId === "card-secondary")?.transactionCount, 1);
 });
 
-test("account view retains settled activity without verified card metadata", () => {
+test("Slash account view groups settled activity by virtual account", () => {
   const accounts = groupBankTransactionsByAccount([
     bankTransaction("platinum", "Meta", 100),
     bankTransaction("gold", "Meta", 25, {
       accountId: "slash-gold",
-      accountName: "Slash Gold Credit"
+      accountName: "Slash Gold Credit",
+      slashVirtualAccountId: "virtual-reservation",
+      slashVirtualAccountName: "Reservation Account"
     })
   ]);
 
   assert.equal(accounts.length, 2);
-  assert.equal(accounts.find((item) => item.accountName === "Slash Platinum Credit")?.transactionCount, 1);
-  assert.equal(accounts.find((item) => item.accountName === "Slash Gold Credit")?.transactionCount, 1);
+  assert.equal(accounts.find((item) => item.accountName === "Primary Account")?.transactionCount, 1);
+  assert.equal(accounts.find((item) => item.accountName === "Reservation Account")?.transactionCount, 1);
+  assert.deepEqual(groupBankTransactionsByAccount([
+    bankTransaction("unassigned", "Meta", 10, {
+      slashVirtualAccountId: undefined,
+      slashVirtualAccountName: undefined
+    })
+  ]), []);
 });
 
 test("bank activity summaries retain exact totals without raw transaction arrays", () => {

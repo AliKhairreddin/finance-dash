@@ -481,9 +481,6 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
     if (!sortKeys.includes(sortKey as TransactionSortKey)) throw new ClientRequestError("Transaction sort is invalid");
     const search = typeof request.query.search === "string" ? request.query.search.trim() : "";
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";
-    const slashVirtualAccountId = typeof request.query.slashVirtualAccountId === "string"
-      ? request.query.slashVirtualAccountId.trim()
-      : "";
     const category = typeof request.query.category === "string" ? request.query.category.trim() : "";
     const team = typeof request.query.team === "string" ? request.query.team.trim() : "";
     const rawGroupType = typeof request.query.groupType === "string" ? request.query.groupType.trim() : "";
@@ -494,10 +491,6 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
     if (Boolean(rawGroupType) !== Boolean(groupKey) || groupKey.length > 512) {
       throw new ClientRequestError("Transaction group filter is invalid");
     }
-    if (slashVirtualAccountId.length > 256) throw new ClientRequestError("Slash account is invalid");
-    if (slashVirtualAccountId && source !== "slash") {
-      throw new ClientRequestError("Slash account filtering requires the Slash source");
-    }
     return {
       fromDate,
       toDate,
@@ -505,7 +498,6 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(accountId ? { accountId } : {}),
-      ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
       ...(category ? { category } : {}),
       ...(team ? { team } : {}),
       ...(rawGroupType ? { groupType: rawGroupType as "merchant" | "card" | "account", groupKey } : {}),

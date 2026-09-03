@@ -6,6 +6,7 @@ import { useUrlState } from "@/lib/url-state";
 import {
   bankCardCashbackRate,
   bankGroupAmountTotal,
+  bankVirtualAccountGroupKey,
   type BankCardGroupSummary,
   type BankMerchantGroup,
   type BankMerchantGroupSummary
@@ -15,7 +16,7 @@ import {
   generateBankExpenseReportPdf,
   type BankExpenseReportPeriod
 } from "../../../shared/bankExpenseReport";
-import type { Transaction } from "../../../shared/types";
+import type { SlashVirtualAccount, Transaction } from "../../../shared/types";
 
 export const bankActivityViewModes = ["transactions", "groups", "cards", "accounts"] as const;
 export type BankActivityViewMode = (typeof bankActivityViewModes)[number];
@@ -65,16 +66,18 @@ function downloadBytes(bytes: Uint8Array, fileName: string): void {
 
 export function BankActivityViewToggle({
   value,
-  onChange
+  onChange,
+  virtualAccounts = false
 }: {
   value: BankActivityViewMode;
   onChange: (value: BankActivityViewMode) => void;
+  virtualAccounts?: boolean;
 }) {
   const options: Array<{ value: BankActivityViewMode; label: string; icon: typeof List }> = [
     { value: "transactions", label: "Transactions", icon: List },
     { value: "groups", label: "Group view", icon: Layers3 },
     { value: "cards", label: "Card view", icon: CreditCard },
-    { value: "accounts", label: "Account view", icon: Landmark }
+    { value: "accounts", label: virtualAccounts ? "Virtual accounts" : "Account view", icon: Landmark }
   ];
   return (
     <div className="segmented-control bank-activity-view-toggle" aria-label="Bank activity view">
@@ -345,12 +348,14 @@ export function BankCardActivityView({
 
 export function BankAccountActivityView({
   groups,
+  virtualAccounts,
   isLoading,
   loadError,
   onRetry,
   onOpenGroup
 }: {
   groups: readonly BankCardGroupSummary[];
+  virtualAccounts?: readonly SlashVirtualAccount[];
   isLoading: boolean;
   loadError: string | null;
   onRetry: () => Promise<void>;
@@ -362,6 +367,22 @@ export function BankAccountActivityView({
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("bankAccountOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
+  const completeGroups = useMemo(() => {
+    if (!virtualAccounts) return groups;
+    const groupsByKey = new Map(groups.map((group) => [group.key, group]));
+    return virtualAccounts.map((account) => groupsByKey.get(bankVirtualAccountGroupKey(account.id)) ?? {
+      key: bankVirtualAccountGroupKey(account.id),
+      label: account.name,
+      source: "slash" as const,
+      accountName: account.name,
+      transactionCount: 0,
+      firstDate: "",
+      lastDate: "",
+      spend: {},
+      credits: {},
+      cashback: {}
+    });
+  }, [groups, virtualAccounts]);
   const rows = useMemo(() => {
     function sortValue(group: BankCardGroupSummary): number | string {
       if (sortKey === "account") return group.accountName;
@@ -374,11 +395,11 @@ export function BankAccountActivityView({
       if (sortKey === "transactions") return group.transactionCount;
       return bankGroupAmountTotal(group.spend);
     }
-    return [...groups].sort((left, right) =>
+    return [...completeGroups].sort((left, right) =>
       compareTableValues(sortValue(left), sortValue(right), sortDirection)
       || left.label.localeCompare(right.label)
     );
-  }, [groups, sortDirection, sortKey]);
+  }, [completeGroups, sortDirection, sortKey]);
 
   function requestSort(nextSortKey: AccountSortKey): void {
     if (nextSortKey === sortKey) {
@@ -392,11 +413,11 @@ export function BankAccountActivityView({
   return (
     <>
       <LoadingCompletePeriod isLoading={isLoading} loadError={loadError} onRetry={onRetry} />
-      <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} accounts shown.</span>
+      <span className="screen-reader-only" role="status" aria-live="polite">{rows.length} {virtualAccounts ? "virtual accounts" : "accounts"} shown.</span>
       <div className="table-wrap bank-card-table-wrap">
         <table className="data-table modern-income-table bank-card-table">
           <thead><tr>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">Account</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="account">{virtualAccounts ? "Virtual account" : "Account"}</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
@@ -425,7 +446,7 @@ export function BankAccountActivityView({
                 <td className="amount"><strong>{(bankCardCashbackRate(group) * 100).toFixed(2)}%</strong></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={9}>{isLoading ? "Loading account activity..." : "No settled account activity matches this view"}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={9}>{isLoading ? `Loading ${virtualAccounts ? "virtual account" : "account"} activity...` : `No settled ${virtualAccounts ? "virtual account" : "account"} activity matches this view`}</td></tr>}
           </tbody>
         </table>
       </div>

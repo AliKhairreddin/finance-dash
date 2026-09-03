@@ -2129,7 +2129,6 @@ interface TransactionPageOptions {
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
   accountId?: string;
-  slashVirtualAccountId?: string;
   category?: string;
   team?: string;
   groupType?: BankActivityGroupType;
@@ -2229,7 +2228,6 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
     options.search
     || options.wiseEntity
     || options.accountId
-    || options.slashVirtualAccountId
     || options.category
     || options.team
     || options.groupType
@@ -2297,10 +2295,6 @@ function filterAndSortActivity(
   const rows = transactions.filter((transaction) => {
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
     if (options.accountId && transaction.accountId !== options.accountId) return false;
-    if (
-      options.slashVirtualAccountId
-      && transaction.slashVirtualAccountId !== options.slashVirtualAccountId
-    ) return false;
     if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
     if (options.team === "unassigned" && transaction.teamId) return false;
     if (options.team && options.team !== "unassigned" && transaction.teamId !== options.team) return false;
@@ -6557,19 +6551,12 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const search = url.searchParams.get("search")?.trim();
   const accountId = url.searchParams.get("accountId")?.trim();
-  const slashVirtualAccountId = url.searchParams.get("slashVirtualAccountId")?.trim();
   const category = url.searchParams.get("category")?.trim();
   const team = url.searchParams.get("team")?.trim();
   const groupType = url.searchParams.get("groupType")?.trim();
   const groupKey = url.searchParams.get("groupKey")?.trim();
   if (search && search.length > 200) throw new ApiError(400, "Transaction search is too long");
   if (accountId && accountId.length > 256) throw new ApiError(400, "Transaction account is invalid");
-  if (slashVirtualAccountId && slashVirtualAccountId.length > 256) {
-    throw new ApiError(400, "Slash account is invalid");
-  }
-  if (slashVirtualAccountId && source !== "slash") {
-    throw new ApiError(400, "Slash account filtering requires the Slash source");
-  }
   if (category && category.length > 160) throw new ApiError(400, "Transaction category is invalid");
   if (team && team.length > 256) throw new ApiError(400, "Transaction owner is invalid");
   if (groupType && groupType !== "merchant" && groupType !== "card" && groupType !== "account") {
@@ -6585,7 +6572,6 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
     ...(accountId ? { accountId } : {}),
-    ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
     ...(category ? { category } : {}),
     ...(team ? { team } : {}),
     ...(groupType ? { groupType: groupType as BankActivityGroupType, groupKey } : {}),

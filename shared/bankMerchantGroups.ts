@@ -268,8 +268,16 @@ export function bankCardGroupKey(transaction: Transaction): string | undefined {
 
 export function bankAccountGroupKey(transaction: Transaction): string | undefined {
   if (!settledBankTransaction(transaction)) return undefined;
+  if (transaction.source === "slash") {
+    const virtualAccountId = transaction.slashVirtualAccountId?.trim();
+    return virtualAccountId ? bankVirtualAccountGroupKey(virtualAccountId) : undefined;
+  }
   const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
   return `${transaction.source}:account:${accountIdentity}`;
+}
+
+export function bankVirtualAccountGroupKey(virtualAccountId: string): string {
+  return `slash:virtual-account:${virtualAccountId.trim()}`;
 }
 
 export function bankMerchantGroupKey(
@@ -343,12 +351,16 @@ export function groupBankTransactionsByAccount(transactions: readonly Transactio
   for (const transaction of transactions) {
     const key = bankAccountGroupKey(transaction);
     if (!key) continue;
+    const accountName = transaction.source === "slash"
+      ? transaction.slashVirtualAccountName?.trim()
+      : transaction.accountName;
+    if (!accountName) continue;
     const existing = groups.get(key);
     const group: BankCardGroup = existing ?? {
       key,
-      label: transaction.accountName,
+      label: accountName,
       source: transaction.source,
-      accountName: transaction.accountName,
+      accountName,
       transactions: [],
       transactionCount: 0,
       firstDate: transaction.date,

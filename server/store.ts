@@ -2715,7 +2715,6 @@ type LocalTransactionPageOptions = {
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
   accountId?: string;
-  slashVirtualAccountId?: string;
   category?: string;
   team?: string;
   groupType?: BankActivityGroupType;
@@ -2814,10 +2813,6 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
       && (!options.accountId || transaction.accountId === options.accountId)
-      && (
-        !options.slashVirtualAccountId
-        || transaction.slashVirtualAccountId === options.slashVirtualAccountId
-      )
       && (!options.category || transactionBusinessCategory(transaction.category) === options.category)
       && (!options.team || (options.team === "unassigned" ? !transaction.teamId : transaction.teamId === options.team))
       && (!options.groupType || transactionBankActivityGroupKey(transaction, options.groupType, providers) === options.groupKey)

@@ -108,8 +108,6 @@ export function AllBankTransactionsView({
   setBankDirection,
   bankAccountFilter,
   setBankAccountFilter,
-  slashVirtualAccountFilter,
-  setSlashVirtualAccountFilter,
   bankCategoryFilter,
   setBankCategoryFilter,
   teamFilter,
@@ -154,8 +152,6 @@ export function AllBankTransactionsView({
   setBankDirection: (direction: "all" | "in" | "out") => void;
   bankAccountFilter: string;
   setBankAccountFilter: (accountId: string) => void;
-  slashVirtualAccountFilter: string;
-  setSlashVirtualAccountFilter: (accountId: string) => void;
   bankCategoryFilter: string;
   setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
@@ -189,8 +185,6 @@ export function AllBankTransactionsView({
   const setDirection = setBankDirection;
   const account = bankAccountFilter;
   const setAccount = setBankAccountFilter;
-  const virtualAccount = slashVirtualAccountFilter;
-  const setVirtualAccount = setSlashVirtualAccountFilter;
   const category = bankCategoryFilter;
   const setCategory = setBankCategoryFilter;
   const owner = teamFilter;
@@ -212,7 +206,7 @@ export function AllBankTransactionsView({
       .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
     [dashboard.accounts]
   );
-  const virtualAccountOptions = useMemo(
+  const virtualAccounts = useMemo(
     () => slashVirtualAccountOptions(dashboard.accounts),
     [dashboard.accounts]
   );
@@ -222,14 +216,6 @@ export function AllBankTransactionsView({
     const selectedAccount = accountOptions.find((item) => item.id === account);
     if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
   }, [account, accountOptions, setAccount, source]);
-
-  useEffect(() => {
-    if (virtualAccount === "all") return;
-    if (
-      source !== "slash"
-      || !virtualAccountOptions.some((item) => item.id === virtualAccount)
-    ) setVirtualAccount("all");
-  }, [setVirtualAccount, source, virtualAccount, virtualAccountOptions]);
 
   const rows = transactions;
 
@@ -245,7 +231,7 @@ export function AllBankTransactionsView({
   const bankActiveFilters: ActiveFilter[] = [
     ...(bankGroupType ? [{
       key: "activity-group",
-      label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : "Account"}: ${bankGroupLabel}`,
+      label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : source === "slash" ? "Virtual account" : "Account"}: ${bankGroupLabel}`,
       onRemove: onClearBankGroup
     }] : []),
     ...(source === "all" ? [] : [{
@@ -257,11 +243,6 @@ export function AllBankTransactionsView({
       key: "account",
       label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`,
       onRemove: () => setAccount("all")
-    }]),
-    ...(virtualAccount === "all" ? [] : [{
-      key: "slash-account",
-      label: `Slash account: ${virtualAccountOptions.find((item) => item.id === virtualAccount)?.name ?? virtualAccount}`,
-      onRemove: () => setVirtualAccount("all")
     }]),
     ...(direction === "all" ? [] : [{
       key: "direction",
@@ -309,28 +290,12 @@ export function AllBankTransactionsView({
                       setSource(nextSource);
                       const selectedAccount = accountOptions.find((item) => item.id === account);
                       if (nextSource !== "all" && selectedAccount?.source !== nextSource) setAccount("all");
-                      if (nextSource !== "slash") setVirtualAccount("all");
                     }}
                   >
                     <NativeSelectOption value="all">All sources</NativeSelectOption>
                     {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
-                {source === "slash" && (
-                  <label>
-                    Slash account
-                    <NativeSelect
-                      aria-label="Filter bank transactions by Slash account"
-                      value={virtualAccount}
-                      onValueChange={setVirtualAccount}
-                    >
-                      <NativeSelectOption value="all">All Slash accounts</NativeSelectOption>
-                      {virtualAccountOptions.map((item) => (
-                        <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  </label>
-                )}
                 <label>
                   Account
                   <NativeSelect aria-label="Filter bank transactions by account" value={account} onValueChange={setAccount}>
@@ -379,7 +344,7 @@ export function AllBankTransactionsView({
                 </label>
               </FilterFieldGroup>
             </FilterPopover>
-            <BankActivityViewToggle value={activityView} onChange={setActivityView} />
+            <BankActivityViewToggle value={activityView} onChange={setActivityView} virtualAccounts={source === "slash"} />
           </div>
           <div className="list-toolbar-actions">
             {rangeControls}
@@ -410,7 +375,6 @@ export function AllBankTransactionsView({
           onClearBankGroup();
           setSource("all");
           setAccount("all");
-          setVirtualAccount("all");
           setDirection("all");
           setCategory("all");
           setMatch("all");
@@ -477,6 +441,7 @@ export function AllBankTransactionsView({
       ) : (
         <BankAccountActivityView
           groups={activitySummary?.accountGroups ?? []}
+          virtualAccounts={source === "slash" ? virtualAccounts : undefined}
           isLoading={isLoadingActivitySummary}
           loadError={activitySummaryError}
           onRetry={onRetryActivitySummary}
