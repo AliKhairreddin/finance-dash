@@ -58,8 +58,8 @@ test("Telegram user mappings normalize login names, including internal spaces", 
 test("Telegram OTP messages lead with a formatted code and provide a native copy button", () => {
   assert.deepEqual(buildTelegramOtpMessage("6064572340", "123456"), {
     chat_id: "6064572340",
-    text: "🔐 Finance Dash sign-in\n\n123456\n\nExpires in 5 minutes.\nIf you didn’t request this, ignore the message.",
-    entities: [{ type: "code", offset: 25, length: 6 }],
+    text: "123456 — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.",
+    entities: [{ type: "code", offset: 0, length: 6 }],
     reply_markup: {
       inline_keyboard: [[{
         text: "Copy code",

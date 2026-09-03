@@ -275,18 +275,11 @@ export async function sendTelegramDocument(
 
 export function buildTelegramOtpMessage(chatId: string, code: string): TelegramOtpMessagePayload {
   if (!/^[0-9]{6}$/u.test(code)) throw new Error("Telegram OTP was invalid");
-  const text = [
-    "🔐 Finance Dash sign-in",
-    "",
-    code,
-    "",
-    "Expires in 5 minutes.",
-    "If you didn’t request this, ignore the message."
-  ].join("\n");
+  const text = `${code} — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.`;
   return {
     chat_id: chatId,
     text,
-    entities: [{ type: "code", offset: text.indexOf(code), length: code.length }],
+    entities: [{ type: "code", offset: 0, length: code.length }],
     reply_markup: {
       inline_keyboard: [[{
         text: "Copy code",
