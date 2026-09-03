@@ -226,6 +226,7 @@ import {
   transactionReviewerCanAccess
 } from "./auth";
 import {
+  formatTelegramTimestamp,
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
   pollTelegramOnboarding,
@@ -234,7 +235,11 @@ import {
   type TelegramCommandReply,
   type TelegramCommandRole
 } from "./telegram";
-import { financeTelegramCommands } from "./telegramCommandCatalog";
+import {
+  financeTelegramCommands,
+  telegramCommandUsage,
+  type FinanceTelegramCommand
+} from "./telegramCommandCatalog";
 import {
   buildSlashVirtualAccountBalanceAlertMessage,
   sendSlashVirtualAccountBalanceAlert,
@@ -4007,7 +4012,8 @@ async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise
   if (!settings.digestTimeUtc || time < settings.digestTimeUtc) return 0;
   const snapshot = await getSnapshot(env);
   const message = [
-    `Finance Dash daily digest · ${date}`,
+    "📊 Finance Dash daily digest",
+    telegramDateLabel(date),
     "",
     `Approx. liquid assets: ${telegramUsd(snapshot.approximateUsdTotals.totalUsd)}`,
     `Receivables: ${telegramTotals(snapshot.metrics.totalReceivables)}`,
@@ -4015,7 +4021,8 @@ async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise
     `Open invoices: ${snapshot.invoices.filter((invoice) => invoice.status !== "paid").length}`,
     `Unpaid bills: ${snapshot.expenses.filter((expense) => expense.paymentStatus === "unpaid").length}`,
     `Needs review: ${snapshot.transactionReviewPreview.length}`,
-    `As of: ${snapshot.asOf}`
+    "",
+    `Updated: ${formatTelegramTimestamp(snapshot.asOf)}`
   ].join("\n");
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   if (!users) throw new Error("Telegram user mapping was invalid");
@@ -7468,7 +7475,8 @@ async function handleApi(
   }
 }
 
-const telegramMaximumLines = 18;
+const telegramMaximumLines = 10;
+const telegramMaximumMessageCharacters = 4_096;
 const telegramMaximumDocumentBytes = 10 * 1024 * 1024;
 
 async function telegramBoundedDocumentBytes(response: Response): Promise<ArrayBuffer> {
@@ -7528,14 +7536,37 @@ function telegramTotals(totals: Record<string, number>): string {
 }
 
 function telegramList(heading: string, lines: readonly string[], empty: string): string {
-  if (lines.length === 0) return `${heading}\n\n${empty}`;
+  if (lines.length === 0) return `${heading}\n\n— ${empty}`;
   const visible = lines.slice(0, telegramMaximumLines);
   return [
     heading,
     "",
-    ...visible,
-    ...(lines.length > visible.length ? [`…and ${lines.length - visible.length} more`] : [])
+    ...visible.map((line) => `• ${line.replace(/\n/gu, "\n  ")}`),
+    ...(lines.length > visible.length ? ["", `…plus ${lines.length - visible.length} more`] : [])
   ].join("\n");
+}
+
+function telegramBoundedText(text: string): string {
+  if (text.length <= telegramMaximumMessageCharacters) return text;
+  const visible = text.slice(0, telegramMaximumMessageCharacters - 32);
+  const lastBreak = visible.lastIndexOf("\n");
+  return `${visible.slice(0, lastBreak > 0 ? lastBreak : visible.length).trimEnd()}\n\n…response shortened`;
+}
+
+function telegramCompactText(value: string, maximumLength = 42): string {
+  const compact = value.trim().replace(/\s+/gu, " ");
+  return compact.length <= maximumLength ? compact : `${compact.slice(0, maximumLength - 1).trimEnd()}…`;
+}
+
+function telegramDateLabel(value: string): string {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(date);
 }
 
 function telegramCommandParts(text: string): { command: string; args: string } {
@@ -7615,10 +7646,14 @@ function telegramTransactionOptions(
   };
 }
 
-function telegramTransactionLine(transaction: Transaction): string {
+export function buildTelegramTransactionListItem(transaction: Transaction): string {
   const account = transaction.slashVirtualAccountName ?? transaction.accountName;
   const sign = transaction.direction === "in" ? "+" : "−";
-  return `${transaction.date} · ${sign}${telegramMoney(transaction.amount, transaction.currency)} · ${transaction.merchantName ?? transaction.counterparty} · ${account} · ${transaction.id}`;
+  const direction = transaction.direction === "in" ? "🟢" : "🔴";
+  return [
+    `${direction} ${sign}${telegramMoney(transaction.amount, transaction.currency)} · ${telegramCompactText(transaction.merchantName ?? transaction.counterparty, 34)}`,
+    `${telegramDateLabel(transaction.date)} · ${telegramCompactText(account, 32)}`
+  ].join("\n");
 }
 
 function telegramInvoice(snapshot: DashboardSnapshot, reference: string): Invoice {
@@ -7647,66 +7682,69 @@ function telegramDashboardLink(env: Env, page = ""): string {
 
 function telegramMenu(role: TelegramCommandRole): string {
   const commands = financeTelegramCommands.filter((item) => role === "administrator" || item.access === "read");
-  const groups = [
-    ["Core", ["menu", "help", "whoami", "cancel", "ask", "overview", "balances", "cashflow", "receivables", "payables", "holdings", "fx"]],
-    ["Banking", ["transactions", "transaction", "needs_review", "search", "cashback", "export_transactions"]],
-    ["Analysis", ["analytics", "spend", "income", "top_companies", "top_categories"]],
-    ["Documents", ["invoices", "invoice", "overdue", "due_soon", "invoice_pdf", "payment_candidates", "expenses", "expense", "unpaid_bills", "missing_documents", "expense_document"]],
-    ["Operations", ["revenue", "revenue_runs", "media_spend", "provider_funds", "distribution", "management", "companies", "teams", "health"]],
-    ["Alerts & views", ["alerts", "alert_history", "screenshot", "open"]],
-    ["Actions", commands.filter((item) => item.access === "action").map((item) => item.command)]
-  ] as const;
-  const available = new Set(commands.map((item) => item.command));
+  const tap = commands.filter((item) => item.input === "tap").map((item) => `/${item.command}`);
+  const optional = commands.filter((item) => item.input === "optional").map((item) => `/${item.command}`);
+  const details = commands.filter((item) => item.input === "required" && item.access === "read")
+    .map((item) => item.command);
+  const actions = commands.filter((item) => item.access === "action").map((item) => item.command);
   return [
-    `Finance Dash commands · ${role === "administrator" ? "full access" : "CEO read-only"}`,
+    "📊 Finance Dash commands",
+    `Access: ${role === "administrator" ? "Full administrator" : "CEO read-only"}`,
     "",
-    ...groups.flatMap(([label, names]) => {
-      const visible = names.filter((name) => available.has(name));
-      return visible.length > 0 ? [`${label}:`, visible.map((name) => `/${name}`).join(" · ")] : [];
-    }),
+    "▶ TAP TO RUN",
+    tap.join(" · "),
     "",
-    "Use /help <command> for syntax."
-  ].join("\n").slice(0, 4_096);
+    "⚙ TAP FOR DEFAULTS, OR TYPE OPTIONS",
+    optional.join(" · "),
+    ...(details.length > 0 ? [
+      "",
+      "✍ TYPE DETAILS FIRST",
+      details.join(" · ")
+    ] : []),
+    ...(actions.length > 0 ? [
+      "",
+      "🔒 ADMIN ACTIONS — TYPE DETAILS",
+      actions.join(" · ")
+    ] : []),
+    "",
+    "Required-detail commands are written without / so they aren’t mistaken for one-tap commands.",
+    "Syntax: /help <command>",
+    ...(role === "administrator" ? ["Mutating actions show CONFIRM in their syntax."] : [])
+  ].join("\n");
 }
 
-const telegramHelp: Readonly<Record<string, string>> = {
-  balances: "/balances [all|slash|wise|revolut|amex|holdings]",
-  transactions: "/transactions [period] [bank] [search text]",
-  search: "/search <text> [uses this month]",
-  analytics: "/analytics [today|yesterday|last-7-days|this-month|last-month|YYYY-MM-DD:YYYY-MM-DD]",
-  invoice: "/invoice <invoice number or ID>",
-  invoice_pdf: "/invoice_pdf <invoice number or ID>",
-  expense: "/expense <record number or ID>",
-  expense_document: "/expense_document <record number or ID>",
-  open: "/open [overview|bank|analytics|revenue|invoices|expenses|funding|distribution|management]",
-  screenshot: "/screenshot <page>",
-  sync: "/sync CONFIRM",
-  categorize: "/categorize <transaction ID> | <category> | <transaction|merchant> | CONFIRM",
-  assign_company: "/assign_company <transaction ID> | <company ID> | <transaction|merchant> | CONFIRM",
-  assign_team: "/assign_team <transaction ID> | <team ID or none> | CONFIRM",
-  revenue_pull: "/revenue_pull <JSON SyncRevenuePayload> CONFIRM",
-  draft_revenue: "/draft_revenue <JSON DraftRevenueRunPayload> CONFIRM",
-  create_invoice: "/create_invoice <JSON CreateInvoicePayload> CONFIRM",
-  edit_invoice: "/edit_invoice <invoice number or ID> | <JSON UpdateInvoicePayload> | CONFIRM",
-  duplicate_invoice: "/duplicate_invoice <invoice number or ID> CONFIRM",
-  delete_draft: "/delete_draft <invoice number or ID> CONFIRM",
-  match_invoice: "/match_invoice <transaction ID> | <invoice number or ID> | CONFIRM",
-  record_payment: "/record_payment <invoice number or ID> | <JSON RecordInvoicePaymentPayload> | CONFIRM",
-  send_invoice: "/send_invoice <invoice number or ID> | <save|deliver> | CONFIRM",
-  create_expense: "/create_expense <JSON CreateExpensePayload> CONFIRM",
-  upload_receipt: "/upload_receipt <expense number> — then use the secure upload link",
-  match_expense: "/match_expense <expense number or ID> | <transaction ID> | CONFIRM",
-  add_receivable: "/add_receivable <JSON CreateManualReceivablePayload> CONFIRM",
-  add_holding: "/add_holding <JSON CreateHoldingPayload> CONFIRM",
-  update_holding: "/update_holding <holding ID> | <JSON UpdateHoldingPayload> | CONFIRM",
-  save_cashflow: "/save_cashflow <JSON SaveCashFlowSnapshotPayload> CONFIRM",
-  alert_add: "/alert_add <Slash virtual account> | <USD threshold> | CONFIRM",
-  alert_remove: "/alert_remove <Slash virtual account> | CONFIRM",
-  alert_pause: "/alert_pause <Slash virtual account|all> | CONFIRM",
-  alert_resume: "/alert_resume <Slash virtual account|all> | CONFIRM",
-  alert_test: "/alert_test <Slash virtual account> | CONFIRM",
-  digest: "/digest <HH:MM|off> | CONFIRM — time is UTC"
-};
+const telegramHelp: Readonly<Record<string, string>> = Object.fromEntries(
+  financeTelegramCommands.map((command) => [command.command, telegramCommandUsage(command)])
+);
+
+function telegramCommandHelp(command: FinanceTelegramCommand): string {
+  const inputGuidance = command.input === "tap"
+    ? "▶ Tap to run — no additional text is needed."
+    : command.input === "optional"
+      ? "⚙ Tap to use the default, or type options after the command."
+      : command.access === "action" && command.command !== "upload_receipt"
+        ? "🔒 Type the required details and include the exact CONFIRM marker."
+        : "✍ Type the required details after the command.";
+  return [
+    `ℹ️ /${command.command}`,
+    command.description,
+    "",
+    inputGuidance,
+    `Syntax: ${telegramCommandUsage(command)}`,
+    ...(command.example ? [`Example: ${command.example}`] : [])
+  ].join("\n");
+}
+
+function telegramMissingInput(command: FinanceTelegramCommand): string {
+  return [
+    `✍️ /${command.command} needs details`,
+    "",
+    `Syntax: ${telegramCommandUsage(command)}`,
+    ...(command.example ? [`Example: ${command.example}`] : []),
+    "",
+    "Nothing was changed."
+  ].join("\n");
+}
 
 async function telegramStoredAlertSettings(env: Env, now = new Date().toISOString()): Promise<{
   defaults: ReturnType<typeof telegramAlertDefaults>;
@@ -7750,17 +7788,21 @@ async function telegramAnalytics(
 async function telegramReadCommand(
   env: Env,
   user: TelegramAuthUser,
+  role: TelegramCommandRole,
   command: string,
   args: string
 ): Promise<TelegramCommandReply> {
-  if (command === "menu") return telegramMenu("read-only");
+  if (command === "menu") return telegramMenu(role);
   if (command === "help") {
     const requested = args.toLowerCase();
-    return requested
-      ? telegramHelp[requested] ?? `/${requested} is available. Use /menu to browse commands.`
-      : `${telegramMenu("read-only")}\n\nPeriods: today, yesterday, last-7-days, this-month, last-month, or YYYY-MM-DD:YYYY-MM-DD.`;
+    if (!requested) return telegramMenu(role);
+    const definition = financeTelegramCommands.find((item) => item.command === requested);
+    if (!definition || (definition.access === "action" && role !== "administrator")) {
+      throw new ApiError(404, `No available command named /${requested}`);
+    }
+    return telegramCommandHelp(definition);
   }
-  if (command === "cancel") return "There is no unfinished Telegram action.";
+  if (command === "cancel") return "✅ Nothing to cancel\n\nThere is no unfinished Telegram action.";
   if (command === "open" || command === "screenshot") {
     const pageNames: Record<string, string> = {
       overview: "",
@@ -7776,7 +7818,7 @@ async function telegramReadCommand(
     const page = args.trim().toLowerCase() || "overview";
     if (!(page in pageNames)) throw new ApiError(400, telegramHelp.open);
     const link = telegramDashboardLink(env, pageNames[page]);
-    if (command === "open") return `Open ${page}: ${link}`;
+    if (command === "open") return `🔗 Finance Dash · ${page}\n\n${link}`;
     const targetUrl = new URL(link);
     const sessionToken = await createAuthSessionToken(
       env.AUTH_SESSION_SECRET,
@@ -7804,7 +7846,7 @@ async function telegramReadCommand(
         bytes: await telegramBoundedDocumentBytes(response),
         contentType: "image/png",
         fileName: `finance-${page}-${financeOperatingDate()}.png`,
-        caption: `Finance Dash · ${page} · ${new Date().toISOString()}`
+        caption: `📊 Finance Dash · ${page}\n${formatTelegramTimestamp(Date.now())}`
       }
     };
   }
@@ -7817,8 +7859,8 @@ async function telegramReadCommand(
     if (command === "search" && !args) throw new ApiError(400, "/search requires text");
     const page = await readScopedTransactionPage(env, options);
     return telegramList(
-      `${command === "needs_review" ? "Needs review" : "Transactions"} · ${options.periodLabel}${page.totalCount === undefined ? "" : ` · ${page.totalCount} total`}`,
-      page.transactions.map(telegramTransactionLine),
+      `${command === "needs_review" ? "🧾 Needs review" : "🏦 Transactions"}\n${options.periodLabel}${page.totalCount === undefined ? "" : ` · ${page.totalCount} total`}`,
+      page.transactions.map(buildTelegramTransactionListItem),
       "No matching transactions."
     );
   }
@@ -7830,13 +7872,18 @@ async function telegramReadCommand(
     });
     if (!transaction) throw new ApiError(404, "Transaction not found");
     return [
-      `${transaction.direction === "in" ? "Incoming" : "Outgoing"} transaction`,
+      `${transaction.direction === "in" ? "🟢 Incoming" : "🔴 Outgoing"} transaction`,
       "",
-      telegramTransactionLine(transaction),
+      `Amount: ${telegramMoney(transaction.amount, transaction.currency)}`,
+      `Merchant: ${transaction.merchantName ?? transaction.counterparty}`,
+      `Date: ${telegramDateLabel(transaction.date)}`,
+      `Account: ${transaction.slashVirtualAccountName ?? transaction.accountName}`,
       `Category: ${transaction.category}`,
       `Company: ${transaction.matchedProviderId ?? "Unassigned"}`,
       `Owner: ${transaction.teamId ?? "Unassigned"}`,
-      `Status: ${transaction.status}`
+      `Status: ${transaction.status}`,
+      "",
+      `Transaction ID:\n${transaction.id}`
     ].join("\n");
   }
   if (command === "export_transactions") {
@@ -7854,7 +7901,7 @@ async function telegramReadCommand(
         bytes: bytes.buffer,
         contentType: "text/csv;charset=utf-8",
         fileName: transactionCsvFileName(options.source ?? "all"),
-        caption: `${collected.transactions.length} transactions · ${options.periodLabel}`
+        caption: `📄 ${collected.transactions.length} transactions\n${options.periodLabel}`
       }
     };
   }
@@ -7862,13 +7909,13 @@ async function telegramReadCommand(
   if (["analytics", "spend", "income", "top_companies", "top_categories", "cashback"].includes(command)) {
     const range = telegramDateRange(args || undefined);
     const analytics = await telegramAnalytics(env, range);
-    if (!analytics) return `Analytics for ${range.label} are being prepared. Retry this command in a moment.`;
-    if (command === "spend") return `Spend · ${range.label}\n\n${telegramTotals(analytics.summary.moneyOut)}`;
-    if (command === "income") return `Income · ${range.label}\n\n${telegramTotals(analytics.summary.moneyIn)}`;
+    if (!analytics) return `⏳ Analytics · ${range.label}\n\nThe report is being prepared. Try this command again shortly.`;
+    if (command === "spend") return `💸 Spend · ${range.label}\n\n${telegramTotals(analytics.summary.moneyOut)}`;
+    if (command === "income") return `💰 Income · ${range.label}\n\n${telegramTotals(analytics.summary.moneyIn)}`;
     if (command === "cashback") {
       const cashback = analytics.bankPeriod.slashCashback;
       return [
-        `Slash cashback · ${range.label}`,
+        `🎁 Slash cashback · ${range.label}`,
         "",
         `Earned: ${telegramTotals(cashback.earned)}`,
         `Eligible spend: ${telegramTotals(cashback.eligibleSpend)}`,
@@ -7881,7 +7928,7 @@ async function telegramReadCommand(
         Object.values(right.moneyOut).reduce((sum, value) => sum + value, 0)
         - Object.values(left.moneyOut).reduce((sum, value) => sum + value, 0)
       );
-      return telegramList(`Top companies · ${range.label}`, rows.map((row) =>
+      return telegramList(`🏢 Top companies · ${range.label}`, rows.map((row) =>
         `${row.providerName}: ${telegramTotals(row.moneyOut)} · ${row.transactionCount} tx`
       ), "No company activity.");
     }
@@ -7890,12 +7937,12 @@ async function telegramReadCommand(
         Object.values(right.moneyOut).reduce((sum, value) => sum + value, 0)
         - Object.values(left.moneyOut).reduce((sum, value) => sum + value, 0)
       );
-      return telegramList(`Top categories · ${range.label}`, rows.map((row) =>
+      return telegramList(`🏷️ Top categories · ${range.label}`, rows.map((row) =>
         `${row.category}: ${telegramTotals(row.moneyOut)} · ${row.transactionCount} tx`
       ), "No category activity.");
     }
     return [
-      `Analytics · ${range.label}`,
+      `📈 Analytics · ${range.label}`,
       "",
       `Money in: ${telegramTotals(analytics.summary.moneyIn)}`,
       `Money out: ${telegramTotals(analytics.summary.moneyOut)}`,
@@ -7909,7 +7956,7 @@ async function telegramReadCommand(
     const range = telegramDateRange(args || undefined);
     const media = await readMediaSpend(env, range.fromDate, range.toDate);
     return [
-      `Media spend · ${range.label}`,
+      `📣 Media spend · ${range.label}`,
       "",
       `Spend: ${telegramMoney(media.summary.totalSpend, media.currency)}`,
       `Days reported: ${media.summary.days}`,
@@ -7919,7 +7966,7 @@ async function telegramReadCommand(
   }
   if (command === "provider_funds") {
     const funding = await readMediaFunding(env);
-    return telegramList("Provider funds", funding.providers.map((provider) =>
+    return telegramList("💳 Provider funds", funding.providers.map((provider) =>
       `${provider.name}: ${telegramMoney(provider.estimatedBalance, funding.currency)} estimated · ${provider.assignmentCount} assignments`
     ), "No funding providers configured.");
   }
@@ -7927,7 +7974,7 @@ async function telegramReadCommand(
     const report = await getManagementReportDashboard(env);
     if (!isRecord(report) || !isRecord(report.metadata)) throw new ApiError(503, "Management report is unavailable");
     return [
-      "Management report",
+      "📋 Management report",
       "",
       `Status: ${String(report.status)}`,
       `Report: ${String(report.metadata.reportName ?? "—")}`,
@@ -7961,11 +8008,11 @@ async function telegramReadCommand(
       systemPrompt: "Answer only from the supplied Finance Dash facts. Be concise, preserve currencies, and say when the facts do not contain the answer.",
       prompt: `Finance Dash facts:\n${JSON.stringify(compactContext)}\n\nQuestion: ${args}`
     });
-    return result.output.slice(0, 4_096);
+    return `💬 Finance answer\n\n${result.output}`;
   }
   if (command === "overview") {
     return [
-      "Finance overview",
+      "📊 Finance overview",
       "",
       `Approx. liquid assets: ${telegramUsd(snapshot.approximateUsdTotals.totalUsd)}`,
       `Bank accounts: ${telegramUsd(snapshot.approximateUsdTotals.accountsUsd)}`,
@@ -7974,7 +8021,7 @@ async function telegramReadCommand(
       `Payables: ${telegramTotals(snapshot.metrics.totalPayables)}`,
       `Open invoices: ${snapshot.invoices.filter((invoice) => invoice.status !== "paid").length}`,
       `Needs review: ${snapshot.transactionReviewPreview.length}`,
-      `As of: ${snapshot.asOf}`
+      `Updated: ${formatTelegramTimestamp(snapshot.asOf)}`
     ].join("\n");
   }
   if (command === "balances") {
@@ -7988,7 +8035,7 @@ async function telegramReadCommand(
         apiKey: env.SLASH_API_KEY,
         legalEntityId: env.SLASH_LEGAL_ENTITY_ID
       });
-      return telegramList("Slash virtual-account balances", accounts.filter((account) => !account.closedAt).map((account) =>
+      return telegramList("🏦 Slash virtual-account balances", accounts.filter((account) => !account.closedAt).map((account) =>
         `${account.name}: ${telegramMoney(account.balance, account.currency)}`
       ), "No open Slash virtual accounts.");
     }
@@ -7997,11 +8044,11 @@ async function telegramReadCommand(
       : snapshot.accounts.filter((account) => filter === "all" || account.source === filter).map((account) =>
           `${account.name}: ${telegramMoney(account.balance, account.currency)} · ${account.source}`
         );
-    return telegramList("Balances", lines, "No balances match this filter.");
+    return telegramList("💰 Balances", lines, "No balances match this filter.");
   }
   if (command === "cashflow") {
     return [
-      "Cash flow",
+      "💵 Cash flow",
       "",
       `Cash: ${telegramTotals(snapshot.metrics.totalCash)}`,
       `Receivables: ${telegramTotals(snapshot.metrics.totalReceivables)}`,
@@ -8010,21 +8057,21 @@ async function telegramReadCommand(
       `Total assets: ${telegramTotals(snapshot.metrics.totalAssets)}`
     ].join("\n");
   }
-  if (command === "receivables") return telegramList("Receivables", snapshot.receivables.map((item) =>
+  if (command === "receivables") return telegramList("📥 Receivables", snapshot.receivables.map((item) =>
     `${item.name}: ${telegramMoney(item.balance, item.currency)}${item.dueDate ? ` · due ${item.dueDate}` : ""}`
   ), "No receivables.");
-  if (command === "payables") return telegramList("Payables", snapshot.payables.map((item) =>
+  if (command === "payables") return telegramList("📤 Payables", snapshot.payables.map((item) =>
     `${item.supplier}: ${telegramMoney(item.balance, item.currency)}`
   ), "No payables.");
-  if (command === "holdings") return telegramList("Holdings", snapshot.holdings.map((holding) =>
+  if (command === "holdings") return telegramList("🪙 Holdings", snapshot.holdings.map((holding) =>
     `${holding.name}: ${holding.balance.toLocaleString("en-US")} ${holding.asset} · ${holding.kind}`
   ), "No holdings.");
-  if (command === "fx") return telegramList("FX rates to USD", snapshot.fxRates.map((rate) =>
+  if (command === "fx") return telegramList("💱 FX rates to USD", snapshot.fxRates.map((rate) =>
     `${rate.asset}: ${rate.rateUsd.toLocaleString("en-US", { maximumFractionDigits: 8 })}${rate.stale ? " · stale" : ""}`
   ), "No FX rates.");
   if (command === "revenue") {
     return [
-      "Revenue",
+      "💹 Revenue",
       "",
       `Total: ${telegramTotals(snapshot.revenueMetrics.totalRevenue)}`,
       `Invoiced: ${telegramTotals(snapshot.revenueMetrics.invoicedRevenue)}`,
@@ -8033,7 +8080,7 @@ async function telegramReadCommand(
       `Failed runs: ${snapshot.revenueMetrics.failedRuns}`
     ].join("\n");
   }
-  if (command === "revenue_runs") return telegramList("Revenue runs", snapshot.revenueRuns.map((run) =>
+  if (command === "revenue_runs") return telegramList("🧮 Revenue runs", snapshot.revenueRuns.map((run) =>
     `${run.periodStart}–${run.periodEnd} · ${run.partnerName}: ${telegramMoney(run.revenue, run.currency)} · ${run.status}`
   ), "No revenue runs.");
   if (["invoices", "overdue", "due_soon"].includes(command)) {
@@ -8044,8 +8091,8 @@ async function telegramReadCommand(
       if (command === "due_soon") return invoice.status !== "paid" && invoice.dueDate >= today && invoice.dueDate <= dueSoon;
       return true;
     });
-    return telegramList(command === "overdue" ? "Overdue invoices" : command === "due_soon" ? "Invoices due soon" : "Invoices", invoices.map((invoice) =>
-      `${invoice.invoiceNumber} · ${invoice.customerName} · ${telegramMoney(invoice.amount, invoice.currency)} · ${invoice.status} · due ${invoice.dueDate}`
+    return telegramList(command === "overdue" ? "🚨 Overdue invoices" : command === "due_soon" ? "⏰ Invoices due soon" : "🧾 Invoices", invoices.map((invoice) =>
+      `${invoice.invoiceNumber} · ${telegramCompactText(invoice.customerName, 30)}\n${telegramMoney(invoice.amount, invoice.currency)} · ${invoice.status} · Due ${telegramDateLabel(invoice.dueDate)}`
     ), "No matching invoices.");
   }
   if (command === "invoice" || command === "invoice_pdf") {
@@ -8058,20 +8105,20 @@ async function telegramReadCommand(
           bytes: await telegramBoundedDocumentBytes(response),
           contentType: "application/pdf",
           fileName: invoicePdfFileName(invoice),
-          caption: `Invoice ${invoice.invoiceNumber} · ${invoice.customerName}`
+          caption: `🧾 Invoice ${invoice.invoiceNumber}\n${invoice.customerName}`
         }
       };
     }
     const outstanding = invoiceOutstanding(invoice, snapshot.paymentAllocations);
     return [
-      `Invoice ${invoice.invoiceNumber}`,
+      `🧾 Invoice ${invoice.invoiceNumber}`,
       "",
       `Customer: ${invoice.customerName}`,
       `Amount: ${telegramMoney(invoice.amount, invoice.currency)}`,
       `Outstanding: ${telegramMoney(outstanding, invoice.currency)}`,
       `Status: ${invoice.status}`,
-      `Issue date: ${invoice.issueDate}`,
-      `Due date: ${invoice.dueDate}`,
+      `Issue date: ${telegramDateLabel(invoice.issueDate)}`,
+      `Due date: ${telegramDateLabel(invoice.dueDate)}`,
       `Delivery: ${invoice.meritDeliveryStatus}`,
       `ID: ${invoice.id}`
     ].join("\n");
@@ -8079,7 +8126,7 @@ async function telegramReadCommand(
   if (command === "payment_candidates") {
     const currency = (args || "USD").toUpperCase();
     const page = await invoicePaymentCandidates(env, currency, 12, null);
-    return telegramList(`Payment candidates · ${currency}`, page.transactions.map(telegramTransactionLine), "No candidates.");
+    return telegramList(`🔎 Payment candidates · ${currency}`, page.transactions.map(buildTelegramTransactionListItem), "No candidates.");
   }
   if (["expenses", "unpaid_bills", "missing_documents"].includes(command)) {
     const expenses = snapshot.expenses.filter((expense) => {
@@ -8087,8 +8134,8 @@ async function telegramReadCommand(
       if (command === "missing_documents") return expense.documents.length === 0;
       return true;
     });
-    return telegramList(command === "unpaid_bills" ? "Unpaid bills" : command === "missing_documents" ? "Missing documents" : "Expenses", expenses.map((expense) =>
-      `${expense.recordNumber} · ${expense.supplierName} · ${telegramMoney(expense.grossAmount, expense.currency)} · ${expense.paymentStatus}`
+    return telegramList(command === "unpaid_bills" ? "⏳ Unpaid bills" : command === "missing_documents" ? "📎 Missing documents" : "🧾 Expenses", expenses.map((expense) =>
+      `${expense.recordNumber} · ${telegramCompactText(expense.supplierName, 30)}\n${telegramMoney(expense.grossAmount, expense.currency)} · ${expense.paymentStatus}`
     ), "No matching expenses.");
   }
   if (command === "expense" || command === "expense_document") {
@@ -8106,12 +8153,12 @@ async function telegramReadCommand(
           bytes: await telegramBoundedDocumentBytes(response),
           contentType: document.contentType,
           fileName: document.fileName,
-          caption: `Expense ${expense.recordNumber} · ${expense.supplierName}`
+          caption: `🧾 Expense ${expense.recordNumber}\n${expense.supplierName}`
         }
       };
     }
     return [
-      `Expense ${expense.recordNumber}`,
+      `🧾 Expense ${expense.recordNumber}`,
       "",
       `Supplier: ${expense.supplierName}`,
       `Gross: ${telegramMoney(expense.grossAmount, expense.currency)}`,
@@ -8122,20 +8169,20 @@ async function telegramReadCommand(
       `ID: ${expense.id}`
     ].join("\n");
   }
-  if (command === "distribution") return telegramList("Profit distribution", snapshot.profitDistribution.currencies.map((currency) =>
+  if (command === "distribution") return telegramList("📊 Profit distribution", snapshot.profitDistribution.currencies.map((currency) =>
     `${currency.currency}: ${telegramMoney(currency.remaining, currency.currency)} remaining · ${telegramMoney(currency.totalPaid, currency.currency)} paid`
   ), "No distribution data.");
-  if (command === "companies") return telegramList("Companies", snapshot.providers.map((provider) =>
-    `${provider.name} · ${provider.type} · ${provider.id}`
+  if (command === "companies") return telegramList("🏢 Companies", snapshot.providers.map((provider) =>
+    `${provider.name} · ${provider.type}`
   ), "No companies.");
-  if (command === "teams") return telegramList("Teams", snapshot.teams.map((team) => `${team.name} · ${team.id}`), "No teams.");
-  if (command === "health") return telegramList("Integration health", snapshot.integrationStatus.map((integration) =>
+  if (command === "teams") return telegramList("👥 Teams", snapshot.teams.map((team) => team.name), "No teams.");
+  if (command === "health") return telegramList("🩺 Integration health", snapshot.integrationStatus.map((integration) =>
     `${integration.configured && !integration.issue ? "✅" : "⚠️"} ${integration.label}: ${integration.issue ?? integration.message}`
   ), "No integrations.");
   if (command === "alert_history") {
     const history = await env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").getTelegramAlertHistory();
-    return telegramList("Recent alert deliveries", history.map((item) =>
-      `${item.deliveredAt} · ${item.kind === "low-balance" ? "⚠️" : "✅"} ${item.accountName} · ${telegramMoney(item.balance, item.currency)} · ${item.recipient}`
+    return telegramList("🔔 Recent alert deliveries", history.map((item) =>
+      `${item.kind === "low-balance" ? "⚠️" : "✅"} ${item.accountName} · ${telegramMoney(item.balance, item.currency)}\n${formatTelegramTimestamp(item.deliveredAt)} · Sent to ${item.recipient}`
     ), "No alert deliveries have been recorded yet.");
   }
   if (command === "alerts") {
@@ -8156,9 +8203,9 @@ async function telegramReadCommand(
       )[0]
     }));
     return telegramList(
-      `Alert rules · recipients ${defaults.recipients.join(", ")} · digest ${settings.digestTimeUtc ? `${settings.digestTimeUtc} UTC` : "off"}`,
+      `🔔 Alert rules\nRecipients: ${defaults.recipients.join(", ")} · Digest: ${settings.digestTimeUtc ? `${settings.digestTimeUtc} UTC` : "off"}`,
       observations.map(({ rule, observation }) =>
-        `${rule.paused ? "⏸" : observation.balance < observation.threshold ? "⚠️" : "✅"} ${observation.accountName}: ${telegramMoney(observation.balance, observation.currency)} · threshold ${telegramMoney(observation.threshold, observation.currency)}${rule.paused ? " · paused" : ""}`
+        `${rule.paused ? "⏸" : observation.balance < observation.threshold ? "⚠️" : "✅"} ${observation.accountName}\nBalance ${telegramMoney(observation.balance, observation.currency)} · Threshold ${telegramMoney(observation.threshold, observation.currency)}${rule.paused ? " · Paused" : ""}`
       ),
       "No alert rules."
     );
@@ -8181,21 +8228,21 @@ async function telegramActionCommand(env: Env, command: string, args: string): P
       throw new ApiError(400, telegramHelp.categorize);
     }
     const updated = await updateTransactionCategory(env, { transactionId, category, scope });
-    return `✅ ${updated.id} categorized as ${updated.category}.`;
+    return `✅ Transaction categorized\n\nCategory: ${updated.category}`;
   }
   if (command === "assign_company") {
     const [transactionId, providerId, scope, confirmation] = telegramPipeParts(args, 4);
     if (confirmation !== "CONFIRM" || (scope !== "transaction" && scope !== "merchant")) {
       throw new ApiError(400, telegramHelp.assign_company);
     }
-    const updated = await matchTransaction(env, { transactionId, providerId, scope }, true);
-    return `✅ Company assigned to ${updated.id}.`;
+    await matchTransaction(env, { transactionId, providerId, scope }, true);
+    return "✅ Company assigned\n\nThe transaction classification was updated.";
   }
   if (command === "assign_team") {
     const [transactionId, teamId, confirmation] = telegramPipeParts(args, 3);
     if (confirmation !== "CONFIRM") throw new ApiError(400, telegramHelp.assign_team);
     const updated = await assignTransactionTeam(env, { transactionId, teamId: teamId === "none" ? undefined : teamId });
-    return `✅ Owner ${updated.teamId ? "assigned" : "cleared"} for ${updated.id}.`;
+    return `✅ Transaction owner ${updated.teamId ? "assigned" : "cleared"}.`;
   }
   if (command === "revenue_pull") {
     const result = await syncRevenue(env, telegramConfirmedJson<SyncRevenuePayload>(args));
@@ -8275,7 +8322,7 @@ async function telegramActionCommand(env: Env, command: string, args: string): P
   if (command === "upload_receipt") {
     if (!args) throw new ApiError(400, telegramHelp.upload_receipt);
     const expense = telegramExpense(snapshot, args);
-    return `Open the secure expense editor to upload evidence for ${expense.recordNumber}: ${telegramDashboardLink(env, "expenses")}`;
+    return `📎 Upload receipt · ${expense.recordNumber}\n\nOpen the secure expense editor:\n${telegramDashboardLink(env, "expenses")}`;
   }
   if (command === "match_expense") {
     const [reference, transactionId, confirmation] = telegramPipeParts(args, 3);
@@ -8369,7 +8416,7 @@ async function telegramActionCommand(env: Env, command: string, args: string): P
         rule.threshold,
         now
       )[0];
-      return `TEST ONLY\n\n${buildSlashVirtualAccountBalanceAlertMessage({
+      return `🧪 TEST ONLY\n\n${buildSlashVirtualAccountBalanceAlertMessage({
         ...observation,
         id: crypto.randomUUID(),
         band: observation.balance < observation.threshold ? "below" : "healthy",
@@ -8409,33 +8456,43 @@ export async function handleTelegramCommand(
       : configuredReaders.has(user.normalizedUsername)
         ? "read-only"
         : null;
-    if (!expectedRole || expectedRole !== role) throw new ApiError(403, "Telegram command access denied");
+    if (!expectedRole || expectedRole !== role) throw new ApiError(403, "This Telegram account does not have that Finance Dash role.");
 
     const { command, args } = telegramCommandParts(text);
     if (command === "whoami") {
-      return `${user.username} · ${role === "administrator" ? "full administrator commands" : "CEO read-only commands"}`;
+      return [
+        "👤 Finance Dash access",
+        "",
+        `User: ${user.username}`,
+        `Role: ${role === "administrator" ? "Full administrator" : "CEO read-only"}`
+      ].join("\n");
     }
     if (command === "menu") return telegramMenu(role);
-    if (command === "help" && role === "administrator" && !args) {
-      return `${telegramMenu(role)}\n\nActions require the exact CONFIRM marker. Use /help <command> for syntax.`;
-    }
     const definition = financeTelegramCommands.find((item) => item.command === command);
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
       if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
-      return (await telegramActionCommand(env, command, args)).slice(0, 4_096);
+      if (definition.input === "required" && !args) return telegramMissingInput(definition);
+      return telegramBoundedText(await telegramActionCommand(env, command, args));
     }
-    const reply = await telegramReadCommand(env, user, command, args);
-    return typeof reply === "string" ? reply.slice(0, 4_096) : reply;
+    if (definition.input === "required" && !args) return telegramMissingInput(definition);
+    const reply = await telegramReadCommand(env, user, role, command, args);
+    return typeof reply === "string" ? telegramBoundedText(reply) : reply;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Telegram command failed";
+    const parsed = telegramCommandParts(text);
     console.error(JSON.stringify({
       event: "telegram_command_failed",
-      command: telegramCommandParts(text).command,
+      command: parsed.command,
       username: user.username,
       error: message
     }));
-    return `⚠️ ${message.slice(0, 3_900)}`;
+    const heading = /access|administrator action|finance dash role/u.test(message.toLowerCase())
+      ? "⛔ Access denied"
+      : /unknown command/u.test(message.toLowerCase())
+        ? "❓ Unknown command"
+        : `⚠️ Couldn’t run /${parsed.command || "command"}`;
+    return telegramBoundedText(`${heading}\n\n${message}`);
   }
 }
 

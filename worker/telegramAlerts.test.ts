@@ -105,10 +105,11 @@ test("virtual-account alert messages identify the account, balance, and threshol
     "low-1"
   ).notification!;
   const message = buildSlashVirtualAccountBalanceAlertMessage(notification);
-  assert.match(message, /Slash virtual account is below the alert threshold/);
-  assert.match(message, /Account: Primary Account/);
+  assert.match(message, /⚠️ LOW BALANCE/);
+  assert.match(message, /Slash · Primary Account/);
   assert.match(message, /Balance: \$9,500\.00/);
   assert.match(message, /Threshold: \$10,000\.00/);
+  assert.match(message, /Checked: Sep 3, 2026 · 8:02 AM EDT/);
 });
 
 test("virtual-account alerts are protected and can target either authorized user", async () => {

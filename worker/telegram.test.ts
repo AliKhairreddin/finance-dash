@@ -4,8 +4,10 @@ import {
   buildTelegramOtpMessage,
   buildTelegramSignInAlertMessage,
   configureTelegramBotCommands,
+  formatTelegramTimestamp,
   parseTelegramAuthUsers,
-  pollTelegramUpdates
+  pollTelegramUpdates,
+  sendTelegramMessage
 } from "./telegram";
 import { financeTelegramCommands, readOnlyFinanceTelegramCommands } from "./telegramCommandCatalog";
 
@@ -56,8 +58,8 @@ test("Telegram user mappings normalize login names, including internal spaces", 
 test("Telegram OTP messages lead with a formatted code and provide a native copy button", () => {
   assert.deepEqual(buildTelegramOtpMessage("6064572340", "123456"), {
     chat_id: "6064572340",
-    text: "123456 — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.",
-    entities: [{ type: "code", offset: 0, length: 6 }],
+    text: "🔐 Finance Dash sign-in\n\n123456\n\nExpires in 5 minutes.\nIf you didn’t request this, ignore the message.",
+    entities: [{ type: "code", offset: 25, length: 6 }],
     reply_markup: {
       inline_keyboard: [[{
         text: "Copy code",
@@ -77,9 +79,10 @@ test("passwordless sign-in alerts include the security details and revocation in
     device: "Safari on iPhone"
   }), {
     chat_id: "6064572340",
-    text: "Finance Dash sign-in detected for Ali M.\n\nTime: 2026-08-22 20:15:00 UTC\nIP address: 203.0.113.42\nDevice: Safari on iPhone\n\nIf this wasn’t you, contact your dashboard administrator immediately to re-enable OTP and revoke this passwordless session.",
+    text: "🔐 Finance Dash sign-in detected\n\nAccount: Ali M\nTime: Aug 22, 2026 · 4:15 PM EDT\nIP address: 203.0.113.42\nDevice: Safari on iPhone\n\n⚠️ Not you? Contact your dashboard administrator immediately to revoke this session and re-enable OTP.",
     protect_content: true
   });
+  assert.equal(formatTelegramTimestamp("2026-01-22T20:15:00.000Z"), "Jan 22, 2026 · 3:15 PM EST");
 });
 
 test("an unmapped coworker receives their chat ID after messaging the bot", async () => {
@@ -99,7 +102,7 @@ test("an unmapped coworker receives their chat ID after messaging the bot", asyn
   assert.deepEqual(result, { nextOffset: 41, processed: 1 });
   assert.deepEqual(replies, [{
     chatId: "777888999",
-    text: "Hi Amin (@amin_dn). Your Finance Dash chat ID is 777888999. Send this chat ID to your dashboard administrator together with the username you want to use."
+    text: "👋 Connect Finance Dash\n\nHi Amin (@amin_dn).\nChat ID: 777888999\n\nSend this chat ID and your requested Finance Dash username to a dashboard administrator."
   }]);
 });
 
@@ -116,7 +119,7 @@ test("a mapped user receives a connection confirmation", async () => {
 
   assert.deepEqual(result, { nextOffset: 101, processed: 1 });
   assert.deepEqual(replies, [
-    "Hi Ali. You are connected to Finance Dash as Ali. You can receive sign-in codes here."
+    "✅ Finance Dash connected\n\nHi Ali. You’re connected as Ali.\nSign-in codes will arrive in this private chat."
   ]);
 });
 
@@ -171,9 +174,29 @@ test("administrator and CEO users receive their assigned command roles while Mee
   ]);
   assert.deepEqual(replies[5], {
     chatId: "777888996",
-    text: "Hi Meet. You are connected to Finance Dash as Meet. You can receive sign-in codes here.",
+    text: "✅ Finance Dash connected\n\nHi Meet. You’re connected as Meet.\nSign-in codes will arrive in this private chat.",
     protectContent: false
   });
+});
+
+test("Telegram messages disable link previews and reject invalid message lengths", async () => {
+  const originalFetch = globalThis.fetch;
+  const payloads: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return Response.json({ ok: true, result: {} });
+  };
+  try {
+    await sendTelegramMessage(baseEnv, "5518715264", "🔗 Finance Dash\n\nhttps://finance.example", true);
+    assert.deepEqual(payloads[0]?.link_preview_options, { is_disabled: true });
+    assert.equal(payloads[0]?.protect_content, true);
+    await assert.rejects(
+      () => sendTelegramMessage(baseEnv, "5518715264", "x".repeat(4_097)),
+      /message was invalid/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("command documents are delivered to the authorized chat with forwarding protection", async () => {
@@ -241,6 +264,10 @@ test("Telegram installs full and CEO menus per chat and removes Meet's menu", as
     { method: "setMyCommands", chatId: "777888999", commandCount: readOnlyFinanceTelegramCommands.length },
     { method: "deleteMyCommands", chatId: "777888996", commandCount: 0 }
   ]);
+  const installed = requests[0]?.payload.commands as Array<{ command: string; description: string }>;
+  assert.match(installed.find(({ command }) => command === "overview")?.description ?? "", /^▶ TAP · /u);
+  assert.match(installed.find(({ command }) => command === "transactions")?.description ?? "", /^⚙ OPTIONAL · /u);
+  assert.match(installed.find(({ command }) => command === "search")?.description ?? "", /^✍ TYPE DETAILS · /u);
 });
 
 test("group messages are ignored while their update offset advances", async () => {

@@ -1,5 +1,6 @@
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
 import {
+  formatTelegramTimestamp,
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
   sendTelegramMessage
@@ -342,15 +343,16 @@ export function buildSlashVirtualAccountBalanceAlertMessage(
 ): string {
   validateObservation(notification);
   const heading = notification.kind === "low-balance"
-    ? "⚠️ Slash virtual account is below the alert threshold."
-    : "✅ Slash virtual account has recovered to the alert threshold.";
+    ? "⚠️ LOW BALANCE"
+    : "✅ BALANCE RECOVERED";
   return [
     heading,
+    `Slash · ${notification.accountName}`,
     "",
-    `Account: ${notification.accountName}`,
     `Balance: ${usd(notification.balance)}`,
     `Threshold: ${usd(notification.threshold)}`,
-    `Checked: ${notification.observedAt}`
+    "",
+    `Checked: ${formatTelegramTimestamp(notification.observedAt)}`
   ].join("\n");
 }
 

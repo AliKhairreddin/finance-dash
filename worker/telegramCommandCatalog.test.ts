@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   financeTelegramCommands,
   parseTelegramCommandUsers,
-  readOnlyFinanceTelegramCommands
+  readOnlyFinanceTelegramCommands,
+  telegramCommandMenuDescription,
+  telegramCommandUsage
 } from "./telegramCommandCatalog";
 
 const requestedCommands = `
@@ -30,6 +32,25 @@ test("CEO command menu contains every data command and no action commands", () =
   assert.ok(readOnlyFinanceTelegramCommands.every(({ access }) => access === "read"));
   assert.equal(readOnlyFinanceTelegramCommands.some(({ command }) => command === "sync"), false);
   assert.equal(readOnlyFinanceTelegramCommands.some(({ command }) => command === "overview"), true);
+});
+
+test("every command declares whether it is one-tap, optional, or requires details", () => {
+  for (const command of financeTelegramCommands) {
+    if (command.input === "tap") assert.equal(command.arguments, undefined, command.command);
+    else assert.ok(command.arguments, command.command);
+    const description = telegramCommandMenuDescription(command);
+    assert.ok(description.length >= 1 && description.length <= 256, command.command);
+    assert.match(description, command.input === "tap"
+      ? /^▶ TAP · /u
+      : command.input === "optional"
+        ? /^⚙ OPTIONAL · /u
+        : /^✍ TYPE DETAILS · /u);
+    assert.equal(telegramCommandUsage(command).startsWith(`/${command.command}`), true);
+  }
+  assert.equal(financeTelegramCommands.find(({ command }) => command === "overview")?.input, "tap");
+  assert.equal(financeTelegramCommands.find(({ command }) => command === "transactions")?.input, "optional");
+  assert.equal(financeTelegramCommands.find(({ command }) => command === "search")?.input, "required");
+  assert.equal(financeTelegramCommands.filter(({ access }) => access === "action").every(({ input }) => input === "required"), true);
 });
 
 test("Telegram role lists normalize whitespace and reject duplicates", () => {

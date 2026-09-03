@@ -67,7 +67,7 @@ async function configurationFingerprints(
     crypto.subtle.digest(
       "SHA-256",
       textEncoder.encode([
-        "finance-telegram-commands.v1",
+        "finance-telegram-commands.v2",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
         env.TELEGRAM_COMMAND_ADMIN_USERS,

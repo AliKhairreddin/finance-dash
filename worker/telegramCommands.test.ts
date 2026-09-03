@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleTelegramCommand } from "./handler";
+import { buildTelegramTransactionListItem, handleTelegramCommand } from "./handler";
 import type { TelegramAuthUser } from "./telegram";
 import { financeTelegramCommands } from "./telegramCommandCatalog";
 
@@ -23,40 +23,75 @@ const amin: TelegramAuthUser = {
 test("Telegram command handler reports the configured full-access identity", async () => {
   assert.equal(
     await handleTelegramCommand(env, ali, "administrator", "/whoami"),
-    "Ali · full administrator commands"
+    "👤 Finance Dash access\n\nUser: Ali\nRole: Full administrator"
   );
   const menu = await handleTelegramCommand(env, ali, "administrator", "/menu");
   assert.equal(typeof menu, "string");
-  assert.match(menu as string, /full access/u);
-  for (const { command } of financeTelegramCommands) assert.match(menu as string, new RegExp(`/${command}\\b`, "u"));
+  assert.match(menu as string, /Full administrator/u);
+  assert.match(menu as string, /▶ TAP TO RUN/u);
+  assert.match(menu as string, /⚙ TAP FOR DEFAULTS/u);
+  assert.match(menu as string, /✍ TYPE DETAILS FIRST/u);
+  assert.match(menu as string, /🔒 ADMIN ACTIONS/u);
+  for (const { command, input } of financeTelegramCommands) {
+    assert.match(menu as string, new RegExp(`${input === "required" ? "" : "/"}${command}\\b`, "u"));
+  }
+  assert.doesNotMatch(menu as string, /\/search\b/u);
 });
 
 test("Telegram command handler keeps CEO users read-only", async () => {
   assert.equal(
     await handleTelegramCommand(env, amin, "read-only", "/whoami"),
-    "Amin · CEO read-only commands"
+    "👤 Finance Dash access\n\nUser: Amin\nRole: CEO read-only"
   );
   assert.equal(
     await handleTelegramCommand(env, amin, "read-only", "/sync CONFIRM"),
-    "⚠️ This is an administrator action command"
+    "⛔ Access denied\n\nThis is an administrator action command"
   );
   const menu = await handleTelegramCommand(env, amin, "read-only", "/menu");
   assert.equal(typeof menu, "string");
   assert.doesNotMatch(menu as string, /\/sync/u);
   for (const { command, access } of financeTelegramCommands) {
-    if (access === "read") assert.match(menu as string, new RegExp(`/${command}\\b`, "u"));
+    if (access === "read") assert.match(menu as string, new RegExp(`${command}\\b`, "u"));
   }
 });
 
 test("Telegram command handler rejects a mismatched role and unknown commands", async () => {
   assert.equal(
     await handleTelegramCommand(env, ali, "read-only", "/overview"),
-    "⚠️ Telegram command access denied"
+    "⛔ Access denied\n\nThis Telegram account does not have that Finance Dash role."
   );
   assert.equal(
     await handleTelegramCommand(env, ali, "administrator", "/not_a_command"),
-    "⚠️ Unknown command. Use /menu."
+    "❓ Unknown command\n\nUnknown command. Use /menu."
   );
+});
+
+test("required-detail commands explain their syntax instead of running empty", async () => {
+  assert.equal(
+    await handleTelegramCommand(env, ali, "administrator", "/search"),
+    "✍️ /search needs details\n\nSyntax: /search <text>\nExample: /search Meta\n\nNothing was changed."
+  );
+  assert.equal(
+    await handleTelegramCommand(env, ali, "administrator", "/help search"),
+    "ℹ️ /search\nSearch this month's transactions\n\n✍ Type the required details after the command.\nSyntax: /search <text>\nExample: /search Meta"
+  );
+});
+
+test("transaction list items stay readable and omit long backend IDs", () => {
+  const item = buildTelegramTransactionListItem({
+    id: "slash-v2-73615f32767a37766c753737677130746167675f74785f336f3865646133306b30756d31",
+    date: "2026-09-03",
+    direction: "out",
+    amount: 808.47,
+    currency: "USD",
+    merchantName: "FACEBK *HSD7L5J5D4",
+    counterparty: "Meta",
+    accountName: "Business Platinum",
+    slashVirtualAccountName: "Primary Account"
+  } as never);
+
+  assert.equal(item, "🔴 −$808.47 · FACEBK *HSD7L5J5D4\nSep 3, 2026 · Primary Account");
+  assert.doesNotMatch(item, /slash-v2/u);
 });
 
 test("Telegram screenshot command renders an authenticated dashboard page", async () => {

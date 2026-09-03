@@ -1,12 +1,14 @@
 import {
   financeTelegramCommands,
   parseTelegramCommandUsers,
-  readOnlyFinanceTelegramCommands
+  readOnlyFinanceTelegramCommands,
+  telegramCommandMenuDescription
 } from "./telegramCommandCatalog";
 
 const TELEGRAM_API_BODY_LIMIT_BYTES = 1024 * 1024;
 const TELEGRAM_UPDATE_LIMIT = 100;
 const TELEGRAM_DOCUMENT_LIMIT_BYTES = 10 * 1024 * 1024;
+const TELEGRAM_MESSAGE_LIMIT_CHARACTERS = 4_096;
 
 export interface TelegramAuthUser {
   username: string;
@@ -215,9 +217,13 @@ export async function sendTelegramMessage(
   text: string,
   protectContent = false
 ): Promise<void> {
+  if (!text || text.length > TELEGRAM_MESSAGE_LIMIT_CHARACTERS) {
+    throw new Error("Telegram message was invalid");
+  }
   await telegramApi(env, "sendMessage", {
     chat_id: chatId,
     text,
+    link_preview_options: { is_disabled: true },
     ...(protectContent ? { protect_content: true } : {})
   });
 }
@@ -269,10 +275,18 @@ export async function sendTelegramDocument(
 
 export function buildTelegramOtpMessage(chatId: string, code: string): TelegramOtpMessagePayload {
   if (!/^[0-9]{6}$/u.test(code)) throw new Error("Telegram OTP was invalid");
+  const text = [
+    "🔐 Finance Dash sign-in",
+    "",
+    code,
+    "",
+    "Expires in 5 minutes.",
+    "If you didn’t request this, ignore the message."
+  ].join("\n");
   return {
     chat_id: chatId,
-    text: `${code} — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.`,
-    entities: [{ type: "code", offset: 0, length: code.length }],
+    text,
+    entities: [{ type: "code", offset: text.indexOf(code), length: code.length }],
     reply_markup: {
       inline_keyboard: [[{
         text: "Copy code",
@@ -281,6 +295,27 @@ export function buildTelegramOtpMessage(chatId: string, code: string): TelegramO
     },
     protect_content: true
   };
+}
+
+export function formatTelegramTimestamp(value: string | number): string {
+  const normalizedValue = typeof value === "string"
+    ? value.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/u, "$1T$2Z")
+    : value;
+  const date = new Date(normalizedValue);
+  if (!Number.isFinite(date.getTime())) throw new Error("Telegram timestamp was invalid");
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Toronto",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short"
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("month")} ${part("day")}, ${part("year")} · ${part("hour")}:${part("minute")} ${part("dayPeriod").toUpperCase()} ${part("timeZoneName")}`;
 }
 
 export async function sendTelegramOtp(
@@ -297,7 +332,16 @@ export function buildTelegramSignInAlertMessage(
 ): TelegramSignInAlertPayload {
   return {
     chat_id: chatId,
-    text: `Finance Dash sign-in detected for ${details.username}.\n\nTime: ${details.occurredAt}\nIP address: ${details.ipAddress}\nDevice: ${details.device}\n\nIf this wasn’t you, contact your dashboard administrator immediately to re-enable OTP and revoke this passwordless session.`,
+    text: [
+      "🔐 Finance Dash sign-in detected",
+      "",
+      `Account: ${details.username}`,
+      `Time: ${formatTelegramTimestamp(details.occurredAt)}`,
+      `IP address: ${details.ipAddress}`,
+      `Device: ${details.device}`,
+      "",
+      "⚠️ Not you? Contact your dashboard administrator immediately to revoke this session and re-enable OTP."
+    ].join("\n"),
     protect_content: true
   };
 }
@@ -362,7 +406,10 @@ export async function configureTelegramBotCommands(
       return;
     }
     await telegramApi(env, "setMyCommands", {
-      commands: commands.map(({ command, description }) => ({ command, description })),
+      commands: commands.map((command) => ({
+        command: command.command,
+        description: telegramCommandMenuDescription(command)
+      })),
       scope: { type: "chat", chat_id: user.chatId }
     });
   }));
@@ -427,8 +474,20 @@ function onboardingReply(message: TelegramPrivateMessage, users: TelegramAuthUse
   const configuredUser = users.find((user) => user.chatId === message.chatId);
   const telegramLabel = message.telegramUsername ? ` (@${message.telegramUsername})` : "";
   return configuredUser
-    ? `Hi ${message.firstName}. You are connected to Finance Dash as ${configuredUser.username}. You can receive sign-in codes here.`
-    : `Hi ${message.firstName}${telegramLabel}. Your Finance Dash chat ID is ${message.chatId}. Send this chat ID to your dashboard administrator together with the username you want to use.`;
+    ? [
+        "✅ Finance Dash connected",
+        "",
+        `Hi ${message.firstName}. You’re connected as ${configuredUser.username}.`,
+        "Sign-in codes will arrive in this private chat."
+      ].join("\n")
+    : [
+        "👋 Connect Finance Dash",
+        "",
+        `Hi ${message.firstName}${telegramLabel}.`,
+        `Chat ID: ${message.chatId}`,
+        "",
+        "Send this chat ID and your requested Finance Dash username to a dashboard administrator."
+      ].join("\n");
 }
 
 export async function pollTelegramUpdates(
