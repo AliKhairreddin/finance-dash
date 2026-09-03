@@ -32,6 +32,10 @@ test("bank record validation rejects poison rows before Convex writes", () => {
     () => assertBankTransactionInput({ ...valid, cardMetadataVersion: 0 }),
     /positive safe integer/
   );
+  assert.throws(
+    () => assertBankTransactionInput({ ...valid, slashVirtualAccountMetadataVersion: 0 }),
+    /positive safe integer/
+  );
 });
 
 test("bank mutation payloads have an encoded byte ceiling", () => {

@@ -1,4 +1,4 @@
-import type { AccountBalance, SlashAccountSubtype, Transaction } from "./types";
+import type { AccountBalance, SlashAccountSubtype, SlashVirtualAccount, Transaction } from "./types";
 import {
   decodeBankSyncCheckpoint,
   encodeBankSyncCheckpoint,
@@ -13,6 +13,8 @@ const maxSlashPages = 100;
 const maximumSlashPageItems = 500;
 const maximumSlashAccounts = 200;
 const maximumSlashAccountPages = 10;
+const maximumSlashVirtualAccounts = 200;
+const maximumSlashVirtualAccountPages = 10;
 const maximumSlashCardsPerSync = 1_000;
 const maximumSlashAccountBalanceRows = 200;
 const maximumSlashBalancesPerAccount = 10;
@@ -61,6 +63,7 @@ interface SlashTransaction {
   amountCents: number;
   accountId: string;
   accountSubtype: SlashAccountSubtype;
+  virtualAccountId?: string;
   cardId?: string;
   status: SlashTransactionStatus;
   cashbackInfo?: {
@@ -311,6 +314,24 @@ function parseSlashAccount(value: unknown): SlashAccount {
   };
 }
 
+function parseSlashVirtualAccount(value: unknown): SlashVirtualAccount {
+  const entry = requiredRecord(value, "virtual account entry");
+  const payload = requiredRecord(entry.virtualAccount, "virtual account");
+  const accountType = requiredString(payload.accountType, "virtual account.accountType", 16);
+  if (accountType !== "primary" && accountType !== "default") {
+    throw new Error("Slash API response has unsupported virtual account.accountType");
+  }
+  return {
+    id: requiredString(payload.id, "virtual account.id", maximumSlashProviderIdLength),
+    name: requiredString(payload.name, "virtual account.name", 512),
+    accountId: requiredString(payload.accountId, "virtual account.accountId", maximumSlashProviderIdLength),
+    accountType,
+    ...(payload.closedAt === undefined || payload.closedAt === null
+      ? {}
+      : { closedAt: requiredIsoTimestamp(payload.closedAt, "virtual account.closedAt") })
+  };
+}
+
 function parseSlashCard(value: unknown): SlashCard {
   const payload = requiredRecord(value, "card");
   const last4 = requiredString(payload.last4, "card.last4", 4);
@@ -346,6 +367,15 @@ function parseSlashTransaction(value: unknown): SlashTransaction {
     amountCents: requiredCents(payload.amountCents, "transaction.amountCents"),
     accountId: requiredString(payload.accountId, "transaction.accountId", maximumSlashProviderIdLength),
     accountSubtype,
+    ...(payload.virtualAccountId === undefined || payload.virtualAccountId === null
+      ? {}
+      : {
+          virtualAccountId: requiredString(
+            payload.virtualAccountId,
+            "transaction.virtualAccountId",
+            maximumSlashProviderIdLength
+          )
+        }),
     ...(payload.cardId === undefined || payload.cardId === null
       ? {}
       : { cardId: requiredString(payload.cardId, "transaction.cardId", maximumSlashProviderIdLength) }),
@@ -534,6 +564,7 @@ async function fetchSlashTransactionPages({
   initialUrl,
   headers,
   accountIdentityByKey,
+  virtualAccountDirectory,
   resolveCards,
   onTransactionPage,
   collectTransactions
@@ -542,6 +573,7 @@ async function fetchSlashTransactionPages({
   initialUrl: URL;
   headers: HeadersInit;
   accountIdentityByKey: ReadonlyMap<string, SlashAccountIdentity>;
+  virtualAccountDirectory: ReadonlyMap<string, SlashVirtualAccount>;
   resolveCards: (cardIds: readonly string[]) => Promise<ReadonlyMap<string, SlashCard>>;
   onTransactionPage?: (transactions: Transaction[]) => void | Promise<void>;
   collectTransactions: boolean;
@@ -563,7 +595,7 @@ async function fetchSlashTransactionPages({
       if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountIdentity, cardDirectory)];
+      return [normalizeSlashTransaction(item, accountIdentity, virtualAccountDirectory, cardDirectory)];
     });
 
     if (collectTransactions) transactions.push(...normalizedPage);
@@ -604,6 +636,7 @@ function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
 function normalizeSlashTransaction(
   transaction: SlashTransaction,
   accountIdentity: SlashAccountIdentity,
+  virtualAccountDirectory: ReadonlyMap<string, SlashVirtualAccount>,
   cardDirectory?: ReadonlyMap<string, SlashCard>
 ): Transaction {
   const signedAmount = transaction.amountCents / 100;
@@ -617,11 +650,26 @@ function normalizeSlashTransaction(
   if (transaction.cardId && !card) {
     throw new Error(`Slash transaction ${transaction.id} references unknown card ${transaction.cardId}`);
   }
+  const virtualAccount = transaction.virtualAccountId
+    ? virtualAccountDirectory.get(transaction.virtualAccountId)
+    : undefined;
+  if (transaction.virtualAccountId && !virtualAccount) {
+    throw new Error(
+      `Slash transaction ${transaction.id} references unknown virtual account ${transaction.virtualAccountId}`
+    );
+  }
   return {
     id: bankProviderTransactionId("slash", [accountIdentity.accountId, transaction.id]),
     providerLegacyId: `slash-${transaction.id}`,
     source: "slash",
     slashAccountSubtype: transaction.accountSubtype,
+    ...(virtualAccount
+      ? {
+          slashVirtualAccountId: virtualAccount.id,
+          slashVirtualAccountName: virtualAccount.name
+        }
+      : {}),
+    slashVirtualAccountMetadataVersion: 1,
     accountId: `slash-${accountIdentity.accountId}-${transaction.accountSubtype}`,
     accountName: accountIdentity.accountName,
     date: transaction.date.slice(0, 10),
@@ -651,14 +699,41 @@ async function fetchSlashAccountSnapshot(
   fetcher: typeof fetch,
   baseUrl: string,
   headers: HeadersInit
-): Promise<{ accounts: AccountBalance[]; accountIdentityByKey: Map<string, SlashAccountIdentity> }> {
-  const slashAccounts = await fetchAllSlashPages(
-    fetcher,
-    new URL("/account", baseUrl),
-    headers,
-    parseSlashAccount,
-    maximumSlashAccounts,
-    maximumSlashAccountPages
+): Promise<{
+  accounts: AccountBalance[];
+  accountIdentityByKey: Map<string, SlashAccountIdentity>;
+  virtualAccountDirectory: Map<string, SlashVirtualAccount>;
+}> {
+  const [slashAccounts, slashVirtualAccounts] = await Promise.all([
+    fetchAllSlashPages(
+      fetcher,
+      new URL("/account", baseUrl),
+      headers,
+      parseSlashAccount,
+      maximumSlashAccounts,
+      maximumSlashAccountPages
+    ),
+    fetchAllSlashPages(
+      fetcher,
+      new URL("/virtual-account", baseUrl),
+      headers,
+      parseSlashVirtualAccount,
+      maximumSlashVirtualAccounts,
+      maximumSlashVirtualAccountPages
+    )
+  ]);
+  if (new Set(slashVirtualAccounts.map((account) => account.id)).size !== slashVirtualAccounts.length) {
+    throw new Error("Slash API response contains duplicate virtual account IDs");
+  }
+  const slashAccountIds = new Set(slashAccounts.map((account) => account.id));
+  const unknownVirtualAccount = slashVirtualAccounts.find((account) => !slashAccountIds.has(account.accountId));
+  if (unknownVirtualAccount) {
+    throw new Error(
+      `Slash virtual account ${unknownVirtualAccount.id} references unknown account ${unknownVirtualAccount.accountId}`
+    );
+  }
+  const virtualAccountDirectory = new Map(
+    slashVirtualAccounts.map((account) => [account.id, account])
   );
   const openAccounts = slashAccounts.filter((item) => item.status === "open");
   const accountBalanceRows = openAccounts.reduce(
@@ -713,6 +788,9 @@ async function fetchSlashAccountSnapshot(
           name: `${account.name} ${label}`,
           source: "slash" as const,
           slashAccountSubtype: subtype,
+          slashVirtualAccounts: slashVirtualAccounts.filter(
+            (virtualAccount) => virtualAccount.accountId === account.id
+          ),
           balance: balance.available.amountCents / 100,
           currency: "USD",
           updatedAt: balance.timestamp,
@@ -720,7 +798,7 @@ async function fetchSlashAccountSnapshot(
         };
       });
     });
-  return { accounts, accountIdentityByKey };
+  return { accounts, accountIdentityByKey, virtualAccountDirectory };
 }
 
 export async function fetchSlashActivityBatch({
@@ -750,7 +828,11 @@ export async function fetchSlashActivityBatch({
       }
     : slashTransactionWindow(dateRange, now);
   const headers = slashHeaders(apiKey, legalEntityId);
-  const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const { accounts, accountIdentityByKey, virtualAccountDirectory } = await fetchSlashAccountSnapshot(
+    fetcher,
+    baseUrl,
+    headers
+  );
   const resolveCards = createSlashCardResolver(fetcher, baseUrl, headers);
   if (onAccountsDiscovered) await onAccountsDiscovered(accounts);
   const initialUrl = new URL("/transaction", baseUrl);
@@ -778,7 +860,7 @@ export async function fetchSlashActivityBatch({
       if (!accountIdentity) {
         throw new Error(`Slash transaction ${item.id} references unknown account ${item.accountId}`);
       }
-      return [normalizeSlashTransaction(item, accountIdentity, cardDirectory)];
+      return [normalizeSlashTransaction(item, accountIdentity, virtualAccountDirectory, cardDirectory)];
     });
     if (collectTransactions) transactions.push(...normalizedPage);
     if (normalizedPage.length > 0 && onTransactionPage) {
@@ -843,10 +925,19 @@ export async function fetchSlashTransactionForLegalEntity({
   const cardDirectory = transaction.cardId
     ? await createSlashCardResolver(fetcher, baseUrl, headers)([transaction.cardId])
     : undefined;
+  const virtualAccount = transaction.virtualAccountId
+    ? await fetchSlashResource(
+        fetcher,
+        new URL(`/virtual-account/${encodeURIComponent(transaction.virtualAccountId)}`, baseUrl),
+        headers,
+        "virtual account",
+        parseSlashVirtualAccount
+      )
+    : undefined;
   return normalizeSlashTransaction(transaction, {
     accountId: transaction.accountId,
     accountName: account.name
-  }, cardDirectory);
+  }, new Map(virtualAccount ? [[virtualAccount.id, virtualAccount]] : []), cardDirectory);
 }
 
 export async function fetchSlashActivityForLegalEntity({
@@ -875,7 +966,11 @@ export async function fetchSlashActivityForLegalEntity({
     );
   }
 
-  const { accounts, accountIdentityByKey } = await fetchSlashAccountSnapshot(fetcher, baseUrl, headers);
+  const { accounts, accountIdentityByKey, virtualAccountDirectory } = await fetchSlashAccountSnapshot(
+    fetcher,
+    baseUrl,
+    headers
+  );
   const resolveCards = createSlashCardResolver(fetcher, baseUrl, headers);
 
   const transactions = await fetchSlashTransactionPages({
@@ -883,6 +978,7 @@ export async function fetchSlashActivityForLegalEntity({
     initialUrl: transactionsUrl,
     headers,
     accountIdentityByKey,
+    virtualAccountDirectory,
     resolveCards,
     onTransactionPage,
     collectTransactions

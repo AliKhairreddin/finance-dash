@@ -2129,6 +2129,7 @@ interface TransactionPageOptions {
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
   accountId?: string;
+  slashVirtualAccountId?: string;
   category?: string;
   team?: string;
   groupType?: BankActivityGroupType;
@@ -2228,6 +2229,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
     options.search
     || options.wiseEntity
     || options.accountId
+    || options.slashVirtualAccountId
     || options.category
     || options.team
     || options.groupType
@@ -2263,7 +2265,7 @@ function activitySortValue(
   teamsById: ReadonlyMap<string, { id: string; name: string }>,
   documentedTransactionIds: ReadonlySet<string>
 ): boolean | number | string | undefined {
-  if (options.sortKey === "account") return transaction.accountName;
+  if (options.sortKey === "account") return transaction.slashVirtualAccountName ?? transaction.accountName;
   if (options.sortKey === "amount") return transaction.amount;
   if (options.sortKey === "category") return transactionBusinessCategory(transaction.category);
   if (options.sortKey === "company") {
@@ -2295,6 +2297,10 @@ function filterAndSortActivity(
   const rows = transactions.filter((transaction) => {
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
     if (options.accountId && transaction.accountId !== options.accountId) return false;
+    if (
+      options.slashVirtualAccountId
+      && transaction.slashVirtualAccountId !== options.slashVirtualAccountId
+    ) return false;
     if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
     if (options.team === "unassigned" && transaction.teamId) return false;
     if (options.team && options.team !== "unassigned" && transaction.teamId !== options.team) return false;
@@ -2320,6 +2326,7 @@ function filterAndSortActivity(
       transaction.description,
       transaction.rawName,
       transaction.accountName,
+      transaction.slashVirtualAccountName,
       transaction.cardHolderName,
       transaction.cardLastFour,
       transaction.category,
@@ -3790,13 +3797,13 @@ async function enqueueBankBackfill(
   });
 }
 
-async function enqueueSlashCardMetadataRepair(env: Env): Promise<{
+async function enqueueSlashMetadataRepair(env: Env): Promise<{
   range: SlashTransactionDateRange;
   job: BankBackfillJob;
 } | null> {
   if (!bankSourceConfigured(env, "slash")) return null;
   const connectionKey = await requireBankConnectionKey(env, "slash");
-  const range = await getConvexClient(env).query(api.banking.getSlashCardMetadataRepairRange, {
+  const range = await getConvexClient(env).query(api.banking.getSlashMetadataRepairRange, {
     serviceToken: getConvexServiceToken(env),
     connectionKey
   });
@@ -6550,12 +6557,19 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const search = url.searchParams.get("search")?.trim();
   const accountId = url.searchParams.get("accountId")?.trim();
+  const slashVirtualAccountId = url.searchParams.get("slashVirtualAccountId")?.trim();
   const category = url.searchParams.get("category")?.trim();
   const team = url.searchParams.get("team")?.trim();
   const groupType = url.searchParams.get("groupType")?.trim();
   const groupKey = url.searchParams.get("groupKey")?.trim();
   if (search && search.length > 200) throw new ApiError(400, "Transaction search is too long");
   if (accountId && accountId.length > 256) throw new ApiError(400, "Transaction account is invalid");
+  if (slashVirtualAccountId && slashVirtualAccountId.length > 256) {
+    throw new ApiError(400, "Slash account is invalid");
+  }
+  if (slashVirtualAccountId && source !== "slash") {
+    throw new ApiError(400, "Slash account filtering requires the Slash source");
+  }
   if (category && category.length > 160) throw new ApiError(400, "Transaction category is invalid");
   if (team && team.length > 256) throw new ApiError(400, "Transaction owner is invalid");
   if (groupType && groupType !== "merchant" && groupType !== "card" && groupType !== "account") {
@@ -6571,6 +6585,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
     ...(category ? { category } : {}),
     ...(team ? { team } : {}),
     ...(groupType ? { groupType: groupType as BankActivityGroupType, groupKey } : {}),
@@ -6823,12 +6838,12 @@ async function handleApi(
         : { status: 202, headers: { "Retry-After": "5" } });
     }
 
-    if (url.pathname === "/api/transactions/card-metadata-repair" && request.method === "POST") {
-      const repair = await enqueueSlashCardMetadataRepair(env);
+    if (url.pathname === "/api/transactions/slash-metadata-repair" && request.method === "POST") {
+      const repair = await enqueueSlashMetadataRepair(env);
       if (!repair) return json({ status: "complete" });
       const run = runBankBackfillJob(env, repair.job.key).catch((error: unknown) => {
         console.error(JSON.stringify({
-          event: "slash_card_metadata_repair_failed",
+          event: "slash_metadata_repair_failed",
           fromDate: repair.range.fromDate,
           toDate: repair.range.toDate,
           error: error instanceof Error ? error.message : String(error)
@@ -7238,7 +7253,7 @@ export default {
         failures.push(error);
       }
       try {
-        await enqueueSlashCardMetadataRepair(env);
+        await enqueueSlashMetadataRepair(env);
         await processPendingBankBackfills(env);
       } catch (error) {
         console.error(JSON.stringify({

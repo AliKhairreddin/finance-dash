@@ -240,6 +240,7 @@ type TransactionPageRequest = {
   direction?: "in" | "out";
   wiseEntity?: WiseEntity;
   accountId?: string;
+  slashVirtualAccountId?: string;
   category?: string;
   team?: string;
   match: TransactionMatchFilter;
@@ -752,6 +753,7 @@ function App() {
   });
   const [teamFilter, setTeamFilter] = useUrlState("bankTeam", "all");
   const [bankAccountFilter, setBankAccountFilter] = useUrlState("bankAccount", "all");
+  const [slashVirtualAccountFilter, setSlashVirtualAccountFilter] = useUrlState("slashAccount", "all");
   const [bankCategoryFilter, setBankCategoryFilter] = useUrlState("bankCategory", "all");
   const defaultRevolutRange = useMemo(defaultRevolutTransactionDateRange, []);
   const defaultSlashRange = useMemo(defaultSlashTransactionDateRange, []);
@@ -848,6 +850,9 @@ function App() {
             : allBankDateRange;
     const wiseEntity = source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
     const accountId = bankAccountFilter === "all" ? undefined : bankAccountFilter;
+    const slashVirtualAccountId = source === "slash" && slashVirtualAccountFilter !== "all"
+      ? slashVirtualAccountFilter
+      : undefined;
     const category = bankCategoryFilter === "all" ? undefined : bankCategoryFilter;
     const team = teamFilter === "all" ? undefined : teamFilter;
     const search = debouncedSearchTerm.trim() || undefined;
@@ -859,6 +864,7 @@ function App() {
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(accountId ? { accountId } : {}),
+      ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
       ...(category ? { category } : {}),
       ...(team ? { team } : {}),
       ...(search ? { search } : {}),
@@ -873,6 +879,7 @@ function App() {
     allBankSource,
     allBankDateRange,
     bankAccountFilter,
+    slashVirtualAccountFilter,
     bankCategoryFilter,
     bankDirection,
     bankGroupKey,
@@ -1082,6 +1089,7 @@ function App() {
     if (request.direction) query.set("direction", request.direction);
     if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
     if (request.accountId) query.set("accountId", request.accountId);
+    if (request.slashVirtualAccountId) query.set("slashVirtualAccountId", request.slashVirtualAccountId);
     if (request.category) query.set("category", request.category);
     if (request.team) query.set("team", request.team);
     if (request.search) query.set("search", request.search);
@@ -1105,16 +1113,16 @@ function App() {
     }
   }
 
-  async function repairAllSlashCardMetadata(): Promise<boolean> {
+  async function repairAllSlashMetadata(): Promise<boolean> {
     let repaired = false;
     while (true) {
-      const response = await fetch(`${apiBase}/transactions/card-metadata-repair`, { method: "POST" });
+      const response = await fetch(`${apiBase}/transactions/slash-metadata-repair`, { method: "POST" });
       if (!response.ok && response.status !== 202) {
         throw new Error(await apiErrorMessage(response, "Historical Slash card metadata could not be repaired"));
       }
       const repair = (await response.json()) as { status?: string; key?: string };
       if (repair.status === "complete") return repaired;
-      if (!repair.key) throw new Error("Historical Slash card metadata repair returned no job key");
+      if (!repair.key) throw new Error("Historical Slash metadata repair returned no job key");
       repaired = true;
       await waitForHistoricalTransactionSync(repair.key);
     }
@@ -1443,8 +1451,8 @@ function App() {
       }
       setDashboard((await response.json()) as DashboardSnapshot);
       if (activeTab === "banks" && bankTab === "slash") {
-        setNotice("Repairing all historical Slash card metadata...");
-        const repairedHistory = await repairAllSlashCardMetadata();
+        setNotice("Repairing historical Slash account and card metadata...");
+        const repairedHistory = await repairAllSlashMetadata();
         if (!repairedHistory) {
           setNotice("Refreshing the selected Slash period...");
           const periodResponse = await fetch(`${apiBase}/transactions/sync`, {
@@ -1463,7 +1471,7 @@ function App() {
       await refreshCurrentTransactionPage();
       invalidateAnalyticsData();
       setNotice(activeTab === "banks" && bankTab === "slash"
-        ? "Refresh and sync complete. All historical Slash card metadata is verified and up to date."
+        ? "Refresh and sync complete. Historical Slash account and card metadata is up to date."
         : "Refresh and sync complete. New bank transactions were imported and categorized automatically.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh and sync failed");
@@ -2420,6 +2428,8 @@ function App() {
           setBankDirection={setBankDirection}
           bankAccountFilter={bankAccountFilter}
           setBankAccountFilter={setBankAccountFilter}
+          slashVirtualAccountFilter={slashVirtualAccountFilter}
+          setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
           bankCategoryFilter={bankCategoryFilter}
           setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
@@ -3627,6 +3637,8 @@ function BanksView({
   setBankDirection,
   bankAccountFilter,
   setBankAccountFilter,
+  slashVirtualAccountFilter,
+  setSlashVirtualAccountFilter,
   bankCategoryFilter,
   setBankCategoryFilter,
   teamFilter,
@@ -3698,6 +3710,8 @@ function BanksView({
   setBankDirection: (direction: "all" | "in" | "out") => void;
   bankAccountFilter: string;
   setBankAccountFilter: (accountId: string) => void;
+  slashVirtualAccountFilter: string;
+  setSlashVirtualAccountFilter: (accountId: string) => void;
   bankCategoryFilter: string;
   setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
@@ -3788,6 +3802,17 @@ function BanksView({
     const selectedAccount = dashboard.accounts.find((account) => account.id === bankAccountFilter);
     if (!selectedAccount || selectedAccount.source !== activeSource.id) setBankAccountFilter("all");
   }, [activeSource, bankAccountFilter, dashboard.accounts, setBankAccountFilter]);
+  useEffect(() => {
+    if (slashVirtualAccountFilter === "all") return;
+    const slashIsVisible = activeBank === "slash" || (activeBank === "all" && allBankSource === "slash");
+    const accountExists = dashboard.accounts.some((account) =>
+      account.source === "slash"
+      && account.slashVirtualAccounts?.some((virtualAccount) =>
+        !virtualAccount.closedAt && virtualAccount.id === slashVirtualAccountFilter
+      )
+    );
+    if (!slashIsVisible || !accountExists) setSlashVirtualAccountFilter("all");
+  }, [activeBank, allBankSource, dashboard.accounts, setSlashVirtualAccountFilter, slashVirtualAccountFilter]);
   const periodMetricsReady = bankPeriodMetrics !== null && bankPeriodMetricsError === null;
   const periodSourceById = new Map(
     periodMetricsReady ? bankPeriodMetrics.sources.map((item) => [item.source, item]) : []
@@ -4122,6 +4147,8 @@ function BanksView({
             setBankDirection={setBankDirection}
             bankAccountFilter={bankAccountFilter}
             setBankAccountFilter={setBankAccountFilter}
+            slashVirtualAccountFilter={slashVirtualAccountFilter}
+            setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
             bankCategoryFilter={bankCategoryFilter}
             setBankCategoryFilter={setBankCategoryFilter}
             teamFilter={teamFilter}
@@ -4172,6 +4199,8 @@ function BanksView({
           setBankDirection={setBankDirection}
           bankAccountFilter={bankAccountFilter}
           setBankAccountFilter={setBankAccountFilter}
+          slashVirtualAccountFilter={slashVirtualAccountFilter}
+          setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
           bankCategoryFilter={bankCategoryFilter}
           setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
@@ -4238,6 +4267,8 @@ function BanksView({
           setBankDirection={setBankDirection}
           bankAccountFilter={bankAccountFilter}
           setBankAccountFilter={setBankAccountFilter}
+          slashVirtualAccountFilter={slashVirtualAccountFilter}
+          setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
           bankCategoryFilter={bankCategoryFilter}
           setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
@@ -4293,6 +4324,8 @@ function BanksView({
           setBankDirection={setBankDirection}
           bankAccountFilter={bankAccountFilter}
           setBankAccountFilter={setBankAccountFilter}
+          slashVirtualAccountFilter={slashVirtualAccountFilter}
+          setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
           bankCategoryFilter={bankCategoryFilter}
           setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
@@ -4347,6 +4380,8 @@ function BanksView({
           setBankDirection={setBankDirection}
           bankAccountFilter={bankAccountFilter}
           setBankAccountFilter={setBankAccountFilter}
+          slashVirtualAccountFilter={slashVirtualAccountFilter}
+          setSlashVirtualAccountFilter={setSlashVirtualAccountFilter}
           bankCategoryFilter={bankCategoryFilter}
           setBankCategoryFilter={setBankCategoryFilter}
           teamFilter={teamFilter}
@@ -4423,6 +4458,8 @@ type BankReconciliationViewProps = {
   setBankDirection: (direction: "all" | "in" | "out") => void;
   bankAccountFilter: string;
   setBankAccountFilter: (accountId: string) => void;
+  slashVirtualAccountFilter: string;
+  setSlashVirtualAccountFilter: (accountId: string) => void;
   bankCategoryFilter: string;
   setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
@@ -4481,6 +4518,8 @@ function BankReconciliationView({
   setBankDirection,
   bankAccountFilter,
   setBankAccountFilter,
+  slashVirtualAccountFilter,
+  setSlashVirtualAccountFilter,
   bankCategoryFilter,
   setBankCategoryFilter,
   teamFilter,
@@ -4552,6 +4591,16 @@ function BankReconciliationView({
   const accountOptions = dashboard.accounts
     .filter((account) => account.source === source)
     .sort((left, right) => left.name.localeCompare(right.name));
+  const slashVirtualAccountOptions = [...new Map(
+    dashboard.accounts
+      .filter((account) => account.source === "slash")
+      .flatMap((account) => account.slashVirtualAccounts ?? [])
+      .filter((account) => !account.closedAt)
+      .map((account) => [account.id, account] as const)
+  ).values()].sort((left, right) =>
+    Number(left.accountType !== "primary") - Number(right.accountType !== "primary")
+    || left.name.localeCompare(right.name)
+  );
   const activeFilters: ActiveFilter[] = [
     ...(bankGroupType ? [{
       key: "activity-group",
@@ -4562,6 +4611,11 @@ function BankReconciliationView({
       key: "account",
       label: `Account: ${accountOptions.find((account) => account.id === bankAccountFilter)?.name ?? bankAccountFilter}`,
       onRemove: () => setBankAccountFilter("all")
+    }]),
+    ...(slashVirtualAccountFilter === "all" ? [] : [{
+      key: "slash-account",
+      label: `Slash account: ${slashVirtualAccountOptions.find((account) => account.id === slashVirtualAccountFilter)?.name ?? slashVirtualAccountFilter}`,
+      onRemove: () => setSlashVirtualAccountFilter("all")
     }]),
     ...(bankDirection === "all" ? [] : [{
       key: "direction",
@@ -4612,6 +4666,21 @@ function BankReconciliationView({
                     {accountOptions.map((account) => <NativeSelectOption key={account.id} value={account.id}>{account.name}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
+                {source === "slash" && (
+                  <label>
+                    Slash account
+                    <NativeSelect
+                      aria-label="Filter Slash transactions by Slash account"
+                      value={slashVirtualAccountFilter}
+                      onValueChange={setSlashVirtualAccountFilter}
+                    >
+                      <NativeSelectOption value="all">All Slash accounts</NativeSelectOption>
+                      {slashVirtualAccountOptions.map((account) => (
+                        <NativeSelectOption key={account.id} value={account.id}>{account.name}</NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </label>
+                )}
                 <label>
                   Direction
                   <NativeSelect aria-label={`Filter ${sourceLabel} transactions by direction`} value={bankDirection} onValueChange={(value) => setBankDirection(value as "all" | "in" | "out")}>
@@ -4734,6 +4803,7 @@ function BankReconciliationView({
         onClearAll={() => {
           onClearBankGroup();
           setBankAccountFilter("all");
+          setSlashVirtualAccountFilter("all");
           setBankDirection("all");
           setMatchFilter("all");
           setBankCategoryFilter("all");
@@ -7350,7 +7420,7 @@ function BankDateRangeControls({
         windowDays={windowDays}
       />
       <InfoPopover label="automatic bank updates">
-        Revolut and Slash refresh automatically. Slash card metadata is verified on import, and any unchecked history is repaired in the background.
+        Revolut and Slash refresh automatically. Slash account and card metadata is verified on import, and any unchecked history is repaired in the background.
       </InfoPopover>
     </div>
   );

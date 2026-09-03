@@ -219,12 +219,22 @@ const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), 
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
+const slashVirtualAccount = v.object({
+  id: v.string(),
+  name: v.string(),
+  accountId: v.string(),
+  accountType: v.union(v.literal("primary"), v.literal("default")),
+  closedAt: v.optional(v.string())
+});
 
 const transaction = v.object({
   id: v.string(),
   source: dataSource,
   wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
+  slashVirtualAccountId: v.optional(v.string()),
+  slashVirtualAccountName: v.optional(v.string()),
+  slashVirtualAccountMetadataVersion: v.optional(v.number()),
   accountId: v.optional(v.string()),
   accountName: v.string(),
   date: v.string(),
@@ -289,6 +299,7 @@ const accountBalance = v.object({
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
+  slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
   balance: v.number(),
   currency: v.string(),
   updatedAt: v.string(),
@@ -605,6 +616,13 @@ export default defineSchema({
       "source",
       "connectionKey",
       "cardMetadataVersion",
+      "date",
+      "id"
+    ])
+    .index("by_source_connection_slash_virtual_account_metadata_version_date_id", [
+      "source",
+      "connectionKey",
+      "slashVirtualAccountMetadataVersion",
       "date",
       "id"
     ])

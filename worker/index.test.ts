@@ -273,6 +273,14 @@ test("transaction page API validates every bound before reading storage", async 
       message: "Transaction Wise entity is invalid"
     },
     {
+      query: "fromDate=2026-06-01&toDate=2026-06-30&slashVirtualAccountId=virtual-primary",
+      message: "Slash account filtering requires the Slash source"
+    },
+    {
+      query: `fromDate=2026-06-01&toDate=2026-06-30&source=slash&slashVirtualAccountId=${"x".repeat(257)}`,
+      message: "Slash account is invalid"
+    },
+    {
       query: "fromDate=2026-06-01&toDate=2026-06-30&match=unmatched",
       message: "Transaction category status is invalid"
     },

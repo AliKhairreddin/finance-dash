@@ -37,6 +37,13 @@ const bankConnection = v.object({ source: bankSource, connectionKey: v.string() 
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
+const slashVirtualAccount = v.object({
+  id: v.string(),
+  name: v.string(),
+  accountId: v.string(),
+  accountType: v.union(v.literal("primary"), v.literal("default")),
+  closedAt: v.optional(v.string())
+});
 const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 const maximumActivityPageSize = 200;
 const maximumActivityRowsRead = 250;
@@ -70,6 +77,9 @@ const transaction = v.object({
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
+  slashVirtualAccountId: v.optional(v.string()),
+  slashVirtualAccountName: v.optional(v.string()),
+  slashVirtualAccountMetadataVersion: v.optional(v.number()),
   accountId: v.optional(v.string()),
   accountName: v.string(),
   date: v.string(),
@@ -167,6 +177,7 @@ const account = v.object({
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
+  slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
   balance: v.number(),
   currency: v.string(),
   updatedAt: v.string(),
@@ -1090,7 +1101,7 @@ export const getSyncState = query({
   }
 });
 
-export const getSlashCardMetadataRepairRange = query({
+export const getSlashMetadataRepairRange = query({
   args: { serviceToken: v.string(), connectionKey: v.string() },
   returns: v.union(
     v.null(),
@@ -1106,19 +1117,33 @@ export const getSlashCardMetadataRepairRange = query({
     }
     await assertBankLedgerReady(ctx);
     await assertBankConnectionBinding(ctx, "slash", args.connectionKey);
-    const unverifiedQuery = () => ctx.db
+    const unverifiedCardQuery = () => ctx.db
       .query("bankTransactions")
       .withIndex("by_source_connection_card_metadata_version_date_id", (q) =>
         q.eq("source", "slash")
           .eq("connectionKey", args.connectionKey)
           .eq("cardMetadataVersion", undefined)
       );
-    const [first, last] = await Promise.all([
-      unverifiedQuery().order("asc").first(),
-      unverifiedQuery().order("desc").first()
+    const unverifiedVirtualAccountQuery = () => ctx.db
+      .query("bankTransactions")
+      .withIndex("by_source_connection_slash_virtual_account_metadata_version_date_id", (q) =>
+        q.eq("source", "slash")
+          .eq("connectionKey", args.connectionKey)
+          .eq("slashVirtualAccountMetadataVersion", undefined)
+      );
+    const [firstCard, lastCard, firstVirtualAccount, lastVirtualAccount] = await Promise.all([
+      unverifiedCardQuery().order("asc").first(),
+      unverifiedCardQuery().order("desc").first(),
+      unverifiedVirtualAccountQuery().order("asc").first(),
+      unverifiedVirtualAccountQuery().order("desc").first()
     ]);
-    if (!first || !last) return null;
-    return { fromDate: first.date, toDate: last.date };
+    const datedRows = [firstCard, lastCard, firstVirtualAccount, lastVirtualAccount]
+      .filter((row): row is BankTransactionDoc => row !== null);
+    if (datedRows.length === 0) return null;
+    return {
+      fromDate: datedRows.reduce((earliest, row) => row.date < earliest ? row.date : earliest, datedRows[0].date),
+      toDate: datedRows.reduce((latest, row) => row.date > latest ? row.date : latest, datedRows[0].date)
+    };
   }
 });
 

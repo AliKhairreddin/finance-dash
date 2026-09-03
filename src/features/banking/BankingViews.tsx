@@ -16,6 +16,7 @@ import type {
   HoldingAssetType,
   HoldingKind,
   Provider,
+  SlashVirtualAccount,
   Transaction,
   TransactionMatchFilter,
   TransactionSortKey,
@@ -75,6 +76,20 @@ function sourceLabel(source: DataSource): string {
   return transactionSources.find((item) => item.value === source)?.label ?? source;
 }
 
+function slashVirtualAccountOptions(accounts: DashboardSnapshot["accounts"]): SlashVirtualAccount[] {
+  const options = new Map<string, SlashVirtualAccount>();
+  for (const account of accounts) {
+    if (account.source !== "slash") continue;
+    for (const virtualAccount of account.slashVirtualAccounts ?? []) {
+      if (!virtualAccount.closedAt) options.set(virtualAccount.id, virtualAccount);
+    }
+  }
+  return [...options.values()].sort((left, right) =>
+    Number(left.accountType !== "primary") - Number(right.accountType !== "primary")
+    || left.name.localeCompare(right.name)
+  );
+}
+
 export function AllBankTransactionsView({
   dashboard,
   providersById,
@@ -93,6 +108,8 @@ export function AllBankTransactionsView({
   setBankDirection,
   bankAccountFilter,
   setBankAccountFilter,
+  slashVirtualAccountFilter,
+  setSlashVirtualAccountFilter,
   bankCategoryFilter,
   setBankCategoryFilter,
   teamFilter,
@@ -137,6 +154,8 @@ export function AllBankTransactionsView({
   setBankDirection: (direction: "all" | "in" | "out") => void;
   bankAccountFilter: string;
   setBankAccountFilter: (accountId: string) => void;
+  slashVirtualAccountFilter: string;
+  setSlashVirtualAccountFilter: (accountId: string) => void;
   bankCategoryFilter: string;
   setBankCategoryFilter: (category: string) => void;
   teamFilter: string;
@@ -170,6 +189,8 @@ export function AllBankTransactionsView({
   const setDirection = setBankDirection;
   const account = bankAccountFilter;
   const setAccount = setBankAccountFilter;
+  const virtualAccount = slashVirtualAccountFilter;
+  const setVirtualAccount = setSlashVirtualAccountFilter;
   const category = bankCategoryFilter;
   const setCategory = setBankCategoryFilter;
   const owner = teamFilter;
@@ -191,12 +212,24 @@ export function AllBankTransactionsView({
       .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
     [dashboard.accounts]
   );
+  const virtualAccountOptions = useMemo(
+    () => slashVirtualAccountOptions(dashboard.accounts),
+    [dashboard.accounts]
+  );
 
   useEffect(() => {
     if (account === "all") return;
     const selectedAccount = accountOptions.find((item) => item.id === account);
     if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
   }, [account, accountOptions, setAccount, source]);
+
+  useEffect(() => {
+    if (virtualAccount === "all") return;
+    if (
+      source !== "slash"
+      || !virtualAccountOptions.some((item) => item.id === virtualAccount)
+    ) setVirtualAccount("all");
+  }, [setVirtualAccount, source, virtualAccount, virtualAccountOptions]);
 
   const rows = transactions;
 
@@ -224,6 +257,11 @@ export function AllBankTransactionsView({
       key: "account",
       label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`,
       onRemove: () => setAccount("all")
+    }]),
+    ...(virtualAccount === "all" ? [] : [{
+      key: "slash-account",
+      label: `Slash account: ${virtualAccountOptions.find((item) => item.id === virtualAccount)?.name ?? virtualAccount}`,
+      onRemove: () => setVirtualAccount("all")
     }]),
     ...(direction === "all" ? [] : [{
       key: "direction",
@@ -271,12 +309,28 @@ export function AllBankTransactionsView({
                       setSource(nextSource);
                       const selectedAccount = accountOptions.find((item) => item.id === account);
                       if (nextSource !== "all" && selectedAccount?.source !== nextSource) setAccount("all");
+                      if (nextSource !== "slash") setVirtualAccount("all");
                     }}
                   >
                     <NativeSelectOption value="all">All sources</NativeSelectOption>
                     {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
+                {source === "slash" && (
+                  <label>
+                    Slash account
+                    <NativeSelect
+                      aria-label="Filter bank transactions by Slash account"
+                      value={virtualAccount}
+                      onValueChange={setVirtualAccount}
+                    >
+                      <NativeSelectOption value="all">All Slash accounts</NativeSelectOption>
+                      {virtualAccountOptions.map((item) => (
+                        <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  </label>
+                )}
                 <label>
                   Account
                   <NativeSelect aria-label="Filter bank transactions by account" value={account} onValueChange={setAccount}>
@@ -356,6 +410,7 @@ export function AllBankTransactionsView({
           onClearBankGroup();
           setSource("all");
           setAccount("all");
+          setVirtualAccount("all");
           setDirection("all");
           setCategory("all");
           setMatch("all");
@@ -380,7 +435,7 @@ export function AllBankTransactionsView({
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td>{transaction.accountName}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} type="button" title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}</td></tr>;
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td><span>{transaction.slashVirtualAccountName ?? transaction.accountName}</span>{transaction.slashVirtualAccountName && <small>{transaction.accountName}</small>}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} type="button" title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}</td></tr>;
             }) : <tr><td colSpan={8}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>

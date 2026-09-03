@@ -49,12 +49,21 @@ export interface DashboardSession {
   role: DashboardAccessRole;
 }
 
+export interface SlashVirtualAccount {
+  id: string;
+  name: string;
+  accountId: string;
+  accountType: "primary" | "default";
+  closedAt?: string;
+}
+
 export interface AccountBalance {
   id: string;
   name: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
   slashAccountSubtype?: SlashAccountSubtype;
+  slashVirtualAccounts?: SlashVirtualAccount[];
   balance: number;
   currency: string;
   updatedAt: string;
@@ -515,6 +524,10 @@ export interface Transaction {
   source: DataSource;
   wiseEntity?: WiseEntity;
   slashAccountSubtype?: SlashAccountSubtype;
+  slashVirtualAccountId?: string;
+  slashVirtualAccountName?: string;
+  /** Slash enrichment version proving virtual-account metadata was checked. */
+  slashVirtualAccountMetadataVersion?: number;
   /** Immutable provider account identity used for coverage and connection isolation. */
   accountId?: string;
   accountName: string;

@@ -34,6 +34,8 @@ export function assertBankTransactionInput(transaction: Transaction): void {
   assertBoundedString(transaction.providerLegacyId, "transaction.providerLegacyId", 2_048);
   assertBoundedString(transaction.accountId, "transaction.accountId", 1_024, true);
   assertBoundedString(transaction.accountName, "transaction.accountName", 512, true);
+  assertBoundedString(transaction.slashVirtualAccountId, "transaction.slashVirtualAccountId", 1_024);
+  assertBoundedString(transaction.slashVirtualAccountName, "transaction.slashVirtualAccountName", 512);
   assertBoundedString(transaction.description, "transaction.description", 1_024, true);
   assertBoundedString(transaction.rawName, "transaction.rawName", 1_024, true);
   assertBoundedString(transaction.counterparty, "transaction.counterparty", 1_024, true);
@@ -48,6 +50,15 @@ export function assertBankTransactionInput(transaction: Transaction): void {
     && (!Number.isSafeInteger(transaction.cardMetadataVersion) || transaction.cardMetadataVersion < 1)
   ) {
     throw new Error("transaction.cardMetadataVersion must be a positive safe integer");
+  }
+  if (
+    transaction.slashVirtualAccountMetadataVersion !== undefined
+    && (
+      !Number.isSafeInteger(transaction.slashVirtualAccountMetadataVersion)
+      || transaction.slashVirtualAccountMetadataVersion < 1
+    )
+  ) {
+    throw new Error("transaction.slashVirtualAccountMetadataVersion must be a positive safe integer");
   }
   assertBoundedString(transaction.category, "transaction.category", 256, true);
   assertBoundedString(transaction.merchantName, "transaction.merchantName", 1_024);
@@ -93,6 +104,12 @@ export function assertBankAccountInput(account: AccountBalance): void {
   assertBoundedString(account.id, "account.id", 1_024, true);
   assertBoundedString(account.name, "account.name", 512, true);
   assertBoundedString(account.updatedAt, "account.updatedAt", 64, true);
+  for (const virtualAccount of account.slashVirtualAccounts ?? []) {
+    assertBoundedString(virtualAccount.id, "account.slashVirtualAccounts.id", 1_024, true);
+    assertBoundedString(virtualAccount.name, "account.slashVirtualAccounts.name", 512, true);
+    assertBoundedString(virtualAccount.accountId, "account.slashVirtualAccounts.accountId", 1_024, true);
+    assertBoundedString(virtualAccount.closedAt, "account.slashVirtualAccounts.closedAt", 64);
+  }
   if (!/^[A-Z0-9]{3,8}$/.test(account.currency)) {
     throw new Error("account.currency must be a 3-8 character uppercase currency code");
   }

@@ -40,6 +40,21 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
         metadata: { count: 1 }
       });
     }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({
+        items: [{
+          virtualAccount: {
+            id: "virtual-primary",
+            name: "Primary",
+            accountId: "account-debit",
+            accountType: "primary"
+          },
+          balance: { amountCents: 125_000 },
+          spend: { amountCents: 25_000 }
+        }],
+        metadata: { count: 1 }
+      });
+    }
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
         balances: [{
@@ -64,6 +79,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
             amountCents: -12_345,
             accountId: "underlying-debit",
             accountSubtype: "cash",
+            virtualAccountId: "virtual-primary",
             cardId: "card-primary",
             status: "posted",
             cashbackInfo: {
@@ -118,6 +134,12 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     name: "Operating Cash",
     source: "slash",
     slashAccountSubtype: "cash",
+    slashVirtualAccounts: [{
+      id: "virtual-primary",
+      name: "Primary",
+      accountId: "account-debit",
+      accountType: "primary"
+    }],
     balance: 1250,
     currency: "USD",
     updatedAt: "2026-07-28T12:00:00.000Z",
@@ -129,6 +151,9 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       providerLegacyId: "slash-transaction-card",
       source: "slash",
       slashAccountSubtype: "cash",
+      slashVirtualAccountId: "virtual-primary",
+      slashVirtualAccountName: "Primary",
+      slashVirtualAccountMetadataVersion: 1,
       accountId: "slash-underlying-debit-cash",
       accountName: "Operating",
       date: "2026-07-27",
@@ -153,6 +178,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       providerLegacyId: "slash-transaction-failed",
       source: "slash",
       slashAccountSubtype: "cash",
+      slashVirtualAccountMetadataVersion: 1,
       accountId: "slash-underlying-debit-cash",
       accountName: "Operating",
       date: "2026-07-27",
@@ -172,6 +198,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       providerLegacyId: "slash-transaction-credit",
       source: "slash",
       slashAccountSubtype: "cash",
+      slashVirtualAccountMetadataVersion: 1,
       accountId: "slash-underlying-debit-cash",
       accountName: "Operating",
       date: "2026-07-28",
@@ -198,6 +225,7 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
     true
   );
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-debit/balance"), true);
+  assert.equal(requests.some((request) => request.url.pathname === "/virtual-account"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/card/card-primary"), true);
   assert.equal(requests.some((request) => request.url.pathname === "/account/account-closed/balance"), false);
 });
@@ -215,6 +243,21 @@ test("Slash charge-card accounts use the available credit balance", async () => 
           balances: ["cash", "credit"]
         }],
         metadata: {}
+      });
+    }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({
+        items: ["Primary", "Wagner", "Reservation"].map((name, index) => ({
+          virtualAccount: {
+            id: `virtual-${name.toLowerCase()}`,
+            name,
+            accountId: "account-platinum",
+            accountType: index === 0 ? "primary" : "default"
+          },
+          balance: { amountCents: 0 },
+          spend: { amountCents: 0 }
+        })),
+        metadata: { count: 3 }
       });
     }
     if (url.pathname === "/account/account-platinum/balance") {
@@ -255,6 +298,11 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       name: "Business Platinum Cash",
       source: "slash",
       slashAccountSubtype: "cash",
+      slashVirtualAccounts: [
+        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary" },
+        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default" },
+        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default" }
+      ],
       balance: 0,
       currency: "USD",
       updatedAt: "2026-07-28T22:31:42.058Z",
@@ -265,6 +313,11 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       name: "Business Platinum Credit",
       source: "slash",
       slashAccountSubtype: "credit",
+      slashVirtualAccounts: [
+        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary" },
+        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default" },
+        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default" }
+      ],
       balance: 66_551.98,
       currency: "USD",
       updatedAt: "2026-07-28T22:31:42.052Z",
@@ -287,6 +340,9 @@ test("Slash rejects card transactions whose card identity cannot be resolved", a
         }],
         metadata: {}
       });
+    }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({ items: [], metadata: {} });
     }
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
@@ -380,6 +436,7 @@ test("Slash can load one transaction by ID without scanning the activity window"
     rawName: "Old Merchant",
     counterparty: "Old Merchant",
     cardMetadataVersion: 1,
+    slashVirtualAccountMetadataVersion: 1,
     amount: 123.45,
     currency: "USD",
     direction: "out",
@@ -447,6 +504,9 @@ test("Slash activity loads every page inside an exact inclusive date range", asy
         }],
         metadata: {}
       });
+    }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({ items: [], metadata: {} });
     }
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
@@ -531,6 +591,9 @@ test("Slash activity accepts bounded opaque provider cursors larger than 512 cha
     if (url.pathname === "/account") {
       return Response.json({ items: [], metadata: {} });
     }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({ items: [], metadata: {} });
+    }
     transactionRequests.push(url);
     return Response.json({
       items: [],
@@ -554,6 +617,9 @@ test("Slash activity rejects provider cursors larger than its bounded checkpoint
   const fetcher: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.pathname === "/account") {
+      return Response.json({ items: [], metadata: {} });
+    }
+    if (url.pathname === "/virtual-account") {
       return Response.json({ items: [], metadata: {} });
     }
     return Response.json({ items: [], metadata: { nextCursor: "x".repeat(8 * 1024 + 1) } });
@@ -594,6 +660,9 @@ test("Slash activity streams bounded deduplicated pages without collecting trans
         }],
         metadata: {}
       });
+    }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({ items: [], metadata: {} });
     }
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
@@ -681,6 +750,9 @@ test("Slash sync checkpoints resume the provider cursor with a frozen bounded wi
         }],
         metadata: {}
       });
+    }
+    if (url.pathname === "/virtual-account") {
+      return Response.json({ items: [], metadata: {} });
     }
     if (url.pathname === "/account/account-debit/balance") {
       return Response.json({
@@ -848,6 +920,9 @@ test("Slash rejects malformed balance cents and timestamps instead of fabricatin
           }],
           metadata: {}
         });
+      }
+      if (url.pathname === "/virtual-account") {
+        return Response.json({ items: [], metadata: {} });
       }
       if (url.pathname === "/account/account-debit/balance") {
         return Response.json({ balances: [balance] });

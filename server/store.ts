@@ -2715,6 +2715,7 @@ type LocalTransactionPageOptions = {
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
   accountId?: string;
+  slashVirtualAccountId?: string;
   category?: string;
   team?: string;
   groupType?: BankActivityGroupType;
@@ -2741,7 +2742,7 @@ function localTransactionCursor(transaction: Transaction): string {
 function localTransactionPage(rows: Transaction[], options: LocalTransactionPageOptions): TransactionPage {
   const sorted = rows.sort((left, right) => {
     function sortValue(transaction: Transaction): boolean | number | string | undefined {
-      if (options.sortKey === "account") return transaction.accountName;
+      if (options.sortKey === "account") return transaction.slashVirtualAccountName ?? transaction.accountName;
       if (options.sortKey === "amount") return transaction.amount;
       if (options.sortKey === "category") return transactionBusinessCategory(transaction.category);
       if (options.sortKey === "company") {
@@ -2797,6 +2798,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
         transaction.description,
         transaction.rawName,
         transaction.accountName,
+        transaction.slashVirtualAccountName,
         transaction.category,
         provider?.name,
         provider?.legalName,
@@ -2812,6 +2814,10 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
       && (!options.accountId || transaction.accountId === options.accountId)
+      && (
+        !options.slashVirtualAccountId
+        || transaction.slashVirtualAccountId === options.slashVirtualAccountId
+      )
       && (!options.category || transactionBusinessCategory(transaction.category) === options.category)
       && (!options.team || (options.team === "unassigned" ? !transaction.teamId : transaction.teamId === options.team))
       && (!options.groupType || transactionBankActivityGroupKey(transaction, options.groupType, providers) === options.groupKey)
