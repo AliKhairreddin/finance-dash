@@ -127,6 +127,8 @@ npm run auth:configure:transaction-reviewer
 
 The reviewer signs in with the configured username and the one-time code delivered directly to their Telegram chat. Reviewers receive only the transaction-review bootstrap data and may read bank transactions or override a transaction's category, company, and owner. Every other API route is denied at the Worker boundary. Ask the reviewer to message the Finance Dash bot first; the bot replies with the Telegram chat ID needed by the setup command. Never ask the reviewer to share a sign-in code.
 
+The five-minute bank sync also monitors the aggregate live USD balance of every Slash cash subaccount. A protected Telegram alert is sent to the authorized user named by `SLASH_CASH_ALERT_RECIPIENT` when that total first falls below `SLASH_CASH_ALERT_THRESHOLD_USD`, and one recovery message is sent when it returns to or above the threshold. The default deployment threshold is USD 10,000 and the recipient is Ali M. Credit balances are excluded, failed messages retry on a later healthy Slash sync, and repeated checks in the same balance band do not produce duplicate alerts.
+
 ### Regression Coverage
 
 The current test suite covers currency math, empty-state behavior, service-token enforcement, stale writes, atomic invoice reservations, company deletion, secret scrubbing, and API fail-closed behavior.

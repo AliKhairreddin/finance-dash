@@ -223,6 +223,11 @@ import {
 } from "./auth";
 import { pollTelegramOnboarding } from "./telegram";
 import {
+  sendSlashCashBalanceAlert,
+  slashCashAlertThreshold,
+  slashCashBalanceObservation
+} from "./telegramAlerts";
+import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
   maximumAmexCursorHistory,
@@ -3797,6 +3802,41 @@ async function syncLatestBankActivity(
   if (failures.length > 0) throw failures[0].reason;
 }
 
+async function checkSlashCashBalanceAlert(env: Env): Promise<boolean> {
+  if (
+    !env.SLASH_API_KEY?.trim()
+    || !env.SLASH_LEGAL_ENTITY_ID?.trim()
+    || !env.SLASH_BASE_URL?.trim()
+  ) return false;
+
+  const threshold = slashCashAlertThreshold(env.SLASH_CASH_ALERT_THRESHOLD_USD);
+  const recipient = env.SLASH_CASH_ALERT_RECIPIENT?.trim();
+  if (!recipient) throw new Error("SLASH_CASH_ALERT_RECIPIENT is required");
+  const state = await loadPersisted(env);
+  if (state.bankSyncHealth.slash?.status !== "healthy") return false;
+  const observation = slashCashBalanceObservation(
+    state.bankAccounts,
+    threshold,
+    new Date().toISOString()
+  );
+  if (!observation) throw new Error("Slash cash balance is unavailable for alerting");
+
+  const alertState = env.TELEGRAM_OTP_STATE.getByName("telegram-slash-cash-balance-alert");
+  const notification = await alertState.prepareSlashCashBalanceAlert(observation, crypto.randomUUID());
+  if (!notification) return false;
+  await sendSlashCashBalanceAlert(env, recipient, notification);
+  await alertState.confirmSlashCashBalanceAlert(notification.id);
+  console.log(JSON.stringify({
+    event: "slash_cash_balance_alert_sent",
+    kind: notification.kind,
+    balance: notification.balance,
+    threshold: notification.threshold,
+    currency: notification.currency,
+    recipient
+  }));
+  return true;
+}
+
 async function syncBankSourceRange(
   env: Env,
   source: BankTransactionSource,
@@ -7290,6 +7330,16 @@ export default {
       } catch (error) {
         console.error(JSON.stringify({
           event: "bank_activity_sync_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+      try {
+        await checkSlashCashBalanceAlert(env);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "slash_cash_balance_alert_failed",
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));

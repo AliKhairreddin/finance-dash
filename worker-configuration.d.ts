@@ -76,6 +76,8 @@ interface __BaseEnv_WorkerEnv {
 	SLASH_CONNECTION_ID: string;
 	SLASH_LEGAL_ENTITY_ID: string;
 	SLASH_BASE_URL: string;
+	SLASH_CASH_ALERT_THRESHOLD_USD: string;
+	SLASH_CASH_ALERT_RECIPIENT: string;
 	AMEX_TOKEN_URL: string;
 	AMEX_CONNECTION_ID: string;
 	AMEX_API_BASE_URL: string;

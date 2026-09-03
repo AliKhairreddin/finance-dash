@@ -13,10 +13,18 @@ import {
   type TelegramOtpStoredState,
   type TelegramOtpVerifyResult
 } from "./telegramOtp";
+import {
+  confirmSlashCashBalanceAlertTransition,
+  prepareSlashCashBalanceAlertTransition,
+  type SlashCashBalanceAlertState,
+  type SlashCashBalanceNotification,
+  type SlashCashBalanceObservation
+} from "./telegramAlerts";
 
 const OTP_STATE_KEY = "otp-state";
 const POLLING_CONFIGURATION_KEY = "polling-configuration";
 const POLLING_OFFSET_KEY = "polling-offset";
+const SLASH_CASH_BALANCE_ALERT_STATE_KEY = "slash-cash-balance-alert-state";
 const POLLING_CONFIGURATION_RECHECK_MS = 24 * 60 * 60 * 1000;
 const textEncoder = new TextEncoder();
 
@@ -121,6 +129,28 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
         await this.ctx.storage.put(POLLING_OFFSET_KEY, result.nextOffset);
       }
       return result.processed;
+    });
+  }
+
+  async prepareSlashCashBalanceAlert(
+    observation: SlashCashBalanceObservation,
+    notificationId: string
+  ): Promise<SlashCashBalanceNotification | null> {
+    return this.serialize(async () => {
+      const stored = await this.ctx.storage.get<SlashCashBalanceAlertState>(SLASH_CASH_BALANCE_ALERT_STATE_KEY);
+      const transition = prepareSlashCashBalanceAlertTransition(stored, observation, notificationId);
+      await this.ctx.storage.put(SLASH_CASH_BALANCE_ALERT_STATE_KEY, transition.state);
+      return transition.notification;
+    });
+  }
+
+  async confirmSlashCashBalanceAlert(notificationId: string): Promise<void> {
+    await this.serialize(async () => {
+      const stored = await this.ctx.storage.get<SlashCashBalanceAlertState>(SLASH_CASH_BALANCE_ALERT_STATE_KEY);
+      const nextState = confirmSlashCashBalanceAlertTransition(stored, notificationId);
+      if (nextState && nextState !== stored) {
+        await this.ctx.storage.put(SLASH_CASH_BALANCE_ALERT_STATE_KEY, nextState);
+      }
     });
   }
 
