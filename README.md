@@ -119,6 +119,14 @@ npm run auth:configure:slash
 
 Sessions are signed for the hostname that issued them, so a Slash session cannot be replayed against `finance.thatcanadian.dev`.
 
+Create the transaction-review-only Telegram login from an interactive terminal:
+
+```bash
+npm run auth:configure:transaction-reviewer
+```
+
+The reviewer signs in with the configured username and the one-time code delivered directly to their Telegram chat. Reviewers receive only the transaction-review bootstrap data and may read bank transactions or override a transaction's category, company, and owner. Every other API route is denied at the Worker boundary. Ask the reviewer to message the Finance Dash bot first; the bot replies with the Telegram chat ID needed by the setup command. Never ask the reviewer to share a sign-in code.
+
 ### Regression Coverage
 
 The current test suite covers currency math, empty-state behavior, service-token enforcement, stale writes, atomic invoice reservations, company deletion, secret scrubbing, and API fail-closed behavior.

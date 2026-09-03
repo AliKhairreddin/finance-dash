@@ -7,6 +7,7 @@
     "dev": "concurrently -k \"DOTENV_CONFIG_PATH=.env.local tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
     "server": "DOTENV_CONFIG_PATH=.env.local tsx watch server/index.ts",
     "auth:configure:slash": "tsx scripts/configure-auth.ts",
+    "auth:configure:transaction-reviewer": "tsx scripts/configure-transaction-reviewer.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
     "import:wise-statements": "tsx scripts/import-wise-statements.ts",
     "save:cash-flow-snapshot": "tsx scripts/save-cash-flow-snapshot.ts",

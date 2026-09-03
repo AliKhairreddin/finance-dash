@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   createAuthSessionToken,
   enforceSiteAuthentication,
+  getDashboardSession,
+  transactionReviewerCanAccess,
   verifyAuthSessionToken,
   verifyLoginCredentials
 } from "./auth";
@@ -115,6 +117,51 @@ test("signed sessions expire and reject tampering or a different hostname", asyn
     ),
     false
   );
+});
+
+test("configured transaction reviewers resolve to a restricted session role", async () => {
+  const env = {
+    ...(telegramEnv() as unknown as Record<string, unknown>),
+    TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "7070707070" })
+  } as never;
+  const reviewerToken = await createAuthSessionToken(testSessionSecret, "finance.example", "meet");
+  const administratorToken = await createAuthSessionToken(testSessionSecret, "finance.example", "ali");
+
+  assert.deepEqual(
+    await getDashboardSession(new Request("https://finance.example/api/session", {
+      headers: { Cookie: `__Host-finance_session=${reviewerToken}` }
+    }), env),
+    { username: "Meet", role: "transaction-reviewer" }
+  );
+  assert.deepEqual(
+    await getDashboardSession(new Request("https://finance.example/api/session", {
+      headers: { Cookie: `__Host-finance_session=${administratorToken}` }
+    }), env),
+    { username: "Ali", role: "administrator" }
+  );
+});
+
+test("transaction reviewer API access is limited to review reads and manual overrides", () => {
+  for (const [method, path] of [
+    ["GET", "/api/session"],
+    ["GET", "/api/transaction-review"],
+    ["GET", "/api/transactions?limit=100"],
+    ["POST", "/api/transactions/tx-1/category"],
+    ["POST", "/api/transactions/tx-1/company"],
+    ["POST", "/api/transactions/tx-1/team"]
+  ]) {
+    assert.equal(transactionReviewerCanAccess(new Request(`https://finance.example${path}`, { method })), true, `${method} ${path}`);
+  }
+  for (const [method, path] of [
+    ["GET", "/api/dashboard"],
+    ["GET", "/api/analytics"],
+    ["POST", "/api/matches"],
+    ["POST", "/api/sync"],
+    ["POST", "/api/invoices"],
+    ["DELETE", "/api/providers/company-1"]
+  ]) {
+    assert.equal(transactionReviewerCanAccess(new Request(`https://finance.example${path}`, { method })), false, `${method} ${path}`);
+  }
 });
 
 test("authentication fails closed when Telegram secrets are missing or malformed", async () => {

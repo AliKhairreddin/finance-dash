@@ -7,6 +7,7 @@ import {
   type TelegramAuthUser
 } from "./telegram";
 import { TELEGRAM_OTP_EXPIRY_MS } from "./telegramOtp";
+import type { DashboardSession } from "../shared/types";
 
 const AUTH_COOKIE_NAME = "__Host-finance_session";
 const LOGIN_COOKIE_NAME = "__Host-finance_login";
@@ -35,7 +36,9 @@ type AuthEnv = Pick<
   | "TELEGRAM_BOT_TOKEN"
   | "TELEGRAM_OTP_STATE"
   | "TELEGRAM_PASSWORDLESS_USERS_JSON"
->;
+> & {
+  TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
+};
 
 interface AuthCredential {
   username: string;
@@ -51,6 +54,7 @@ interface PasswordVerifier {
 interface TelegramAuthConfig {
   users: TelegramAuthUser[];
   passwordlessUsernames: Set<string>;
+  transactionReviewerUsernames: Set<string>;
   sessionSecret: string;
 }
 
@@ -127,11 +131,32 @@ function slashCredential(env: AuthEnv): { credential: AuthCredential; sessionSec
 function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
   const botToken = env.TELEGRAM_BOT_TOKEN?.trim();
-  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
-  if (!sessionSecret || !botToken || !users || !env.TELEGRAM_OTP_STATE) return null;
+  const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  const transactionReviewerUsers = parseOptionalTelegramUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON);
+  if (!sessionSecret || !botToken || !administratorUsers || !transactionReviewerUsers || !env.TELEGRAM_OTP_STATE) return null;
+  const users = [...administratorUsers, ...transactionReviewerUsers];
+  const normalizedUsernames = new Set<string>();
+  const chatIds = new Set<string>();
+  for (const user of users) {
+    if (normalizedUsernames.has(user.normalizedUsername) || chatIds.has(user.chatId)) return null;
+    normalizedUsernames.add(user.normalizedUsername);
+    chatIds.add(user.chatId);
+  }
   const passwordlessUsernames = parsePasswordlessTelegramUsers(env.TELEGRAM_PASSWORDLESS_USERS_JSON, users);
   if (!passwordlessUsernames) return null;
-  return { users, passwordlessUsernames, sessionSecret };
+  const transactionReviewerUsernames = new Set(transactionReviewerUsers.map((user) => user.normalizedUsername));
+  if ([...transactionReviewerUsernames].some((username) => passwordlessUsernames.has(username))) return null;
+  return {
+    users,
+    passwordlessUsernames,
+    transactionReviewerUsernames,
+    sessionSecret
+  };
+}
+
+function parseOptionalTelegramUsers(value: string | undefined): TelegramAuthUser[] | null {
+  if (!value?.trim()) return [];
+  return parseTelegramAuthUsers(value);
 }
 
 function parsePasswordlessTelegramUsers(
@@ -569,13 +594,26 @@ async function hasValidTelegramSession(
   config: TelegramAuthConfig,
   audience: string
 ): Promise<boolean> {
+  return (await telegramSessionUsername(request, config, audience)) !== null;
+}
+
+async function telegramSessionUsername(
+  request: Request,
+  config: TelegramAuthConfig,
+  audience: string
+): Promise<string | null> {
   const token = cookieValue(request, AUTH_COOKIE_NAME);
   const subject = token
     ? await verifiedAuthSessionSubject(token, config.sessionSecret, audience)
     : null;
-  if (!subject) return false;
-  if (!subject.startsWith(PASSWORDLESS_SESSION_SUBJECT_PREFIX)) return true;
-  return config.passwordlessUsernames.has(subject.slice(PASSWORDLESS_SESSION_SUBJECT_PREFIX.length));
+  if (!subject) return null;
+  const passwordless = subject.startsWith(PASSWORDLESS_SESSION_SUBJECT_PREFIX);
+  const username = passwordless
+    ? subject.slice(PASSWORDLESS_SESSION_SUBJECT_PREFIX.length)
+    : subject;
+  if (!config.users.some((user) => user.normalizedUsername === username)) return null;
+  if (passwordless && !config.passwordlessUsernames.has(username)) return null;
+  return username;
 }
 
 function telegramUser(config: TelegramAuthConfig, username: string): TelegramAuthUser | undefined {
@@ -919,4 +957,46 @@ export async function enforceSiteAuthentication(
   return url.hostname === SLASH_APP_HOSTNAME
     ? enforceSlashAuth(request, env, url)
     : enforceTelegramAuth(request, env, url, dependencies);
+}
+
+export async function getDashboardSession(
+  request: Request,
+  env: AuthEnv
+): Promise<DashboardSession | null> {
+  const url = new URL(request.url);
+  if (url.hostname === SLASH_APP_HOSTNAME) {
+    const config = slashCredential(env);
+    if (!config) return null;
+    const token = cookieValue(request, AUTH_COOKIE_NAME);
+    const username = token
+      ? await verifiedAuthSessionSubject(token, config.sessionSecret, url.hostname)
+      : null;
+    return username === normalizeFinanceUsername(config.credential.username)
+      ? { username: config.credential.username, role: "administrator" }
+      : null;
+  }
+
+  const config = telegramConfig(env);
+  if (!config) return null;
+  const normalizedUsername = await telegramSessionUsername(request, config, url.hostname);
+  if (!normalizedUsername) return null;
+  const user = config.users.find((candidate) => candidate.normalizedUsername === normalizedUsername);
+  if (!user) return null;
+  return {
+    username: user.username,
+    role: config.transactionReviewerUsernames.has(normalizedUsername)
+      ? "transaction-reviewer"
+      : "administrator"
+  };
+}
+
+export function transactionReviewerCanAccess(request: Request): boolean {
+  const url = new URL(request.url);
+  if (request.method === "GET") {
+    return url.pathname === "/api/session"
+      || url.pathname === "/api/transaction-review"
+      || url.pathname === "/api/transactions";
+  }
+  if (request.method !== "POST") return false;
+  return /^\/api\/transactions\/[^/]+\/(?:category|company|team)$/u.test(url.pathname);
 }

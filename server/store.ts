@@ -1265,7 +1265,10 @@ export async function runAiPrompt(payload: AiPromptPayload): Promise<AiPromptRes
   return runOpenRouterPrompt(runtimeAiSettings(), payload, process.env.PUBLIC_APP_URL);
 }
 
-export async function matchTransaction(payload: MatchTransactionPayload): Promise<Transaction> {
+export async function matchTransaction(
+  payload: MatchTransactionPayload,
+  preserveInvoiceMatch = false
+): Promise<Transaction> {
   const provider = providers.find((item) => item.id === payload.providerId);
   const transaction = findKnownTransaction(payload.transactionId);
   if (!provider || !transaction) {
@@ -1278,7 +1281,7 @@ export async function matchTransaction(payload: MatchTransactionPayload): Promis
   const matchedTransaction: Transaction = {
     ...transaction,
     matchedProviderId: payload.providerId,
-    matchedInvoiceId: payload.invoiceId,
+    matchedInvoiceId: preserveInvoiceMatch ? transaction.matchedInvoiceId : payload.invoiceId,
     companyMatchSource: "manual",
     companyConfidence: 1,
     companyMatchReason: "Approved company match",

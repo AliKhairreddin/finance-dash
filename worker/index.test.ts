@@ -79,11 +79,11 @@ const workerTestAuth = {
   }
 };
 
-async function authenticatedRequest(url: string, init: RequestInit = {}): Promise<Request> {
+async function authenticatedRequest(url: string, init: RequestInit = {}, subject = "finance-test"): Promise<Request> {
   const token = await createAuthSessionToken(
     workerTestAuth.AUTH_SESSION_SECRET,
     new URL(url).hostname,
-    "finance-test"
+    subject
   );
   const headers = new Headers(init.headers);
   headers.set("Cookie", `__Host-finance_session=${token}`);
@@ -92,6 +92,28 @@ async function authenticatedRequest(url: string, init: RequestInit = {}): Promis
     headers
   });
 }
+
+test("transaction reviewer sessions expose their role and deny non-review APIs", async () => {
+  const env = authenticatedEnv({
+    ASSETS: { fetch: async () => new Response("asset") },
+    TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "7070707070" })
+  });
+  const sessionResponse = await worker.fetch(
+    await authenticatedRequest("https://finance.example/api/session", {}, "meet"),
+    env
+  );
+  assert.equal(sessionResponse.status, 200);
+  assert.deepEqual(await sessionResponse.json(), { username: "Meet", role: "transaction-reviewer" });
+
+  const dashboardResponse = await worker.fetch(
+    await authenticatedRequest("https://finance.example/api/dashboard", {}, "meet"),
+    env
+  );
+  assert.equal(dashboardResponse.status, 403);
+  assert.deepEqual(await dashboardResponse.json(), {
+    message: "This account can access bank transaction review only"
+  });
+});
 
 function authenticatedEnv(values: Record<string, unknown>): WorkerEnv {
   return { ...workerTestAuth, ...values } as never;

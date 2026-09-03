@@ -90,6 +90,7 @@ import type {
   CreateTransactionCategoryPayload,
   CurrencyTotals,
   DataSource,
+  DashboardSession,
   DashboardSnapshot,
   DeleteInvoicesPayload,
   DraftRevenueRunPayload,
@@ -122,6 +123,8 @@ import type {
   Team,
   Transaction,
   TransactionCategory,
+  TransactionReviewBootstrap,
+  TransactionReviewCompany,
   TransactionMatchFilter,
   TransactionPage,
   TransactionSortKey,
@@ -561,7 +564,7 @@ function providerTypeLabel(type: ProviderType): string {
   return labels[type];
 }
 
-function providerTagLabel(provider?: Provider): string {
+function providerTagLabel(provider?: Pick<Provider, "tags">): string {
   return provider?.tags.length ? provider.tags.join(" · ") : "No tags";
 }
 
@@ -715,6 +718,8 @@ function App() {
     return window.localStorage.getItem(themeStorageKey) === "dark" ? "dark" : "light";
   });
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
+  const [session, setSession] = useState<DashboardSession | null>(null);
+  const [transactionReview, setTransactionReview] = useState<TransactionReviewBootstrap | null>(null);
   const [activeTab, setActiveTab] = useUrlState<ActiveTab>("page", "overview", {
     allowedValues: activeTabs,
     history: "push"
@@ -816,6 +821,7 @@ function App() {
   const [transactionSortDirection, setTransactionSortDirection] = useUrlState<SortDirection>("bankOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
+  const isTransactionReviewer = session?.role === "transaction-reviewer";
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
@@ -823,12 +829,15 @@ function App() {
   }, [searchTerm]);
 
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
-    if (activeTab !== "banks" || bankTab === "holdings") return null;
-    const source = bankTab === "all"
-      ? allBankSource === "all" ? undefined : allBankSource
+    if ((!isTransactionReviewer && activeTab !== "banks") || (!isTransactionReviewer && bankTab === "holdings")) return null;
+    const effectiveBankTab: Exclude<BankTab, "holdings"> = isTransactionReviewer || bankTab === "holdings"
+      ? "all"
       : bankTab;
+    const source = effectiveBankTab === "all"
+      ? allBankSource === "all" ? undefined : allBankSource
+      : effectiveBankTab;
     const direction = bankDirection !== "all" ? bankDirection : undefined;
-    const dateRange = bankTab === "all"
+    const dateRange = effectiveBankTab === "all"
       ? allBankDateRange
       : source === "wise"
         ? wiseDateRange
@@ -877,7 +886,8 @@ function App() {
     transactionSortDirection,
     transactionSortKey,
     wiseDateRange,
-    wiseEntityView
+    wiseEntityView,
+    isTransactionReviewer
   ]);
   transactionPageRequestRef.current = transactionPageRequest;
   const [invoiceTransaction, setInvoiceTransaction] = useState<Transaction | null>(null);
@@ -928,7 +938,7 @@ function App() {
     return request;
   }, []);
 
-  const bankPeriodRange = activeTab === "banks" && bankTab !== "holdings"
+  const bankPeriodRange = !isTransactionReviewer && activeTab === "banks" && bankTab !== "holdings"
     ? transactionPageRequest?.dateRange ?? null
     : null;
   const bankPeriodRangeKey = bankPeriodRange ? analyticsSnapshotKey(bankPeriodRange) : null;
@@ -985,10 +995,31 @@ function App() {
     setDashboard((await response.json()) as DashboardSnapshot);
   }
 
+  async function loadApplication() {
+    setError(null);
+    const sessionResponse = await fetch(`${apiBase}/session`);
+    if (!sessionResponse.ok) {
+      throw new Error(await apiErrorMessage(sessionResponse, "Could not load account access"));
+    }
+    const nextSession = (await sessionResponse.json()) as DashboardSession;
+    setSession(nextSession);
+    if (nextSession.role === "transaction-reviewer") {
+      const reviewResponse = await fetch(`${apiBase}/transaction-review`);
+      if (!reviewResponse.ok) {
+        throw new Error(await apiErrorMessage(reviewResponse, "Could not load transaction review"));
+      }
+      setTransactionReview((await reviewResponse.json()) as TransactionReviewBootstrap);
+      setDashboard(null);
+      return;
+    }
+    setTransactionReview(null);
+    await loadDashboard();
+  }
+
   async function retryDashboard() {
     setIsLoading(true);
     try {
-      await loadDashboard();
+      await loadApplication();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load dashboard");
     } finally {
@@ -997,7 +1028,7 @@ function App() {
   }
 
   useEffect(() => {
-    loadDashboard()
+    loadApplication()
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not load dashboard"))
       .finally(() => setIsLoading(false));
   }, []);
@@ -1136,7 +1167,7 @@ function App() {
         isLoading: false,
         error: null
       });
-      if (navigation === "reset" && page.coverage?.some((item) => item.missingRanges.length > 0)) {
+      if (!isTransactionReviewer && navigation === "reset" && page.coverage?.some((item) => item.missingRanges.length > 0)) {
         const requests = page.coverage.flatMap((item) => {
           if (item.missingRanges.length === 0) return [];
           const fromDate = item.missingRanges.reduce(
@@ -1280,7 +1311,7 @@ function App() {
   );
 
   useEffect(() => {
-    if (bankActivityView === "transactions" || !transactionPageRequest) {
+    if (isTransactionReviewer || bankActivityView === "transactions" || !transactionPageRequest) {
       bankActivitySummaryAbortRef.current?.abort();
       if (!transactionPageRequest) {
         setBankActivitySummaryState({ requestKey: "", summary: null, isLoading: false, error: null });
@@ -1314,7 +1345,7 @@ function App() {
         }
       });
     return () => controller.abort();
-  }, [bankActivitySummaryRetry, bankActivityView !== "transactions", transactionPageRequest?.key]);
+  }, [bankActivitySummaryRetry, bankActivityView !== "transactions", transactionPageRequest?.key, isTransactionReviewer]);
 
   const bankActivitySummary = bankActivitySummaryState.requestKey === transactionPageRequest?.key
     ? bankActivitySummaryState.summary
@@ -1353,9 +1384,9 @@ function App() {
 
   const teamsById = useMemo(() => {
     const map = new Map<string, Team>();
-    for (const team of dashboard?.teams ?? []) map.set(team.id, team);
+    for (const team of dashboard?.teams ?? transactionReview?.teams ?? []) map.set(team.id, team);
     return map;
-  }, [dashboard?.teams]);
+  }, [dashboard?.teams, transactionReview?.teams]);
 
   const allBankTransactions = useMemo(() => {
     if (activeTab !== "banks" || bankTab !== "all") return [];
@@ -1580,15 +1611,20 @@ function App() {
       return;
     }
     setError(null);
-    const response = await fetch(`${apiBase}/matches`, {
+    const response = await fetch(
+      isTransactionReviewer
+        ? `${apiBase}/transactions/${encodeURIComponent(transaction.id)}/company`
+        : `${apiBase}/matches`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        transactionId: transaction.id,
-        providerId: selectedProviderId,
-        invoiceId: transaction.matchedInvoiceId,
-        scope
-      })
+      body: JSON.stringify(isTransactionReviewer
+        ? { providerId: selectedProviderId, scope }
+        : {
+          transactionId: transaction.id,
+          providerId: selectedProviderId,
+          invoiceId: transaction.matchedInvoiceId,
+          scope
+        })
     });
     if (!response.ok) {
       setError(await apiErrorMessage(response, "Match failed"));
@@ -2137,6 +2173,51 @@ function App() {
     );
   }
 
+  if (isTransactionReviewer && transactionReview && session) {
+    return (
+      <TransactionReviewerWorkspace
+        access={transactionReview}
+        dateRange={allBankDateRange}
+        direction={bankDirection}
+        error={error}
+        hasMore={hasMoreTransactions}
+        hasPrevious={hasPreviousTransactions}
+        isLoading={isLoadingTransactionPage}
+        loadError={transactionPageError}
+        match={matchFilter}
+        notice={notice}
+        onAssignTeam={assignTransactionTeam}
+        onDismissMessage={() => (error ? setError(null) : setNotice(null))}
+        onLoadMore={loadNextTransactionPage}
+        onLoadPrevious={loadPreviousTransactionPage}
+        onMatch={matchTransaction}
+        onUpdateCategory={updateTransactionCategory}
+        searchTerm={searchTerm}
+        session={session}
+        setAccount={setBankAccountFilter}
+        setCategory={setBankCategoryFilter}
+        setDateRange={setAllBankDateRange}
+        setDirection={setBankDirection}
+        setMatch={setMatchFilter}
+        setSearchTerm={setSearchTerm}
+        setSortDirection={setTransactionSortDirection}
+        setSortKey={setTransactionSortKey}
+        setSource={setAllBankSource}
+        setTeam={setTeamFilter}
+        sortDirection={transactionSortDirection}
+        sortKey={transactionSortKey}
+        source={allBankSource}
+        team={teamFilter}
+        category={bankCategoryFilter}
+        account={bankAccountFilter}
+        themeMode={themeMode}
+        toggleThemeMode={toggleThemeMode}
+        totalCount={transactionPageIsCurrent ? transactionPageState.totalCount : undefined}
+        transactions={loadedBankTransactions}
+      />
+    );
+  }
+
   if (!dashboard) {
     return (
       <main className="loading-screen" role="alert" aria-live="assertive">
@@ -2590,6 +2671,246 @@ function App() {
           }}
         />
       )}
+      </div>
+    </main>
+  );
+}
+
+function TransactionReviewerWorkspace({
+  access,
+  account,
+  category,
+  dateRange,
+  direction,
+  error,
+  hasMore,
+  hasPrevious,
+  isLoading,
+  loadError,
+  match,
+  notice,
+  onAssignTeam,
+  onDismissMessage,
+  onLoadMore,
+  onLoadPrevious,
+  onMatch,
+  onUpdateCategory,
+  searchTerm,
+  session,
+  setAccount,
+  setCategory,
+  setDateRange,
+  setDirection,
+  setMatch,
+  setSearchTerm,
+  setSortDirection,
+  setSortKey,
+  setSource,
+  setTeam,
+  sortDirection,
+  sortKey,
+  source,
+  team,
+  themeMode,
+  toggleThemeMode,
+  totalCount,
+  transactions
+}: {
+  access: TransactionReviewBootstrap;
+  account: string;
+  category: string;
+  dateRange: BankTransactionDateRange;
+  direction: "all" | "in" | "out";
+  error: string | null;
+  hasMore: boolean;
+  hasPrevious: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  match: TransactionMatchFilter;
+  notice: string | null;
+  onAssignTeam: (transaction: Transaction, teamId?: string) => Promise<void>;
+  onDismissMessage: () => void;
+  onLoadMore: () => Promise<void>;
+  onLoadPrevious: () => Promise<void>;
+  onMatch: (transaction: Transaction, providerId?: string, scope?: TransactionOverrideScope) => Promise<void>;
+  onUpdateCategory: (transaction: Transaction, category: string, scope?: TransactionOverrideScope) => Promise<void>;
+  searchTerm: string;
+  session: DashboardSession;
+  setAccount: (value: string) => void;
+  setCategory: (value: string) => void;
+  setDateRange: (value: BankTransactionDateRange) => void;
+  setDirection: (value: "all" | "in" | "out") => void;
+  setMatch: (value: TransactionMatchFilter) => void;
+  setSearchTerm: (value: string) => void;
+  setSortDirection: (value: SortDirection) => void;
+  setSortKey: (value: TransactionSortKey) => void;
+  setSource: (value: "all" | BankSource) => void;
+  setTeam: (value: string) => void;
+  sortDirection: SortDirection;
+  sortKey: TransactionSortKey;
+  source: "all" | BankSource;
+  team: string;
+  themeMode: ThemeMode;
+  toggleThemeMode: () => void;
+  totalCount?: number;
+  transactions: Transaction[];
+}) {
+  const companiesById = useMemo(
+    () => new Map(access.companies.map((company) => [company.id, company])),
+    [access.companies]
+  );
+  const accountOptions = useMemo(
+    () => access.accounts
+      .filter((item) => source === "all" || item.source === source)
+      .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
+    [access.accounts, source]
+  );
+
+  useEffect(() => {
+    if (account !== "all" && !accountOptions.some((item) => item.id === account)) setAccount("all");
+  }, [account, accountOptions, setAccount]);
+
+  const filters: ActiveFilter[] = [
+    ...(source === "all" ? [] : [{ key: "source", label: `Source: ${sourceLabel(source)}`, onRemove: () => setSource("all") }]),
+    ...(account === "all" ? [] : [{ key: "account", label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`, onRemove: () => setAccount("all") }]),
+    ...(direction === "all" ? [] : [{ key: "direction", label: `Direction: ${direction === "in" ? "Money in" : "Money out"}`, onRemove: () => setDirection("all") }]),
+    ...(category === "all" ? [] : [{ key: "category", label: `Category: ${category}`, onRemove: () => setCategory("all") }]),
+    ...(match === "all" ? [] : [{ key: "match", label: match === "matched" ? "Status: Categorized" : "Status: Needs category", onRemove: () => setMatch("all") }]),
+    ...(team === "all" ? [] : [{ key: "team", label: `Owner: ${team === "unassigned" ? "Unassigned" : access.teams.find((item) => item.id === team)?.name ?? team}`, onRemove: () => setTeam("all") }])
+  ];
+
+  function requestSort(nextSortKey: TransactionSortKey) {
+    if (nextSortKey === sortKey) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSortKey(nextSortKey);
+    setSortDirection("asc");
+  }
+
+  return (
+    <main className="transaction-reviewer-shell">
+      <header className="transaction-reviewer-header">
+        <div className="transaction-reviewer-brand">
+          <Banknote aria-hidden="true" size={19} />
+          <div><strong>Finance</strong><span>Transaction review</span></div>
+        </div>
+        <div className="transaction-reviewer-account">
+          <span>{session.username}</span>
+          <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
+          <a className="secondary-button transaction-reviewer-logout" href="/logout"><LogOut aria-hidden="true" size={15} /> Log out</a>
+        </div>
+      </header>
+      <div className="transaction-reviewer-content">
+        {(error || notice) && (
+          <div className={error ? "toast error" : "toast"} role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"}>
+            {error ? <CircleAlert size={16} /> : <Check size={16} />}
+            <span>{error || notice}</span>
+            <Button aria-label="Dismiss" onClick={onDismissMessage}><X size={14} /></Button>
+          </div>
+        )}
+        <section className="panel wide-panel transaction-reviewer-panel">
+          <div className="panel-header compact transaction-reviewer-panel-header">
+            <div><p className="eyebrow">Bank transactions</p><h2>Review and correct</h2></div>
+            <div className="list-toolbar transaction-reviewer-toolbar">
+              <div className="list-toolbar-main">
+                <ToolbarSearchField
+                  ariaLabel="Search bank transactions"
+                  className="bank-toolbar-search"
+                  placeholder="Search transactions"
+                  value={searchTerm}
+                  onChange={setSearchTerm}
+                />
+                <FilterPopover activeCount={filters.length} title="Transaction filters">
+                  <FilterFieldGroup title="Transaction">
+                    <label>Source
+                      <NativeSelect aria-label="Filter transactions by source" value={source} onValueChange={(value) => setSource(value as "all" | BankSource)}>
+                        <NativeSelectOption value="all">All sources</NativeSelectOption>
+                        {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
+                      </NativeSelect>
+                    </label>
+                    <label>Account
+                      <NativeSelect aria-label="Filter transactions by account" value={account} onValueChange={setAccount}>
+                        <NativeSelectOption value="all">All accounts</NativeSelectOption>
+                        {accountOptions.map((item) => <NativeSelectOption key={item.id} value={item.id}>{source === "all" ? `${sourceLabel(item.source)} · ${item.name}` : item.name}</NativeSelectOption>)}
+                      </NativeSelect>
+                    </label>
+                    <label>Direction
+                      <NativeSelect aria-label="Filter transactions by direction" value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}>
+                        <NativeSelectOption value="all">Money in & out</NativeSelectOption>
+                        <NativeSelectOption value="in">Money in</NativeSelectOption>
+                        <NativeSelectOption value="out">Money out</NativeSelectOption>
+                      </NativeSelect>
+                    </label>
+                    <label>Status
+                      <NativeSelect aria-label="Filter transactions by category status" value={match} onValueChange={(value) => setMatch(value as TransactionMatchFilter)}>
+                        <NativeSelectOption value="all">All transactions</NativeSelectOption>
+                        <NativeSelectOption value="matched">Categorized</NativeSelectOption>
+                        <NativeSelectOption value="needs-review">Needs category</NativeSelectOption>
+                      </NativeSelect>
+                    </label>
+                    <label>Category
+                      <NativeSelect aria-label="Filter transactions by category" value={category} onValueChange={setCategory}>
+                        <NativeSelectOption value="all">All categories</NativeSelectOption>
+                        {[...access.categories].sort((left, right) => left.name.localeCompare(right.name)).map((item) => <NativeSelectOption key={item.id} value={item.name}>{item.name}</NativeSelectOption>)}
+                      </NativeSelect>
+                    </label>
+                    <label>Owner
+                      <NativeSelect aria-label="Filter transactions by owner" value={team} onValueChange={setTeam}>
+                        <NativeSelectOption value="all">All owners</NativeSelectOption>
+                        <NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
+                        {access.teams.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>)}
+                      </NativeSelect>
+                    </label>
+                  </FilterFieldGroup>
+                </FilterPopover>
+              </div>
+              <BankDateRangeControls
+                dateRange={dateRange}
+                isLoading={isLoading}
+                onLoad={async (value) => setDateRange(value)}
+                windowDays={revolutDefaultActivityWindowDays}
+              />
+            </div>
+          </div>
+          <ActiveFilterBar
+            filters={filters}
+            resultLabel={totalCount === undefined ? `${transactions.length} transactions on this page` : `${transactions.length} of ${totalCount.toLocaleString("en-US")} matching transactions`}
+            onClearAll={() => {
+              setSource("all");
+              setAccount("all");
+              setDirection("all");
+              setCategory("all");
+              setMatch("all");
+              setTeam("all");
+            }}
+          />
+          <TransactionTable
+            categories={access.categories}
+            expenses={[]}
+            hasMore={hasMore}
+            hasPrevious={hasPrevious}
+            isLoading={isLoading}
+            loadError={loadError}
+            onAssignTeam={onAssignTeam}
+            onLoadMore={onLoadMore}
+            onLoadPrevious={onLoadPrevious}
+            onMatch={onMatch}
+            onMatchInvoice={() => undefined}
+            onOpenInvoice={() => undefined}
+            onSort={requestSort}
+            onUpdateCategory={onUpdateCategory}
+            providers={access.companies}
+            providersById={companiesById}
+            reviewMode
+            rows={transactions}
+            sortDirection={sortDirection}
+            sortKey={sortKey}
+            source="all"
+            teams={access.teams}
+            totalCount={totalCount}
+          />
+        </section>
       </div>
     </main>
   );
@@ -6046,14 +6367,15 @@ function TransactionTable({
   onLoadPrevious,
   onLoadMore,
   showWiseEntity = false,
-  source
+  source,
+  reviewMode = false
 }: {
   rows: Transaction[];
   expenses: ExpenseRecord[];
   categories: TransactionCategory[];
   teams: Team[];
-  providers: Provider[];
-  providersById: Map<string, Provider>;
+  providers: readonly TransactionReviewCompany[];
+  providersById: ReadonlyMap<string, TransactionReviewCompany>;
   sortKey: TransactionSortKey;
   sortDirection: SortDirection;
   onSort: (sortKey: TransactionSortKey) => void;
@@ -6070,7 +6392,8 @@ function TransactionTable({
   onLoadPrevious: () => Promise<void>;
   onLoadMore: () => Promise<void>;
   showWiseEntity?: boolean;
-  source: BankSource;
+  source: BankSource | "all";
+  reviewMode?: boolean;
 }) {
   const [detailPopover, setDetailPopover] = useState<TransactionDetailPopover | null>(null);
   const [pendingOverride, setPendingOverride] = useState<
@@ -6241,18 +6564,22 @@ function TransactionTable({
       <table className="data-table activity-table transaction-table">
         <colgroup>
           <col className="transaction-date-col" />
+          {source === "all" && <col className="transaction-source-col" />}
           <col className="transaction-counterparty-col" />
           <col className="transaction-direction-col" />
           <col className="transaction-amount-col" />
           <col className="transaction-team-col" />
           <col className="transaction-category-col" />
           <col className="transaction-company-col" />
-          <col className="transaction-document-col" />
-          <col className="transaction-actions-col" />
+          {!reviewMode && <col className="transaction-document-col" />}
+          {!reviewMode && <col className="transaction-actions-col" />}
         </colgroup>
         <thead>
           <tr>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="date">Date</SortableTableHead>
+            {source === "all" && (
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="source">Source</SortableTableHead>
+            )}
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
             <SortableTableHead
               activeSortKey={sortKey}
@@ -6297,8 +6624,10 @@ function TransactionTable({
             >
               <>Company <span className="column-note">Optional</span></>
             </SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="document">Document</SortableTableHead>
-            <th scope="col">Actions</th>
+            {!reviewMode && (
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="document">Document</SortableTableHead>
+            )}
+            {!reviewMode && <th scope="col">Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -6338,6 +6667,9 @@ function TransactionTable({
               return (
                 <tr key={transaction.id}>
                   <td>{dateLabel(transaction.date)}</td>
+                  {source === "all" && (
+                    <td><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span></td>
+                  )}
                   <td className="counterparty-cell">
                     <div className="transaction-counterparty-heading">
                       {showWiseEntity && transaction.wiseEntity && (
@@ -6443,7 +6775,7 @@ function TransactionTable({
                       {!nonOperatingMovement && provider && <small>{providerTagLabel(provider)}</small>}
                     </div>
                   </td>
-                  <td>
+                  {!reviewMode && <td>
                     {nonOperatingMovement ? (
                       <span className="status-pill">Not required</span>
                     ) : transaction.matchedInvoiceId || expense ? (
@@ -6451,21 +6783,21 @@ function TransactionTable({
                     ) : (
                       <div className="transaction-document-match"><span className="status-pill">None</span>{transaction.invoiceMatchSource === "manual" && <small>Manual override</small>}</div>
                     )}
-                  </td>
-                  <td>
+                  </td>}
+                  {!reviewMode && <td>
                     <div className="row-actions">
                       {transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}
                       <Button className="icon-button" title={documentTitle} disabled={nonOperatingMovement || Boolean(expense)} onClick={() => onOpenInvoice(transaction)}>
                         {transaction.direction === "in" ? <FilePlus2 size={16} /> : <ReceiptText size={16} />}
                       </Button>
                     </div>
-                  </td>
+                  </td>}
                 </tr>
               );
             })
           ) : (
             <tr>
-              <td colSpan={10}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td>
+              <td colSpan={7 + (source === "all" ? 1 : 0) + (reviewMode ? 0 : 2)}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td>
             </tr>
           )}
         </tbody>

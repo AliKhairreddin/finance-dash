@@ -42,6 +42,13 @@ export type CurrencyTotals = Record<string, number>;
 
 export type SlashAccountSubtype = "cash" | "credit";
 
+export type DashboardAccessRole = "administrator" | "transaction-reviewer";
+
+export interface DashboardSession {
+  username: string;
+  role: DashboardAccessRole;
+}
+
 export interface AccountBalance {
   id: string;
   name: string;
@@ -324,6 +331,26 @@ export interface TransactionCategory {
   system: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TransactionReviewAccount {
+  id: string;
+  name: string;
+  source: BankTransactionSource;
+}
+
+export interface TransactionReviewCompany {
+  id: string;
+  name: string;
+  type: ProviderType;
+  tags: string[];
+}
+
+export interface TransactionReviewBootstrap {
+  accounts: TransactionReviewAccount[];
+  companies: TransactionReviewCompany[];
+  teams: Team[];
+  categories: TransactionCategory[];
 }
 
 export interface Invoice {

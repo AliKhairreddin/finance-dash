@@ -214,7 +214,12 @@ import {
   buildBankAnalyticsPageBudget,
   createBankAnalyticsJobIdentity
 } from "../shared/analyticsJob";
-import { enforceSiteAuthentication } from "./auth";
+import { transactionReviewBootstrap } from "../shared/transactionReview";
+import {
+  enforceSiteAuthentication,
+  getDashboardSession,
+  transactionReviewerCanAccess
+} from "./auth";
 import { pollTelegramOnboarding } from "./telegram";
 import {
   appendAmexCursorFingerprint,
@@ -4771,7 +4776,11 @@ async function autoCategorizeStoredTransactions(
     ?? { semanticMatches: 0, aiMatches: 0, categorizedOnly: 0, reviewed: 0 };
 }
 
-async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
+async function matchTransaction(
+  env: Env,
+  payload: MatchTransactionPayload,
+  preserveInvoiceMatch = false
+) {
   const state = await loadPersisted(env);
   const transaction = await fetchTransactionForMatch(env, payload.transactionId, state);
   const provider = state.providers.find((item) => item.id === payload.providerId);
@@ -4784,7 +4793,7 @@ async function matchTransaction(env: Env, payload: MatchTransactionPayload) {
   const matchedTransaction: Transaction = {
     ...transaction,
     matchedProviderId: payload.providerId,
-    matchedInvoiceId: payload.invoiceId,
+    matchedInvoiceId: preserveInvoiceMatch ? transaction.matchedInvoiceId : payload.invoiceId,
     companyMatchSource: "manual",
     companyConfidence: 1,
     companyMatchReason: "Approved company match",
@@ -7007,6 +7016,29 @@ async function handleApi(
       return json(await matchTransaction(env, (await request.json()) as MatchTransactionPayload));
     }
 
+    const transactionCompanyMatch = url.pathname.match(/^\/api\/transactions\/([^/]+)\/company$/);
+    if (transactionCompanyMatch && request.method === "POST") {
+      const body: unknown = await request.json();
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new ApiError(400, "A company selection is required");
+      }
+      const providerId = "providerId" in body && typeof body.providerId === "string"
+        ? body.providerId.trim()
+        : "";
+      const scope = "scope" in body ? body.scope : undefined;
+      if (!providerId || providerId.length > 256) {
+        throw new ApiError(400, "A valid company selection is required");
+      }
+      if (scope !== undefined && scope !== "transaction" && scope !== "merchant") {
+        throw new ApiError(400, "Company update scope must be transaction or merchant");
+      }
+      return json(await matchTransaction(env, {
+        transactionId: decodeURIComponent(transactionCompanyMatch[1]),
+        providerId,
+        scope: scope === "merchant" ? "merchant" : "transaction"
+      }, true));
+    }
+
     if (url.pathname === "/api/transactions/auto-categorize" && request.method === "POST") {
       return json(await autoCategorizeTransactions(env, ((await request.json()) ?? {}) as AutoCategorizeTransactionsPayload));
     }
@@ -7158,6 +7190,19 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
+      const session = await getDashboardSession(request, env);
+      if (!session) {
+        return json({ message: "Authentication required" }, { status: 401 });
+      }
+      if (session.role === "transaction-reviewer" && !transactionReviewerCanAccess(request)) {
+        return json({ message: "This account can access bank transaction review only" }, { status: 403 });
+      }
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        return json(session);
+      }
+      if (url.pathname === "/api/transaction-review" && request.method === "GET") {
+        return json(transactionReviewBootstrap(await getSnapshot(env)));
+      }
       return handleApi(request, env, executionContext);
     }
     return env.ASSETS.fetch(request);

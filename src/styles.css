@@ -11140,6 +11140,125 @@ body {
   }
 }
 
+.transaction-reviewer-shell {
+  min-height: 100vh;
+  background: var(--app-bg);
+}
+
+.transaction-reviewer-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.transaction-reviewer-brand,
+.transaction-reviewer-account,
+.transaction-reviewer-logout {
+  display: flex;
+  align-items: center;
+}
+
+.transaction-reviewer-brand {
+  gap: 9px;
+}
+
+.transaction-reviewer-brand > div {
+  display: grid;
+  gap: 1px;
+}
+
+.transaction-reviewer-brand strong {
+  font-size: 0.9rem;
+}
+
+.transaction-reviewer-brand span,
+.transaction-reviewer-account > span {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+}
+
+.transaction-reviewer-account {
+  gap: 10px;
+}
+
+.transaction-reviewer-logout {
+  gap: 6px;
+  min-height: 34px;
+  text-decoration: none;
+}
+
+.transaction-reviewer-content {
+  width: min(100%, 1680px);
+  margin: 0 auto;
+  padding: 14px;
+}
+
+.transaction-reviewer-panel {
+  overflow: hidden;
+}
+
+.transaction-reviewer-panel-header {
+  align-items: center;
+  gap: 14px;
+}
+
+.transaction-reviewer-panel-header > div:first-child {
+  flex: 0 0 auto;
+}
+
+.transaction-reviewer-panel-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.transaction-reviewer-toolbar {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.transaction-source-col {
+  width: 92px;
+}
+
+@media (max-width: 760px) {
+  .transaction-reviewer-header,
+  .transaction-reviewer-panel-header,
+  .transaction-reviewer-toolbar {
+    align-items: stretch;
+  }
+
+  .transaction-reviewer-header,
+  .transaction-reviewer-panel-header {
+    display: grid;
+  }
+
+  .transaction-reviewer-account {
+    justify-content: space-between;
+  }
+
+  .transaction-reviewer-account > span {
+    display: none;
+  }
+
+  .transaction-reviewer-toolbar,
+  .transaction-reviewer-toolbar .list-toolbar-main {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 360px) {
   .modal-actions,
   .invoice-editor-modal .modal-actions {

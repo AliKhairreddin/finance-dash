@@ -12,7 +12,9 @@ type TelegramEnv = Pick<
   | "TELEGRAM_AUTH_USERS_JSON"
   | "TELEGRAM_BOT_TOKEN"
   | "TELEGRAM_OTP_STATE"
->;
+> & {
+  TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
+};
 
 interface TelegramApiEnvelope {
   ok: boolean;
@@ -285,13 +287,23 @@ function onboardingReply(message: TelegramPrivateMessage, users: TelegramAuthUse
 }
 
 export async function pollTelegramUpdates(
-  env: Pick<TelegramEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN">,
+  env: Pick<TelegramEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN" | "TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON">,
   offset: number,
   dependencies: TelegramPollingDependencies = {}
 ): Promise<{ nextOffset: number; processed: number }> {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Telegram update offset was invalid");
-  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
-  if (!users) throw new Error("Telegram user mapping was invalid");
+  const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  const transactionReviewerUsers = env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?.trim()
+    ? parseTelegramAuthUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON)
+    : [];
+  if (!administratorUsers || !transactionReviewerUsers) throw new Error("Telegram user mapping was invalid");
+  const users = [...administratorUsers, ...transactionReviewerUsers];
+  if (
+    new Set(users.map((user) => user.normalizedUsername)).size !== users.length
+    || new Set(users.map((user) => user.chatId)).size !== users.length
+  ) {
+    throw new Error("Telegram user mapping was invalid");
+  }
   const values = await (dependencies.getUpdates ?? getTelegramUpdates)(env, offset);
   let nextOffset = offset;
   let processed = 0;

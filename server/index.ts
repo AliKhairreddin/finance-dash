@@ -55,6 +55,7 @@ import {
 import { parseSlashTransactionDateRange } from "../shared/slashApi";
 import { transactionBusinessCategory } from "../shared/categories";
 import { financeOperatingDate } from "../shared/operatingDate";
+import { transactionReviewBootstrap } from "../shared/transactionReview";
 import {
   assignTransactionTeam,
   autoMatchInvoicePayments,
@@ -207,6 +208,14 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true, service: "finance-dash-api", time: new Date().toISOString() });
+});
+
+app.get("/api/session", (_request, response) => {
+  response.json({ username: "Local developer", role: "administrator" });
+});
+
+app.get("/api/transaction-review", (_request, response) => {
+  response.json(transactionReviewBootstrap(getSnapshot()));
 });
 
 app.get("/api/dashboard", (_request, response) => {
@@ -717,6 +726,28 @@ app.post("/api/matches", async (request, response, next) => {
       return;
     }
     response.json(await matchTransaction(payload));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/transactions/:transactionId/company", async (request, response, next) => {
+  try {
+    const providerId = typeof request.body?.providerId === "string" ? request.body.providerId.trim() : "";
+    const scope = request.body?.scope;
+    if (!providerId || providerId.length > 256) {
+      response.status(400).json({ message: "A valid company selection is required" });
+      return;
+    }
+    if (scope !== undefined && scope !== "transaction" && scope !== "merchant") {
+      response.status(400).json({ message: "Company update scope must be transaction or merchant" });
+      return;
+    }
+    response.json(await matchTransaction({
+      transactionId: request.params.transactionId,
+      providerId,
+      scope: scope === "merchant" ? "merchant" : "transaction"
+    }, true));
   } catch (error) {
     next(error);
   }
