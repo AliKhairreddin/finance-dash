@@ -31,7 +31,7 @@ const invoice: Invoice = {
   updatedAt: "2026-07-20T00:00:00.000Z"
 };
 
-test("configured Wise reports live balances while documenting manual activity imports", () => {
+test("configured Wise reports automatic balance and transaction sync", () => {
   const previousToken = process.env.WISE_API_TOKEN;
   const previousProfileIds = process.env.WISE_PROFILE_IDS;
   try {
@@ -45,7 +45,7 @@ test("configured Wise reports live balances while documenting manual activity im
     assert.equal(wise?.issue, undefined);
     assert.equal(
       wise?.message,
-      "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
+      "Balances and transactions are saved in Convex and refreshed incrementally every 5 minutes or on Sync."
     );
   } finally {
     if (previousToken === undefined) delete process.env.WISE_API_TOKEN;

@@ -172,7 +172,7 @@ export function getIntegrationStatus(
       message:
         activeWiseIssue ??
         (wiseNeeds.length === 0
-          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
+          ? "Balances and transactions are saved in Convex and refreshed incrementally every 5 minutes or on Sync."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: activeWiseIssue

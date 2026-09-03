@@ -150,8 +150,9 @@ import {
 } from "../shared/slashApi";
 import {
   emptyWiseActivity,
-  fetchWiseBalancesForAccessibleBusinesses,
+  fetchWiseActivityBatch,
   parseWiseProfileIds,
+  summarizeWiseStatementIssues,
   type WiseActivityResult
 } from "../shared/wiseApi";
 import {
@@ -340,6 +341,7 @@ interface BankBackfillJob {
 
 const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
 export const automaticTransactionBankSources: readonly BankTransactionSource[] = [
+  "wise",
   "revolut",
   "slash",
   "amex"
@@ -3076,7 +3078,7 @@ function integrationStatus(
       message:
         wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Balances sync automatically. Transactions and statements are imported manually from Wise CSVs."
+          ? "Balances and transactions are saved in Convex and refreshed incrementally every 5 minutes or on Sync."
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
@@ -3609,20 +3611,57 @@ async function syncSlashActivity(
   });
 }
 
-async function syncWiseActivity(env: Env): Promise<boolean> {
+async function syncWiseActivity(
+  env: Env,
+  requestedRange?: SlashTransactionDateRange,
+  laneKey = "live",
+  pageBudget = 10
+): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "wise");
   return withBankSyncLease(env, "wise", connectionKey, async (lease) => {
-    const activity = await fetchWiseBalancesForAccessibleBusinesses({
+    const storedCheckpoint = await bankSyncCheckpoint(env, "wise", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range = storedCheckpoint
+      ?? requestedRange
+      ?? incrementalBankDateRange(await bankSyncState(env, "wise", connectionKey));
+    const activity = await fetchWiseActivityBatch({
       baseUrl: wiseBaseUrl(env),
       token: env.WISE_API_TOKEN,
-      profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS)
+      profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS),
+      ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+      pageBudget,
+      collectTransactions: false,
+      onAccountsDiscovered: async (accounts) => {
+        await registerDiscoveredBankAccountSet(
+          env,
+          "wise",
+          laneKey,
+          storedCheckpoint,
+          accounts,
+          lease
+        );
+      },
+      onTransactionPage: async (transactions) => {
+        await upsertSyncedLedgerTransactions(env, "wise", transactions, lease);
+      }
     });
-    await persistBankAccountSnapshot(
+    await persistCheckpointedBankSync(
       env,
       "wise",
-      activity.accounts,
-      lease
+      range,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
     );
+    const statementIssue = summarizeWiseStatementIssues(activity.statementIssues);
+    if (statementIssue) throw new Error(statementIssue);
+    return activity.complete;
   });
 }
 
@@ -3705,8 +3744,8 @@ async function syncLatestBankActivity(
   const laneKey = options.dateRange
     ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
     : "live";
-  if (!options.dateRange && includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
-    jobs.push({ source: "wise", run: syncWiseActivity(env) });
+  if (includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
+    jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange, laneKey) });
   }
   if (
     includes("revolut")
@@ -3764,7 +3803,7 @@ async function syncBankSourceRange(
   range: SlashTransactionDateRange,
   laneKey: string
 ): Promise<boolean> {
-  if (source === "wise") throw new Error("Wise transaction history is imported manually from CSV");
+  if (source === "wise") return syncWiseActivity(env, range, laneKey, 1);
   if (source === "revolut") return syncRevolutActivity(env, range, laneKey, 1);
   if (source === "slash") return syncSlashActivity(env, range, laneKey, 1);
   return syncAmexActivity(env, range, laneKey, 1);
@@ -3775,9 +3814,6 @@ async function enqueueBankBackfill(
   source: BankTransactionSource,
   range: SlashTransactionDateRange
 ): Promise<BankBackfillJob> {
-  if (source === "wise") {
-    throw new ApiError(409, "Wise transaction history is imported manually from CSV");
-  }
   if (!bankSourceConfigured(env, source)) {
     throw new ApiError(409, `${source} is not configured for transaction sync`);
   }

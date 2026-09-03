@@ -19,8 +19,8 @@ import worker, {
   mergeInvoices
 } from "./handler";
 
-test("automatic bank transaction sync excludes manual Wise imports", () => {
-  assert.deepEqual(automaticTransactionBankSources, ["revolut", "slash", "amex"]);
+test("automatic bank transaction sync includes every configured bank", () => {
+  assert.deepEqual(automaticTransactionBankSources, ["wise", "revolut", "slash", "amex"]);
 });
 
 test("saved Wise balance accounts do not depend on a transaction sync record", () => {

@@ -200,7 +200,7 @@ A local `.xlsx` path is also accepted. Imports are idempotent by workbook conten
 
 ## Wise Statement Imports
 
-Wise balances are discovered automatically across the configured business profiles. When a profile does not expose its live statement feed, CSV import remains the supported reconciliation path:
+Wise balances and transactions are synchronized automatically every five minutes across the configured business profiles. The sync resumes from durable checkpoints, rereads a short overlap window for late provider changes, and deduplicates transactions by their Wise balance-scoped provider reference. CSV import remains available for historical recovery:
 
 - export one statement per currency balance;
 - keep Wise's original `statement_<balanceId>_<currency>_...csv` filename so the dashboard can verify the balance against the live Digital Nudge or Love Me Do profile;
@@ -219,7 +219,7 @@ Eligible Slash card purchases retain the API's native cashback amount and rate. 
 
 | Integration | Current role |
 | --- | --- |
-| Wise | Selected multi-business balance discovery; live statements when permitted, with CSV statement import for restricted profiles |
+| Wise | Selected multi-business balance and transaction sync with durable checkpoints; CSV statement import for historical recovery |
 | Revolut | Read-only Business API adapter with runtime RS256 client assertions; requires certificate authorization |
 | Slash | Account/transaction adapter prepared; requires API access |
 | Amex | OAuth and account/transaction adapter prepared; requires approved API access |
