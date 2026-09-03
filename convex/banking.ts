@@ -1126,7 +1126,7 @@ export const getSlashMetadataRepairRange = query({
       );
     const unverifiedVirtualAccountQuery = () => ctx.db
       .query("bankTransactions")
-      .withIndex("by_source_connection_slash_virtual_account_metadata_version_date_id", (q) =>
+      .withIndex("by_source_connection_slash_virtual_version_date_id", (q) =>
         q.eq("source", "slash")
           .eq("connectionKey", args.connectionKey)
           .eq("slashVirtualAccountMetadataVersion", undefined)

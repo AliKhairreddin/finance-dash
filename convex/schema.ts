@@ -619,7 +619,7 @@ export default defineSchema({
       "date",
       "id"
     ])
-    .index("by_source_connection_slash_virtual_account_metadata_version_date_id", [
+    .index("by_source_connection_slash_virtual_version_date_id", [
       "source",
       "connectionKey",
       "slashVirtualAccountMetadataVersion",
