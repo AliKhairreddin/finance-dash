@@ -18,6 +18,21 @@ export interface MediaSpendRow {
   syncedAt: string;
 }
 
+export interface MediaSpendAccountGroup {
+  accountId: string;
+  accountName?: string;
+  businessManagerId: string;
+  businessManagerName?: string;
+  currency: string;
+  dayCount: number;
+  key: string;
+  platform: string;
+  rows: MediaSpendRow[];
+  searchText: string;
+  spend: number;
+  workspaces: number[];
+}
+
 export type MediaSpendSyncStatus = "never" | "running" | "healthy" | "failed";
 
 export interface MediaSpendSyncState {
@@ -219,4 +234,46 @@ export function summarizeMediaSpend(rows: readonly MediaSpendRow[]): MediaSpendS
     businessManagers: new Set(rows.map((row) => `${row.platform}:${row.businessManagerId}`)).size,
     accounts: new Set(rows.map((row) => `${row.platform}:${row.accountId}`)).size
   };
+}
+
+export function groupMediaSpendByAccount(rows: readonly MediaSpendRow[]): MediaSpendAccountGroup[] {
+  const groups = new Map<string, MediaSpendRow[]>();
+  for (const row of rows) {
+    const key = [row.platform, row.accountId].map(encodeURIComponent).join(":");
+    const existing = groups.get(key) ?? [];
+    existing.push(row);
+    groups.set(key, existing);
+  }
+
+  return [...groups.entries()].map(([key, accountRows]) => {
+    const latestRow = [...accountRows].sort((left, right) =>
+      right.date.localeCompare(left.date) || right.key.localeCompare(left.key)
+    )[0];
+    const searchTerms = new Set<string>();
+    const workspaces = new Set<number>();
+    for (const row of accountRows) {
+      searchTerms.add(row.accountId);
+      if (row.accountName) searchTerms.add(row.accountName);
+      searchTerms.add(row.businessManagerId);
+      if (row.businessManagerName) searchTerms.add(row.businessManagerName);
+      searchTerms.add(row.platform);
+      searchTerms.add(String(row.workspace));
+      workspaces.add(row.workspace);
+    }
+
+    return {
+      accountId: latestRow.accountId,
+      ...(latestRow.accountName ? { accountName: latestRow.accountName } : {}),
+      businessManagerId: latestRow.businessManagerId,
+      ...(latestRow.businessManagerName ? { businessManagerName: latestRow.businessManagerName } : {}),
+      currency: latestRow.currency,
+      dayCount: new Set(accountRows.map((row) => row.date)).size,
+      key,
+      platform: latestRow.platform,
+      rows: accountRows,
+      searchText: [...searchTerms].join(" ").toLowerCase(),
+      spend: accountRows.reduce((total, row) => total + row.spend, 0),
+      workspaces: [...workspaces].sort((left, right) => left - right)
+    };
+  });
 }

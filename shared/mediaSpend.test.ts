@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  groupMediaSpendByAccount,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummary,
+  parseLemonMaxSpendSummaryRange,
   summarizeMediaSpend,
   validateMediaSpendDateRange
 } from "./mediaSpend";
@@ -74,6 +76,31 @@ test("keeps spend rows when LemonMax omits display names", () => {
   assert.equal(rows[0].businessManagerName, undefined);
   assert.equal(rows[0].accountName, undefined);
   assert.equal(rows[0].spend, 3119.71);
+});
+
+test("groups daily spend into one row per platform ad account", () => {
+  const rows = parseLemonMaxSpendSummaryRange({
+    ...response,
+    data: [
+      response.data[0],
+      {
+        ...response.data[0],
+        Workspace: 2,
+        Date: "2026-08-02",
+        Spend: 880.29
+      },
+      response.data[1]
+    ]
+  }, "2026-08-01", "2026-08-02", "USD", "2026-08-03T08:30:00.000Z");
+
+  const groups = groupMediaSpendByAccount(rows);
+  assert.equal(groups.length, 2);
+  const groupedAccount = groups.find((group) => group.accountId === "1328654684466184");
+  assert.ok(groupedAccount);
+  assert.equal(groupedAccount.dayCount, 2);
+  assert.equal(groupedAccount.rows.length, 2);
+  assert.equal(groupedAccount.spend, 4000);
+  assert.deepEqual(groupedAccount.workspaces, [1, 2]);
 });
 
 test("uses India calendar time when selecting yesterday", () => {

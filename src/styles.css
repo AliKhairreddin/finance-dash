@@ -353,6 +353,58 @@
   white-space: nowrap;
 }
 
+.media-spend-account-row {
+  cursor: pointer;
+}
+
+.media-spend-account-row .counterparty-cell {
+  min-width: 250px;
+}
+
+.media-spend-account-row .bank-group-drilldown {
+  width: 100%;
+}
+
+.media-spend-table.media-spend-account-table {
+  min-width: 1020px;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.media-spend-account-table th:first-child {
+  width: 42px;
+}
+
+.media-spend-account-table th:nth-child(2) {
+  width: 102px;
+}
+
+.media-spend-account-table th:nth-child(3) {
+  width: 120px;
+}
+
+.media-spend-account-table th:nth-child(7) {
+  width: 130px;
+}
+
+.media-spend-account-table th:last-child {
+  width: 130px;
+}
+
+.media-spend-account-table .counterparty-cell {
+  min-width: 0;
+}
+
+.media-spend-account-table td small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-spend-table.media-spend-daily-table {
+  min-width: 850px;
+}
+
 .media-spend-platform {
   display: inline-flex;
   width: fit-content;
