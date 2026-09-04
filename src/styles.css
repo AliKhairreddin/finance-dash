@@ -8080,7 +8080,11 @@ th.amount .sortable-table-heading {
 
 .bank-details-account-table-wrap {
   width: 100%;
-  overflow-x: auto;
+  max-height: clamp(220px, 45vh, 420px);
+  overflow: auto;
+  scrollbar-color: var(--app-muted) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
 .bank-details-account-table {
@@ -8095,6 +8099,12 @@ th.amount .sortable-table-heading {
 
 .bank-details-account-table tbody tr:last-child td {
   border-bottom: 0;
+}
+
+.bank-details-account-table .bank-details-account-row.has-coverage td {
+  padding-bottom: 4px;
+  border-bottom: 0;
+  vertical-align: top;
 }
 
 .bank-details-account-table td:first-child {
@@ -8117,49 +8127,53 @@ th.amount .sortable-table-heading {
   white-space: nowrap;
 }
 
-.bank-details-account-name .note-popover {
-  position: relative;
-  top: auto;
-  right: auto;
-  flex: 0 0 auto;
+.bank-details-account-coverage-row:hover {
+  background: transparent;
 }
 
-.bank-details-account-name .note-popover-trigger {
-  width: 20px;
-  height: 20px;
-  min-height: 20px;
-  border-radius: 999px;
-  box-shadow: none;
+.bank-details-account-coverage-row td {
+  padding-top: 0;
+  padding-bottom: 8px;
 }
 
-.wise-account-coverage-popover {
+.bank-details-account-coverage {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
 }
 
-.wise-account-coverage-popover > div {
+.bank-details-account-coverage > div {
   display: grid;
-  gap: 2px;
+  min-width: 0;
+  gap: 1px;
+  padding: 6px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--panel-soft);
 }
 
-.wise-account-coverage-popover > div + div {
-  padding-top: 8px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.wise-account-coverage-popover span {
+.bank-details-account-coverage dt {
   color: var(--app-muted);
-  font-size: 0.64rem;
+  font-size: 0.6rem;
   font-weight: 720;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.025em;
   text-transform: uppercase;
 }
 
-.wise-account-coverage-popover strong {
+.bank-details-account-coverage dd {
+  min-width: 0;
+  margin: 0;
   color: var(--ink);
-  font-size: 0.75rem;
+  font-size: 0.69rem;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.bank-details-account-coverage dd.warning-text {
+  color: var(--amber);
 }
 
 .bank-details-summary-grid {

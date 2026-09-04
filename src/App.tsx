@@ -46,6 +46,7 @@ import {
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
+  Fragment,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -3541,10 +3542,10 @@ function BankDetailsAccountTable({
   }>;
   secondaryLabel: string;
 }) {
-  const [sortKey, setSortKey] = useUrlState<BankDetailAccountSortKey>("bankDetailSort", "name", {
+  const [sortKey, setSortKey] = useUrlState<BankDetailAccountSortKey>("bankDetailSort", "balance", {
     allowedValues: ["balance", "name", "source"]
   });
-  const [sortDirection, setSortDirection] = useUrlState<SortDirection>("bankDetailOrder", "asc", {
+  const [sortDirection, setSortDirection] = useUrlState<SortDirection>("bankDetailOrder", "desc", {
     allowedValues: ["asc", "desc"]
   });
   const sortedRows = useMemo(() => [...rows].sort((left, right) => {
@@ -3573,35 +3574,44 @@ function BankDetailsAccountTable({
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map((row) => (
-            <tr key={row.id}>
-              <td>
-                <div className="bank-details-account-name">
-                  <strong title={row.title}>{row.name}</strong>
-                  {row.statementCoverage && (
-                    <InfoPopover label={`${row.name} statement coverage`}>
-                      <div className="wise-account-coverage-popover">
+          {sortedRows.map((row) => {
+            const coverageLabel = row.statementCoverage?.periodStart && row.statementCoverage.periodEnd
+              ? dateRangeLabel(row.statementCoverage.periodStart, row.statementCoverage.periodEnd)
+              : "No CSV uploaded";
+            const uploadLabel = row.statementCoverage?.importedAt
+              ? dateTimeLabel(row.statementCoverage.importedAt)
+              : "Never";
+
+            return (
+              <Fragment key={row.id}>
+                <tr className={row.statementCoverage ? "bank-details-account-row has-coverage" : "bank-details-account-row"}>
+                  <td>
+                    <div className="bank-details-account-name">
+                      <strong title={row.title}>{row.name}</strong>
+                    </div>
+                  </td>
+                  <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
+                  <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
+                </tr>
+                {row.statementCoverage && (
+                  <tr className="bank-details-account-coverage-row">
+                    <td colSpan={3}>
+                      <dl className="bank-details-account-coverage" aria-label={`${row.name} statement coverage`}>
                         <div>
-                          <span>Transactions cover</span>
-                          <strong>{row.statementCoverage.periodStart && row.statementCoverage.periodEnd
-                            ? dateRangeLabel(row.statementCoverage.periodStart, row.statementCoverage.periodEnd)
-                            : "No CSV uploaded"}</strong>
+                          <dt>Transactions cover</dt>
+                          <dd className={row.statementCoverage.periodStart && row.statementCoverage.periodEnd ? "" : "warning-text"}>{coverageLabel}</dd>
                         </div>
                         <div>
-                          <span>Last uploaded</span>
-                          <strong>{row.statementCoverage.importedAt
-                            ? dateTimeLabel(row.statementCoverage.importedAt)
-                            : "Never"}</strong>
+                          <dt>Last uploaded</dt>
+                          <dd className={row.statementCoverage.importedAt ? "" : "warning-text"}>{uploadLabel}</dd>
                         </div>
-                      </div>
-                    </InfoPopover>
-                  )}
-                </div>
-              </td>
-              <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
-              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
-            </tr>
-          ))}
+                      </dl>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
           {sortedRows.length === 0 && <tr><td colSpan={3}>{emptyLabel}</td></tr>}
         </tbody>
       </table>
