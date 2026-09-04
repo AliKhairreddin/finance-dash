@@ -17,6 +17,7 @@ import {
   isCurrentBankTransactionId,
   isLegacySurrogateBankTransactionId
 } from "../shared/providerIdentity";
+import { canonicalWiseCsvTransactionId } from "../shared/wiseTransactionIdentity";
 import {
   assertActiveBankSyncLease,
   assertBankConnectionBinding,
@@ -329,6 +330,144 @@ function transactionAliasKey(source: BankSource, connectionKey: string, alias: s
     throw new ConvexError({ code: "INVALID_TRANSACTION_ALIAS", source });
   }
   return `${source}:${connectionKey}:${alias}`;
+}
+
+async function reassignTransactionAliases(
+  ctx: MutationCtx,
+  fromTransactionId: string,
+  toTransactionId: string,
+  updatedAt: string
+): Promise<void> {
+  const aliases = await ctx.db
+    .query("bankTransactionAliases")
+    .withIndex("by_transaction_id", (q) => q.eq("transactionId", fromTransactionId))
+    .take(101);
+  if (aliases.length > 100) {
+    throw new ConvexError({ code: "TRANSACTION_ALIAS_LIMIT_EXCEEDED", transactionId: fromTransactionId });
+  }
+  for (const alias of aliases) {
+    await ctx.db.patch(alias._id, { transactionId: toTransactionId, updatedAt });
+  }
+}
+
+function mostRecentlySyncedTransaction(
+  left: BankTransactionDoc,
+  right: BankTransactionDoc
+): BankTransactionDoc {
+  if (left.syncedAt !== right.syncedAt) return left.syncedAt > right.syncedAt ? left : right;
+  return left._creationTime >= right._creationTime ? left : right;
+}
+
+function preferOwnedTransaction(
+  left: BankTransactionDoc,
+  right: BankTransactionDoc,
+  sourceField: "categorySource" | "companyMatchSource" | "invoiceMatchSource",
+  valueField: "category" | "matchedProviderId" | "matchedInvoiceId"
+): BankTransactionDoc | null {
+  const leftManual = left[sourceField] === "manual";
+  const rightManual = right[sourceField] === "manual";
+  if (leftManual && rightManual && left[valueField] !== right[valueField]) {
+    throw new ConvexError({
+      code: "TRANSACTION_MANUAL_DATA_CONFLICT",
+      transactionId: left.id,
+      duplicateTransactionId: right.id,
+      field: valueField
+    });
+  }
+  if (leftManual) return left;
+  if (rightManual) return right;
+  if (left[valueField] !== undefined && right[valueField] === undefined) return left;
+  if (right[valueField] !== undefined && left[valueField] === undefined) return right;
+  return null;
+}
+
+function coalescedWiseCsvTransaction(
+  target: BankTransactionDoc,
+  duplicate: BankTransactionDoc,
+  canonicalId: string
+): Omit<BankTransactionDoc, "_id" | "_creationTime"> {
+  if (
+    target.source !== "wise"
+    || duplicate.source !== "wise"
+    || target.connectionKey !== duplicate.connectionKey
+    || target.accountId !== duplicate.accountId
+    || target.amount !== duplicate.amount
+    || target.currency !== duplicate.currency
+    || target.direction !== duplicate.direction
+  ) {
+    throw new ConvexError({
+      code: "WISE_CSV_IDENTITY_CONFLICT",
+      transactionId: target.id,
+      duplicateTransactionId: duplicate.id
+    });
+  }
+  if (target.teamId && duplicate.teamId && target.teamId !== duplicate.teamId) {
+    throw new ConvexError({
+      code: "TRANSACTION_MANUAL_DATA_CONFLICT",
+      transactionId: target.id,
+      duplicateTransactionId: duplicate.id,
+      field: "teamId"
+    });
+  }
+  if (
+    target.matchedInvoiceId
+    && duplicate.matchedInvoiceId
+    && target.matchedInvoiceId !== duplicate.matchedInvoiceId
+  ) {
+    throw new ConvexError({
+      code: "TRANSACTION_MANUAL_DATA_CONFLICT",
+      transactionId: target.id,
+      duplicateTransactionId: duplicate.id,
+      field: "matchedInvoiceId"
+    });
+  }
+
+  const recent = mostRecentlySyncedTransaction(target, duplicate);
+  const other = recent._id === target._id ? duplicate : target;
+  const categoryOwner = preferOwnedTransaction(
+    target,
+    duplicate,
+    "categorySource",
+    "category"
+  ) ?? recent;
+  const companyOwner = preferOwnedTransaction(
+    target,
+    duplicate,
+    "companyMatchSource",
+    "matchedProviderId"
+  ) ?? recent;
+  const invoiceOwner = preferOwnedTransaction(
+    target,
+    duplicate,
+    "invoiceMatchSource",
+    "matchedInvoiceId"
+  ) ?? recent;
+  const {
+    _id: _recentId,
+    _creationTime: _recentCreationTime,
+    ...recentValue
+  } = recent;
+
+  return {
+    ...recentValue,
+    id: canonicalId,
+    category: categoryOwner.category,
+    categorySource: categoryOwner.categorySource,
+    categoryConfidence: categoryOwner.categoryConfidence,
+    categoryReason: categoryOwner.categoryReason,
+    matchedProviderId: companyOwner.matchedProviderId ?? other.matchedProviderId,
+    companyMatchSource: companyOwner.companyMatchSource ?? other.companyMatchSource,
+    companyConfidence: companyOwner.companyConfidence ?? other.companyConfidence,
+    companyMatchReason: companyOwner.companyMatchReason ?? other.companyMatchReason,
+    matchedInvoiceId: invoiceOwner.matchedInvoiceId ?? other.matchedInvoiceId,
+    invoiceMatchSource: invoiceOwner.invoiceMatchSource ?? other.invoiceMatchSource,
+    invoiceMatchConfidence: invoiceOwner.invoiceMatchConfidence ?? other.invoiceMatchConfidence,
+    invoiceMatchReason: invoiceOwner.invoiceMatchReason ?? other.invoiceMatchReason,
+    teamId: recent.teamId ?? other.teamId,
+    classificationComplete: recent.classificationComplete ?? other.classificationComplete,
+    confidence: companyOwner.confidence ?? other.confidence,
+    matchReason: companyOwner.matchReason ?? other.matchReason
+  };
 }
 
 async function remapDashboardTransactionReferences(
@@ -1252,7 +1391,12 @@ async function applyActivityBatch(
   ) {
     throw new ConvexError({ code: "SOURCE_MISMATCH" });
   }
-  if (new Set(args.transactions.map((item) => item.id)).size !== args.transactions.length) {
+  const transactions = args.transactions.map((item) => {
+    if (args.source !== "wise") return item;
+    const canonicalId = canonicalWiseCsvTransactionId(item.id);
+    return canonicalId && canonicalId !== item.id ? { ...item, id: canonicalId } : item;
+  });
+  if (new Set(transactions.map((item) => item.id)).size !== transactions.length) {
     throw new ConvexError({ code: "DUPLICATE_TRANSACTION_ID" });
   }
   try {
@@ -1300,7 +1444,7 @@ async function applyActivityBatch(
   const analyticsChangedDates = new Set<string>();
   const identityChanges = new Map<string, string>();
   const factDeltas = new Map<string, ProfitFactDelta>();
-  for (const ingest of args.transactions) {
+  for (const ingest of transactions) {
     const { providerLegacyId, ...fresh } = ingest;
     assertCurrentTransactionIdentity(args.source, fresh.id);
     let existing = await ctx.db
@@ -1445,16 +1589,7 @@ async function applyActivityBatch(
       if (existing.id !== fresh.id) aliasSourceIds.add(existing.id);
       if (coalescedLegacy) aliasSourceIds.add(coalescedLegacy.id);
       for (const aliasSourceId of aliasSourceIds) {
-        const aliases = await ctx.db
-          .query("bankTransactionAliases")
-          .withIndex("by_transaction_id", (q) => q.eq("transactionId", aliasSourceId))
-          .take(101);
-        if (aliases.length > 100) {
-          throw new ConvexError({ code: "TRANSACTION_ALIAS_LIMIT_EXCEEDED", transactionId: aliasSourceId });
-        }
-        for (const alias of aliases) {
-          await ctx.db.patch(alias._id, { transactionId: fresh.id, updatedAt: args.syncedAt });
-        }
+        await reassignTransactionAliases(ctx, aliasSourceId, fresh.id, args.syncedAt);
       }
       if (coalescedLegacy) await ctx.db.delete(coalescedLegacy._id);
       updatedTransactions += 1;
@@ -1479,7 +1614,7 @@ async function applyActivityBatch(
   if (analyticsChangedDates.size > 0) await bumpLedgerRevision(ctx, analyticsChangedDates);
   return {
     accounts: args.accounts.length,
-    transactions: args.transactions.length,
+    transactions: transactions.length,
     insertedTransactions,
     updatedTransactions
   };
@@ -1521,6 +1656,84 @@ export const upsertSyncedActivityBatch = mutation({
     await assertBankLedgerReady(ctx);
     await assertActiveBankSyncLease(ctx, args.source, args);
     return applyActivityBatch(ctx, args);
+  }
+});
+
+export const canonicalizeWiseCsvTransactionsBatch = mutation({
+  args: {
+    serviceToken: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    limit: v.optional(v.number())
+  },
+  returns: v.object({
+    processed: v.number(),
+    rekeyed: v.number(),
+    merged: v.number(),
+    isDone: v.boolean(),
+    continueCursor: v.union(v.string(), v.null())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await assertBankLedgerReady(ctx);
+    const requestedLimit = args.limit === undefined || !Number.isFinite(args.limit)
+      ? maximumMaintenanceBatchSize
+      : Math.trunc(args.limit);
+    const limit = Math.max(1, Math.min(maximumMaintenanceBatchSize, requestedLimit));
+    const result = await ctx.db
+      .query("bankTransactions")
+      .withIndex("by_source", (q) => q.eq("source", "wise"))
+      .paginate({
+        numItems: limit,
+        cursor: args.cursor,
+        maximumRowsRead: limit,
+        maximumBytesRead: maximumActivityBytesRead
+      });
+    const factDeltas = new Map<string, ProfitFactDelta>();
+    const identityChanges = new Map<string, string>();
+    const changedDates = new Set<string>();
+    const updatedAt = new Date().toISOString();
+    let rekeyed = 0;
+    let merged = 0;
+
+    for (const row of result.page) {
+      const canonicalId = canonicalWiseCsvTransactionId(row.id);
+      if (!canonicalId || canonicalId === row.id) continue;
+      const target = await ctx.db
+        .query("bankTransactions")
+        .withIndex("by_transaction_id", (q) => q.eq("id", canonicalId))
+        .unique();
+      identityChanges.set(row.id, canonicalId);
+      changedDates.add(row.date);
+
+      if (!target) {
+        await ctx.db.patch(row._id, { id: canonicalId });
+        await reassignTransactionAliases(ctx, row.id, canonicalId, updatedAt);
+        rekeyed += 1;
+        continue;
+      }
+
+      const mergedValue = coalescedWiseCsvTransaction(target, row, canonicalId);
+      const next = { ...target, ...mergedValue };
+      addVersionedProfitFactChange(factDeltas, target, next);
+      addVersionedProfitFactDeletion(factDeltas, row);
+      await ctx.db.patch(target._id, mergedValue);
+      await reassignTransactionAliases(ctx, row.id, canonicalId, mergedValue.syncedAt);
+      await ctx.db.delete(row._id);
+      changedDates.add(target.date);
+      changedDates.add(mergedValue.date);
+      merged += 1;
+    }
+
+    await applyProfitFactDeltas(ctx, factDeltas);
+    await remapDashboardTransactionReferences(ctx, identityChanges);
+    if (changedDates.size > 0) await bumpLedgerRevision(ctx, changedDates);
+    return {
+      processed: result.page.length,
+      rekeyed,
+      merged,
+      isDone: result.isDone,
+      continueCursor: result.isDone ? null : result.continueCursor
+    };
   }
 });
 

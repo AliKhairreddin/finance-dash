@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConvexError } from "convex/values";
-import { wiseTransactionId } from "../shared/wiseTransactionIdentity";
+import {
+  canonicalWiseCsvTransactionId,
+  wiseCsvLedgerEntryIdentifier,
+  wiseTransactionId
+} from "../shared/wiseTransactionIdentity";
 import {
   applyMatchedInvoiceAssignmentsBatch,
   applyMerchantCategory,
   applyTeamAssignmentsBatch,
   backfillProfitFactsBatch,
+  canonicalizeWiseCsvTransactionsBatch,
   deleteSourceBatch,
   getActivityPage,
   getAnalyticsPeriodRevision,
@@ -1141,6 +1146,158 @@ test("bank upserts and deletes maintain facts, classification, and ledger revisi
     assert.equal(ctx.tables.bankTransactions.length, 0);
     assert.equal(ctx.tables.profitDistributionFacts.length, 0);
     assert.equal(ctx.tables.bankLedgerRevision[0].revision, 3);
+  });
+});
+
+test("Wise CSV identity repair merges timezone variants and preserves reviewed data", async () => {
+  await withServiceToken(async () => {
+    const oldIdentifier = JSON.stringify([
+      "TRANSFER-2319930101",
+      "19-08-2026 16:35:51.113",
+      "100000",
+      "USD",
+      "CREDIT",
+      "DEPOSIT"
+    ]);
+    const shiftedIdentifier = JSON.stringify([
+      "TRANSFER-2319930101",
+      "19-08-2026 23:35:51.113",
+      "100000",
+      "USD",
+      "CREDIT",
+      "DEPOSIT"
+    ]);
+    const oldId = wiseTransactionId("123", oldIdentifier);
+    const shiftedId = wiseTransactionId("123", shiftedIdentifier);
+    const canonicalId = canonicalWiseCsvTransactionId(oldId);
+    assert.equal(
+      canonicalId,
+      wiseTransactionId(
+        "123",
+        wiseCsvLedgerEntryIdentifier(
+          "TRANSFER-2319930101",
+          "100000",
+          "USD",
+          "CREDIT",
+          "DEPOSIT"
+        )
+      )
+    );
+
+    const reviewed = storedTransaction(oldIdentifier, 100_000, "USD", "in", "Revenue", {
+      _id: "wise-reviewed",
+      _creationTime: 1,
+      syncedAt: "2026-08-24T14:25:48.073Z",
+      profitContributionVersion: 1,
+      categorySource: "manual",
+      categoryConfidence: 1,
+      categoryReason: "Reviewed",
+      matchedInvoiceId: "invoice-reviewed",
+      invoiceMatchSource: "manual"
+    });
+    const shifted = storedTransaction(shiftedIdentifier, 100_000, "USD", "in", "Internal transfer", {
+      _id: "wise-shifted",
+      _creationTime: 2,
+      syncedAt: "2026-08-31T04:35:02.669Z",
+      profitContributionVersion: 1,
+      categorySource: "ai",
+      matchedProviderId: "provider-current",
+      companyMatchSource: "ai"
+    });
+    const ctx = memoryBankingContext({
+      bankTransactions: [reviewed, shifted],
+      bankTransactionAliases: [{
+        _id: "alias-shifted",
+        _creationTime: 1,
+        key: `wise:${"a".repeat(64)}:legacy-shifted`,
+        source: "wise",
+        connectionKey: "a".repeat(64),
+        alias: "legacy-shifted",
+        transactionId: shiftedId,
+        updatedAt: "2026-08-31T04:35:02.669Z"
+      }],
+      profitDistributionFacts: [{
+        _id: "fact-usd",
+        _creationTime: 1,
+        key: "2026-06:USD",
+        version: 1,
+        month: "2026-06",
+        currency: "USD",
+        transactionCount: 2,
+        revenue: 100_000,
+        generalCosts: 0,
+        payments: [],
+        updatedAt: "2026-08-31T04:35:02.669Z"
+      }],
+      bankLedgerRevision: [],
+      bankLedgerCutover: [{
+        _id: "cutover-ready",
+        _creationTime: 1,
+        key: "default",
+        status: "ready"
+      }],
+      bankConnectionBindings: [{
+        _id: "binding-wise",
+        _creationTime: 1,
+        source: "wise",
+        connectionKey: "a".repeat(64)
+      }]
+    });
+    const repair = handlerOf<Record<string, unknown>, {
+      processed: number;
+      rekeyed: number;
+      merged: number;
+      isDone: boolean;
+      continueCursor: string | null;
+    }>(canonicalizeWiseCsvTransactionsBatch);
+
+    assert.deepEqual(await repair(ctx, {
+      serviceToken: "expected-token",
+      cursor: null,
+      limit: 200
+    }), {
+      processed: 2,
+      rekeyed: 1,
+      merged: 1,
+      isDone: true,
+      continueCursor: null
+    });
+    assert.equal(ctx.tables.bankTransactions.length, 1);
+    assert.equal(ctx.tables.bankTransactions[0].id, canonicalId);
+    assert.equal(ctx.tables.bankTransactions[0].category, "Revenue");
+    assert.equal(ctx.tables.bankTransactions[0].categorySource, "manual");
+    assert.equal(ctx.tables.bankTransactions[0].matchedInvoiceId, "invoice-reviewed");
+    assert.equal(ctx.tables.bankTransactions[0].matchedProviderId, "provider-current");
+    assert.equal(ctx.tables.bankTransactionAliases[0].transactionId, canonicalId);
+    assert.equal(ctx.tables.profitDistributionFacts[0].transactionCount, 1);
+    assert.equal(ctx.tables.profitDistributionFacts[0].revenue, 100_000);
+    assert.equal(ctx.tables.bankLedgerRevision[0].revision, 1);
+
+    const upsert = handlerOf<Record<string, unknown>, {
+      insertedTransactions: number;
+      updatedTransactions: number;
+    }>(upsertActivityBatch);
+    const replay = await upsert(ctx, {
+      serviceToken: "expected-token",
+      source: "wise",
+      connectionKey: "a".repeat(64),
+      replaceAccounts: false,
+      accounts: [],
+      transactions: [bankTransactionValue(
+        shiftedIdentifier,
+        100_000,
+        "USD",
+        "in",
+        "Internal transfer"
+      )],
+      syncedAt: "2026-09-04T12:00:00.000Z"
+    });
+    assert.equal(replay.insertedTransactions, 0);
+    assert.equal(replay.updatedTransactions, 1);
+    assert.equal(ctx.tables.bankTransactions.length, 1);
+    assert.equal(ctx.tables.bankTransactions[0].id, canonicalId);
+    assert.equal(ctx.tables.bankTransactions[0].category, "Revenue");
+    assert.equal(ctx.tables.bankTransactions[0].categorySource, "manual");
   });
 });
 

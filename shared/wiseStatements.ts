@@ -8,6 +8,7 @@ import type {
 import {
   isScopedWiseTransactionId,
   scopeWiseCsvTransactionId,
+  wiseCsvLedgerEntryIdentifier,
   wiseUnscopedTransactionId
 } from "./wiseTransactionIdentity";
 import {
@@ -111,7 +112,6 @@ const columnAliases = {
   description: ["description", "details", "transactiondetails", "paymentdescription"],
   reference: ["reference", "paymentreference", "transactionreference", "transferreference"],
   transactionId: ["transactionid", "wiseid", "transferwiseid", "transferid", "referenceid", "id"],
-  dateTime: ["datetime", "transactiondatetime", "createddatetime", "completeddatetime", "timestamp"],
   transactionDetailsType: ["transactiondetailstype", "detailstype"],
   counterparty: [
     "counterparty",
@@ -370,18 +370,16 @@ function wiseLedgerEntryIdentifier(
   signedAmount: number,
   currency: string
 ): string {
-  const dateTime = cell(row, columnAliases.dateTime) ?? cell(row, columnAliases.date) ?? "";
   const transactionType = cell(row, columnAliases.category) ?? "";
   const transactionDetailsType = cell(row, columnAliases.transactionDetailsType) ?? "";
   return requiredBoundedText(
-    JSON.stringify([
+    wiseCsvLedgerEntryIdentifier(
       providerIdentifier,
-      dateTime,
       String(signedAmount),
       currency,
       transactionType,
       transactionDetailsType
-    ]),
+    ),
     "Wise CSV ledger entry identity",
     maximumWiseProviderIdLength
   );

@@ -8,7 +8,7 @@ import {
   validateWiseStatementImportPayload
 } from "./wiseStatements";
 import { verifyWiseStatementAccount } from "./wiseEntities";
-import { wiseTransactionId } from "./wiseTransactionIdentity";
+import { wiseCsvLedgerEntryIdentifier, wiseTransactionId } from "./wiseTransactionIdentity";
 
 const header = [
   "TransferWise ID",
@@ -149,16 +149,44 @@ test("Wise CSV ownership is verified by balance ID instead of counterparty names
     lmdPayload.transactions[0].id,
     wiseTransactionId(
       "37067652",
-      JSON.stringify([
+      wiseCsvLedgerEntryIdentifier(
         "TRANSFER-2273583228",
-        "27-07-2026 11:42:43.898",
         "99000",
         "USD",
         "CREDIT",
         "TRANSFER"
-      ])
+      )
     )
   );
+});
+
+test("overlapping Wise exports keep the same identity when the display timezone changes", () => {
+  const fileName = "statement_114115192_USD_2026-08-01_2026-08-31.csv";
+  const earlyExport = statementRow({
+    amount: "-5001.13",
+    description: "Sent money to 24 Media LLC",
+    dateTime: "19-08-2026 16:35:51.113",
+    payee: "24 Media LLC"
+  });
+  const laterExport = statementRow({
+    amount: "-5001.13",
+    description: "Sent money to 24 Media LLC",
+    dateTime: "19-08-2026 23:35:51.113",
+    payee: "24 Media LLC"
+  });
+
+  const firstParsed = parseWiseStatementCsv(`${header}\n${earlyExport}`, fileName)[0];
+  const secondParsed = parseWiseStatementCsv(`${header}\n${laterExport}`, fileName)[0];
+  const first = prepareWiseStatementImport(
+    firstParsed,
+    verifyWiseStatementAccount(firstParsed.metadata, accounts, "dn")
+  );
+  const second = prepareWiseStatementImport(
+    secondParsed,
+    verifyWiseStatementAccount(secondParsed.metadata, accounts, "dn")
+  );
+
+  assert.equal(first.transactions[0].id, second.transactions[0].id);
 });
 
 test("Wise CSV imports retain the card last four digits for card totals", () => {

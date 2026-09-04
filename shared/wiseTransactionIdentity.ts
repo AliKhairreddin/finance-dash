@@ -1,6 +1,14 @@
 const wiseScopedPrefix = "wise-v2-";
 const wiseUnscopedPrefix = "wise-csv-v2-";
 
+type WiseCsvLedgerEntryIdentity = readonly [
+  providerIdentifier: string,
+  signedAmount: string,
+  currency: string,
+  transactionType: string,
+  transactionDetailsType: string
+];
+
 function requiredProviderIdentifier(value: string, field: string): string {
   const identifier = value.trim();
   if (!identifier || identifier.length > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(identifier)) {
@@ -30,6 +38,22 @@ function decodeExact(value: string): string {
     bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
   }
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+export function wiseCsvLedgerEntryIdentifier(
+  providerIdentifier: string,
+  signedAmount: string,
+  currency: string,
+  transactionType: string,
+  transactionDetailsType: string
+): string {
+  return JSON.stringify([
+    providerIdentifier,
+    signedAmount,
+    currency,
+    transactionType,
+    transactionDetailsType
+  ] satisfies WiseCsvLedgerEntryIdentity);
 }
 
 /**
@@ -66,4 +90,39 @@ export function scopeWiseCsvTransactionId(
 
 export function isScopedWiseTransactionId(value: string, balanceId: string): boolean {
   return value.startsWith(`${wiseScopedPrefix}${requiredBalanceId(balanceId)}-`);
+}
+
+/**
+ * Normalizes CSV ledger identities created before timestamps were removed from
+ * the identity. Wise renders CSV timestamps in the exporter's timezone, so the
+ * same transaction must never be keyed by that display value.
+ */
+export function canonicalWiseCsvTransactionId(value: string): string | null {
+  const match = /^wise-v2-(\d{1,32})-([0-9a-f]+)$/.exec(value);
+  if (!match) return null;
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(decodeExact(match[2])) as unknown;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(decoded) || (decoded.length !== 5 && decoded.length !== 6)) {
+    return null;
+  }
+  const components = decoded.length === 6
+    ? [decoded[0], decoded[2], decoded[3], decoded[4], decoded[5]]
+    : decoded;
+  if (!components.every((component) => typeof component === "string")) return null;
+  const [providerIdentifier, signedAmount, currency, transactionType, transactionDetailsType] = components;
+  return wiseTransactionId(
+    match[1],
+    wiseCsvLedgerEntryIdentifier(
+      providerIdentifier,
+      signedAmount,
+      currency,
+      transactionType,
+      transactionDetailsType
+    )
+  );
 }

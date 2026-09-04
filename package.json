@@ -10,6 +10,7 @@
     "auth:configure:transaction-reviewer": "tsx scripts/configure-transaction-reviewer.ts",
     "import:management-report": "tsx scripts/import-management-report.ts",
     "import:wise-statements": "tsx scripts/import-wise-statements.ts",
+    "wise:repair-csv-identities": "tsx scripts/repair-wise-csv-identities.ts",
     "save:cash-flow-snapshot": "tsx scripts/save-cash-flow-snapshot.ts",
     "wise:reset": "tsx scripts/reset-wise.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
