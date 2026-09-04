@@ -7825,7 +7825,7 @@ th.amount .sortable-table-heading {
 
 .bank-overview-header {
   display: grid;
-  grid-template-columns: minmax(155px, 0.62fr) minmax(420px, 1.5fr) auto;
+  grid-template-columns: minmax(155px, 0.62fr) minmax(420px, 1.5fr) auto auto;
   align-items: center;
   gap: 12px 18px;
   padding-block: 11px;
@@ -7889,6 +7889,50 @@ th.amount .sortable-table-heading {
 
 .bank-headline-metric.warning > strong {
   color: var(--amber);
+}
+
+.bank-sync-status {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 7px 5px 10px;
+  align-items: center;
+  gap: 6px;
+  color: var(--green);
+  border: 1px solid var(--green-border);
+  border-radius: 9px;
+  background: var(--green-soft);
+  font-size: 0.72rem;
+  font-weight: 740;
+  white-space: nowrap;
+}
+
+.bank-sync-status.syncing,
+.bank-sync-status.warning {
+  color: var(--amber);
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+.bank-sync-status > span:not(.note-popover) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bank-sync-status > .note-popover {
+  position: static;
+  flex: 0 0 auto;
+}
+
+.bank-sync-status .note-popover-trigger {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  color: inherit;
+  border-color: currentColor;
+  background: transparent;
+  box-shadow: none;
 }
 
 .bank-header-controls {
@@ -8192,7 +8236,7 @@ th.amount .sortable-table-heading {
 
 @media (max-width: 1120px) {
   .bank-overview-header {
-    grid-template-columns: minmax(180px, 1fr) auto;
+    grid-template-columns: minmax(180px, 1fr) auto auto;
   }
 
   .bank-headline-metrics {
@@ -8210,6 +8254,17 @@ th.amount .sortable-table-heading {
   .bank-overview-header {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
+  }
+
+  .bank-sync-status {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .bank-headline-metrics {
+    grid-row: 3;
   }
 
   .bank-header-controls {

@@ -271,6 +271,10 @@ type BankActivitySummaryState = {
   isLoading: boolean;
   error: string | null;
 };
+type BankBackgroundSyncState = {
+  phase: "syncing" | "complete" | "error";
+  message: string;
+};
 type TransactionDetailPopover = {
   id: string;
   title: string;
@@ -808,6 +812,7 @@ function App() {
   const bankActivitySummaryAbortRef = useRef<AbortController | null>(null);
   const [bankActivitySummaryRetry, setBankActivitySummaryRetry] = useState(0);
   const historicalSyncRequestKeysRef = useRef(new Set<string>());
+  const [bankBackgroundSync, setBankBackgroundSync] = useState<BankBackgroundSyncState | null>(null);
   const [isImportingWise, setIsImportingWise] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1185,7 +1190,10 @@ function App() {
           return [{ key, source: item.source, fromDate, toDate }];
         });
         if (requests.length > 0) {
-          setNotice("Historical bank activity is syncing in the background.");
+          setBankBackgroundSync({
+            phase: "syncing",
+            message: "Historical bank activity is syncing in the background."
+          });
           void Promise.all(requests.map(async ({ key, ...payload }) => {
             const response = await fetch(`${apiBase}/transactions/sync`, {
               method: "POST",
@@ -1201,16 +1209,20 @@ function App() {
           })).then(() => {
             for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
             invalidateAnalyticsData();
+            setBankBackgroundSync({
+              phase: "complete",
+              message: "Historical bank activity is up to date."
+            });
             const latestRequest = transactionPageRequestRef.current;
             if (latestRequest?.key === request.key) {
-              setNotice("Historical bank activity is up to date.");
               void loadTransactionPage(latestRequest, null, "reset");
             }
           }).catch((syncError: unknown) => {
             for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
-            if (transactionPageRequestRef.current?.key === request.key) {
-              setNotice(syncError instanceof Error ? syncError.message : "Historical transaction sync failed");
-            }
+            setBankBackgroundSync({
+              phase: "error",
+              message: syncError instanceof Error ? syncError.message : "Historical transaction sync failed"
+            });
           });
         }
       }
@@ -2405,6 +2417,7 @@ function App() {
       {activeTab === "banks" && (
         <BanksView
           dashboard={dashboard}
+          backgroundSync={bankBackgroundSync}
           activeBank={bankTab}
           setActiveBank={setBankTab}
           activityView={bankActivityView}
@@ -3621,6 +3634,7 @@ function BankDetailsAccountTable({
 
 function BanksView({
   dashboard,
+  backgroundSync,
   activeBank,
   setActiveBank,
   activityView,
@@ -3692,6 +3706,7 @@ function BanksView({
   onRefreshRates
 }: {
   dashboard: DashboardSnapshot;
+  backgroundSync: BankBackgroundSyncState | null;
   activeBank: BankTab;
   setActiveBank: (source: BankTab) => void;
   activityView: BankActivityViewMode;
@@ -3792,6 +3807,14 @@ function BanksView({
     : activeSourceAccounts;
   const activeSourceBalance = sumCurrencyTotals(activeSourceDisplayAccounts, (account) => account.balance);
   const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
+  const relevantIntegrationStatuses = activeSourceStatus
+    ? [activeSourceStatus]
+    : activeBank === "all"
+      ? bankSources.flatMap((source) => {
+          const status = statusBySource.get(source.id);
+          return status ? [status] : [];
+        })
+      : [];
 
   useEffect(() => {
     if (bankAccountFilter === "all" || !activeSource) return;
@@ -3990,7 +4013,7 @@ function BanksView({
                   : periodTransactionCount === null
                     ? periodMetricPlaceholder
                     : `${periodTransactionCount} transactions`}
-                detail={summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined}
+                detail={status?.issue ?? (summaryAccounts.length > 0 ? nativeCurrencyBreakdown(accountTotals) : undefined)}
               />
             );
           })}
@@ -4081,6 +4104,10 @@ function BanksView({
               {headerMetrics}
             </div>
           )}
+          <BankSyncStatus
+            backgroundSync={backgroundSync}
+            integrationStatuses={relevantIntegrationStatuses}
+          />
           <div className="bank-header-controls">
             {activeBank === "wise" && (
               <NativeSelect
@@ -4419,6 +4446,63 @@ function BanksView({
   );
 }
 
+function BankSyncStatus({
+  backgroundSync,
+  integrationStatuses
+}: {
+  backgroundSync: BankBackgroundSyncState | null;
+  integrationStatuses: DashboardSnapshot["integrationStatus"];
+}) {
+  const issues = integrationStatuses.filter((status) => status.issue);
+  const backgroundIsRunning = backgroundSync?.phase === "syncing";
+  const backgroundFailed = backgroundSync?.phase === "error";
+  const allLive = integrationStatuses.length > 0
+    && integrationStatuses.every((status) => status.mode === "live");
+  const tone = backgroundIsRunning
+    ? "syncing"
+    : issues.length > 0 || backgroundFailed || (integrationStatuses.length > 0 && !allLive)
+      ? "warning"
+      : "good";
+  const label = backgroundIsRunning
+    ? "Syncing history"
+    : issues.length === 1
+      ? `${issues[0].label} needs attention`
+      : issues.length > 1
+        ? `${issues.length} sources need attention`
+        : backgroundFailed
+          ? "Historical sync failed"
+          : backgroundSync?.phase === "complete"
+            ? "History up to date"
+            : allLive
+              ? "Bank data live"
+              : integrationStatuses.length > 0
+                ? "Bank data partial"
+                : "No bank sync needed";
+  const details = backgroundIsRunning
+    ? [backgroundSync.message]
+    : issues.length > 0
+      ? issues.map((status) => `${status.label}: ${status.issue}`)
+      : backgroundFailed || backgroundSync?.phase === "complete"
+        ? [backgroundSync.message]
+        : integrationStatuses.length > 0
+          ? integrationStatuses.map((status) => `${status.label}: ${status.message}`)
+          : ["Manual cash and wallet holdings do not require a bank sync."];
+
+  return (
+    <div className={`bank-sync-status ${tone}`} role="status" aria-live="polite">
+      {backgroundIsRunning
+        ? <Loader2 aria-hidden="true" className="spin" size={15} />
+        : tone === "good"
+          ? <Check aria-hidden="true" size={15} />
+          : <CircleAlert aria-hidden="true" size={15} />}
+      <span>{label}</span>
+      <InfoPopover label="bank sync status">
+        {details.map((detail) => <span key={detail}>{detail}</span>)}
+      </InfoPopover>
+    </div>
+  );
+}
+
 type BankReconciliationViewProps = {
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
@@ -4536,7 +4620,6 @@ function BankReconciliationView({
 }: BankReconciliationViewProps) {
   const sourceLabel = bankSourceLabel(source);
   const wiseFileInputRef = useRef<HTMLInputElement>(null);
-  const integrationStatus = dashboard.integrationStatus.find((integration) => integration.id === source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
   const resolvedPeriodActivity = resolvedBankPeriodActivity(periodActivity, periodMetricsReady);
   const periodDirection = resolvedPeriodActivity
@@ -4779,12 +4862,6 @@ function BankReconciliationView({
         <div className="integration-alert">
           <CircleAlert size={16} />
           <span>Period totals could not be calculated: {periodMetricsError}</span>
-        </div>
-      )}
-      {integrationStatus?.issue && (
-        <div className="integration-alert">
-          <CircleAlert size={16} />
-          <span>{integrationStatus.issue}</span>
         </div>
       )}
       {activityView === "transactions" ? <TransactionTable
