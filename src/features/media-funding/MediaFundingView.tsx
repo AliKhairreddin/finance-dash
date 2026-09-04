@@ -16,6 +16,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CalendarDatePicker } from "@/components/ui/calendar-period-picker";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
@@ -496,7 +497,7 @@ function FundingProviderDialog({
         </div>
         <div className="form-grid">
           <label>Opening balance<Input min="0" step="0.01" type="number" value={openingBalance} onChange={(event) => setOpeningBalance(event.target.value)} /></label>
-          <label>Balance as of<Input max={financeOperatingDate()} type="date" value={openingBalanceDate} onChange={(event) => setOpeningBalanceDate(event.target.value)} /></label>
+          <label>Balance as of<CalendarDatePicker ariaLabel="Choose balance date" max={financeOperatingDate()} value={openingBalanceDate} onChange={setOpeningBalanceDate} /></label>
         </div>
         <p className="field-help">The opening balance includes all payments, fees, and spend through this date. Starting the next day, matched bank funding and assigned LemonMax spend update the balance automatically. Changing the fee recalculates all included bank funding after the opening date.</p>
         <div className="modal-actions"><Button className="secondary-button" disabled={submitting} onClick={onClose} type="button">Cancel</Button><Button className="primary-button" disabled={submitting || !valid} type="submit">{submitting ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Save provider</Button></div>

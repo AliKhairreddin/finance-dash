@@ -18,6 +18,7 @@ import type {
   Provider,
   SlashVirtualAccount,
   Transaction,
+  TransactionOverrideScope,
   TransactionMatchFilter,
   TransactionSortKey,
   UpdateHoldingPayload
@@ -29,6 +30,7 @@ import type {
   BankMerchantGroupSummary
 } from "../../../shared/bankMerchantGroups";
 import { bankSources, type BankSource } from "../../../shared/banks";
+import { transactionBusinessCategory, transactionCategoryOptionsForDirection } from "../../../shared/categories";
 import {
   isInternalTransferTransaction,
   isNonOperatingMovementTransaction,
@@ -134,6 +136,8 @@ export function AllBankTransactionsView({
   onOpenMerchantGroup,
   onOpenCardGroup,
   onOpenAccountGroup,
+  onMatch,
+  onUpdateCategory,
   onMatchInvoice
 }: {
   dashboard: DashboardSnapshot;
@@ -178,6 +182,8 @@ export function AllBankTransactionsView({
   onOpenMerchantGroup: (group: BankMerchantGroupSummary) => void;
   onOpenCardGroup: (group: BankCardGroupSummary) => void;
   onOpenAccountGroup: (group: BankCardGroupSummary) => void;
+  onMatch: (transaction: Transaction, providerId: string | undefined, scope: TransactionOverrideScope) => void;
+  onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onMatchInvoice: (transaction: Transaction) => void;
 }) {
   const query = searchTerm;
@@ -211,6 +217,19 @@ export function AllBankTransactionsView({
     () => slashVirtualAccountOptions(dashboard.accounts),
     [dashboard.accounts]
   );
+  const clientProviders = useMemo(
+    () => dashboard.providers.filter((provider) => provider.type === "client"),
+    [dashboard.providers]
+  );
+  const supplierProviders = useMemo(
+    () => dashboard.providers.filter((provider) => provider.type === "supplier"),
+    [dashboard.providers]
+  );
+  const [pendingOverride, setPendingOverride] = useState<
+    | { kind: "category"; transaction: Transaction; value: string }
+    | { kind: "company"; transaction: Transaction; value: string }
+    | null
+  >(null);
 
   useEffect(() => {
     if (account === "all") return;
@@ -228,6 +247,21 @@ export function AllBankTransactionsView({
     setSortKey(nextSortKey);
     setSortDirection("asc");
   }
+
+  function applyPendingOverride(scope: TransactionOverrideScope) {
+    if (!pendingOverride) return;
+    if (pendingOverride.kind === "category") {
+      onUpdateCategory(pendingOverride.transaction, pendingOverride.value, scope);
+    } else {
+      onMatch(pendingOverride.transaction, pendingOverride.value, scope);
+    }
+    setPendingOverride(null);
+  }
+
+  const pendingMerchantName = pendingOverride?.transaction.merchantName?.trim();
+  const pendingValueLabel = pendingOverride?.kind === "company"
+    ? providersById.get(pendingOverride.value)?.name ?? pendingOverride.value
+    : pendingOverride?.value;
 
   const bankActiveFilters: ActiveFilter[] = [
     ...(bankGroupType ? [{
@@ -269,6 +303,51 @@ export function AllBankTransactionsView({
 
   return (
     <section className="panel wide-panel">
+      {pendingOverride && createPortal(
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setPendingOverride(null)}>
+          <div
+            className="modal confirmation-modal transaction-override-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="all-bank-transaction-override-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Manual override</p>
+                <h2 id="all-bank-transaction-override-title">
+                  Apply {pendingOverride.kind === "category" ? "category" : "company"} change
+                </h2>
+              </div>
+              <Button className="icon-button" type="button" aria-label="Close" onClick={() => setPendingOverride(null)}>
+                <X size={16} />
+              </Button>
+            </div>
+            <p>
+              Set <strong>{pendingValueLabel}</strong> for {pendingMerchantName ?? pendingOverride.transaction.counterparty}.
+            </p>
+            <div className="modal-actions transaction-override-actions">
+              <Button className="secondary-button" type="button" onClick={() => applyPendingOverride("transaction")}>
+                This transaction only
+              </Button>
+              <Button
+                type="button"
+                disabled={!pendingMerchantName}
+                title={pendingMerchantName ? `Apply to every ${pendingMerchantName} transaction` : "AI merchant identification is still pending"}
+                onClick={() => applyPendingOverride("merchant")}
+              >
+                All {pendingMerchantName ?? "equivalent"} transactions
+              </Button>
+            </div>
+            <small>
+              {pendingMerchantName
+                ? "The merchant-wide choice updates existing equivalents and teaches future transactions."
+                : "Merchant-wide changes become available after AI merchant identification completes."}
+            </small>
+          </div>
+        </div>,
+        document.body
+      )}
       <div className="panel-header compact unified-bank-header">
         <div className="list-toolbar unified-bank-toolbar">
           <div className="list-toolbar-main">
@@ -396,11 +475,20 @@ export function AllBankTransactionsView({
           </tr></thead>
           <tbody>
             {rows.length > 0 ? rows.map((transaction) => {
-              const provider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              const expectedProviderType = transaction.direction === "in" ? "client" : "supplier";
+              const matchedProvider = transaction.matchedProviderId ? providersById.get(transaction.matchedProviderId) : undefined;
+              const provider = matchedProvider?.type === expectedProviderType ? matchedProvider : undefined;
+              const providerOptions = expectedProviderType === "client" ? clientProviders : supplierProviders;
               const expense = expenseByTransactionId.get(transaction.id);
               const internalTransfer = isInternalTransferTransaction(transaction);
               const nonOperatingMovement = isNonOperatingMovementTransaction(transaction);
-              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td><span>{transaction.slashVirtualAccountName ?? transaction.accountName}</span>{transaction.slashVirtualAccountName && <small>{transaction.accountName}</small>}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><span>{transaction.category}</span><small>{nonOperatingMovement ? "No company needed" : provider?.name ?? (expense ? `Expense ${expense.recordNumber}` : transaction.matchedInvoiceId ? `Invoice ${transaction.matchedInvoiceId}` : "Merchant only")}</small></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} type="button" title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}</td></tr>;
+              const displayCategory = transactionBusinessCategory(transaction.category);
+              const directionCategories = transactionCategoryOptionsForDirection(transaction.direction, dashboard.transactionCategories);
+              const categoryOptions = directionCategories.includes(displayCategory)
+                ? directionCategories
+                : [displayCategory, ...directionCategories];
+              const voided = transaction.status === "voided";
+              return <tr key={transaction.id}><td>{dateLabel(transaction.date)}</td><td><div className="bank-source-labels"><span className={`bank-source-badge source-${transaction.source}`}>{sourceLabel(transaction.source)}</span>{transaction.source === "wise" && transaction.wiseEntity && <span className={`wise-entity-badge entity-${transaction.wiseEntity}`} title={wiseEntityLabel(transaction.wiseEntity)}>{wiseEntityShortLabel(transaction.wiseEntity)}</span>}</div></td><td><span>{transaction.slashVirtualAccountName ?? transaction.accountName}</span>{transaction.slashVirtualAccountName && <small>{transaction.accountName}</small>}</td><td className="counterparty-cell"><strong>{transactionCounterpartyLabel(transaction)}</strong><small>{transactionDescriptionLabel(transaction)}</small></td><td><span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>{transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{transactionMovementLabel(transaction)}</span></td><td><div className="unified-bank-classification-cell">{voided ? <span className="status-pill" title="Card authorization cancelled or reversed before settlement; no category is required.">Voided</span> : <NativeSelect aria-label={`Category for ${transaction.merchantName ?? transaction.counterparty}`} className="unified-bank-category-select" size="sm" value={displayCategory} onValueChange={(value) => setPendingOverride({ kind: "category", transaction, value })}>{categoryOptions.map((category) => <NativeSelectOption key={category} value={category}>{category}</NativeSelectOption>)}</NativeSelect>}{nonOperatingMovement ? <span className="status-pill">No company needed</span> : <NativeSelect aria-label={`Company for ${transaction.counterparty}`} className="unified-bank-company-select" size="sm" value={provider?.id ?? ""} onValueChange={(value) => { if (value) setPendingOverride({ kind: "company", transaction, value }); }}><NativeSelectOption value="" disabled>{transaction.direction === "in" ? "Optional client" : "Optional supplier"}</NativeSelectOption>{providerOptions.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>)}</NativeSelect>}</div></td><td className="amount">{money(transaction.amount, transaction.currency)}</td><td>{transaction.direction === "in" && !nonOperatingMovement && !expense && <Button className={`icon-button ${transaction.matchedInvoiceId ? "matched-action" : ""}`} type="button" title={transaction.matchedInvoiceId ? "Invoice matched — review or replace" : "Match to an existing invoice"} onClick={() => onMatchInvoice(transaction)}>{transaction.matchedInvoiceId ? <Check size={16} /> : <Link2 size={16} />}</Button>}</td></tr>;
             }) : <tr><td colSpan={8}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td></tr>}
           </tbody>
         </table>

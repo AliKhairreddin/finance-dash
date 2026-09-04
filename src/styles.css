@@ -6712,6 +6712,38 @@ th.amount .sortable-table-heading {
   white-space: nowrap;
 }
 
+.calendar-date-picker-trigger {
+  width: 100%;
+  min-height: 36px;
+  justify-content: space-between;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--control-bg);
+  box-shadow: 0 1px 1px rgba(20, 32, 51, 0.03);
+  font-size: 0.85rem;
+  font-weight: 560;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.calendar-date-picker-trigger:hover,
+.calendar-date-picker-trigger[aria-expanded="true"] {
+  border-color: var(--control-border-hover);
+}
+
+.calendar-date-picker-trigger:focus-visible {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 3px var(--violet-soft);
+}
+
+.calendar-date-picker-trigger svg {
+  color: var(--app-muted);
+}
+
 .bank-date-controls > .note-popover {
   position: relative;
   top: auto;
@@ -6738,6 +6770,10 @@ th.amount .sortable-table-heading {
   color: var(--ink);
   background: var(--panel);
   box-shadow: var(--modal-shadow);
+}
+
+.calendar-date-picker-selection {
+  justify-content: flex-start;
 }
 
 .bank-calendar-shortcuts {
@@ -6882,6 +6918,17 @@ th.amount .sortable-table-heading {
 
 .unified-bank-table {
   min-width: 980px;
+}
+
+.unified-bank-classification-cell {
+  display: grid;
+  min-width: 170px;
+  gap: 5px;
+}
+
+.unified-bank-category-select,
+.unified-bank-company-select {
+  min-width: 0;
 }
 
 .bank-source-badge.source-wise {

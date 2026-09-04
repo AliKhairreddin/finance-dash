@@ -4184,6 +4184,8 @@ function BanksView({
             onOpenMerchantGroup={onOpenMerchantGroup}
             onOpenCardGroup={onOpenCardGroup}
             onOpenAccountGroup={onOpenAccountGroup}
+            onMatch={onMatch}
+            onUpdateCategory={onUpdateCategory}
             onMatchInvoice={onMatchInvoice}
             rangeControls={(
               <BankDateRangeControls

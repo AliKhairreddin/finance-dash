@@ -1,4 +1,4 @@
-import { CalendarRange, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { CalendarDays, CalendarRange, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -63,6 +63,178 @@ export function calendarDateRangeLabel(dateRange: CalendarDateRange): string {
     day: "numeric"
   }).format(fromDate);
   return `${compactFrom}–${calendarDateLabel(dateRange.toDate)}`;
+}
+
+export function CalendarDatePicker({
+  ariaLabel,
+  disabled = false,
+  max,
+  min,
+  onChange,
+  value
+}: {
+  ariaLabel: string;
+  disabled?: boolean;
+  max?: string;
+  min?: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftDate, setDraftDate] = useState(value);
+  const [visibleMonth, setVisibleMonth] = useState(calendarMonth(value));
+  const [panelPosition, setPanelPosition] = useState({ top: 0, left: 0 });
+  const visibleDays = useMemo(() => calendarDays(visibleMonth), [visibleMonth]);
+
+  function positionPanel(): void {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const panelWidth = Math.min(340, window.innerWidth - 24);
+    const estimatedHeight = 370;
+    const left = Math.min(
+      Math.max(12, rect.right - panelWidth),
+      Math.max(12, window.innerWidth - panelWidth - 12)
+    );
+    const top = rect.bottom + 8 + estimatedHeight <= window.innerHeight
+      ? rect.bottom + 8
+      : Math.max(12, rect.top - estimatedHeight - 8);
+    setPanelPosition({ top, left });
+  }
+
+  function openPicker(): void {
+    setDraftDate(value);
+    setVisibleMonth(calendarMonth(value));
+    setIsOpen(true);
+  }
+
+  useEffect(() => {
+    if (!isOpen) return;
+    positionPanel();
+
+    function closeOnOutsidePointer(event: PointerEvent): void {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      setIsOpen(false);
+    }
+
+    function closeOnEscape(event: globalThis.KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    }
+
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isOpen]);
+
+  const visibleMonthIsAtMinimum = min !== undefined && visibleMonth <= calendarMonth(min);
+  const visibleMonthIsAtMaximum = max !== undefined && visibleMonth >= calendarMonth(max);
+  return (
+    <>
+      <Button
+        ref={triggerRef}
+        className="calendar-date-picker-trigger"
+        type="button"
+        aria-label={`${ariaLabel}: ${calendarDateLabel(value)}`}
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        disabled={disabled}
+        onClick={() => (isOpen ? setIsOpen(false) : openPicker())}
+      >
+        <span>{calendarDateLabel(value)}</span>
+        <CalendarDays size={16} aria-hidden="true" />
+      </Button>
+      {isOpen && createPortal(
+        <div
+          ref={panelRef}
+          className="bank-date-range-popover calendar-date-picker-popover"
+          role="dialog"
+          aria-label={ariaLabel}
+          style={{ top: panelPosition.top, left: panelPosition.left }}
+        >
+          <div className="bank-calendar-header">
+            <Button
+              className="icon-button"
+              type="button"
+              aria-label="Previous month"
+              disabled={visibleMonthIsAtMinimum}
+              onClick={() => setVisibleMonth((current) => shiftCalendarMonth(current, -1))}
+            >
+              <ChevronLeft size={16} />
+            </Button>
+            <strong>{calendarMonthLabel(visibleMonth)}</strong>
+            <Button
+              className="icon-button"
+              type="button"
+              aria-label="Next month"
+              disabled={visibleMonthIsAtMaximum}
+              onClick={() => setVisibleMonth((current) => shiftCalendarMonth(current, 1))}
+            >
+              <ChevronRight size={16} />
+            </Button>
+          </div>
+          <div className="bank-calendar-weekdays" aria-hidden="true">
+            {["M", "T", "W", "T", "F", "S", "S"].map((weekday, index) => (
+              <span key={`${weekday}-${index}`}>{weekday}</span>
+            ))}
+          </div>
+          <div className="bank-calendar-grid" role="grid">
+            {visibleDays.map((date, index) => {
+              if (!date) return <span className="bank-calendar-empty" key={`empty-${index}`} />;
+              const isSelected = date === draftDate;
+              const isDisabled = (min !== undefined && date < min) || (max !== undefined && date > max);
+              return (
+                <button
+                  key={date}
+                  className={isSelected ? "selected" : undefined}
+                  type="button"
+                  role="gridcell"
+                  aria-label={calendarDateLabel(date)}
+                  aria-selected={isSelected}
+                  disabled={isDisabled}
+                  onClick={() => setDraftDate(date)}
+                >
+                  {Number(date.slice(-2))}
+                </button>
+              );
+            })}
+          </div>
+          <div className="bank-calendar-selection calendar-date-picker-selection">
+            <span>{calendarDateLabel(draftDate)}</span>
+          </div>
+          <div className="bank-calendar-actions">
+            <Button className="secondary-button" type="button" onClick={() => setIsOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="primary-button"
+              type="button"
+              disabled={!draftDate || (min !== undefined && draftDate < min) || (max !== undefined && draftDate > max)}
+              onClick={() => {
+                setIsOpen(false);
+                onChange(draftDate);
+                triggerRef.current?.focus();
+              }}
+            >
+              Apply
+            </Button>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
 }
 
 function calendarDays(value: string): Array<string | null> {
