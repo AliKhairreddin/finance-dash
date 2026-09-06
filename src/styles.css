@@ -11173,14 +11173,21 @@ body {
   align-items: center;
   gap: 5px;
   width: fit-content;
-  color: var(--accent);
+  color: var(--ink);
   font-size: 0.74rem;
   font-weight: 650;
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .expense-document-links a:hover {
-  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+
+.expense-document-links a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
 }
 
 .expense-editor-modal {
