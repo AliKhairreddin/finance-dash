@@ -84,3 +84,10 @@ test("archiving an invoice preserves its existing fee-adjusted bank link without
   assert.equal((await db.ctx.db.get("tx-1")).invoiceMatchConfidence, 0.98);
   assert.equal((await db.ctx.db.get("state")).invoices[0].status, "open");
 });
+
+test("invoice PDF downloads select the PDF when an earlier original is an image", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = database({ financialDocuments: [{ ...doc(), contentType: "image/png", invoiceId: "invoice-1", fileName: "original.png" }, { ...doc(), _id: "pdf", storageId: "pdf-blob", invoiceId: "invoice-1", fileName: "invoice.pdf" }] });
+  const result = await db.run(documents.forInvoice, { serviceToken: "test-service", invoiceId: "invoice-1" });
+  assert.equal(result.id, "pdf"); assert.equal(result.contentType, "application/pdf");
+});

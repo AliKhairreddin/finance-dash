@@ -196,7 +196,7 @@ export const discard = mutation({
 });
 export const forInvoice = query({
   args: { serviceToken: v.string(), invoiceId: v.string() }, returns: v.union(v.object({ id: v.id("financialDocuments"), fileName: v.string(), contentType: v.string(), url: v.union(v.string(), v.null()) }), v.null()),
-  handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.query("financialDocuments").withIndex("by_invoice", q => q.eq("invoiceId", args.invoiceId)).first(); return doc ? { id: doc._id, fileName: doc.fileName, contentType: doc.contentType, url: await ctx.storage.getUrl(doc.storageId) } : null; }
+  handler: async (ctx, args) => { authorize(args.serviceToken); const originals = await ctx.db.query("financialDocuments").withIndex("by_invoice", q => q.eq("invoiceId", args.invoiceId)).take(20); const doc = originals.find(file => file.contentType === "application/pdf") ?? originals[0]; return doc ? { id: doc._id, fileName: doc.fileName, contentType: doc.contentType, url: await ctx.storage.getUrl(doc.storageId) } : null; }
 });
 
 export const claim = internalMutation({

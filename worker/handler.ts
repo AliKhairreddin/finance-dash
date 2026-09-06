@@ -5849,7 +5849,7 @@ async function downloadInvoicePdf(env: Env, invoiceId: string): Promise<Response
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice || invoice.documentType !== "sales_invoice") throw new ApiError(404, "Sales invoice not found");
   const archived = await getConvexClient(env).query(api.documents.forInvoice, { serviceToken: getConvexServiceToken(env), invoiceId });
-  if (archived?.url) {
+  if (archived?.url && archived.contentType === "application/pdf") {
     const original = await fetch(archived.url, { signal: AbortSignal.timeout(30_000) });
     return new Response(original.body, { status: original.status, headers: { "Content-Type": archived.contentType, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(archived.fileName)}`, "Cache-Control": "private, no-store" } });
   }
