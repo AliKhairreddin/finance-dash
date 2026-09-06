@@ -1139,6 +1139,29 @@ export const getInvoicePaymentCandidates = query({
   }
 });
 
+export const getCashReportAccounts = query({
+  args: { serviceToken: v.string(), connections: v.array(bankConnection) },
+  returns: v.array(v.object({ ...account.fields, syncedAt: v.string() })),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    if (
+      args.connections.length > allBankSources.length
+      || new Set(args.connections.map((connection) => connection.source)).size !== args.connections.length
+      || args.connections.some((connection) => !/^[0-9a-f]{64}$/u.test(connection.connectionKey))
+    ) throw new ConvexError({ code: "INVALID_BANK_CONNECTION_DIRECTORY" });
+    const rows = await Promise.all(args.connections.map(async ({ source, connectionKey }) => {
+      const accounts = await ctx.db.query("bankAccounts")
+        .withIndex("by_source_connection", (q) => q.eq("source", source).eq("connectionKey", connectionKey))
+        .take(maximumBankAccountsPerSource + 1);
+      if (accounts.length > maximumBankAccountsPerSource) {
+        throw new ConvexError({ code: "BANK_ACCOUNT_LIMIT_EXCEEDED", source });
+      }
+      return accounts.map(({ _id: _id, _creationTime: _creationTime, connectionKey: _connectionKey, ...item }) => item);
+    }));
+    return rows.flat();
+  }
+});
+
 export const getActivityMetadata = query({
   args: {
     serviceToken: v.string(),

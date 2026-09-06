@@ -9,7 +9,7 @@ import {
 } from "./telegramCommandCatalog";
 
 const requestedCommands = `
-menu help whoami cancel ask overview balances cashflow receivables payables holdings fx
+menu help whoami cancel ask overview cash balances cashflow receivables payables holdings fx
 transactions transaction needs_review search cashback export_transactions analytics spend income
 top_companies top_categories revenue revenue_runs revenue_pull draft_revenue invoices invoice overdue
 due_soon invoice_pdf payment_candidates expenses expense unpaid_bills missing_documents expense_document

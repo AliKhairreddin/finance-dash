@@ -65,7 +65,7 @@ export interface TelegramCommandDocumentReply {
   text?: string;
 }
 
-export type TelegramCommandReply = string | TelegramCommandDocumentReply;
+export type TelegramCommandReply = string | TelegramCommandDocumentReply | { messages: string[] };
 
 export type TelegramCommandHandler = (
   env: WorkerEnv,
@@ -193,7 +193,8 @@ async function telegramApi(
     response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000)
     });
   } catch {
     throw new Error(`Telegram ${method} request failed`);
@@ -533,6 +534,10 @@ export async function pollTelegramUpdates(
       const protectContent = Boolean(configuredUser && role);
       if (typeof reply === "string") {
         await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, reply, protectContent);
+      } else if ("messages" in reply) {
+        for (const message of reply.messages) {
+          await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, message, protectContent);
+        }
       } else {
         if (reply.text) {
           await (dependencies.sendMessage ?? sendTelegramMessage)(

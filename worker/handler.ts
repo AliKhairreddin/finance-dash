@@ -249,6 +249,7 @@ import {
   slashVirtualAccountBalanceObservations,
   type TelegramAlertSettings
 } from "./telegramAlerts";
+import { buildTelegramCashReport, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -3995,6 +3996,34 @@ function telegramAlertDefaults(env: Env): {
     threshold: slashVirtualAccountAlertThreshold(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD),
     recipients: slashVirtualAccountAlertRecipients(env.SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS)
   };
+}
+
+export async function getTelegramCashReport(env: Env): Promise<string> {
+  const connections = (await bankStorageConnectionDirectory(env))
+    .filter((connection) => connection.source === "wise" || connection.source === "revolut");
+  const [accounts, slashAccounts] = await Promise.all([
+    getConvexClient(env).query(api.banking.getCashReportAccounts, {
+      serviceToken: getConvexServiceToken(env), connections
+    }),
+    fetchSlashVirtualAccountBalancesForLegalEntity({
+      baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+    })
+  ]);
+  for (const { source } of connections) {
+    if (!accounts.some((account) => account.source === source && account.status === "live")) {
+      throw new ApiError(503, `${source} bank balances are unavailable; cash report cannot be totaled`);
+    }
+  }
+  const assets = accounts.filter((account) => account.balance !== 0 && account.status === "live")
+    .map((account) => account.currency);
+  let rates: FxRate[];
+  try {
+    rates = await fetchCoinbaseUsdRates(env, assets);
+  } catch {
+    // Keep native balances visible and explicitly mark USD valuation as unavailable.
+    rates = [];
+  }
+  return buildTelegramCashReport({ accounts, slashAccounts, rates, asOf: new Date().toISOString() });
 }
 
 async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise<number> {
@@ -7792,6 +7821,10 @@ async function telegramReadCommand(
   command: string,
   args: string
 ): Promise<TelegramCommandReply> {
+  if (command === "cash") {
+    const messages = splitCashReport(await getTelegramCashReport(env));
+    return messages.length === 1 ? messages[0] : { messages };
+  }
   if (command === "menu") return telegramMenu(role);
   if (command === "help") {
     const requested = args.toLowerCase();
@@ -8527,6 +8560,16 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
     if (controller.cron === "* * * * *") {
+      try {
+        await sendTelegramCashReportIfDue(env, controller.scheduledTime, () => getTelegramCashReport(env));
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "telegram_cash_report_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
       try {
         const processed = await pollTelegramOnboarding(env);
         if (processed > 0) {

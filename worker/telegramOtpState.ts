@@ -2,8 +2,16 @@ import { DurableObject } from "cloudflare:workers";
 import {
   configureTelegramBotCommands,
   deleteTelegramWebhook,
-  pollTelegramUpdates
+  pollTelegramUpdates,
+  sendTelegramMessage
 } from "./telegram";
+import {
+  cashReportDelivered,
+  cashReportDeliveryStateKey,
+  cashReportRecipient,
+  deliverCashReportParts,
+  type CashReportDeliveryState
+} from "./telegramCashReport";
 import { handleTelegramCommand } from "./handler";
 import {
   cancelTelegramOtpTransition,
@@ -67,7 +75,7 @@ async function configurationFingerprints(
     crypto.subtle.digest(
       "SHA-256",
       textEncoder.encode([
-        "finance-telegram-commands.v2",
+        "finance-telegram-commands.v3",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
         env.TELEGRAM_COMMAND_ADMIN_USERS,
@@ -274,6 +282,21 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
     return this.serialize(async () =>
       await this.ctx.storage.get<TelegramAlertDeliveryRecord[]>(TELEGRAM_ALERT_HISTORY_KEY) ?? []
     );
+  }
+
+  async isCashReportDelivered(date: string): Promise<boolean> {
+    return this.serialize(async () => cashReportDelivered(
+      await this.ctx.storage.get<CashReportDeliveryState>(cashReportDeliveryStateKey), date
+    ));
+  }
+
+  async deliverCashReport(date: string, username: string, message: string): Promise<boolean> {
+    return this.serialize(async () => {
+      const recipient = cashReportRecipient(this.env, username);
+      return deliverCashReportParts(this.ctx.storage, date, message, (part) =>
+        sendTelegramMessage(this.env, recipient.chatId, part, true)
+      );
+    });
   }
 
   async prepareTelegramDigest(date: string, notificationId: string): Promise<string | null> {

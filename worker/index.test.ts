@@ -905,7 +905,7 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
   await worker.scheduled(
     {
       cron: "* * * * *",
-      scheduledTime: new Date("2026-08-21T20:00:00.000Z").getTime(),
+      scheduledTime: new Date("2026-08-21T03:59:00.000Z").getTime(),
       noRetry() {}
     },
     {
@@ -921,7 +921,7 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
               return {
                 rules: [],
                 digestTimeUtc: null,
-                updatedAt: "2026-08-21T20:00:00.000Z"
+                updatedAt: "2026-08-21T03:59:00.000Z"
               };
             }
           };
@@ -933,6 +933,25 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
     } as never
   );
   assert.equal(calls, 1);
+});
+
+test("minute scheduler checks each cash recipient using the Beirut date after 07:00", async () => {
+  const checked: string[] = [];
+  await worker.scheduled({ cron: "* * * * *", scheduledTime: Date.parse("2026-09-06T04:00:00Z"), noRetry() {} }, {
+    TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222" }),
+    SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary Account",
+    SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD: "10000",
+    SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Ali,Ali M",
+    TELEGRAM_OTP_STATE: { getByName(name: string) {
+      return {
+        async isCashReportDelivered(date: string) { checked.push(`${name}:${date}`); return true; },
+        async pollOnboarding() { return 0; },
+        async getTelegramAlertSettings() { return { rules: [], digestTimeUtc: null, updatedAt: "2026-09-06T04:00:00Z" }; }
+      };
+    } }
+  } as never);
+  assert.deepEqual(checked.sort(), ["telegram-cash-report:ali m:2026-09-06", "telegram-cash-report:ali:2026-09-06"]);
 });
 
 test("five-minute scheduled handler drains the transaction classification backlog", async () => {

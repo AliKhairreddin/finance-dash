@@ -41,6 +41,20 @@ function telegramUpdate(
   };
 }
 
+test("multipart cash replies send every part to the authorized private chat with content protection", async () => {
+  const sent: Array<{ chatId: string; message: string; protected: boolean | undefined }> = [];
+  const result = await pollTelegramUpdates(baseEnv, 1, {
+    async getUpdates() { return [telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")]; },
+    async handleCommand() { return { messages: ["First cash report part", "Remaining balances"] }; },
+    async sendMessage(_env, chatId, message, protectContent) { sent.push({ chatId, message, protected: protectContent }); }
+  });
+  assert.equal(result.nextOffset, 2);
+  assert.deepEqual(sent, [
+    { chatId: "5518715264", message: "First cash report part", protected: true },
+    { chatId: "5518715264", message: "Remaining balances", protected: true }
+  ]);
+});
+
 test("Telegram user mappings normalize login names, including internal spaces", () => {
   assert.deepEqual(parseTelegramAuthUsers(JSON.stringify({
     Ali: "5518715264",
