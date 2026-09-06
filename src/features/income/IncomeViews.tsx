@@ -1,4 +1,4 @@
-import { DocumentActions } from "@/features/expenses/DocumentsView";
+import { DocumentCreateMenu } from "@/features/expenses/DocumentsView";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   CalendarClock,
@@ -10,6 +10,7 @@ import {
   Download,
   Edit3,
   FilePlus2,
+  Folder,
   Loader2,
   Mail,
   RefreshCw,
@@ -1005,187 +1006,171 @@ export function InvoicesView({
       </section>
 
       <section className="panel invoice-panel">
-        <div className="panel-header invoice-control-header">
+        <div className={`panel-header invoice-toolbar${selectedIds.length > 0 ? " has-selection" : ""}`}>
           <div className="invoice-heading">
             <h2>Invoices</h2>
             <InfoPopover label="invoice payments">
               Select unpaid drafts or open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.
             </InfoPopover>
           </div>
-          <div className="segmented-control invoice-tabs" aria-label="Invoice view">
-            {([
-              ["all", `All ${filteredRows.length}`],
-              ["pending", `Pending ${filteredRows.filter((row) => row.status === "draft" || row.status === "open").length}`],
-              ["paid", `Paid ${filteredRows.filter((row) => row.status === "paid").length}`]
-            ] as Array<[InvoiceTab, string]>).map(([id, label]) => (
-              <Button
-                key={id}
-                className={tab === id ? "active" : ""}
-                type="button"
-                aria-pressed={tab === id}
-                onClick={() => selectInvoiceTab(id)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
           <NativeSelect className="invoice-view-select" aria-label="Invoice view" value={tab} onValueChange={(value) => selectInvoiceTab(value as InvoiceTab)}>
             <NativeSelectOption value="all">All {filteredRows.length}</NativeSelectOption>
             <NativeSelectOption value="pending">Pending {filteredRows.filter((row) => row.status === "draft" || row.status === "open").length}</NativeSelectOption>
             <NativeSelectOption value="paid">Paid {filteredRows.filter((row) => row.status === "paid").length}</NativeSelectOption>
           </NativeSelect>
-          <div className="invoice-header-actions">
-            <Button className="icon-text-button invoice-secondary-action" type="button" aria-label="Export CSV" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /><span>Export CSV</span></Button>
-            <DocumentActions apiBase={apiBase} label="Invoice documents" href="?page=documents&documentKind=invoice" viewLabel="View invoice documents" className="invoice-secondary-action" />
-            <Button className="primary-button invoice-create-action" type="button" aria-label="Create manual invoice" title="Create manual invoice" onClick={() => setEditorRequest({ mode: "new" })}><FilePlus2 size={16} /><span>Create manual invoice</span></Button>
-          </div>
-        </div>
-
-        <div className="invoice-controls-row">
-          {selectedIds.length > 0 ? (
-            <div className="selection-action-bar">
-              <span>
-                {selectedIds.length} selected
-                {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
-                {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
-              </span>
-              <Button
-                className="icon-text-button"
-                type="button"
-                title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only unpaid drafts or open invoices can be recorded as paid"}
-                onClick={() => setBulkPaymentInvoices(selectedPayableInvoices)}
-                disabled={selectedPayableInvoices.length === 0}
-              >
-                <Check size={15} /> Record paid ({selectedPayableInvoices.length})
-              </Button>
-              <Button
-                className="icon-text-button destructive-icon-button"
-                type="button"
-                title={allSelectedDeletable ? "Delete every selected dashboard draft" : "Delete is available only when every selected invoice is an unsent dashboard draft"}
-                onClick={() => setDeleteInvoices(selectedInvoices)}
-                disabled={!allSelectedDeletable}
-              >
-                <Trash2 size={15} /> Delete selected
-              </Button>
-              <Button
-                className="primary-button"
-                type="button"
-                title={allSelectedSendable ? undefined : "Review is available only when every selected invoice can be saved or delivered through Merit"}
-                onClick={() => setSendRequest({ invoiceIds: selectedIds })}
-                disabled={!meritWriteEnabled || !allSelectedSendable}
-              >
-                {selectedDraftCount === 0 ? <Mail size={15} /> : <Send size={15} />}
-                {selectedDraftCount === 0 ? "Deliver selected" : "Review selected"}
-              </Button>
-              <Button className="icon-button" type="button" aria-label="Clear selection" onClick={() => setSelectedIds([])}><X size={15} /></Button>
-            </div>
-          ) : (
-            <div className="list-toolbar invoice-list-toolbar">
-              <div className="list-toolbar-main">
-                <ToolbarSearchField
-                  ariaLabel="Search invoice details and amounts"
-                  className="invoice-toolbar-search"
-                  placeholder="Search invoices, companies, amounts"
-                  value={query}
-                  onChange={setQuery}
-                />
-                <NativeSelect
-                  aria-label="Filter invoices by company"
-                  className="promoted-filter-select invoice-company-filter"
-                  value={companyId}
-                  onValueChange={setCompanyId}
+          <div className="invoice-toolbar-controls">
+            {selectedIds.length > 0 ? (
+              <div className="selection-action-bar">
+                <span>
+                  {selectedIds.length} selected
+                  {selectedDraftCount > 0 ? ` · ${selectedDraftCount} draft${selectedDraftCount === 1 ? "" : "s"}` : ""}
+                  {selectedDeliveryCount > 0 ? ` · ${selectedDeliveryCount} in Merit` : ""}
+                </span>
+                <Button
+                  className="icon-text-button"
+                  type="button"
+                  title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only unpaid drafts or open invoices can be recorded as paid"}
+                  onClick={() => setBulkPaymentInvoices(selectedPayableInvoices)}
+                  disabled={selectedPayableInvoices.length === 0}
                 >
-                  <NativeSelectOption value="all">All companies</NativeSelectOption>
-                  {providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}
-                </NativeSelect>
-                <FilterPopover activeCount={structuredFilterCount} title="Invoice filters">
-                  <ActiveFilterBar
-                    filters={invoiceActiveFilters}
-                    resultLabel={`${visibleRows.length} invoices shown in the ${tab} view`}
-                    onClearAll={clearInvoiceFilters}
-                  />
-                  <FilterFieldGroup title="State">
-                    <label>
-                      Bank match
-                      <NativeSelect aria-label="Filter invoices by bank match" value={matchFilter} onValueChange={value => setMatchFilter(value as typeof matchFilter)}>
-                        <NativeSelectOption value="all">All bank matches</NativeSelectOption>
-                        <NativeSelectOption value="matched">Matched</NativeSelectOption>
-                        <NativeSelectOption value="unmatched">Unmatched</NativeSelectOption>
-                      </NativeSelect>
-                    </label>
-                    <label>
-                      Active status
-                      <NativeSelect
-                        aria-label="Filter invoices by active status"
-                        value={statusFilter}
-                        onValueChange={(value) => {
-                          const nextStatus = value as InvoiceStatusFilter;
-                          setStatusFilter(nextStatus);
-                          if (nextStatus !== "all") setTab("pending");
-                        }}
-                      >
-                        <NativeSelectOption value="all">All active statuses</NativeSelectOption>
-                        <NativeSelectOption value="draft">Draft</NativeSelectOption>
-                        <NativeSelectOption value="open">Open</NativeSelectOption>
-                      </NativeSelect>
-                    </label>
-                    <label>
-                      Delivery
-                      <NativeSelect aria-label="Filter invoices by delivery state" value={deliveryFilter} onValueChange={(value) => setDeliveryFilter(value as InvoiceDeliveryFilter)}>
-                        <NativeSelectOption value="all">All delivery states</NativeSelectOption>
-                        <NativeSelectOption value="not-sent">Not sent</NativeSelectOption>
-                        <NativeSelectOption value="saved">Saved, not delivered</NativeSelectOption>
-                        <NativeSelectOption value="delivered">Delivered</NativeSelectOption>
-                        <NativeSelectOption value="delivery-failed">Delivery failed</NativeSelectOption>
-                      </NativeSelect>
-                    </label>
-                  </FilterFieldGroup>
-                  <FilterFieldGroup title="Business">
-                    <label>
-                      Currency
-                      <NativeSelect aria-label="Filter invoices by currency" value={currency} onValueChange={setCurrency}>
-                        <NativeSelectOption value="all">All currencies</NativeSelectOption>
-                        {currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
-                      </NativeSelect>
-                    </label>
-                    <label>
-                      Cadence
-                      <NativeSelect aria-label="Filter invoices by cadence" value={cadence} onValueChange={(value) => setCadence(value as "all" | BillingCadence | "manual")}>
-                        <NativeSelectOption value="all">All cadences</NativeSelectOption>
-                        <NativeSelectOption value="weekly">Weekly</NativeSelectOption>
-                        <NativeSelectOption value="monthly">Monthly</NativeSelectOption>
-                        <NativeSelectOption value="manual">Manual</NativeSelectOption>
-                      </NativeSelect>
-                    </label>
-                  </FilterFieldGroup>
-                  <FilterFieldGroup title="Invoice date">
-                    <CalendarPeriodPicker
-                      ariaLabel="Filter invoices by issue date"
-                      dateRange={issueDateRange}
-                      onApply={(range) => {
-                        setIssueDateFrom(range.fromDate);
-                        setIssueDateTo(range.toDate);
-                      }}
-                      onSelectPreset={(value) => {
-                        if (value === "all") {
-                          setIssueDateFrom("");
-                          setIssueDateTo("");
-                          return;
-                        }
-                        const range = bankPeriodPresetRange(value as BankPeriodPreset, invoiceFilterToday);
-                        setIssueDateFrom(range.fromDate);
-                        setIssueDateTo(range.toDate);
-                      }}
-                      presetAriaLabel="Invoice issue-date presets"
-                      presetOptions={[
-                        { value: "all", label: "Any date" },
-                        ...bankPeriodPresets.map((value) => ({ value, label: bankPeriodPresetLabel(value) }))
-                      ]}
-                      triggerLabel={issueDateFrom || issueDateTo ? calendarDateRangeLabel(issueDateRange) : "Any date"}
-                    />
-                  </FilterFieldGroup>
-                </FilterPopover>
+                  <Check size={15} /> Record paid ({selectedPayableInvoices.length})
+                </Button>
+                <Button
+                  className="icon-text-button destructive-icon-button"
+                  type="button"
+                  title={allSelectedDeletable ? "Delete every selected dashboard draft" : "Delete is available only when every selected invoice is an unsent dashboard draft"}
+                  onClick={() => setDeleteInvoices(selectedInvoices)}
+                  disabled={!allSelectedDeletable}
+                >
+                  <Trash2 size={15} /> Delete selected
+                </Button>
+                <Button
+                  className="primary-button"
+                  type="button"
+                  title={allSelectedSendable ? undefined : "Review is available only when every selected invoice can be saved or delivered through Merit"}
+                  onClick={() => setSendRequest({ invoiceIds: selectedIds })}
+                  disabled={!meritWriteEnabled || !allSelectedSendable}
+                >
+                  {selectedDraftCount === 0 ? <Mail size={15} /> : <Send size={15} />}
+                  {selectedDraftCount === 0 ? "Deliver selected" : "Review selected"}
+                </Button>
+                <Button className="icon-button" type="button" aria-label="Clear selection" onClick={() => setSelectedIds([])}><X size={15} /></Button>
               </div>
+            ) : (
+              <div className="list-toolbar invoice-list-toolbar">
+                <div className="list-toolbar-main">
+                  <ToolbarSearchField
+                    ariaLabel="Search invoice details and amounts"
+                    className="invoice-toolbar-search"
+                    placeholder="Search invoices"
+                    value={query}
+                    onChange={setQuery}
+                  />
+                  <NativeSelect
+                    aria-label="Filter invoices by company"
+                    className="promoted-filter-select invoice-company-filter"
+                    value={companyId}
+                    onValueChange={setCompanyId}
+                  >
+                    <NativeSelectOption value="all">All companies</NativeSelectOption>
+                    {providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                  <FilterPopover activeCount={structuredFilterCount} title="Invoice filters">
+                    <ActiveFilterBar
+                      filters={invoiceActiveFilters}
+                      resultLabel={`${visibleRows.length} invoices shown in the ${tab} view`}
+                      onClearAll={clearInvoiceFilters}
+                    />
+                    <FilterFieldGroup title="State">
+                      <label>
+                        Bank match
+                        <NativeSelect aria-label="Filter invoices by bank match" value={matchFilter} onValueChange={value => setMatchFilter(value as typeof matchFilter)}>
+                          <NativeSelectOption value="all">All bank matches</NativeSelectOption>
+                          <NativeSelectOption value="matched">Matched</NativeSelectOption>
+                          <NativeSelectOption value="unmatched">Unmatched</NativeSelectOption>
+                        </NativeSelect>
+                      </label>
+                      <label>
+                        Active status
+                        <NativeSelect
+                          aria-label="Filter invoices by active status"
+                          value={statusFilter}
+                          onValueChange={(value) => {
+                            const nextStatus = value as InvoiceStatusFilter;
+                            setStatusFilter(nextStatus);
+                            if (nextStatus !== "all") setTab("pending");
+                          }}
+                        >
+                          <NativeSelectOption value="all">All active statuses</NativeSelectOption>
+                          <NativeSelectOption value="draft">Draft</NativeSelectOption>
+                          <NativeSelectOption value="open">Open</NativeSelectOption>
+                        </NativeSelect>
+                      </label>
+                      <label>
+                        Delivery
+                        <NativeSelect aria-label="Filter invoices by delivery state" value={deliveryFilter} onValueChange={(value) => setDeliveryFilter(value as InvoiceDeliveryFilter)}>
+                          <NativeSelectOption value="all">All delivery states</NativeSelectOption>
+                          <NativeSelectOption value="not-sent">Not sent</NativeSelectOption>
+                          <NativeSelectOption value="saved">Saved, not delivered</NativeSelectOption>
+                          <NativeSelectOption value="delivered">Delivered</NativeSelectOption>
+                          <NativeSelectOption value="delivery-failed">Delivery failed</NativeSelectOption>
+                        </NativeSelect>
+                      </label>
+                    </FilterFieldGroup>
+                    <FilterFieldGroup title="Business">
+                      <label>
+                        Currency
+                        <NativeSelect aria-label="Filter invoices by currency" value={currency} onValueChange={setCurrency}>
+                          <NativeSelectOption value="all">All currencies</NativeSelectOption>
+                          {currencies.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
+                        </NativeSelect>
+                      </label>
+                      <label>
+                        Cadence
+                        <NativeSelect aria-label="Filter invoices by cadence" value={cadence} onValueChange={(value) => setCadence(value as "all" | BillingCadence | "manual")}>
+                          <NativeSelectOption value="all">All cadences</NativeSelectOption>
+                          <NativeSelectOption value="weekly">Weekly</NativeSelectOption>
+                          <NativeSelectOption value="monthly">Monthly</NativeSelectOption>
+                          <NativeSelectOption value="manual">Manual</NativeSelectOption>
+                        </NativeSelect>
+                      </label>
+                    </FilterFieldGroup>
+                    <FilterFieldGroup title="Invoice date">
+                      <CalendarPeriodPicker
+                        ariaLabel="Filter invoices by issue date"
+                        dateRange={issueDateRange}
+                        onApply={(range) => {
+                          setIssueDateFrom(range.fromDate);
+                          setIssueDateTo(range.toDate);
+                        }}
+                        onSelectPreset={(value) => {
+                          if (value === "all") {
+                            setIssueDateFrom("");
+                            setIssueDateTo("");
+                            return;
+                          }
+                          const range = bankPeriodPresetRange(value as BankPeriodPreset, invoiceFilterToday);
+                          setIssueDateFrom(range.fromDate);
+                          setIssueDateTo(range.toDate);
+                        }}
+                        presetAriaLabel="Invoice issue-date presets"
+                        presetOptions={[
+                          { value: "all", label: "Any date" },
+                          ...bankPeriodPresets.map((value) => ({ value, label: bankPeriodPresetLabel(value) }))
+                        ]}
+                        triggerLabel={issueDateFrom || issueDateTo ? calendarDateRangeLabel(issueDateRange) : "Any date"}
+                      />
+                    </FilterFieldGroup>
+                  </FilterPopover>
+                </div>
+              </div>
+            )}
+          </div>
+          {selectedIds.length === 0 && (
+            <div className="invoice-header-actions">
+              <Button className="icon-button" type="button" aria-label="Export CSV" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /></Button>
+              <Button className="icon-text-button" nativeButton={false} aria-label="View invoice documents" render={<a href="?page=documents&documentKind=invoice" />}><Folder size={15} /> View documents</Button>
+              <DocumentCreateMenu apiBase={apiBase} label="Add invoice" manualLabel="Create invoice manually" onCreate={() => setEditorRequest({ mode: "new" })} />
             </div>
           )}
         </div>

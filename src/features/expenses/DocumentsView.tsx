@@ -1,6 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ChevronDown, Download, Files, Folder, Loader2, RefreshCw, Upload, X } from "lucide-react";
+import { ChevronDown, Download, FilePlus2, Folder, Plus, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,24 +19,24 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return result;
 }
 
-export function DocumentActions({ apiBase, label, href, viewLabel, className = "" }: {
+export function DocumentCreateMenu({ apiBase, label, manualLabel, onCreate }: {
   apiBase: string;
   label: string;
-  href: string;
-  viewLabel: string;
-  className?: string;
+  manualLabel: string;
+  onCreate: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Popover.Root>
-      <Popover.Trigger className={`icon-text-button document-actions-trigger ${className}`} aria-label={label} title={label}>
-        <Files size={15} /><span>Documents</span><ChevronDown className="document-actions-chevron" size={13} />
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger className="primary-button document-create-trigger" aria-label={label}>
+        <Plus size={15} /><span>{label}</span><ChevronDown size={13} />
       </Popover.Trigger>
       <Popover.Portal keepMounted>
         <Popover.Positioner className="toolbar-popover-positioner" sideOffset={6} align="end">
-          <Popover.Popup className="toolbar-popover-popup document-actions-popup">
+          <Popover.Popup className="toolbar-popover-popup document-create-popup">
             <Popover.Title className="screen-reader-only">{label}</Popover.Title>
-            <DocumentUploadButton apiBase={apiBase} />
-            <Button className="icon-text-button" nativeButton={false} render={<a href={href} />}><Folder size={15} /> {viewLabel}</Button>
+            <DocumentUploadButton apiBase={apiBase} label="Upload an existing document" onOpen={() => setOpen(false)} />
+            <Button className="icon-text-button" onClick={() => { setOpen(false); onCreate(); }}><FilePlus2 size={15} /> {manualLabel}</Button>
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
@@ -44,12 +44,12 @@ export function DocumentActions({ apiBase, label, href, viewLabel, className = "
   );
 }
 
-export function DocumentUploadButton({ apiBase, onUploaded, defaultEntity }: { apiBase: string; onUploaded?: () => void; defaultEntity?: "dn" | "lmd" }) {
+export function DocumentUploadButton({ apiBase, onUploaded, defaultEntity, label = "Upload documents", onOpen }: { apiBase: string; onUploaded?: () => void; defaultEntity?: "dn" | "lmd"; label?: string; onOpen?: () => void }) {
   const [open, setOpen] = useState(false), [entity, setEntity] = useState(defaultEntity ?? "auto");
   const [files, setFiles] = useState<File[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [message, setMessage] = useState("");
   return <>
-    <Button className="primary-button" onClick={() => { setOpen(true); setEntity(defaultEntity ?? "auto"); setError(""); setMessage(""); }}><Upload size={15} /> Upload documents</Button>
+    <Button className="primary-button" title="Import existing invoices or receipts from files" onClick={() => { setOpen(true); setEntity(defaultEntity ?? "auto"); setError(""); setMessage(""); onOpen?.(); }}><Upload size={15} /> {label}</Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><DialogContent className="document-dialog" showCloseButton={false}>
       <div className="panel-header"><DialogTitle>Upload receipts or invoices</DialogTitle><Button aria-label="Close upload" disabled={busy} onClick={() => setOpen(false)}><X size={18} /></Button></div>
       <form onSubmit={async (e: FormEvent) => {

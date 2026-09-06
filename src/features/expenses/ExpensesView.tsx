@@ -1,13 +1,13 @@
-import { DocumentActions } from "./DocumentsView";
+import { DocumentCreateMenu } from "./DocumentsView";
 import { useUrlState } from "@/lib/url-state";
 import { SortableTableHead, compareTableValues, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   Check,
   CircleAlert,
+  Folder,
   Loader2,
   Paperclip,
-  Plus,
   ReceiptText,
   ShieldAlert,
   Upload,
@@ -191,7 +191,7 @@ export function ExpensesView({
       </section>
 
       <section className="panel wide-panel expense-panel">
-        <div className="panel-header expense-control-header">
+        <div className="panel-header expense-toolbar">
           <div className="expense-heading">
             <h2>Expenses</h2>
             <InfoPopover label="expense documents">
@@ -199,17 +199,9 @@ export function ExpensesView({
             </InfoPopover>
             <span className="expense-result-count" role="status">{rows.length} {rows.length === 1 ? "record" : "records"}</span>
           </div>
-          <div className="expense-header-actions">
-            <DocumentActions apiBase={apiBase} label="Expense documents" href="?page=documents" viewLabel="View monthly folders" />
-            <Button className="primary-button expense-create-action" type="button" aria-label="Add supplier bill" title="Add supplier bill" onClick={() => setEditorOpen(true)}>
-              <Plus size={16} /><span>Add supplier bill</span>
-            </Button>
-          </div>
-        </div>
-        <div className="list-toolbar expense-list-toolbar">
           <ToolbarSearchField
             ariaLabel="Search expenses"
-            placeholder="Search supplier, document number, purpose"
+            placeholder="Search expenses"
             value={query}
             onChange={setQuery}
           />
@@ -220,6 +212,10 @@ export function ExpensesView({
             <NativeSelectOption value="missing">Missing documents</NativeSelectOption>
             <NativeSelectOption value="matched">Matched</NativeSelectOption>
           </NativeSelect>
+          <div className="expense-header-actions">
+            <Button className="icon-text-button" nativeButton={false} aria-label="View expense documents" render={<a href="?page=documents&documentKind=expense" />}><Folder size={15} /> View documents</Button>
+            <DocumentCreateMenu apiBase={apiBase} label="Add expense" manualLabel="Create supplier bill manually" onCreate={() => setEditorOpen(true)} />
+          </div>
         </div>
         <div className="table-wrap">
           <table className="data-table expense-table">
