@@ -32,14 +32,16 @@ interface TelegramApiEnvelope {
   result?: unknown;
 }
 
-interface TelegramPrivateMessage {
+export interface TelegramPrivateMessage {
   chatId: string;
   firstName: string;
   telegramUsername?: string;
   text?: string;
+  attachment?: { fileId: string; uniqueId: string; fileName: string; contentType: string; size?: number };
+  caption?: string;
 }
 
-interface TelegramUpdate {
+export interface TelegramUpdate {
   updateId: number;
   message: TelegramPrivateMessage | null;
 }
@@ -432,9 +434,16 @@ function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
   if (message.from.is_bot === true || typeof message.from.first_name !== "string") return null;
   const chatIdValue = message.chat.id;
   if (typeof chatIdValue !== "number" || !Number.isSafeInteger(chatIdValue) || chatIdValue <= 0) return null;
+  const photo = Array.isArray(message.photo) ? message.photo.filter(isRecord).at(-1) : null;
+  const file = isRecord(message.document) ? message.document : photo;
+  const attachment = file && typeof file.file_id === "string" && typeof file.file_unique_id === "string"
+    ? { fileId: file.file_id, uniqueId: file.file_unique_id, fileName: typeof file.file_name === "string" ? file.file_name : `telegram-${file.file_unique_id}.jpg`, contentType: typeof file.mime_type === "string" ? file.mime_type : isRecord(message.document) ? "application/octet-stream" : "image/jpeg", ...(typeof file.file_size === "number" ? { size: file.file_size } : {}) }
+    : undefined;
   return {
     chatId: String(chatIdValue),
     firstName: message.from.first_name.slice(0, 128),
+    ...(attachment ? { attachment } : {}),
+    ...(typeof message.caption === "string" ? { caption: message.caption.slice(0, 1024) } : {}),
     ...(typeof message.text === "string" && message.text.length <= 4_096
       ? { text: message.text }
       : {}),
@@ -454,7 +463,7 @@ function telegramCommandRole(
   return null;
 }
 
-function telegramUpdate(value: unknown): TelegramUpdate {
+export function telegramUpdate(value: unknown): TelegramUpdate {
   if (!isRecord(value) || typeof value.update_id !== "number" || !Number.isSafeInteger(value.update_id)) {
     throw new Error("Telegram update was invalid");
   }
@@ -564,4 +573,54 @@ export async function pollTelegramUpdates(
 export async function pollTelegramOnboarding(env: TelegramEnv): Promise<number> {
   if (!env.TELEGRAM_OTP_STATE) throw new Error("Telegram polling state is unavailable");
   return env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").pollOnboarding();
+}
+
+export async function telegramWebhookSecret(env: Pick<WorkerEnv, "TELEGRAM_BOT_TOKEN">): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.TELEGRAM_BOT_TOKEN), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("finance-dash-telegram-webhook-v1")))].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function configureTelegramWebhook(env: WorkerEnv): Promise<void> {
+  await telegramApi(env, "setWebhook", { url: new URL("/api/telegram/webhook", env.PUBLIC_APP_URL).toString(), secret_token: await telegramWebhookSecret(env), allowed_updates: ["message"], max_connections: 20, drop_pending_updates: false });
+}
+
+export async function getTelegramWebhookInfo(env: WorkerEnv): Promise<unknown> {
+  return telegramApi(env, "getWebhookInfo", {});
+}
+
+export async function downloadTelegramAttachment(env: WorkerEnv, attachment: NonNullable<TelegramPrivateMessage["attachment"]>): Promise<ArrayBuffer> {
+  if (attachment.size && attachment.size > TELEGRAM_DOCUMENT_LIMIT_BYTES) throw new Error("Send a document up to 10 MB");
+  const result = await telegramApi(env, "getFile", { file_id: attachment.fileId });
+  if (!isRecord(result) || typeof result.file_path !== "string" || !/^[a-zA-Z0-9_./-]+$/.test(result.file_path) || result.file_path.includes("..")) throw new Error("Telegram file is unavailable");
+  const response = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${result.file_path}`, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error("Telegram file could not be downloaded");
+  const { boundedBytes } = await import("./documentIntake");
+  return (await boundedBytes(response.body, TELEGRAM_DOCUMENT_LIMIT_BYTES)).buffer;
+}
+
+export function configuredTelegramUser(env: WorkerEnv, message: TelegramPrivateMessage): { user: TelegramAuthUser; role: TelegramCommandRole } | null {
+  const user = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(user => user.chatId === message.chatId);
+  if (!user) return null;
+  const role = telegramCommandRole(user, new Set(parseTelegramCommandUsers(env.TELEGRAM_COMMAND_ADMIN_USERS, "TELEGRAM_COMMAND_ADMIN_USERS").map(normalizeFinanceUsername)), new Set(parseTelegramCommandUsers(env.TELEGRAM_COMMAND_READ_ONLY_USERS, "TELEGRAM_COMMAND_READ_ONLY_USERS").map(normalizeFinanceUsername)));
+  return role ? { user, role } : null;
+}
+
+export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdate, dependencies: {
+  handleCommand: TelegramCommandHandler;
+  handleAttachment: (env: WorkerEnv, user: TelegramAuthUser, message: TelegramPrivateMessage) => Promise<TelegramCommandReply>;
+}): Promise<{ chatId: string; protectContent: boolean; reply: TelegramCommandReply } | null> {
+  const message = update.message; if (!message) return null;
+  const account = configuredTelegramUser(env, message);
+  const text = message.text?.trim() ?? "";
+  let reply: TelegramCommandReply;
+  if (!account) reply = onboardingReply(message, parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []);
+  else if (message.attachment) {
+    reply = account.role === "administrator" && ["ali", "ali m"].includes(account.user.normalizedUsername)
+      ? await dependencies.handleAttachment(env, account.user, message)
+      : "Document uploads are available to Ali and Ali M only.";
+  } else if (text) {
+    await telegramApi(env, "sendChatAction", { chat_id: message.chatId, action: "typing" }).catch(() => undefined);
+    reply = await dependencies.handleCommand(env, account.user, account.role, text.startsWith("/") ? text : `/ask ${text}`);
+  } else reply = "Send a question, or attach a receipt or invoice as a PDF or image.";
+  return { chatId: message.chatId, protectContent: Boolean(account), reply };
 }

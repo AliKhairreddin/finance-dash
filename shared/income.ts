@@ -1,3 +1,4 @@
+import { wiseEntityFromAccountName } from "./wiseEntities";
 import type {
   AccountBalance,
   AiInvoicePaymentMatch,
@@ -378,6 +379,7 @@ export function invoicePaymentAiCandidates({
       || (transaction.status !== "posted" && transaction.status !== "settled")
       || !isPaymentSource(transaction.source)
       || transaction.invoiceMatchSource === "manual"
+      || Boolean(transaction.matchedInvoiceId)
       || allocations.some((allocation) => allocation.transactionId === transaction.id)
     ) {
       return [];
@@ -386,6 +388,8 @@ export function invoicePaymentAiCandidates({
       if (
         invoice.documentType !== "sales_invoice"
         || invoice.status !== "open"
+        || Boolean(invoice.transactionId)
+        || Boolean(invoice.entity && (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)) && invoice.entity !== (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)))
         || invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
         || transaction.date < invoice.issueDate
         || Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)) > invoicePaymentAmountTolerance
@@ -445,24 +449,9 @@ export function reconcileAiInvoicePayments({
     if (!invoice) return transaction;
     const amount = invoiceOutstanding(invoice, nextAllocations);
     if (amount <= 0) return transaction;
-    nextAllocations.push({
-      id: `payment-ai-${slug(transaction.id)}-${slug(invoice.id)}`,
-      invoiceId: invoice.id,
-      transactionId: transaction.id,
-      amount,
-      currency: invoice.currency,
-      source: transaction.source as PaymentSource,
-      accountName: transaction.accountName,
-      reference: transaction.description,
-      mode: "automatic",
-      confidence: match.confidence,
-      matchReason: `AI: ${match.reason}`,
-      paidAt: transaction.date,
-      createdAt
-    });
-    nextInvoices = applyPaymentState(nextInvoices, nextAllocations).map((item) =>
-      item.id === invoice.id ? { ...item, updatedAt: createdAt } : item
-    );
+    nextInvoices = nextInvoices.map(item => item.id === invoice.id
+      ? { ...item, transactionId: transaction.id, updatedAt: createdAt }
+      : item);
     return {
       ...transaction,
       matchedInvoiceId: invoice.id,
@@ -477,7 +466,7 @@ export function reconcileAiInvoicePayments({
     invoices: nextInvoices,
     transactions: nextTransactions,
     allocations: nextAllocations,
-    matched: nextAllocations.length - allocations.length
+    matched: accepted.size
   };
 }
 
@@ -506,6 +495,7 @@ export function reconcileExactInvoicePayments({
       (transaction.status !== "posted" && transaction.status !== "settled") ||
       !isPaymentSource(transaction.source) ||
       transaction.invoiceMatchSource === "manual" ||
+      Boolean(transaction.matchedInvoiceId) ||
       nextAllocations.some((allocation) => allocation.transactionId === transaction.id)
     ) {
       return transaction;
@@ -515,6 +505,8 @@ export function reconcileExactInvoicePayments({
       if (
         invoice.documentType !== "sales_invoice" ||
         invoice.status !== "open" ||
+        Boolean(invoice.transactionId) ||
+        Boolean(invoice.entity && (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)) && invoice.entity !== (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName))) ||
         invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
       ) return false;
       if (transaction.date < invoice.issueDate) return false;
@@ -536,24 +528,9 @@ export function reconcileExactInvoicePayments({
       : `Amount within $${invoicePaymentAmountTolerance} fee tolerance (${difference.toFixed(2)} difference), with matching currency and company or invoice reference`;
     const confidence = isExact ? 1 : 0.98;
     const createdAt = now.toISOString();
-    nextAllocations.push({
-      id: `payment-${slug(transaction.id)}-${slug(invoice.id)}`,
-      invoiceId: invoice.id,
-      transactionId: transaction.id,
-      amount: invoiceOutstanding(invoice, nextAllocations),
-      currency: invoice.currency,
-      source: transaction.source,
-      accountName: transaction.accountName,
-      reference: transaction.description,
-      mode: "automatic",
-      confidence,
-      matchReason,
-      paidAt: transaction.date,
-      createdAt
-    });
-    nextInvoices = applyPaymentState(nextInvoices, nextAllocations).map((item) =>
-      item.id === invoice.id ? { ...item, updatedAt: createdAt } : item
-    );
+    nextInvoices = nextInvoices.map(item => item.id === invoice.id
+      ? { ...item, transactionId: transaction.id, updatedAt: createdAt }
+      : item);
     matched += 1;
     if (isExact) exactMatched += 1;
     else toleranceMatched += 1;

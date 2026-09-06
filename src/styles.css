@@ -12014,3 +12014,36 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.documents-page { display: grid; gap: 18px; min-width: 0; }
+.document-company-tabs, .document-folders { display: flex; gap: 8px; flex-wrap: wrap; }
+.document-folders { padding: 4px 0; }
+.document-folder { min-height: 64px; padding: 12px 16px; border: 1px solid var(--border, #d0d5db); border-radius: 12px; gap: 10px; }
+.document-folder.active { border-color: #438bdb; background: rgba(67,139,219,.12); }
+.document-folder small { font-variant-numeric: tabular-nums; }
+.document-toolbar { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px; }
+.document-toolbar > input { max-width: 300px; }
+.document-dialog { width: min(640px, 95vw); max-height: 90vh; overflow: auto; padding: 24px; }
+.document-dialog form, .document-dialog label { display: grid; gap: 8px; }
+.document-dialog form { gap: 18px; margin-top: 18px; }
+.document-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.document-drop-zone { padding: 24px; border: 1px dashed #8093a8; border-radius: 12px; }
+.account-group-totals { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 10px; padding: 0 16px 16px; }
+.account-group-total { border: 1px solid var(--border, #d0d5db); border-radius: 10px; padding: 12px; display: grid; gap: 6px; }
+.account-group-total strong { font-size: 19px; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .document-form-grid { grid-template-columns: 1fr; } .documents-page > .panel-header { align-items: flex-start; gap: 12px; flex-wrap: wrap; } .document-toolbar > input { max-width: none; } }
+
+.document-dialog { width: min(680px, calc(100vw - 32px)); max-width: 680px; max-height: 90vh; overflow-y: auto; }
+.document-transaction-details { display: flex; gap: 24px; flex-wrap: wrap; margin: 16px 0; }
+.document-transaction-details dt { color: var(--muted-foreground); font-size: 12px; }
+.document-transaction-details dd { margin: 4px 0 0; font-weight: 600; }
+.linked-document-transaction { margin-bottom: 16px; }
+.documents-page td:first-child { max-width: 320px; overflow-wrap: anywhere; }
+.documents-page .note-popover, .document-dialog .note-popover { position: static; display: inline-flex; vertical-align: middle; margin-left: 5px; }
+.documents-page .document-toolbar { flex-direction: row; align-items: center; }
+.document-toolbar > .searchable-select { width: 190px; flex: 0 1 190px; }
+.document-folder { color: var(--ink); background: var(--panel); flex: 0 0 auto; }
+.document-folder.active { color: var(--ink); }
+.document-folders { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+.account-group-total { position: relative; padding-right: 38px; }
+@media (max-width: 640px) { .document-toolbar > .searchable-select { flex: 1 1 160px; } }

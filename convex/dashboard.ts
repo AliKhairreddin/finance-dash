@@ -116,6 +116,7 @@ const provider = v.object({
 
 const invoice = v.object({
   id: v.string(),
+  entity: v.optional(wiseEntity),
   providerId: v.optional(v.string()),
   documentType: invoiceDocumentType,
   origin: v.union(v.literal("manual"), v.literal("revenue"), v.literal("merit")),
@@ -175,6 +176,7 @@ const expenseDocument = v.object({
 });
 const expenseRecord = v.object({
   id: v.string(),
+  entity: v.optional(wiseEntity),
   recordNumber: v.string(),
   recordType: v.union(v.literal("paid_expense"), v.literal("supplier_bill")),
   paymentStatus: v.union(v.literal("paid"), v.literal("unpaid")),
@@ -578,7 +580,7 @@ function normalizedCashFlowLine(line: CashFlowLine): CashFlowLine {
   };
 }
 
-async function bumpBankLedgerRevision(ctx: MutationCtx, dates: Iterable<string>): Promise<void> {
+export async function bumpBankLedgerRevision(ctx: MutationCtx, dates: Iterable<string>): Promise<void> {
   const existing = await ctx.db
     .query("bankLedgerRevision")
     .withIndex("by_key", (q) => q.eq("key", "default"))

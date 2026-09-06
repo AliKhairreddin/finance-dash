@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { financialDocumentFields } from "./documentSchema";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -100,6 +101,7 @@ const provider = v.object({
 
 const invoice = v.object({
   id: v.string(),
+  entity: v.optional(wiseEntity),
   providerId: v.optional(v.string()),
   documentType: invoiceDocumentType,
   origin: v.union(v.literal("manual"), v.literal("revenue"), v.literal("merit")),
@@ -159,6 +161,7 @@ const expenseDocument = v.object({
 });
 const expenseRecord = v.object({
   id: v.string(),
+  entity: v.optional(wiseEntity),
   recordNumber: v.string(),
   recordType: v.union(v.literal("paid_expense"), v.literal("supplier_bill")),
   paymentStatus: v.union(v.literal("paid"), v.literal("unpaid")),
@@ -578,6 +581,18 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  financialDocuments: defineTable(financialDocumentFields)
+    .index("by_storage", ["storageId"])
+    .index("by_content_hash", ["contentHash"])
+    .index("by_intake_key", ["intakeKey"])
+    .index("by_entity_month", ["entity", "month"])
+    .index("by_month", ["month"])
+    .index("by_status_next_match", ["status", "nextMatchAt"])
+    .index("by_status", ["status"])
+    .index("by_transaction", ["transactionId"])
+    .index("by_invoice", ["invoiceId"]),
+  documentFolders: defineTable({ key: v.string(), entity: v.optional(wiseEntity), month: v.string(), count: v.number() }).index("by_key", ["key"]),
+  documentSettings: defineTable({ key: v.string(), allowedSenders: v.array(v.string()) }).index("by_key", ["key"]),
   dashboardState: defineTable({
     key: v.string(),
     providers: v.array(provider),
@@ -673,6 +688,8 @@ export default defineSchema({
     .index("by_source_connection_identity_version", ["source", "connectionKey", "identityVersion"])
     .index("by_merchant_direction", ["merchantKey", "direction"])
     .index("by_matched_provider", ["matchedProviderId"])
+    .index("by_matched_invoice", ["matchedInvoiceId"])
+    .index("by_direction_currency_amount", ["direction", "currency", "amount"])
     .index("by_matched_provider_category_date_id", ["matchedProviderId", "category", "date", "id"])
     .index("by_category", ["category"]),
   profitDistributionFacts: defineTable({

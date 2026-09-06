@@ -1,8 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   configureTelegramBotCommands,
-  deleteTelegramWebhook,
-  pollTelegramUpdates,
+  configureTelegramWebhook,
   sendTelegramMessage
 } from "./telegram";
 import {
@@ -12,7 +11,6 @@ import {
   deliverCashReportParts,
   type CashReportDeliveryState
 } from "./telegramCashReport";
-import { handleTelegramCommand } from "./handler";
 import {
   cancelTelegramOtpTransition,
   issueTelegramOtpTransition,
@@ -42,7 +40,6 @@ import {
 
 const OTP_STATE_KEY = "otp-state";
 const POLLING_CONFIGURATION_KEY = "polling-configuration";
-const POLLING_OFFSET_KEY = "polling-offset";
 const SLASH_VIRTUAL_ACCOUNT_BALANCE_ALERT_STATE_KEY = "slash-virtual-account-balance-alert-state";
 const TELEGRAM_ALERT_SETTINGS_KEY = "telegram-alert-settings";
 const TELEGRAM_ALERT_HISTORY_KEY = "telegram-alert-history";
@@ -75,7 +72,7 @@ async function configurationFingerprints(
     crypto.subtle.digest(
       "SHA-256",
       textEncoder.encode([
-        "finance-telegram-commands.v3",
+        "finance-telegram-webhook.v4",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
         env.TELEGRAM_COMMAND_ADMIN_USERS,
@@ -147,35 +144,15 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
       const now = Date.now();
       const fingerprints = await configurationFingerprints(this.env);
       const stored = await this.ctx.storage.get<StoredPollingConfiguration>(POLLING_CONFIGURATION_KEY);
-      const tokenChanged = Boolean(
-        stored?.tokenFingerprint
-        && stored.tokenFingerprint !== fingerprints.tokenFingerprint
-      );
       const needsConfiguration = stored?.commandFingerprint !== fingerprints.commandFingerprint
-        || !stored
-        || stored.configuredAt <= now - POLLING_CONFIGURATION_RECHECK_MS;
+        || stored?.tokenFingerprint !== fingerprints.tokenFingerprint
+        || !stored || stored.configuredAt <= now - POLLING_CONFIGURATION_RECHECK_MS;
       if (needsConfiguration) {
-        await deleteTelegramWebhook(this.env);
         await configureTelegramBotCommands(this.env);
+        await configureTelegramWebhook(this.env);
         await this.ctx.storage.put(POLLING_CONFIGURATION_KEY, { ...fingerprints, configuredAt: now });
-        if (tokenChanged) await this.ctx.storage.delete(POLLING_OFFSET_KEY);
       }
-
-      const offset = await this.ctx.storage.get<number>(POLLING_OFFSET_KEY) ?? 0;
-      let result: Awaited<ReturnType<typeof pollTelegramUpdates>>;
-      try {
-        result = await pollTelegramUpdates(this.env, offset, { handleCommand: handleTelegramCommand });
-      } catch (error) {
-        if (needsConfiguration) throw error;
-        await deleteTelegramWebhook(this.env);
-        await configureTelegramBotCommands(this.env);
-        await this.ctx.storage.put(POLLING_CONFIGURATION_KEY, { ...fingerprints, configuredAt: now });
-        result = await pollTelegramUpdates(this.env, offset, { handleCommand: handleTelegramCommand });
-      }
-      if (result.nextOffset !== offset) {
-        await this.ctx.storage.put(POLLING_OFFSET_KEY, result.nextOffset);
-      }
-      return result.processed;
+      return 0;
     });
   }
 

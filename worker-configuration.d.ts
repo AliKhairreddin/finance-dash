@@ -60,11 +60,22 @@ interface ScheduledController {
 	noRetry(): void;
 }
 
+interface ForwardableEmailMessage {
+  readonly from: string;
+  readonly to: string;
+  readonly raw: ReadableStream<Uint8Array>;
+  readonly rawSize: number;
+  readonly headers: Headers;
+  setReject(reason: string): void;
+}
 interface ExportedHandler<Env> {
+  email?(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): void | Promise<void>;
 	fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response>;
 	scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
 }
 interface __BaseEnv_WorkerEnv {
+  DOCUMENT_AI_MODEL: string;
+  TELEGRAM_INBOX: DurableObjectNamespace<import("./worker/index").TelegramInbox>;
 	ASSETS: Fetcher;
 	BROWSER: BrowserRun;
 	PUBLIC_APP_URL: "https://finance.thatcanadian.dev";

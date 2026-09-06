@@ -1,3 +1,6 @@
+import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
+import { accountBalanceGroups } from "../shared/accountBalanceGroups";
+import { DocumentsView } from "@/features/expenses/DocumentsView";
 import {
   ArrowDownUp,
   ArrowDownRight,
@@ -225,7 +228,7 @@ import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -1060,6 +1063,19 @@ function App() {
       window.clearInterval(liveRefresh);
     };
   }, [analyticsDataRevision, dashboard?.asOf, ensureAnalyticsSnapshot]);
+
+  useEffect(() => {
+    if (session?.role !== "administrator" || !["expenses", "invoices", "documents", "cash-flow-invoices"].includes(activeTab)) return;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.visibilityState !== "visible") return;
+      pending = true;
+      try { await loadDashboard(); } catch { /* Keep the current view until the next refresh. */ } finally { pending = false; }
+    };
+    window.addEventListener("finance:documents-changed", refresh);
+    const timer = window.setInterval(refresh, 15_000);
+    return () => { window.removeEventListener("finance:documents-changed", refresh); window.clearInterval(timer); };
+  }, [session?.role, activeTab]);
 
   async function requestTransactionPage(
     request: TransactionPageRequest,
@@ -2386,6 +2402,8 @@ function App() {
         </>
       )}
 
+      {activeTab === "documents" && <DocumentsView apiBase={apiBase} />}
+
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
       {activeTab === "media-spend" && <MediaSpendView apiBase={apiBase} onOpenProviderBalances={() => setActiveTab("media-funding")} />}
@@ -2413,6 +2431,8 @@ function App() {
           onUpdateInvoice={updateInvoiceDraft}
         />
       )}
+
+      {activeTab === "banks" && <LinkedDocumentTransaction apiBase={apiBase} invoices={dashboard.invoices} expenses={dashboard.expenses} />}
 
       {activeTab === "banks" && (
         <BanksView
@@ -3056,7 +3076,8 @@ function Sidebar({
   const accountingItems: SidebarItem[] = [
     { id: "revenue", label: "Revenue", icon: <BadgeDollarSign size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FileText size={17} /> },
-    { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> }
+    { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> },
+    { id: "documents", label: "Documents", icon: <FileText size={17} /> }
   ];
   const cashFlowItems: SidebarItem[] = [
     { id: "cash-flow", label: "Position", icon: <WalletCards size={17} /> },
@@ -3275,6 +3296,7 @@ function Overview({
             <h2>Account balances</h2>
             <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
           </div>
+          <div className="account-group-totals">{accountBalanceGroups(dashboard.accounts, dashboard.fxRates).map(group => <article className="account-group-total" key={group.id}><span>{group.name}</span><strong>{group.excludedCurrencies.length ? "Estimate unavailable" : `≈ ${money(group.totalUsd, "USD")}`}</strong><InfoPopover label={`${group.name} balances`}><p>{Object.entries(group.native).map(([currency, amount]) => money(amount, currency)).join(" · ")}</p>{group.asOf && <p>FX as of {group.asOf.slice(0, 10)}</p>}{group.staleCurrencies.length > 0 && <p>Stale rates: {group.staleCurrencies.join(", ")}</p>}{group.excludedCurrencies.length > 0 && <p>Missing rates: {group.excludedCurrencies.join(", ")}</p>}</InfoPopover></article>)}</div>
           <SimpleMoneyTable
             nameLabel="Account"
             rows={dashboard.accounts.filter(hasNonZeroAccountBalance).map((item) => ({

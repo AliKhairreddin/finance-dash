@@ -381,6 +381,7 @@ export interface TransactionReviewBootstrap {
 }
 
 export interface Invoice {
+  entity?: WiseEntity;
   id: string;
   providerId?: string;
   documentType: InvoiceDocumentType;
@@ -456,6 +457,7 @@ export interface ExpenseDocument {
 }
 
 export interface ExpenseRecord {
+  entity?: WiseEntity;
   id: string;
   recordNumber: string;
   recordType: ExpenseRecordType;

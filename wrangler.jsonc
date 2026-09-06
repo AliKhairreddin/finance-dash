@@ -15,6 +15,7 @@
   },
   "durable_objects": {
     "bindings": [
+      { "name": "TELEGRAM_INBOX", "class_name": "TelegramInbox" },
       {
         "name": "TELEGRAM_OTP_STATE",
         "class_name": "TelegramOtpState"
@@ -22,6 +23,7 @@
     ]
   },
   "exports": {
+    "TelegramInbox": { "type": "durable-object", "storage": "sqlite" },
     "TelegramOtpState": {
       "type": "durable-object",
       "storage": "sqlite"
@@ -38,6 +40,7 @@
     }
   ],
   "vars": {
+    "DOCUMENT_AI_MODEL": "google/gemini-3.8-flash",
     // Current showcase/development data store. Switch to famous-oyster-878 only when the app is production-ready.
     "CONVEX_URL": "https://fabulous-elephant-597.convex.cloud",
     "WISE_ENVIRONMENT": "production",

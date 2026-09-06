@@ -234,8 +234,9 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
     now: new Date("2026-07-10T12:00:00.000Z")
   });
   assert.equal(result.matched, 1);
-  assert.equal(result.invoices[0].status, "paid");
-  assert.equal(result.allocations[0].source, "wise");
+  assert.equal(result.invoices[0].status, "open");
+  assert.equal(result.invoices[0].transactionId, transaction.id);
+  assert.equal(result.allocations.length, 0);
   assert.equal(result.transactions[0].matchedInvoiceId, invoice.id);
   assert.equal(result.transactions[0].invoiceMatchSource, "exact");
   assert.equal(result.transactions[0].invoiceMatchConfidence, 1);
@@ -251,7 +252,8 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
   assert.equal(feeAdjusted.exactMatched, 0);
   assert.equal(feeAdjusted.toleranceMatched, 1);
   assert.equal(feeAdjusted.transactions[0].invoiceMatchSource, "tolerance");
-  assert.equal(feeAdjusted.invoices[0].status, "paid");
+  assert.equal(feeAdjusted.invoices[0].status, "open");
+  assert.equal(feeAdjusted.allocations.length, 0);
 
   const outsideFeeTolerance = reconcileExactInvoicePayments({
     invoices: [invoice],
@@ -402,8 +404,9 @@ test("AI invoice reconciliation accepts only server-approved high-confidence mat
     now: new Date("2026-07-10T12:00:00.000Z")
   });
   assert.equal(accepted.matched, 1);
-  assert.equal(accepted.invoices[0].status, "paid");
-  assert.equal(accepted.allocations[0].mode, "automatic");
+  assert.equal(accepted.invoices[0].status, "open");
+  assert.equal(accepted.allocations.length, 0);
+  assert.equal(accepted.invoices[0].transactionId, transaction.id);
   assert.equal(accepted.transactions[0].invoiceMatchSource, "ai");
   assert.equal(accepted.transactions[0].invoiceMatchConfidence, 0.96);
 });

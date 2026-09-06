@@ -1,3 +1,7 @@
+import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
+import { accountBalanceGroups } from "../shared/accountBalanceGroups";
+import { telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
+import { handleDocumentApi, extractDocument, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
 type Env = WorkerEnv;
 import type {
   AccountBalance,
@@ -5844,14 +5848,33 @@ async function downloadInvoicePdf(env: Env, invoiceId: string): Promise<Response
   const state = await loadPersisted(env);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice || invoice.documentType !== "sales_invoice") throw new ApiError(404, "Sales invoice not found");
-  if (!invoice.externalId) throw new ApiError(409, "Save this invoice in Merit before downloading its PDF");
+  const archived = await getConvexClient(env).query(api.documents.forInvoice, { serviceToken: getConvexServiceToken(env), invoiceId });
+  if (archived?.url) {
+    const original = await fetch(archived.url, { signal: AbortSignal.timeout(30_000) });
+    return new Response(original.body, { status: original.status, headers: { "Content-Type": archived.contentType, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(archived.fileName)}`, "Cache-Control": "private, no-store" } });
+  }
+  if (!invoice.externalId) throw new ApiError(409, "This invoice does not have an original document yet");
   const bytes = await fetchMeritInvoicePdf(env, invoice.externalId);
+  await ingestDocument(env, { bytes: new Uint8Array(bytes), fileName: invoicePdfFileName(invoice), contentType: "application/pdf", source: "archive", invoiceId, entity: invoice.entity });
   return new Response(bytes, {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${invoicePdfFileName(invoice)}"`
     }
   });
+}
+
+async function archiveInvoiceOriginals(env: Env, requested?: string[]): Promise<{ saved: number; remaining: number; failed: string[] }> {
+  const missing = await getConvexClient(env).query(api.documents.missingInvoiceOriginals, { serviceToken: getConvexServiceToken(env) });
+  const ids = requested ? requested.filter(id => missing.includes(id)).slice(0, 8) : missing.slice(0, 5);
+  let saved = 0; const failed: string[] = [];
+  for (let offset = 0; offset < ids.length; offset += 3) {
+    await Promise.all(ids.slice(offset, offset + 3).map(async id => {
+      try { const response = await downloadInvoicePdf(env, id); if (!response.ok) throw new Error("Original could not be archived"); await response.body?.cancel(); saved++; }
+      catch (error) { failed.push(id); console.error(JSON.stringify({ event: "invoice_archive_failed", invoiceId: id, error: error instanceof Error ? error.message : String(error) })); }
+    }));
+  }
+  return { saved, remaining: missing.length - saved, failed };
 }
 
 async function syncRevenue(env: Env, payload: SyncRevenuePayload = {}): Promise<RevenuePullResult> {
@@ -6949,6 +6972,12 @@ async function handleApi(
   const url = new URL(request.url);
 
   try {
+    const documentResponse = await handleDocumentApi(request, env);
+    if (documentResponse) return documentResponse;
+
+    if (url.pathname === "/api/telegram/status" && request.method === "GET") return json(await getTelegramWebhookInfo(env));
+    if (url.pathname === "/api/telegram/configure" && request.method === "POST") { await env.TELEGRAM_OTP_STATE.getByName("telegram-onboarding").pollOnboarding(); return json(await getTelegramWebhookInfo(env)); }
+    if (url.pathname === "/api/transactions/lookup" && request.method === "GET") return json(await getConvexClient(env).query(api.banking.getTransaction, { serviceToken: getConvexServiceToken(env), id: url.searchParams.get("id") ?? "" }));
     if (url.pathname === "/api/health") {
       return json({ ok: true, service: "finance-dash-worker", time: new Date().toISOString() });
     }
@@ -7814,6 +7843,48 @@ async function telegramAnalytics(
   return await response.json() as BankAnalyticsSnapshot;
 }
 
+async function telegramQuestion(env: Env, user: TelegramAuthUser, question: string, conversational = true): Promise<TelegramCommandReply> {
+  const startedAt = Date.now();
+  const inbox = env.TELEGRAM_INBOX.getByName(`chat:${user.chatId}`);
+  const [state, history] = await Promise.all([loadPersisted(env), conversational ? inbox.history() : Promise.resolve([])]);
+  const context = {
+    today: financeOperatingDate(), dashboard: env.PUBLIC_APP_URL,
+    balances: accountBalanceGroups(state.bankAccounts, state.fxRates).map(({ accounts, ...group }) => ({ ...group, updatedAt: accounts.map(a => a.updatedAt).sort()[0] })),
+    invoiceCounts: { open: state.invoices.filter(i => i.status === "open").length, paid: state.invoices.filter(i => i.status === "paid").length, matched: state.invoices.filter(i => i.transactionId).length },
+    companies: state.providers.map(p => ({ name: p.name, aliases: p.aliases })).slice(0, 150)
+  };
+  const page = <T,>(rows: T[], offset = 0) => ({ totalRecords: rows.length, offset, records: rows.slice(offset, offset + 60), nextOffset: offset + 60 < rows.length ? offset + 60 : null });
+  const includes = (value: unknown, search?: string) => !search || JSON.stringify(value).toLowerCase().includes(search.toLowerCase());
+  const lookup = async (options: FinanceLookup): Promise<unknown> => {
+    const { section, search, offset = 0 } = options;
+    if (section === "invoices") return page(state.invoices.filter(i => includes(i, search) && (!options.fromDate || i.issueDate >= options.fromDate) && (!options.toDate || i.issueDate <= options.toDate) && (!options.status || (options.status === "matched" ? Boolean(i.transactionId) : i.status === options.status)) && (!options.entity || i.entity === options.entity)).map(i => ({ ...i, outstanding: invoiceOutstanding(i, state.paymentAllocations), matched: Boolean(i.transactionId) })), offset);
+    if (section === "expenses") return page(state.expenses.filter(e => includes(e, search) && (!options.fromDate || e.issueDate >= options.fromDate) && (!options.toDate || e.issueDate <= options.toDate) && (!options.status || (options.status === "matched" ? Boolean(e.transactionId) : e.paymentStatus === options.status)) && (!options.entity || e.entity === options.entity)).map(({ documents, ...e }) => ({ ...e, documents: documents.map(({ storageId: _, ...file }) => file) })), offset);
+    if (section === "companies") return page(state.providers.filter(p => includes(p, search)), offset);
+    if (section === "revenue") return { runs: page(state.revenueRuns.filter(r => includes(r, search) && (!options.fromDate || r.periodEnd >= options.fromDate) && (!options.toDate || r.periodStart <= options.toDate)), offset), accruals: state.revenueAccruals.filter(r => includes(r, search)), rules: state.revenuePartners.filter(r => includes(r, search)) };
+    if (section === "holdings") return state.holdings;
+    if (section === "cashflow") return { receivables: state.manualReceivables, snapshots: state.cashFlowSnapshots.slice(-6), holdings: state.holdings };
+    if (section === "sync_status") return { health: state.bankSyncHealth, coverage: state.bankSyncStates };
+    if (section === "documents") {
+      const result = await getConvexClient(env).query(api.documents.list, { serviceToken: getConvexServiceToken(env), entity: options.entity, paginationOpts: { cursor: options.cursor ?? null, numItems: 100 } });
+      return { records: result.page.filter(d => includes({ fileName: d.fileName, extraction: d.extraction }, search)).map(({ sourceContext: _, storageId: __, ...d }) => d), isDone: result.isDone, nextCursor: result.isDone ? null : result.continueCursor, scope: "Search applies to this page; continue pagination before concluding no matching document exists" };
+    }
+    if (section === "distribution") return (await getSnapshot(env)).profitDistribution;
+    if (section === "media_funding") return readMediaFunding(env);
+    if (section === "management") return getManagementReportDashboard(env);
+    const range = parseSlashTransactionDateRange(options.fromDate, options.toDate);
+    if (!range || range.toDate > financeOperatingDate()) throw new Error("Specify valid fromDate/toDate, no later than today");
+    if (section === "media_spend") return readMediaSpend(env, range.fromDate, range.toDate);
+    if (section === "analytics") return { scope: { ...range, banks: "all", search: "unfiltered; inspect relevant company/source rows in this complete snapshot" }, analytics: await telegramAnalytics(env, range) };
+    if (section === "transactions") return readScopedTransactionPage(env, { ...range, source: options.source, direction: options.direction, wiseEntity: options.entity, search, cursor: options.cursor ?? null, limit: 50, match: "all", sortKey: "date", order: "desc" });
+    throw new Error("Unknown finance section");
+  };
+  const output = await answerFinanceQuestion({ settings: runtimeAiSettings(env, state.aiSettings), question, history, context, referer: env.PUBLIC_APP_URL, lookup });
+  if (conversational) await inbox.remember(question, output);
+  console.log(JSON.stringify({ event: "telegram_answer_completed", durationMs: Date.now() - startedAt }));
+  const messages = splitCashReport(output);
+  return messages.length === 1 ? messages[0] : { messages };
+}
+
 async function telegramReadCommand(
   env: Env,
   user: TelegramAuthUser,
@@ -7844,6 +7915,7 @@ async function telegramReadCommand(
       revenue: "revenue",
       invoices: "invoices",
       expenses: "expenses",
+      documents: "documents",
       funding: "media-funding",
       distribution: "distribution",
       management: "management"
@@ -8016,33 +8088,11 @@ async function telegramReadCommand(
     ].join("\n");
   }
 
-  const snapshot = await getSnapshot(env);
   if (command === "ask") {
     if (!args) throw new ApiError(400, "/ask requires a question");
-    const questionRange = telegramQuestionRange(args);
-    const analytics = await telegramAnalytics(env, questionRange);
-    const compactContext = {
-      asOf: snapshot.asOf,
-      accounts: snapshot.accounts.map(({ name, source, balance, currency, status }) => ({ name, source, balance, currency, status })),
-      metrics: snapshot.metrics,
-      approximateUsdTotals: snapshot.approximateUsdTotals,
-      revenueMetrics: snapshot.revenueMetrics,
-      openInvoices: snapshot.invoices.filter((invoice) => invoice.status !== "paid").map(({ invoiceNumber, customerName, amount, currency, status, dueDate }) => ({ invoiceNumber, customerName, amount, currency, status, dueDate })),
-      unpaidExpenses: snapshot.expenses.filter((expense) => expense.paymentStatus === "unpaid").map(({ recordNumber, supplierName, grossAmount, currency, dueDate }) => ({ recordNumber, supplierName, grossAmount, currency, dueDate })),
-      periodAnalytics: analytics ? {
-        period: questionRange,
-        summary: analytics.summary,
-        companies: analytics.providers,
-        categories: analytics.categories,
-        slashCashback: analytics.bankPeriod.slashCashback
-      } : { period: questionRange, status: "preparing" }
-    };
-    const result = await runAiPrompt(env, {
-      systemPrompt: "Answer only from the supplied Finance Dash facts. Be concise, preserve currencies, and say when the facts do not contain the answer.",
-      prompt: `Finance Dash facts:\n${JSON.stringify(compactContext)}\n\nQuestion: ${args}`
-    });
-    return `💬 Finance answer\n\n${result.output}`;
+    return await telegramQuestion(env, user, args);
   }
+  const snapshot = await getSnapshot(env);
   if (command === "overview") {
     return [
       "📊 Finance overview",
@@ -8535,6 +8585,34 @@ export default {
     env: Env,
     executionContext?: ExecutionContext
   ): Promise<Response> {
+    if (new URL(request.url).pathname === "/api/telegram/webhook") {
+      if (request.method !== "POST" || !await secureHeaderMatches(request.headers.get("X-Telegram-Bot-Api-Secret-Token"), await telegramWebhookSecret(env))) return json({ message: "Unauthorized" }, { status: 401 });
+      if (Number(request.headers.get("Content-Length")) > 1024 * 1024) return json({ message: "Update too large" }, { status: 413 });
+      try { const value = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 1024 * 1024))); const update = telegramUpdate(value); if (update.message) await env.TELEGRAM_INBOX.getByName(`chat:${update.message.chatId}`).receive(value); return json({ ok: true }); }
+      catch { return json({ message: "Update could not be accepted" }, { status: 503 }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/telegram") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try {
+        if (request.method === "GET") return json({ webhook: await getTelegramWebhookInfo(env), documentUsers: (parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []).filter(user => ["ali", "ali m"].includes(user.normalizedUsername)).map(user => user.username) });
+        if (request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
+        const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 8192))) as { username: string; question: string };
+        const user = (parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []).find(user => user.normalizedUsername === body.username?.trim().toLowerCase());
+        if (!user || typeof body.question !== "string" || !body.question.trim() || body.question.length > 4096) return json({ message: "Choose a configured user and a question" }, { status: 400 });
+        const startedAt = Date.now(); const answer = await telegramQuestion(env, user, body.question, false);
+        return json({ answer, durationMs: Date.now() - startedAt });
+      } catch (error) { console.error(JSON.stringify({ event: "telegram_diagnostic_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "The finance assistant could not complete this check" }, { status: 502 }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/documents/archive-invoices") {
+      if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try { const body = await request.json() as { ids?: string[] }; if (body.ids && (!Array.isArray(body.ids) || body.ids.length > 8 || body.ids.some(id => typeof id !== "string"))) return json({ message: "Invalid invoice batch" }, { status: 400 }); return json(await archiveInvoiceOriginals(env, body.ids)); }
+      catch { return json({ message: "Invoice archive could not run" }, { status: 502 }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/documents/process") {
+      if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
+      catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: 502 }); }
+    }
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;
 
@@ -8557,6 +8635,7 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> { await receiveDocumentEmail(message, env); },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
     if (controller.cron === "* * * * *") {
@@ -8623,6 +8702,8 @@ export default {
       }
       try {
         await syncLatestBankActivity(env);
+        await getConvexClient(env).mutation(api.documents.rematch, { serviceToken: getConvexServiceToken(env) });
+        await getConvexClient(env).mutation(api.documents.archiveExpenses, { serviceToken: getConvexServiceToken(env) });
       } catch (error) {
         console.error(JSON.stringify({
           event: "bank_activity_sync_failed",
@@ -8672,6 +8753,9 @@ export default {
       }
     }
     if (controller.cron === "*/15 * * * *") {
+      try { await archiveInvoiceOriginals(env); }
+      catch (error) { console.error(JSON.stringify({ event: "invoice_archive_batch_failed", error: error instanceof Error ? error.message : String(error) })); failures.push(error); }
+
       try {
         await syncMeritActivity(env);
       } catch (error) {

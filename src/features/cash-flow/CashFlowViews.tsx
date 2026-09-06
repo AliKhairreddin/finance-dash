@@ -1,3 +1,4 @@
+import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   Download,
   Edit3,
@@ -722,6 +723,7 @@ export function CashFlowOpenInvoicesView({
   onUpdateInvoice: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
 }) {
   const [query, setQuery] = useUrlState("cashFlowOpenQuery", "");
+  const [matchFilter, setMatchFilter] = useUrlState("cashFlowOpenMatch", "all", { allowedValues: ["all", "matched", "unmatched"] });
   const [sortKey, setSortKey] = useUrlState<OpenReceivableSortKey>("cashFlowOpenSort", "dueDate", {
     allowedValues: ["amount", "dueDate", "name", "source", "status"]
   });
@@ -742,7 +744,7 @@ export function CashFlowOpenInvoicesView({
         id: invoice.id,
         name: lineItem.name,
         source: invoice.invoiceNumber || "Dashboard invoice",
-        status: invoice.status === "draft" ? "Draft" : "Open",
+        status: `${invoice.status === "draft" ? "Draft" : "Open"}${invoice.transactionId ? " · Matched" : ""}`,
         amount: lineItem.amount,
         currency: lineItem.currency,
         dueDate: invoice.dueDate,
@@ -763,6 +765,7 @@ export function CashFlowOpenInvoicesView({
     }))
   ], [dashboard.invoices, dashboard.paymentAllocations, dashboard.providers, dashboard.receivables]);
   const visibleRows = rows
+    .filter(row => matchFilter === "all" || (matchFilter === "matched" ? Boolean(row.invoice?.transactionId) : !row.invoice?.transactionId))
     .filter((row) => `${row.name} ${row.source} ${row.status} ${row.currency} ${row.notes ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((left, right) => compareTableValues(left[sortKey], right[sortKey], sortDirection) || left.id.localeCompare(right.id));
   const total = usdTotal(visibleRows.map((row) => line(row.id, row.name, row.amount, row.currency)), dashboard.fxRates);
@@ -825,14 +828,14 @@ export function CashFlowOpenInvoicesView({
         <article><WalletCards size={19} /><span>Approximate total</span><strong>{money(total)}</strong></article>
       </section>
       <section className="panel">
-        <div className="list-toolbar"><ToolbarSearchField ariaLabel="Search open invoices and receivables" placeholder="Search open items" value={query} onChange={setQuery} /></div>
+        <div className="list-toolbar"><ToolbarSearchField ariaLabel="Search open invoices and receivables" placeholder="Search open items" value={query} onChange={setQuery} /><NativeSelect aria-label="Filter open invoices by bank match" value={matchFilter} onValueChange={value => setMatchFilter(value as typeof matchFilter)}><NativeSelectOption value="all">All bank matches</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption><NativeSelectOption value="unmatched">Unmatched</NativeSelectOption></NativeSelect></div>
         {editError && <div className="inline-error" role="alert">{editError}</div>}
         <div className="table-wrap">
           <table className="data-table cash-flow-open-table">
             <thead><tr>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Company / item</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
-              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status / match</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="dueDate">Expected / due</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
               <th scope="col">Actions</th>
@@ -840,7 +843,7 @@ export function CashFlowOpenInvoicesView({
             <tbody>{visibleRows.length > 0 ? visibleRows.map((row) => <tr key={row.id}>
               <td><strong>{row.name}</strong>{row.notes && <small>{row.notes}</small>}</td>
               <td>{row.source}</td>
-              <td><span className={`status-pill invoice-status-${row.invoice?.status ?? "open"}`}>{row.status}</span></td>
+              <td><span className={`status-pill invoice-status-${row.invoice?.status ?? "open"}`}>{row.status}</span>{row.invoice?.transactionId && <a href={documentTransactionLink(row.invoice.transactionId)}>View transaction</a>}</td>
               <td>{dateLabel(row.dueDate)}</td>
               <td className="amount"><strong>{money(row.amount, row.currency)}</strong></td>
               <td>{row.manual ? <Button className="icon-text-button destructive-icon-button" type="button" disabled={deletingId === row.id} onClick={async () => { setDeletingId(row.id); try { await onDeleteManualReceivable(row.id); } finally { setDeletingId(null); } }}>{deletingId === row.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Remove</Button> : row.invoice ? <div className="row-actions"><Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(row.invoice!)}>{editingId === row.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>{row.invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(row.invoice!)}>{downloadingId === row.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}</div> : null}</td>

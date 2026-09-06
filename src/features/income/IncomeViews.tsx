@@ -1,3 +1,5 @@
+import { DocumentUploadButton } from "@/features/expenses/DocumentsView";
+import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   CalendarClock,
   Check,
@@ -540,7 +542,7 @@ export function RevenueView({
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="cadence">Cadence</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="activity">Activity</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="amount">Amount</SortableTableHead>
-              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="status">Status / match</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="invoice">Invoice</SortableTableHead>
             </tr></thead>
             <tbody>
@@ -587,7 +589,7 @@ export function RevenueView({
               <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="accruedThrough">Accrued through</SortableTableHead>
               <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="cadence">Cadence</SortableTableHead>
               <SortableTableHead activeSortKey={accrualSortKey} className="amount" direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="amount">Current amount</SortableTableHead>
-              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={accrualSortKey} direction={accrualSortDirection} onSort={requestAccrualSort} sortKey="status">Status / match</SortableTableHead>
             </tr></thead>
             <tbody>
               {visibleAccruals.length > 0 ? visibleAccruals.map((row) => (
@@ -657,6 +659,8 @@ export function InvoicesView({
   const [statusFilter, setStatusFilter] = useUrlState<InvoiceStatusFilter>("invoiceStatus", "all", {
     allowedValues: ["all", "draft", "open"]
   });
+  const [matchFilter, setMatchFilter] = useUrlState("invoiceMatch", "all", { allowedValues: ["all", "matched", "unmatched"] });
+  const matchId = (invoice: Invoice) => invoice.transactionId ?? dashboard.paymentAllocations.find(a => a.invoiceId === invoice.id && a.transactionId)?.transactionId;
   const [deliveryFilter, setDeliveryFilter] = useUrlState<InvoiceDeliveryFilter>("invoiceDelivery", "all", {
     allowedValues: ["all", "not-sent", "saved", "delivered", "delivery-failed"]
   });
@@ -716,12 +720,13 @@ export function InvoicesView({
     if (sortKey === "created") return row.invoice.createdAt;
     if (sortKey === "forecast") return dashboard.invoicePredictions.find((prediction) => prediction.invoiceId === row.invoice.id)?.predictedDate;
     if (sortKey === "period") return row.invoice.periodStart;
-    return `${row.status}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`;
+    return `${row.status}:${matchId(row.invoice) ? "matched" : "unmatched"}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`;
   }
 
   const filteredRows = allRows
     .filter((row) => {
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (matchFilter === "matched" && !matchId(row.invoice) || matchFilter === "unmatched" && matchId(row.invoice)) return false;
       if (deliveryFilter !== "all" && row.invoice.meritDeliveryStatus !== deliveryFilter) return false;
       if (companyId !== "all" && rowProviderId(row) !== companyId) return false;
       const rowCurrency = row.invoice.currency;
@@ -934,6 +939,7 @@ export function InvoicesView({
   ].filter(Boolean).length;
   const selectedCompany = providers.find((provider) => provider.id === companyId);
   const invoiceActiveFilters: ActiveFilter[] = [
+    ...(matchFilter === "all" ? [] : [{ key: "bank-match", label: `Bank: ${matchFilter}`, onRemove: () => setMatchFilter("all") }]),
     ...(companyId === "all" ? [] : [{
       key: "company",
       label: `Company: ${selectedCompany?.name ?? companyId}`,
@@ -974,6 +980,7 @@ export function InvoicesView({
   ];
 
   function clearInvoiceFilters() {
+    setMatchFilter("all");
     setCompanyId("all");
     setCurrency("all");
     setStatusFilter("all");
@@ -1163,6 +1170,10 @@ export function InvoicesView({
         {!meritWriteEnabled && (
           <div className="income-callout warning"><CircleAlert size={17} /><span>Merit writes are currently disabled by the deployment switch. Draft review and local payment controls remain available.</span></div>
         )}
+        <div className="document-toolbar">
+          <NativeSelect aria-label="Filter invoices by bank match" value={matchFilter} onValueChange={value => setMatchFilter(value as typeof matchFilter)}><NativeSelectOption value="all">All bank matches</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption><NativeSelectOption value="unmatched">Unmatched</NativeSelectOption></NativeSelect>
+          <DocumentUploadButton apiBase={apiBase} /><a href="?page=documents&documentKind=invoice">Invoice documents</a>
+        </div>
         <div className="invoice-selection-help">
           <Check size={15} />
           <span>Select unpaid drafts or open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.</span>
@@ -1189,7 +1200,7 @@ export function InvoicesView({
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="period">Period</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="cadence">Cadence</SortableTableHead>
-              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status / match</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="forecast">Payment forecast</SortableTableHead>
               <th scope="col">Actions</th>
             </tr></thead>
@@ -1224,6 +1235,7 @@ export function InvoicesView({
                     <td><span className="cadence-badge">{cadenceLabel(invoiceCadence)}</span></td>
                     <td>
                       <div className="invoice-status-stack">
+                        {matchId(invoice) && <a href={documentTransactionLink(matchId(invoice)!)}>Matched transaction</a>}
                         <span><span className={`status-pill invoice-status-${invoice.status}`}>{invoice.status}</span><small>Dashboard</small></span>
                         {invoice.meritStatus && <small>Merit: {invoice.meritStatus}</small>}
                         {invoice.meritDeliveryStatus !== "not-sent" && (
@@ -1241,6 +1253,7 @@ export function InvoicesView({
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
                       {(invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(invoice)}>{editingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>}
+                      {invoice.id.startsWith("document-invoice-") && <a className="icon-text-button" href={`${apiBase}/documents/${encodeURIComponent(invoice.id.slice("document-invoice-".length))}/file`}><Download size={14} /> Original</a>}
                       {invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(invoice)}>{downloadingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}
                       <Button
                         className="icon-text-button"
