@@ -3287,6 +3287,7 @@ function Overview({
   const hasPayables = dashboard.payables.length > 0;
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
   const assetsTone = currencyTotalsTone(dashboard.metrics.totalAssets);
+  const balanceGroups = accountBalanceGroups(dashboard.accounts.filter(hasNonZeroAccountBalance), dashboard.fxRates);
 
   return (
     <div className="overview-grid">
@@ -3296,7 +3297,24 @@ function Overview({
             <h2>Account balances</h2>
             <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
           </div>
-          <div className="account-group-totals">{accountBalanceGroups(dashboard.accounts, dashboard.fxRates).map(group => <article className="account-group-total" key={group.id}><span>{group.name}</span><strong>{group.excludedCurrencies.length ? "Estimate unavailable" : `≈ ${money(group.totalUsd, "USD")}`}</strong><InfoPopover label={`${group.name} balances`}><p>{Object.entries(group.native).map(([currency, amount]) => money(amount, currency)).join(" · ")}</p>{group.asOf && <p>FX as of {group.asOf.slice(0, 10)}</p>}{group.staleCurrencies.length > 0 && <p>Stale rates: {group.staleCurrencies.join(", ")}</p>}{group.excludedCurrencies.length > 0 && <p>Missing rates: {group.excludedCurrencies.join(", ")}</p>}</InfoPopover></article>)}</div>
+          {balanceGroups.length > 0 && (
+            <div className="account-group-totals">
+              {balanceGroups.map(group => (
+                <article className="account-group-total" key={group.id}>
+                  <span>{group.name}</span>
+                  <strong>{group.excludedCurrencies.length ? "Estimate unavailable" : `≈ ${money(group.totalUsd, "USD")}`}</strong>
+                  <InfoPopover label={`${group.name} balances`}>
+                    {group.id === "slash" && <p>Cash held in Slash accounts, included in available liquidity.</p>}
+                    {group.id === "slash-credit" && <p>Card debt, excluded from available liquidity and this panel’s cash total.</p>}
+                    <p>{Object.entries(group.native).map(([currency, amount]) => money(amount, currency)).join(" · ")}</p>
+                    {group.asOf && <p>FX as of {group.asOf.slice(0, 10)}</p>}
+                    {group.staleCurrencies.length > 0 && <p>Stale rates: {group.staleCurrencies.join(", ")}</p>}
+                    {group.excludedCurrencies.length > 0 && <p>Missing rates: {group.excludedCurrencies.join(", ")}</p>}
+                  </InfoPopover>
+                </article>
+              ))}
+            </div>
+          )}
           <SimpleMoneyTable
             nameLabel="Account"
             rows={dashboard.accounts.filter(hasNonZeroAccountBalance).map((item) => ({

@@ -22,7 +22,8 @@ import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { InvoiceEditorDialog } from "@/features/income/IncomeViews";
 import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { useUrlState } from "@/lib/url-state";
-import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
+import { cashFlowSnapshotTotals as snapshotTotals, cashFlowUsdTotal as usdTotal } from "../../../shared/cashFlowReport";
+import { downloadCashFlowPng } from "./exportCashFlowPng";
 import { financeOperatingDate } from "../../../shared/operatingDate";
 import { invoiceOutstanding, isLiquidAccountBalance } from "../../../shared/income";
 import type {
@@ -30,7 +31,6 @@ import type {
   CashFlowSnapshot,
   CreateInvoicePayload,
   CreateManualReceivablePayload,
-  CurrencyTotals,
   DashboardSnapshot,
   FxRate,
   Invoice,
@@ -80,28 +80,6 @@ function dateLabel(value?: string): string {
 
 function line(id: string, name: string, amount: number, currency: string, notes?: string, dueDate?: string): CashFlowLine {
   return { id, name, amount: Number(amount.toFixed(2)), currency: currency.toUpperCase(), notes, dueDate };
-}
-
-function nativeTotals(lines: CashFlowLine[]): CurrencyTotals {
-  return lines.filter((item) => !item.excludedFromTotals).reduce<CurrencyTotals>((totals, item) => ({
-    ...totals,
-    [item.currency]: (totals[item.currency] ?? 0) + item.amount
-  }), {});
-}
-
-function usdTotal(lines: CashFlowLine[], rates: FxRate[]): number {
-  return convertCurrencyTotalsToUsd(nativeTotals(lines), rates).totalUsd;
-}
-
-function snapshotTotals(snapshot: Pick<CashFlowSnapshot, CashFlowSectionKey>, rates: FxRate[]) {
-  const cash = usdTotal(snapshot.cashAccounts, rates);
-  const receivables = usdTotal(snapshot.receivables, rates);
-  const openBalances = usdTotal(snapshot.openBalances, rates);
-  const payables = usdTotal(snapshot.payables, rates);
-  const investments = usdTotal(snapshot.investments, rates);
-  const approximateCash = cash + receivables + openBalances;
-  const profit = cash + receivables + openBalances - payables;
-  return { cash, receivables, openBalances, approximateCash, payables, investments, profit, assets: profit + investments };
 }
 
 function invoiceCashFlowLine(invoice: Invoice, dashboard: DashboardSnapshot): CashFlowLine | null {
@@ -305,295 +283,6 @@ function CompositionChart({ snapshot, rates }: { snapshot: Pick<CashFlowSnapshot
   return <div className="cash-flow-composition" role="img" aria-label="Current cash flow composition">{rows.map((row) => <div key={row.label}><span>{row.label}</span><div><i style={{ background: row.color, width: `${Math.max(2, Math.abs(row.value) / maximum * 100)}%` }} /></div><strong>{money(row.value)}</strong></div>)}</div>;
 }
 
-const cashFlowExportMonths = ["August", "July", "June", "May", "April", "March", "February", "January", "December"] as const;
-
-function payableMonthAmounts(notes?: string): Partial<Record<(typeof cashFlowExportMonths)[number], number>> {
-  if (!notes) return {};
-  const values: Partial<Record<(typeof cashFlowExportMonths)[number], number>> = {};
-  const pattern = /(August|July|June|May|April|March|February|January|December)\s+\$?(-?[\d,]+(?:\.\d+)?)/gi;
-  for (const match of notes.matchAll(pattern)) {
-    const month = cashFlowExportMonths.find((item) => item.toLowerCase() === match[1].toLowerCase());
-    const amount = Number(match[2].replaceAll(",", ""));
-    if (month && Number.isFinite(amount)) values[month] = amount;
-  }
-  return values;
-}
-
-type SheetCellOptions = {
-  align?: CanvasTextAlign;
-  border?: string;
-  fill?: string;
-  fontSize?: number;
-  fontWeight?: number;
-  textColor?: string;
-};
-
-function drawSheetCell(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  text: string,
-  options: SheetCellOptions = {}
-) {
-  const align = options.align ?? "left";
-  context.fillStyle = options.fill ?? "#ffffff";
-  context.fillRect(x, y, width, height);
-  context.strokeStyle = options.border ?? "#18212f";
-  context.lineWidth = 1;
-  context.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
-  context.save();
-  context.beginPath();
-  context.rect(x + 1, y + 1, width - 2, height - 2);
-  context.clip();
-  context.fillStyle = options.textColor ?? "#111827";
-  context.font = `${options.fontWeight ?? 500} ${options.fontSize ?? 17}px Inter, Arial, sans-serif`;
-  context.textAlign = align;
-  context.textBaseline = "middle";
-  const inset = 10;
-  const textX = align === "right" ? x + width - inset : align === "center" ? x + width / 2 : x + inset;
-  context.fillText(text, textX, y + height / 2, width - inset * 2);
-  context.restore();
-}
-
-function drawSheetSection(
-  context: CanvasRenderingContext2D,
-  title: string,
-  lines: CashFlowLine[],
-  rates: FxRate[],
-  x: number,
-  y: number,
-  width: number,
-  rowHeight: number,
-  headerFill = "#f6a313"
-): number {
-  const titleHeight = 36;
-  const columnHeight = 30;
-  const totalHeight = 34;
-  const amountWidth = Math.round(width * 0.34);
-  const nameWidth = width - amountWidth;
-  drawSheetCell(context, x, y, width, titleHeight, title, { align: "center", fill: headerFill, fontSize: 19, fontWeight: 750 });
-  drawSheetCell(context, x, y + titleHeight, nameWidth, columnHeight, "Account", { align: "center", fill: headerFill, fontSize: 15, fontWeight: 700 });
-  drawSheetCell(context, x + nameWidth, y + titleHeight, amountWidth, columnHeight, "Balance", { align: "center", fill: headerFill, fontSize: 15, fontWeight: 700 });
-  let cursorY = y + titleHeight + columnHeight;
-  const rows = lines.length > 0 ? lines : [line("empty", "No entries", 0, "USD")];
-  rows.forEach((item, index) => {
-    const fill = index % 2 === 0 ? "#ffffff" : "#f8fafc";
-    const textColor = item.excludedFromTotals ? "#64748b" : "#111827";
-    drawSheetCell(context, x, cursorY, nameWidth, rowHeight, item.name || "Untitled", { fill, fontSize: 15, textColor });
-    drawSheetCell(context, x + nameWidth, cursorY, amountWidth, rowHeight, money(item.amount, item.currency), { align: "right", fill, fontSize: 15, fontWeight: 600, textColor });
-    cursorY += rowHeight;
-  });
-  drawSheetCell(context, x, cursorY, nameWidth, totalHeight, `Total ${title}`, { fill: headerFill, fontSize: 16, fontWeight: 750 });
-  drawSheetCell(context, x + nameWidth, cursorY, amountWidth, totalHeight, money(usdTotal(lines, rates)), { align: "right", fill: headerFill, fontSize: 16, fontWeight: 750 });
-  return cursorY + totalHeight;
-}
-
-function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]) {
-  const width = 3200;
-  const height = 1800;
-  const canvas = document.createElement("canvas");
-  canvas.width = width * 2;
-  canvas.height = height * 2;
-  const context = canvas.getContext("2d");
-  if (!context) return;
-  context.scale(2, 2);
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, width, height);
-  const totals = snapshotTotals(snapshot, rates);
-  const margin = 50;
-  const top = 88;
-  const leftWidth = 600;
-  const middleWidth = 620;
-  const gap = 12;
-  const leftX = margin;
-  const middleX = leftX + leftWidth + gap;
-  const rightX = middleX + middleWidth + gap;
-  const rightWidth = width - margin - rightX;
-  const orange = "#f6a313";
-  const red = "#ef0909";
-  const darkRed = "#8f0000";
-  drawSheetCell(context, margin, 24, width - margin * 2, 50, `Cash Flow Position · ${dateLabel(snapshot.asOfDate)}`, { align: "center", fill: orange, fontSize: 25, fontWeight: 800 });
-
-  const maximumTableRows = Math.max(snapshot.openBalances.length, snapshot.payables.length, snapshot.cashAccounts.length + snapshot.receivables.length + 5, 1);
-  const rowHeight = Math.min(28, Math.max(20, Math.floor(910 / maximumTableRows)));
-  const cashEndY = drawSheetSection(context, "Cash in Accounts", snapshot.cashAccounts, rates, leftX, top, leftWidth, rowHeight, orange);
-  drawSheetSection(context, "Receivables", snapshot.receivables, rates, leftX, cashEndY + gap, leftWidth, rowHeight, orange);
-  drawSheetSection(context, "Open Balance", snapshot.openBalances, rates, middleX, top, middleWidth, rowHeight, orange);
-
-  const payableTitleHeight = 36;
-  const payableHeaderHeight = 30;
-  const payableNameWidth = 420;
-  const payableBalanceWidth = 205;
-  const monthWidth = (rightWidth - payableNameWidth - payableBalanceWidth) / cashFlowExportMonths.length;
-  drawSheetCell(context, rightX, top, payableNameWidth + payableBalanceWidth, payableTitleHeight, "Payables", { align: "center", fill: red, fontSize: 19, fontWeight: 800, textColor: "#ffffff" });
-  drawSheetCell(context, rightX + payableNameWidth + payableBalanceWidth, top, rightWidth - payableNameWidth - payableBalanceWidth, payableTitleHeight, "Months", { align: "center", fill: darkRed, fontSize: 19, fontWeight: 800, textColor: "#ffffff" });
-  drawSheetCell(context, rightX, top + payableTitleHeight, payableNameWidth, payableHeaderHeight, "Supplier / Platform", { align: "center", fill: red, fontSize: 14, fontWeight: 750, textColor: "#ffffff" });
-  drawSheetCell(context, rightX + payableNameWidth, top + payableTitleHeight, payableBalanceWidth, payableHeaderHeight, "Balance", { align: "center", fill: red, fontSize: 14, fontWeight: 750, textColor: "#ffffff" });
-  cashFlowExportMonths.forEach((month, index) => drawSheetCell(
-    context,
-    rightX + payableNameWidth + payableBalanceWidth + monthWidth * index,
-    top + payableTitleHeight,
-    monthWidth,
-    payableHeaderHeight,
-    month === "February" ? "Feb" : month === "January" ? "Jan" : month,
-    { align: "center", fill: darkRed, fontSize: 13, fontWeight: 750, textColor: "#ffffff" }
-  ));
-  let payableY = top + payableTitleHeight + payableHeaderHeight;
-  const payableRows = snapshot.payables.length > 0 ? snapshot.payables : [line("empty", "No entries", 0, "USD")];
-  payableRows.forEach((item, index) => {
-    const fill = index % 2 === 0 ? "#ffffff" : "#f8fafc";
-    const textColor = item.excludedFromTotals ? "#64748b" : "#111827";
-    drawSheetCell(context, rightX, payableY, payableNameWidth, rowHeight, item.name || "Untitled", { fill, fontSize: 14, textColor });
-    drawSheetCell(context, rightX + payableNameWidth, payableY, payableBalanceWidth, rowHeight, money(item.amount, item.currency), { align: "right", fill, fontSize: 14, fontWeight: 650, textColor });
-    const monthValues = payableMonthAmounts(item.notes);
-    cashFlowExportMonths.forEach((month, monthIndex) => drawSheetCell(
-      context,
-      rightX + payableNameWidth + payableBalanceWidth + monthWidth * monthIndex,
-      payableY,
-      monthWidth,
-      rowHeight,
-      monthValues[month] === undefined ? "" : money(monthValues[month] ?? 0),
-      { align: "right", fill, fontSize: 12, textColor }
-    ));
-    payableY += rowHeight;
-  });
-  const payableMonthTotals = cashFlowExportMonths.map((month) => snapshot.payables.reduce((sum, item) => sum + (payableMonthAmounts(item.notes)[month] ?? 0), 0));
-  drawSheetCell(context, rightX, payableY, payableNameWidth, 34, "Total", { fill: red, fontSize: 16, fontWeight: 800, textColor: "#ffffff" });
-  drawSheetCell(context, rightX + payableNameWidth, payableY, payableBalanceWidth, 34, money(totals.payables), { align: "right", fill: red, fontSize: 15, fontWeight: 800, textColor: "#ffffff" });
-  payableMonthTotals.forEach((value, index) => drawSheetCell(context, rightX + payableNameWidth + payableBalanceWidth + monthWidth * index, payableY, monthWidth, 34, value === 0 ? "$0.00" : money(value), { align: "right", fill: darkRed, fontSize: 12, fontWeight: 750, textColor: "#ffffff" }));
-
-  const summaryTop = payableY + 50;
-  const summaryLabelWidth = 430;
-  const summaryValueWidth = 260;
-  const investmentX = rightX + summaryLabelWidth + summaryValueWidth + 26;
-  const investmentWidth = rightWidth - summaryLabelWidth - summaryValueWidth - 26;
-  const summaryRows = [
-    ["Total Approximate Cash in Account", totals.approximateCash, "#18e018"],
-    ["Total Cash in", totals.cash, "#f7b31d"],
-    ["Total Spend without payments", totals.payables, "#f20f0f"],
-    ["Profit", totals.profit, "#19e51f"]
-  ] as const;
-  summaryRows.forEach(([label, value, fill], index) => {
-    drawSheetCell(context, rightX, summaryTop + index * 36, summaryLabelWidth, 36, label, { align: "right", fill, fontSize: 16, fontWeight: 800 });
-    drawSheetCell(context, rightX + summaryLabelWidth, summaryTop + index * 36, summaryValueWidth, 36, money(value), { align: "right", fill, fontSize: 16, fontWeight: 800 });
-  });
-  drawSheetCell(context, investmentX, summaryTop, investmentWidth, 36, "Investments", { align: "center", fill: "#12d90f", fontSize: 17, fontWeight: 800 });
-  let investmentY = summaryTop + 36;
-  const investmentNameWidth = investmentWidth * 0.58;
-  const investmentRows = snapshot.investments.length > 0 ? snapshot.investments : [line("empty", "No investments", 0, "USD")];
-  investmentRows.forEach((item, index) => {
-    const fill = index % 2 === 0 ? "#ffffff" : "#f8fafc";
-    drawSheetCell(context, investmentX, investmentY, investmentNameWidth, 32, item.name || "Untitled", { fill, fontSize: 14 });
-    drawSheetCell(context, investmentX + investmentNameWidth, investmentY, investmentWidth - investmentNameWidth, 32, money(item.amount, item.currency), { align: "right", fill, fontSize: 14, fontWeight: 700 });
-    investmentY += 32;
-  });
-  drawSheetCell(context, investmentX, investmentY, investmentNameWidth, 34, "Total Investments", { fill: "#12d90f", fontSize: 15, fontWeight: 800 });
-  drawSheetCell(context, investmentX + investmentNameWidth, investmentY, investmentWidth - investmentNameWidth, 34, money(totals.investments), { align: "right", fill: "#12d90f", fontSize: 15, fontWeight: 800 });
-
-  const assetsTop = Math.max(summaryTop + 178, investmentY + 52);
-  drawSheetCell(context, rightX, assetsTop, Math.round(rightWidth * 0.57), 48, "Total Assets (Profit + Investment)", { align: "center", fill: "#d9e8ff", fontSize: 20, fontWeight: 800 });
-  drawSheetCell(context, rightX + Math.round(rightWidth * 0.57), assetsTop, rightWidth - Math.round(rightWidth * 0.57), 48, money(totals.assets), { align: "center", fill: "#d9e8ff", fontSize: 20, fontWeight: 800 });
-  const growthRows = [
-    ["Cash Growth vs Last week", snapshot.cashGrowthPercent],
-    ["Spend Growth vs Last week", snapshot.spendGrowthPercent],
-    ["Profit Growth vs Last week", snapshot.profitGrowthPercent]
-  ] as const;
-  growthRows.forEach(([label, value], index) => {
-    const y = assetsTop + 68 + index * 32;
-    drawSheetCell(context, rightX, y, 430, 32, label, { fill: "#10dfe7", fontSize: 14, fontWeight: 650 });
-    drawSheetCell(context, rightX + 430, y, 170, 32, value === undefined ? "—" : `${value.toFixed(2)}%`, { align: "right", fill: "#10dfe7", fontSize: 14, fontWeight: 750 });
-  });
-
-  const cursorY = 1215;
-  context.fillStyle = "#111827";
-  context.font = "800 25px Inter, Arial, sans-serif";
-  context.fillText("Graphs", margin, cursorY - 30);
-  const points = [...history].sort((left, right) => left.asOfDate.localeCompare(right.asOfDate)).slice(-12);
-  const chartX = margin + 86;
-  const chartY = cursorY + 62;
-  const chartWidth = 1910;
-  const chartHeight = 370;
-  context.fillStyle = "#f8fafc";
-  context.strokeStyle = "#cbd5e1";
-  context.lineWidth = 2;
-  context.fillRect(margin, cursorY, 2080, 500);
-  context.strokeRect(margin + 1, cursorY + 1, 2078, 498);
-  context.fillStyle = "#111827";
-  context.font = "750 20px Inter, Arial, sans-serif";
-  context.fillText("Position trend", margin + 22, cursorY + 34);
-  const chartRows = points.length > 0 ? points : [snapshot];
-  const chartValues = chartRows.map((row) => snapshotTotals(row, rates));
-  const maximum = Math.max(1, ...chartValues.flatMap((row) => [row.cash, row.receivables, row.payables, row.assets]));
-  const colors = ["#0ea5e9", "#8b5cf6", "#ef4444", "#16a34a"];
-  const keys = ["cash", "receivables", "payables", "assets"] as const;
-  context.lineWidth = 2;
-  for (let grid = 0; grid <= 4; grid += 1) {
-    const y = chartY + chartHeight - grid * chartHeight / 4;
-    context.strokeStyle = "#e2e8f0";
-    context.beginPath();
-    context.moveTo(chartX, y);
-    context.lineTo(chartX + chartWidth, y);
-    context.stroke();
-  }
-  keys.forEach((key, seriesIndex) => {
-    context.strokeStyle = colors[seriesIndex];
-    context.lineWidth = 4;
-    context.beginPath();
-    chartValues.forEach((row, index) => {
-      const x = chartX + (chartValues.length === 1 ? chartWidth / 2 : index * chartWidth / (chartValues.length - 1));
-      const y = chartY + chartHeight - row[key] / maximum * chartHeight;
-      if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
-    });
-    context.stroke();
-  });
-  context.fillStyle = "#64748b";
-  context.font = "500 15px Inter, Arial, sans-serif";
-  ["Cash", "Receivables", "Payables", "Assets"].forEach((label, index) => {
-    const legendX = margin + 22 + index * 190;
-    context.fillStyle = colors[index];
-    context.fillRect(legendX, cursorY + 455, 16, 16);
-    context.fillStyle = "#475569";
-    context.fillText(label, legendX + 24, cursorY + 468);
-  });
-
-  const mixX = margin + 2100;
-  const mixWidth = width - margin - mixX;
-  context.fillStyle = "#f8fafc";
-  context.strokeStyle = "#cbd5e1";
-  context.fillRect(mixX, cursorY, mixWidth, 500);
-  context.strokeRect(mixX + 1, cursorY + 1, mixWidth - 2, 498);
-  context.fillStyle = "#111827";
-  context.font = "750 20px Inter, Arial, sans-serif";
-  context.fillText("Current composition", mixX + 22, cursorY + 34);
-  const composition = [
-    ["Cash", totals.cash, "#0ea5e9"],
-    ["Receivables", totals.receivables, "#8b5cf6"],
-    ["Open balances", totals.openBalances, "#f59e0b"],
-    ["Payables", totals.payables, "#ef4444"],
-    ["Investments", totals.investments, "#16a34a"]
-  ] as const;
-  const compositionMaximum = Math.max(1, ...composition.map((item) => Math.abs(item[1])));
-  composition.forEach(([label, value, color], index) => {
-    const y = cursorY + 78 + index * 78;
-    context.fillStyle = "#475569";
-    context.font = "650 15px Inter, Arial, sans-serif";
-    context.fillText(label, mixX + 22, y);
-    context.textAlign = "right";
-    context.fillText(money(value), mixX + mixWidth - 22, y);
-    context.textAlign = "left";
-    context.fillStyle = "#e2e8f0";
-    context.fillRect(mixX + 22, y + 16, mixWidth - 44, 18);
-    context.fillStyle = color;
-    context.fillRect(mixX + 22, y + 16, Math.max(5, (mixWidth - 44) * Math.abs(value) / compositionMaximum), 18);
-  });
-  const link = document.createElement("a");
-  link.download = `cash-flow-${snapshot.asOfDate}.png`;
-  link.href = canvas.toDataURL("image/png");
-  link.click();
-}
-
 export function CashFlowPositionView({
   dashboard,
   onSave
@@ -607,6 +296,8 @@ export function CashFlowPositionView({
     return selected ? snapshotPayload(selected) : liveCashFlowDraft(dashboard);
   });
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const selectedSnapshot = dashboard.cashFlowSnapshots.find((item) => item.id === selectedSnapshotId);
@@ -646,6 +337,18 @@ export function CashFlowPositionView({
     }
   }
 
+  async function exportPng() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await downloadCashFlowPng(preview, dashboard.cashFlowSnapshots, dashboard.fxRates);
+    } catch (caught) {
+      setExportError(caught instanceof Error ? caught.message : "Cash flow image could not be exported");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="cash-flow-page-stack">
       <section className="cash-flow-topbar">
@@ -657,12 +360,13 @@ export function CashFlowPositionView({
           </NativeSelect>
           <Input aria-label="Cash flow date" type="date" value={draft.asOfDate} max={financeOperatingDate()} onChange={(event) => setDraft((current) => ({ ...current, asOfDate: event.target.value }))} />
           <Button className="icon-text-button" type="button" onClick={() => { setSelectedSnapshotId("live"); setDraft(liveCashFlowDraft(dashboard)); }}><RefreshCw size={15} /> Use live values</Button>
-          <Button className="icon-text-button" type="button" onClick={() => downloadCashFlowPng(preview, [...dashboard.cashFlowSnapshots.filter((item) => item.id !== preview.id), preview], dashboard.fxRates)}><Download size={15} /> Export PNG</Button>
+          <Button className="icon-text-button" type="button" disabled={exporting || !draft.asOfDate} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNG</Button>
           <Button className="primary-button" type="button" disabled={saving || !draft.asOfDate} onClick={() => void save()}>{saving ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save</Button>
         </div>
       </section>
       {notice && <div className="cash-flow-save-notice" role="status">{notice}</div>}
       {saveError && <div className="inline-error" role="alert">{saveError}</div>}
+      {exportError && <div className="inline-error" role="alert">{exportError}</div>}
       <section className="cash-flow-metric-grid" aria-label="Cash flow totals">
         <CashFlowMetric label="Cash" value={totals.cash} tone="cash" />
         <CashFlowMetric label="Receivables" value={totals.receivables} tone="receivable" />

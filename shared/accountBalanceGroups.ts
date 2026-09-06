@@ -7,7 +7,8 @@ export function accountBalanceGroups(accounts: AccountBalance[], rates: FxRate[]
   for (const account of accounts) {
     const id = account.source === "wise" ? `wise-${account.wiseEntity ?? "unassigned"}` : `${account.source}${account.slashAccountSubtype === "credit" ? "-credit" : ""}`;
     const name = account.source === "wise" ? `Wise · ${account.wiseEntity ? wiseEntityLabel(account.wiseEntity) : "Unassigned"}`
-      : `${account.source[0].toUpperCase()}${account.source.slice(1)}${account.slashAccountSubtype === "credit" ? " credit" : ""}`;
+      : account.source === "slash" ? `Slash ${account.slashAccountSubtype === "credit" ? "credit" : "cash"}`
+      : `${account.source[0].toUpperCase()}${account.source.slice(1)}`;
     const group = groups.get(id) ?? { id, name, accounts: [] };
     group.accounts.push(account); groups.set(id, group);
   }
