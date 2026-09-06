@@ -7857,7 +7857,13 @@ async function telegramQuestion(env: Env, user: TelegramAuthUser, question: stri
   const includes = (value: unknown, search?: string) => !search || JSON.stringify(value).toLowerCase().includes(search.toLowerCase());
   const lookup = async (options: FinanceLookup): Promise<unknown> => {
     const { section, search, offset = 0 } = options;
-    if (section === "invoices") return page(state.invoices.filter(i => includes(i, search) && (!options.fromDate || i.issueDate >= options.fromDate) && (!options.toDate || i.issueDate <= options.toDate) && (!options.status || (options.status === "matched" ? Boolean(i.transactionId) : i.status === options.status)) && (!options.entity || i.entity === options.entity)).map(i => ({ ...i, outstanding: invoiceOutstanding(i, state.paymentAllocations), matched: Boolean(i.transactionId) })), offset);
+    if (section === "invoices") {
+      const result = page(state.invoices.filter(i => includes(i, search) && (!options.fromDate || i.issueDate >= options.fromDate) && (!options.toDate || i.issueDate <= options.toDate) && (!options.status || (options.status === "matched" ? Boolean(i.transactionId) : i.status === options.status)) && (!options.entity || i.entity === options.entity)), offset);
+      return { ...result, records: await Promise.all(result.records.map(async invoice => {
+        const tx = invoice.transactionId ? await getConvexClient(env).query(api.banking.getTransaction, { serviceToken: getConvexServiceToken(env), id: invoice.transactionId }) : null;
+        return { ...invoice, outstanding: invoiceOutstanding(invoice, state.paymentAllocations), matched: Boolean(invoice.transactionId), matchedTransaction: tx ? { id: tx.id, date: tx.date, amount: tx.amount, currency: tx.currency, counterparty: tx.counterparty, accountName: tx.accountName } : null };
+      })) };
+    }
     if (section === "expenses") return page(state.expenses.filter(e => includes(e, search) && (!options.fromDate || e.issueDate >= options.fromDate) && (!options.toDate || e.issueDate <= options.toDate) && (!options.status || (options.status === "matched" ? Boolean(e.transactionId) : e.paymentStatus === options.status)) && (!options.entity || e.entity === options.entity)).map(({ documents, ...e }) => ({ ...e, documents: documents.map(({ storageId: _, ...file }) => file) })), offset);
     if (section === "companies") return page(state.providers.filter(p => includes(p, search)), offset);
     if (section === "revenue") return { runs: page(state.revenueRuns.filter(r => includes(r, search) && (!options.fromDate || r.periodEnd >= options.fromDate) && (!options.toDate || r.periodStart <= options.toDate)), offset), accruals: state.revenueAccruals.filter(r => includes(r, search)), rules: state.revenuePartners.filter(r => includes(r, search)) };

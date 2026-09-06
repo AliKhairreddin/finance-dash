@@ -120,14 +120,22 @@ async function recordAndMatch(ctx: MutationCtx, document: Doc<"financialDocument
   }
   let invoiceId = existingInvoice?.id ?? document.invoiceId;
   let expenseId = existingExpense?.id ?? document.expenseId;
+  const existingTransactionId = existing?.transactionId;
+  let inherited: Doc<"bankTransactions"> | null = null;
+  if (document.source === "archive" && document.invoiceId && existingInvoice?.transactionId) {
+    const transaction = await ctx.db.query("bankTransactions").withIndex("by_transaction_id", q => q.eq("id", existingInvoice.transactionId!)).unique();
+    if (transaction && transaction.matchedInvoiceId === invoiceId && transaction.direction === "in" && ["posted", "settled"].includes(transaction.status) && transaction.currency === extraction.currency && (!transaction.wiseEntity || transaction.wiseEntity === extraction.entity)) {
+      const binding = await ctx.db.query("bankConnectionBindings").withIndex("by_source_connection", q => q.eq("source", transaction.source).eq("connectionKey", transaction.connectionKey!)).unique();
+      if (binding) inherited = transaction;
+    }
+  }
   const candidates = await bankCandidates(ctx, extraction, !manualTransactionId);
   const available = [];
   for (const transaction of candidates.rows) {
     if ((!transaction.matchedInvoiceId || transaction.matchedInvoiceId === invoiceId) && await unclaimed(ctx, transaction.id, document, invoiceId, expenseId)) available.push(transaction);
   }
-  const existingTransactionId = existing?.transactionId;
-  const match = manualTransactionId ? available.find(t => t.id === manualTransactionId)
-    : available.find(t => t.id === existingTransactionId) ?? (!candidates.limited && available.length === 1 ? available[0] : undefined);
+  const match = inherited ?? (manualTransactionId ? available.find(t => t.id === manualTransactionId)
+    : available.find(t => t.id === existingTransactionId) ?? (!candidates.limited && available.length === 1 ? available[0] : undefined));
   if (manualTransactionId && !match) throw new ConvexError("This transaction no longer fits the document or is already claimed");
   // Never replace a separate link on an existing accounting record silently.
   if (existingTransactionId && (!match || match.id !== existingTransactionId)) {
@@ -154,9 +162,9 @@ async function recordAndMatch(ctx: MutationCtx, document: Doc<"financialDocument
     }];
   }
   await ctx.db.patch(state._id, { invoices, expenses, updatedAt: new Date(Math.max(Date.now(), Date.parse(state.updatedAt) + 1)).toISOString() });
-  const reason = match ? manualTransactionId ? "Match confirmed by the finance team; payment remains unchanged" : "Exact total and currency, document date, company ownership, and counterparty/reference evidence" : available.length > 1 ? "Several bank transactions fit; review required" : "Waiting for a unique matching bank transaction";
+  const reason = inherited ? "Linked to the invoice’s existing bank match; payment status unchanged" : match ? manualTransactionId ? "Match confirmed by the finance team; payment remains unchanged" : "Exact total and currency, document date, company ownership, and counterparty/reference evidence" : available.length > 1 ? "Several bank transactions fit; review required" : "Waiting for a unique matching bank transaction";
   await ctx.db.patch(document._id, { invoiceId, expenseId, status: match ? "matched" : "unmatched", transactionId: match?.id, matchReason: reason, matchedAt: match ? now : undefined, nextMatchAt: match ? undefined : new Date(Date.now() + 5 * 60_000).toISOString() });
-  if (match && invoiceId) {
+  if (match && invoiceId && !inherited) {
     const stored = await ctx.db.query("bankTransactions").withIndex("by_transaction_id", q => q.eq("id", match.id)).unique();
     if (stored) { await ctx.db.patch(stored._id, { matchedInvoiceId: invoiceId, invoiceMatchSource: manualTransactionId ? "manual" : "exact", invoiceMatchConfidence: 1, invoiceMatchReason: reason }); await bumpBankLedgerRevision(ctx, [stored.date]); }
   }
@@ -213,7 +221,7 @@ export const review = mutation({
 });
 export const rematch = mutation({
   args: { serviceToken: v.string(), id: v.optional(v.id("financialDocuments")) }, returns: v.number(),
-  handler: async (ctx, args) => { authorize(args.serviceToken); const rows = args.id ? [await ctx.db.get(args.id)] : await ctx.db.query("financialDocuments").withIndex("by_status_next_match", q => q.eq("status", "unmatched").lte("nextMatchAt", nowIso())).take(20); let count = 0; for (const doc of rows) { if (doc?.status !== "unmatched" || !doc.extraction) continue; await recordAndMatch(ctx, doc, doc.extraction); count++; } return count; }
+  handler: async (ctx, args) => { authorize(args.serviceToken); const rows = args.id ? [await ctx.db.get(args.id)] : await ctx.db.query("financialDocuments").withIndex("by_status_next_match", q => q.eq("status", "unmatched").lte("nextMatchAt", nowIso())).take(20); let count = 0; for (const doc of rows) { if (!doc?.extraction || !(doc.status === "unmatched" || args.id && doc.source === "archive" && doc.invoiceId && doc.status === "needs_review" && doc.extraction.reviewReasons.length === 0)) continue; await recordAndMatch(ctx, doc, doc.extraction); count++; } return count; }
 });
 
 // Backfill the archive from existing protected expense files, without copying their bytes.

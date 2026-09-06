@@ -73,3 +73,14 @@ test("identical uploads deduplicate across channels and discard only the redunda
   const result = await db.run(documents.ingest, { serviceToken: "test-service", storageId: "second-blob", contentHash: "a".repeat(64), intakeKey: "telegram:123", fileName: "forward.pdf", contentType: "application/pdf", size: 100, source: "telegram", sourceContext: "" });
   assert.deepEqual(result, { id: "document", duplicate: true }); assert.deepEqual(db.deletedFiles, ["second-blob"]); assert.equal(db.scheduled.length, 0);
 });
+
+test("archiving an invoice preserves its existing fee-adjusted bank link without upgrading confidence", async () => {
+  const db = setup([{ ...tx("tx-1"), direction: "in", amount: 19.5, date: "2026-03-01", matchedInvoiceId: "invoice-1", invoiceMatchSource: "ai", invoiceMatchConfidence: 0.98 }]);
+  (await db.ctx.db.get("state")).invoices = [{ id: "invoice-1", invoiceNumber: "ACME-101", customerName: "Acme", currency: "USD", amount: 20, entity: "dn", transactionId: "tx-1", status: "open" }];
+  await db.ctx.db.patch("document", { source: "archive", invoiceId: "invoice-1" });
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...extraction, kind: "invoice" } });
+  assert.equal((await db.ctx.db.get("document")).status, "matched");
+  assert.match((await db.ctx.db.get("document")).matchReason, /existing bank match/);
+  assert.equal((await db.ctx.db.get("tx-1")).invoiceMatchConfidence, 0.98);
+  assert.equal((await db.ctx.db.get("state")).invoices[0].status, "open");
+});
