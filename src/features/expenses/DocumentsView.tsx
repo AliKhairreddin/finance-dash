@@ -1,5 +1,6 @@
+import { Popover } from "@base-ui/react/popover";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Download, Folder, Loader2, RefreshCw, Upload, X } from "lucide-react";
+import { ChevronDown, Download, Files, Folder, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,31 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const result = await response.json();
   if (!response.ok) throw new Error(result.message ?? "Document request failed");
   return result;
+}
+
+export function DocumentActions({ apiBase, label, href, viewLabel, className = "" }: {
+  apiBase: string;
+  label: string;
+  href: string;
+  viewLabel: string;
+  className?: string;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger className={`icon-text-button document-actions-trigger ${className}`} aria-label={label} title={label}>
+        <Files size={15} /><span>Documents</span><ChevronDown className="document-actions-chevron" size={13} />
+      </Popover.Trigger>
+      <Popover.Portal keepMounted>
+        <Popover.Positioner className="toolbar-popover-positioner" sideOffset={6} align="end">
+          <Popover.Popup className="toolbar-popover-popup document-actions-popup">
+            <Popover.Title className="screen-reader-only">{label}</Popover.Title>
+            <DocumentUploadButton apiBase={apiBase} />
+            <Button className="icon-text-button" nativeButton={false} render={<a href={href} />}><Folder size={15} /> {viewLabel}</Button>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
 }
 
 export function DocumentUploadButton({ apiBase, onUploaded, defaultEntity }: { apiBase: string; onUploaded?: () => void; defaultEntity?: "dn" | "lmd" }) {

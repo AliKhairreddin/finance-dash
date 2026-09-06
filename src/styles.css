@@ -11098,9 +11098,11 @@ body {
 }
 
 .expense-summary-grid article {
+  position: relative;
   display: grid;
-  gap: 5px;
-  min-height: 112px;
+  align-content: start;
+  gap: 10px;
+  min-height: 104px;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -11113,8 +11115,8 @@ body {
   background: var(--amber-soft);
 }
 
-.expense-summary-grid span,
-.expense-summary-grid small {
+.expense-summary-grid article > span:not(.note-popover) {
+  padding-right: 26px;
   color: var(--app-muted);
   font-size: 0.78rem;
 }
@@ -11127,6 +11129,30 @@ body {
 
 .expense-table {
   min-width: 1080px;
+  table-layout: fixed;
+}
+
+.expense-col-supplier { width: 20%; }
+.expense-col-document { width: 14%; }
+.expense-col-description { width: 29%; }
+.expense-col-vat { width: 12%; }
+.expense-col-status { width: 13%; }
+.expense-col-amount { width: 12%; }
+
+.expense-cell-stack {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.expense-record-number {
+  color: var(--app-muted);
+  font-size: 0.74rem;
+}
+
+.expense-cell-stack small {
+  margin-top: 0;
 }
 
 .expense-table td {
@@ -12090,15 +12116,15 @@ body {
   margin-left: auto;
 }
 
-.invoice-documents-popup {
+.document-actions-popup {
   display: grid;
   gap: 6px;
   width: 224px;
   padding: 8px;
 }
 
-.invoice-documents-popup > button,
-.invoice-documents-popup > a {
+.document-actions-popup > button,
+.document-actions-popup > a {
   justify-content: flex-start;
   width: 100%;
 }
@@ -12149,7 +12175,7 @@ body {
 
 @container invoice-panel (max-width: 900px) {
   .invoice-secondary-action > span,
-  .invoice-documents-chevron {
+  .document-actions-chevron {
     display: none;
   }
 
@@ -12211,5 +12237,103 @@ body {
   .invoice-panel .invoice-company-filter {
     flex-basis: 106px;
     width: 106px;
+  }
+}
+
+
+.expense-panel {
+  container: expense-panel / inline-size;
+}
+
+.expense-panel .expense-control-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.expense-heading,
+.expense-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.expense-heading h2 {
+  margin: 0;
+}
+
+.expense-heading .note-popover {
+  position: static;
+}
+
+.expense-heading .note-popover-trigger {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  box-shadow: none;
+}
+
+.expense-result-count {
+  color: var(--app-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.expense-header-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.expense-panel .expense-list-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.expense-list-toolbar .toolbar-search-field {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.expense-record-filter {
+  flex: 0 0 180px;
+  width: 180px;
+}
+
+@container expense-panel (max-width: 600px) {
+  .expense-header-actions .document-actions-trigger > span,
+  .expense-header-actions .document-actions-chevron {
+    display: none;
+  }
+
+  .expense-header-actions .document-actions-trigger {
+    width: 32px;
+    padding-inline: 0;
+  }
+
+  .expense-record-filter {
+    flex-basis: 150px;
+    width: 150px;
+  }
+}
+
+@container expense-panel (max-width: 420px) {
+  .expense-create-action > span {
+    display: none;
+  }
+
+  .expense-create-action {
+    width: 32px;
+    padding-inline: 0;
+  }
+
+  .expense-record-filter {
+    flex-basis: 130px;
+    width: 130px;
   }
 }

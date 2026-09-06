@@ -1,11 +1,10 @@
-import { DocumentUploadButton } from "./DocumentsView";
+import { DocumentActions } from "./DocumentsView";
 import { useUrlState } from "@/lib/url-state";
 import { SortableTableHead, compareTableValues, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   Check,
   CircleAlert,
-  FileText,
   Loader2,
   Paperclip,
   Plus,
@@ -18,6 +17,8 @@ import { type FormEvent, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { InfoPopover } from "@/components/ui/finance-visuals";
+import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
@@ -146,7 +147,7 @@ export function ExpensesView({
   const [order, setOrder] = useUrlState<TableSortDirection>("expenseOrder", "asc", { allowedValues: ["asc", "desc"] });
   const sortValue = (expense: ExpenseRecord) => sort === "supplier" ? expense.supplierName : sort === "document" ? expense.sourceDocumentNumber : sort === "description" ? expense.description : sort === "vat" ? expense.vatAmount : sort === "amount" ? expense.grossAmount : `${expense.paymentStatus}:${expense.transactionId ? "matched" : "unmatched"}`;
   const onSort = (key: ExpenseSortKey) => { if (key === sort) setOrder(order === "asc" ? "desc" : "asc"); else { setSort(key); setOrder("asc"); } };
-  const head = (key: ExpenseSortKey, label: string) => <SortableTableHead activeSortKey={sort} direction={order} onSort={onSort} sortKey={key}>{label}</SortableTableHead>;
+  const head = (key: ExpenseSortKey, label: string) => <SortableTableHead activeSortKey={sort} direction={order} onSort={onSort} sortKey={key} className={key === "amount" ? "amount" : undefined}>{label}</SortableTableHead>;
   const [query, setQuery] = useUrlState("expenseQuery", "");
   const rows = dashboard.expenses
     .filter((expense) => {
@@ -174,50 +175,67 @@ export function ExpensesView({
 
   return (
     <div className="expenses-stack">
-      <section className="expense-summary-grid">
-        <article><span>Unpaid supplier bills</span><strong>{unpaidCount}</strong><small>Included in supplier payables</small></article>
-        <article><span>Paid expenses</span><strong>{paidCount}</strong><small>Matched to outgoing bank activity</small></article>
-        <article className={missingCount > 0 ? "warning" : ""}><span>Missing source documents</span><strong>{missingCount}</strong><small>Internal declarations, no input VAT</small></article>
+      <section className="expense-summary-grid" aria-label="Expense totals">
+        <article>
+          <InfoPopover label="unpaid supplier bills">Included in supplier payables.</InfoPopover>
+          <span>Unpaid supplier bills</span><strong>{unpaidCount}</strong>
+        </article>
+        <article>
+          <InfoPopover label="paid expenses">Expenses recorded as paid. Matched transactions link to outgoing bank activity.</InfoPopover>
+          <span>Paid expenses</span><strong>{paidCount}</strong>
+        </article>
+        <article className={missingCount > 0 ? "warning" : ""}>
+          <InfoPopover label="missing source documents">Internal missing-document declarations, with no input VAT recorded.</InfoPopover>
+          <span>Missing source documents</span><strong>{missingCount}</strong>
+        </article>
       </section>
 
-      <section className="panel wide-panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Expenses and accounts payable</p>
-            <h2>Supplier documents and payment evidence</h2>
+      <section className="panel wide-panel expense-panel">
+        <div className="panel-header expense-control-header">
+          <div className="expense-heading">
+            <h2>Expenses</h2>
+            <InfoPopover label="expense documents">
+              Electronic source documents are retained in their original format. Internal missing-document declarations are visibly separated and never treated as supplier VAT invoices.
+            </InfoPopover>
+            <span className="expense-result-count" role="status">{rows.length} {rows.length === 1 ? "record" : "records"}</span>
           </div>
-          <DocumentUploadButton apiBase={apiBase} /><a className="text-link-button" href="?page=documents">Monthly folders</a><Button className="secondary-button" type="button" onClick={() => setEditorOpen(true)}>
-            <Plus size={16} /> Add supplier bill
-          </Button>
-        </div>
-        <div className="income-callout">
-          <FileText size={17} />
-          <span>Electronic source documents are retained in their original format. Internal missing-document declarations are visibly separated and never treated as supplier VAT invoices.</span>
-        </div>
-        <div className="list-toolbar">
-          <div className="list-toolbar-main">
-            <Input
-              aria-label="Search expenses"
-              placeholder="Search supplier, document number, purpose"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <NativeSelect value={filter} onValueChange={(value) => setFilter(value as typeof filter)}>
-              <NativeSelectOption value="all">All records</NativeSelectOption>
-              <NativeSelectOption value="unpaid">Unpaid bills</NativeSelectOption>
-              <NativeSelectOption value="paid">Paid expenses</NativeSelectOption>
-              <NativeSelectOption value="missing">Missing documents</NativeSelectOption><NativeSelectOption value="matched">Matched</NativeSelectOption>
-            </NativeSelect>
+          <div className="expense-header-actions">
+            <DocumentActions apiBase={apiBase} label="Expense documents" href="?page=documents" viewLabel="View monthly folders" />
+            <Button className="primary-button expense-create-action" type="button" aria-label="Add supplier bill" title="Add supplier bill" onClick={() => setEditorOpen(true)}>
+              <Plus size={16} /><span>Add supplier bill</span>
+            </Button>
           </div>
-          <span className="total-pill">{rows.length} records</span>
+        </div>
+        <div className="list-toolbar expense-list-toolbar">
+          <ToolbarSearchField
+            ariaLabel="Search expenses"
+            placeholder="Search supplier, document number, purpose"
+            value={query}
+            onChange={setQuery}
+          />
+          <NativeSelect className="expense-record-filter" aria-label="Filter expense records" value={filter} onValueChange={(value) => setFilter(value as typeof filter)}>
+            <NativeSelectOption value="all">All records</NativeSelectOption>
+            <NativeSelectOption value="unpaid">Unpaid bills</NativeSelectOption>
+            <NativeSelectOption value="paid">Paid expenses</NativeSelectOption>
+            <NativeSelectOption value="missing">Missing documents</NativeSelectOption>
+            <NativeSelectOption value="matched">Matched</NativeSelectOption>
+          </NativeSelect>
         </div>
         <div className="table-wrap">
           <table className="data-table expense-table">
-            <thead><tr>{head("supplier", "Record / supplier")}{head("document", "Source document")}{head("description", "Economic content")}{head("vat", "VAT")}{head("status", "Status / match")}{head("amount", "Gross amount")}</tr></thead>
+            <colgroup>
+              <col className="expense-col-supplier" />
+              <col className="expense-col-document" />
+              <col className="expense-col-description" />
+              <col className="expense-col-vat" />
+              <col className="expense-col-status" />
+              <col className="expense-col-amount" />
+            </colgroup>
+            <thead><tr>{head("supplier", "Supplier / record")}{head("document", "Source document")}{head("description", "Description")}{head("vat", "VAT")}{head("status", "Status / match")}{head("amount", "Gross amount")}</tr></thead>
             <tbody>
               {rows.length > 0 ? rows.map((expense) => (
                 <tr key={expense.id}>
-                  <td className="counterparty-cell"><strong>{expense.recordNumber}</strong><span>{expense.supplierName}</span><small>{expense.supplierVatNumber || expense.supplierRegistrationNumber || "Supplier ID not recorded"}</small></td>
+                  <td><div className="expense-cell-stack"><strong>{expense.supplierName}</strong><span className="expense-record-number">{expense.recordNumber}</span><small>{expense.supplierVatNumber || expense.supplierRegistrationNumber || "Supplier ID not recorded"}</small></div></td>
                   <td>
                     <span>{expense.sourceDocumentNumber || (expense.recordType === "supplier_bill" ? "Receipt / invoice" : "Internal declaration")}</span>
                     <div className="expense-document-links">
@@ -228,9 +246,9 @@ export function ExpensesView({
                       ))}
                     </div>
                   </td>
-                  <td className="counterparty-cell"><strong>{expense.description}</strong><span>{expense.businessPurpose}</span><small>{expense.category} · {dateLabel(expense.transactionDate ?? expense.issueDate)}</small></td>
+                  <td><div className="expense-cell-stack"><span>{expense.description}</span>{expense.businessPurpose && <span>{expense.businessPurpose}</span>}<small>{expense.category} · {dateLabel(expense.transactionDate ?? expense.issueDate)}</small></div></td>
                   <td><span>{vatTreatmentLabel(expense.vatTreatment)}</span><small>{money(expense.vatAmount, expense.currency)}{expense.vatRate !== undefined ? ` · ${expense.vatRate}%` : ""}</small></td>
-                  <td>{expense.transactionId && <a href={documentTransactionLink(expense.transactionId)}>Matched transaction</a>}<span className={`status-pill ${expense.paymentStatus === "paid" ? "good" : "warning"}`}>{expense.paymentStatus === "paid" ? "Paid" : "Unpaid"}</span><small>{expense.paymentStatus === "paid" ? `Paid ${dateLabel(expense.paidAt)}` : `Due ${dateLabel(expense.dueDate)}`}</small></td>
+                  <td><div className="expense-cell-stack"><span className={`status-pill ${expense.paymentStatus === "paid" ? "good" : "warning"}`}>{expense.paymentStatus === "paid" ? "Paid" : "Unpaid"}</span><small>{expense.paymentStatus === "paid" ? `Paid ${dateLabel(expense.paidAt)}` : expense.dueDate ? `Due ${dateLabel(expense.dueDate)}` : "No due date"}</small>{expense.transactionId && <a href={documentTransactionLink(expense.transactionId)}>Matched transaction</a>}</div></td>
                   <td className="amount"><strong>{money(expense.grossAmount, expense.currency)}</strong><small>Net {money(expense.netAmount, expense.currency)}</small></td>
                 </tr>
               )) : <tr><td colSpan={6}>No expense records match this view</td></tr>}

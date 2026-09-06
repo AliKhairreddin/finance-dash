@@ -1,10 +1,8 @@
-import { Popover } from "@base-ui/react/popover";
-import { DocumentUploadButton } from "@/features/expenses/DocumentsView";
+import { DocumentActions } from "@/features/expenses/DocumentsView";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   CalendarClock,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleAlert,
   Clock3,
@@ -12,7 +10,6 @@ import {
   Download,
   Edit3,
   FilePlus2,
-  Files,
   Loader2,
   Mail,
   RefreshCw,
@@ -1039,20 +1036,7 @@ export function InvoicesView({
           </NativeSelect>
           <div className="invoice-header-actions">
             <Button className="icon-text-button invoice-secondary-action" type="button" aria-label="Export CSV" disabled={visibleRows.length === 0} title={`Export ${visibleRows.length} row${visibleRows.length === 1 ? "" : "s"} from this filtered view`} onClick={exportVisibleRows}><Download size={15} /><span>Export CSV</span></Button>
-            <Popover.Root>
-              <Popover.Trigger className="icon-text-button invoice-secondary-action" aria-label="Invoice documents" title="Invoice documents">
-                <Files size={15} /><span>Documents</span><ChevronDown className="invoice-documents-chevron" size={13} />
-              </Popover.Trigger>
-              <Popover.Portal keepMounted>
-                <Popover.Positioner className="toolbar-popover-positioner" sideOffset={6} align="end">
-                  <Popover.Popup className="toolbar-popover-popup invoice-documents-popup">
-                    <Popover.Title className="screen-reader-only">Invoice documents</Popover.Title>
-                    <DocumentUploadButton apiBase={apiBase} />
-                    <Button className="icon-text-button" nativeButton={false} render={<a href="?page=documents&documentKind=invoice" />}><Files size={15} /> View invoice documents</Button>
-                  </Popover.Popup>
-                </Popover.Positioner>
-              </Popover.Portal>
-            </Popover.Root>
+            <DocumentActions apiBase={apiBase} label="Invoice documents" href="?page=documents&documentKind=invoice" viewLabel="View invoice documents" className="invoice-secondary-action" />
             <Button className="primary-button invoice-create-action" type="button" aria-label="Create manual invoice" title="Create manual invoice" onClick={() => setEditorRequest({ mode: "new" })}><FilePlus2 size={16} /><span>Create manual invoice</span></Button>
           </div>
         </div>
