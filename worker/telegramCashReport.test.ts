@@ -15,12 +15,12 @@ import {
 } from "./telegramCashReport";
 import { getTelegramCashReport, handleTelegramCommand } from "./handler";
 
-const now = "2026-09-06T04:00:00.000Z";
+const now = "2026-09-07T04:00:00.000Z";
 function account(overrides: Partial<CashReportAccount> = {}): CashReportAccount {
   return {
     id: "wise-usd", name: "Wise USD", source: "wise", wiseEntity: "dn",
     balance: 100, currency: "USD", status: "live", updatedAt: "2026-01-01T00:00:00Z",
-    syncedAt: "2026-09-06T03:55:00.000Z", ...overrides
+    syncedAt: "2026-09-07T03:55:00.000Z", ...overrides
   };
 }
 function slash(overrides: Partial<SlashVirtualAccountBalance> = {}): SlashVirtualAccountBalance {
@@ -74,18 +74,27 @@ test("duplicate Slash virtual accounts cannot inflate a cash report", () => {
   assert.throws(() => buildTelegramCashReport({ accounts: [], slashAccounts: [slash(), slash()], rates: [], asOf: now }), /duplicate virtual accounts/u);
 });
 
-test("07:00 Beirut follows winter, summer and both DST transitions, with same-day catch-up", () => {
+test("Monday 07:00 Beirut follows winter, summer and both DST transitions", () => {
   for (const [before, due, date] of [
-    ["2026-01-15T04:59:00Z", "2026-01-15T05:00:00Z", "2026-01-15"],
-    ["2026-09-06T03:59:00Z", "2026-09-06T04:00:00Z", "2026-09-06"],
-    ["2026-03-29T03:59:00Z", "2026-03-29T04:00:00Z", "2026-03-29"],
-    ["2026-10-25T04:59:00Z", "2026-10-25T05:00:00Z", "2026-10-25"]
+    ["2026-01-12T04:59:00Z", "2026-01-12T05:00:00Z", "2026-01-12"],
+    ["2026-09-07T03:59:00Z", "2026-09-07T04:00:00Z", "2026-09-07"],
+    ["2026-03-23T04:59:00Z", "2026-03-23T05:00:00Z", "2026-03-23"],
+    ["2026-03-30T03:59:00Z", "2026-03-30T04:00:00Z", "2026-03-30"],
+    ["2026-10-19T03:59:00Z", "2026-10-19T04:00:00Z", "2026-10-19"],
+    ["2026-10-26T04:59:00Z", "2026-10-26T05:00:00Z", "2026-10-26"]
   ]) {
     assert.equal(cashReportDateIfDue(Date.parse(before)), null);
     assert.equal(cashReportDateIfDue(Date.parse(due)), date);
   }
-  assert.equal(cashReportDateIfDue(Date.parse("2026-09-06T20:59:00Z")), "2026-09-06");
+});
+
+test("cash report skips every other weekday and stops Monday retries at Beirut midnight", () => {
+  for (let day = 8; day <= 13; day += 1) {
+    assert.equal(cashReportDateIfDue(Date.parse(`2026-09-${String(day).padStart(2, "0")}T12:00:00Z`)), null);
+  }
   assert.equal(cashReportDateIfDue(Date.parse("2026-09-06T21:00:00Z")), null);
+  assert.equal(cashReportDateIfDue(Date.parse("2026-09-07T20:59:00Z")), "2026-09-07");
+  assert.equal(cashReportDateIfDue(Date.parse("2026-09-07T21:00:00Z")), null);
 });
 
 function memoryStorage(): Pick<DurableObjectStorage, "get" | "put"> {
@@ -105,20 +114,20 @@ test("long reports retain all lines and failed multipart deliveries resume witho
   const storage = memoryStorage();
   const sent: string[] = [];
   let calls = 0;
-  await assert.rejects(deliverCashReportParts(storage, "2026-09-06", message, async (part) => {
+  await assert.rejects(deliverCashReportParts(storage, "2026-09-07", message, async (part) => {
     calls += 1;
     if (calls === 2) throw new Error("Telegram unavailable");
     sent.push(part);
   }), /Telegram unavailable/u);
-  assert.equal(await deliverCashReportParts(storage, "2026-09-06", "changed report", async (part) => { sent.push(part); }), true);
+  assert.equal(await deliverCashReportParts(storage, "2026-09-07", "changed report", async (part) => { sent.push(part); }), true);
   assert.deepEqual(sent, parts);
-  assert.equal(await deliverCashReportParts(storage, "2026-09-06", message, async () => { throw new Error("duplicate"); }), false);
+  assert.equal(await deliverCashReportParts(storage, "2026-09-07", message, async () => { throw new Error("duplicate"); }), false);
   assert.equal(await deliverCashReportParts(storage, "2026-09-05", message, async () => { throw new Error("old event"); }), false);
-  assert.equal(await deliverCashReportParts(storage, "2026-09-07", "next day", async (part) => { sent.push(part); }), true);
+  assert.equal(await deliverCashReportParts(storage, "2026-09-08", "next day", async (part) => { sent.push(part); }), true);
   assert.equal(sent.at(-1), "next day");
 });
 
-test("daily delivery retries only failed recipients and concurrent minute ticks do not duplicate reports", async () => {
+test("Monday delivery retries only failed recipients and concurrent minute ticks do not duplicate reports", async () => {
   const storages = new Map<string, ReturnType<typeof memoryStorage>>();
   const queues = new Map<string, Promise<unknown>>();
   const delivered: string[] = [];
@@ -150,7 +159,7 @@ test("daily delivery retries only failed recipients and concurrent minute ticks 
   };
   let builds = 0;
   const build = async () => { builds += 1; return "Cash report"; };
-  assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-06T03:59:00Z"), build), 0);
+  assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-07T03:59:00Z"), build), 0);
   assert.equal(builds, 0);
   await assert.rejects(sendTelegramCashReportIfDue(env as never, Date.parse(now), build), /unfinished recipients will retry/u);
   assert.deepEqual(delivered, ["Ali"]);

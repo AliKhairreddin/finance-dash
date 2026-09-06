@@ -13,11 +13,11 @@ export type CashReportAccount = AccountBalance & { syncedAt: string };
 export function cashReportDateIfDue(timestamp: number): string | null {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: cashReportTimezone,
-    year: "numeric", month: "2-digit", day: "2-digit",
+    year: "numeric", month: "2-digit", day: "2-digit", weekday: "short",
     hour: "2-digit", hourCycle: "h23"
   }).formatToParts(timestamp);
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)!.value;
-  if (Number(value("hour")) < 7) return null;
+  if (value("weekday") !== "Mon" || Number(value("hour")) < 7) return null;
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 

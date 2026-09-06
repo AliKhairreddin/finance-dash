@@ -935,9 +935,9 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
   assert.equal(calls, 1);
 });
 
-test("minute scheduler checks each cash recipient using the Beirut date after 07:00", async () => {
+test("minute scheduler checks each cash recipient using the Monday Beirut date after 07:00", async () => {
   const checked: string[] = [];
-  await worker.scheduled({ cron: "* * * * *", scheduledTime: Date.parse("2026-09-06T04:00:00Z"), noRetry() {} }, {
+  await worker.scheduled({ cron: "* * * * *", scheduledTime: Date.parse("2026-09-07T04:00:00Z"), noRetry() {} }, {
     TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
     TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222" }),
     SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary Account",
@@ -947,11 +947,11 @@ test("minute scheduler checks each cash recipient using the Beirut date after 07
       return {
         async isCashReportDelivered(date: string) { checked.push(`${name}:${date}`); return true; },
         async pollOnboarding() { return 0; },
-        async getTelegramAlertSettings() { return { rules: [], digestTimeUtc: null, updatedAt: "2026-09-06T04:00:00Z" }; }
+        async getTelegramAlertSettings() { return { rules: [], digestTimeUtc: null, updatedAt: "2026-09-07T04:00:00Z" }; }
       };
     } }
   } as never);
-  assert.deepEqual(checked.sort(), ["telegram-cash-report:ali m:2026-09-06", "telegram-cash-report:ali:2026-09-06"]);
+  assert.deepEqual(checked.sort(), ["telegram-cash-report:ali m:2026-09-07", "telegram-cash-report:ali:2026-09-07"]);
 });
 
 test("five-minute scheduled handler drains the transaction classification backlog", async () => {
