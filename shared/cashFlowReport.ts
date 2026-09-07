@@ -23,6 +23,21 @@ export function cashFlowSnapshotTotals(snapshot: Position, rates: FxRate[]) {
   return { cash, receivables, openBalances, approximateCash, payables, investments, profit, assets: profit + investments };
 }
 
+export function cashFlowOpenBalanceGroups(lines: CashFlowLine[]): Array<{ key: string; label: string; lines: CashFlowLine[] }> {
+  const groups = [
+    { key: "cognitive", label: "Cognitive", lines: [] as CashFlowLine[] },
+    { key: "wagner", label: "Wagner", lines: [] as CashFlowLine[] },
+    { key: "other", label: "Other", lines: [] as CashFlowLine[] }
+  ];
+  for (const line of lines) {
+    // Only explicit company suffixes identify a group; supplier names alone do not.
+    const suffix = line.name.match(/(?:^|[-–—·|])\s*(cog|cognitive|wagner)\s*$/i)?.[1].toLowerCase();
+    const key = suffix === "wagner" ? "wagner" : suffix === "cog" || suffix === "cognitive" ? "cognitive" : "other";
+    groups.find((group) => group.key === key)!.lines.push(line);
+  }
+  return groups.filter((group) => group.lines.length > 0);
+}
+
 const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /** The imported snapshot stores its payable month breakdown in each line's notes. */

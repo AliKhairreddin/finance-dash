@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cashFlowPayableMonths, cashFlowPayableMonthTotals, cashFlowReportHistory, cashFlowSnapshotTotals } from "./cashFlowReport";
+import { cashFlowOpenBalanceGroups, cashFlowPayableMonths, cashFlowPayableMonthTotals, cashFlowReportHistory, cashFlowSnapshotTotals, cashFlowUsdTotal } from "./cashFlowReport";
 import type { CashFlowLine, CashFlowSnapshot, FxRate } from "./types";
 
 const line = (amount: number, currency = "USD", excludedFromTotals = false): CashFlowLine => ({
@@ -46,4 +46,21 @@ test("history ends at the exported as-of date, includes the unsaved draft, and d
   assert.deepEqual(cashFlowReportHistory(draft, []), [draft]);
   const history = Array.from({ length: 20 }, (_, i) => snapshot(`2026-08-${String(i + 1).padStart(2, "0")}`));
   assert.equal(cashFlowReportHistory(draft, history).length, 12);
+});
+
+test("open balances use explicit company suffixes, keep ambiguous suppliers, and reconcile signed totals", () => {
+  const rows = [
+    { ...line(100), id: "a", name: "Platform-cog" },
+    { ...line(-60), id: "b", name: "Platform - Cognitive" },
+    { ...line(40), id: "c", name: "Platform–WAGNER" },
+    { ...line(200, "USD", true), id: "d", name: "Excluded-wagner" },
+    { ...line(30), id: "e", name: "Blackbird (SuccessRoom)" },
+    { ...line(20), id: "f", name: "Cognitive supplier without suffix" }
+  ];
+  const groups = cashFlowOpenBalanceGroups(rows);
+  assert.deepEqual(groups.map(group => [group.label, group.lines.map(row => row.id)]), [
+    ["Cognitive", ["a", "b"]], ["Wagner", ["c", "d"]], ["Other", ["e", "f"]]
+  ]);
+  assert.equal(groups.reduce((total, group) => total + cashFlowUsdTotal(group.lines, []), 0), cashFlowUsdTotal(rows, []));
+  assert.deepEqual(cashFlowOpenBalanceGroups([]), []);
 });

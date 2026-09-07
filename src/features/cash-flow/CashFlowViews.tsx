@@ -23,7 +23,7 @@ import { InvoiceEditorDialog } from "@/features/income/IncomeViews";
 import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { useUrlState } from "@/lib/url-state";
 import { cashFlowSnapshotTotals as snapshotTotals, cashFlowUsdTotal as usdTotal } from "../../../shared/cashFlowReport";
-import { downloadCashFlowPng } from "./exportCashFlowPng";
+import { downloadCashFlowPngs } from "./exportCashFlowPng";
 import { financeOperatingDate } from "../../../shared/operatingDate";
 import { invoiceOutstanding, isLiquidAccountBalance } from "../../../shared/income";
 import type {
@@ -341,7 +341,7 @@ export function CashFlowPositionView({
     setExporting(true);
     setExportError(null);
     try {
-      await downloadCashFlowPng(preview, dashboard.cashFlowSnapshots, dashboard.fxRates);
+      await downloadCashFlowPngs(preview, dashboard.cashFlowSnapshots, dashboard.fxRates);
     } catch (caught) {
       setExportError(caught instanceof Error ? caught.message : "Cash flow image could not be exported");
     } finally {
@@ -360,7 +360,7 @@ export function CashFlowPositionView({
           </NativeSelect>
           <Input aria-label="Cash flow date" type="date" value={draft.asOfDate} max={financeOperatingDate()} onChange={(event) => setDraft((current) => ({ ...current, asOfDate: event.target.value }))} />
           <Button className="icon-text-button" type="button" onClick={() => { setSelectedSnapshotId("live"); setDraft(liveCashFlowDraft(dashboard)); }}><RefreshCw size={15} /> Use live values</Button>
-          <Button className="icon-text-button" type="button" disabled={exporting || !draft.asOfDate} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNG</Button>
+          <Button className="icon-text-button" type="button" title="Download landscape and portrait PNGs in one ZIP" disabled={exporting || !draft.asOfDate} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNGs</Button>
           <Button className="primary-button" type="button" disabled={saving || !draft.asOfDate} onClick={() => void save()}>{saving ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save</Button>
         </div>
       </section>
