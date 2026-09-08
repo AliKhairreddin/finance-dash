@@ -100,12 +100,12 @@ test("QuinStreet QMP exchanges client credentials and totals the saved report", 
         ? Response.json({ access_token: "qmp-token" })
         : Response.json({
             data: {
-              columns: ["date", "category", "total_earn"],
+              columns: ["date", "category", "total_earn", "clicks", "grs_leads", "payable_leads", "click_earn", "lead_earn"],
               numberOfRecords: "3",
               records: [
-                { "0": "2026-08-01", "1": "Auto Insurance", "2": "100.25" },
+                { "0": "2026-08-01", "1": "Auto Insurance", "2": "100.25", "3": 10, "4": 25, "5": 20, "6": 80, "7": 20.25 },
                 { "0": "2026-08-01", "1": "Home Insurance", "2": 20 },
-                { "0": "2026-08-02", "1": "Auto Insurance", "2": 49.75 }
+                { "0": "2026-08-02", "1": "Auto Insurance", "2": 49.75, "3": 5, "4": 10, "5": 9, "6": 30, "7": 19.75 }
               ]
             }
           });
@@ -128,7 +128,11 @@ test("QuinStreet QMP exchanges client credentials and totals the saved report", 
     assert.equal(requests[1]?.authorization, "Bearer qmp-token");
     assert.equal(run.source, "quinstreet");
     assert.equal(run.revenue, 150);
-    assert.equal(run.conversions, 2);
+    assert.equal(run.clicks, 15);
+    assert.equal(run.leads, 35);
+    assert.equal(run.payableLeads, 29);
+    assert.equal(run.earningsPerClick, 7.3333);
+    assert.equal(run.earningsPerLead, 1.3793);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousClientId === undefined) delete process.env.TEST_QMP_CLIENT_ID;

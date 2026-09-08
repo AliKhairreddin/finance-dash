@@ -70,7 +70,7 @@ import { financeOperatingDate } from "../../../shared/operatingDate";
 type InvoiceTab = "all" | "pending" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open";
 type InvoiceDeliveryFilter = "all" | MeritDeliveryStatus;
-type RevenueRunSortKey = "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
+type RevenueRunSortKey = "clicks" | "leads" | "payableLeads" | "earningsPerClick" | "earningsPerLead" | "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
 type RevenueAccrualSortKey = "accruedThrough" | "amount" | "cadence" | "company" | "period" | "status";
 type InvoiceSortKey = "amount" | "cadence" | "company" | "created" | "forecast" | "period" | "status";
 type InvoiceSendRequest = {
@@ -269,7 +269,7 @@ export function RevenueView({
   const [pullResults, setPullResults] = useState<RevenueRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [runSortKey, setRunSortKey] = useUrlState<RevenueRunSortKey>("revenueRunSort", "period", {
-    allowedValues: ["activity", "amount", "cadence", "company", "invoice", "period", "status"]
+    allowedValues: ["activity", "amount", "cadence", "company", "invoice", "period", "status", "clicks", "leads", "payableLeads", "earningsPerClick", "earningsPerLead"]
   });
   const [runSortDirection, setRunSortDirection] = useUrlState<TableSortDirection>("revenueRunOrder", "desc", {
     allowedValues: ["asc", "desc"]
@@ -298,14 +298,12 @@ export function RevenueView({
     () => [...new Set([...pullResults.map((run) => run.currency), ...dashboard.revenueRuns.map((run) => run.currency), ...dashboard.revenueAccruals.map((row) => row.currency)])].sort(),
     [dashboard.revenueAccruals, dashboard.revenueRuns, pullResults]
   );
-  const savedRunIds = new Set(dashboard.revenueRuns.map((run) => run.id));
-  const displayedRuns = [
-    ...pullResults.filter((run) => !savedRunIds.has(run.id)),
-    ...dashboard.revenueRuns
-  ];
+  const previewRunIds = new Set(pullResults.map((run) => run.id));
+  const displayedRuns = [...pullResults, ...dashboard.revenueRuns.filter(run => !previewRunIds.has(run.id))];
   function revenueRunSortValue(run: RevenueRun): boolean | number | string | undefined {
     const partner = partnersById.get(run.partnerId);
-    if (runSortKey === "activity") return run.conversions ?? 0;
+    if (runSortKey === "activity") return run.source === "quinstreet" ? run.leads : run.conversions;
+    if (["clicks", "leads", "payableLeads", "earningsPerClick", "earningsPerLead"].includes(runSortKey)) return run[runSortKey as "clicks" | "leads" | "payableLeads" | "earningsPerClick" | "earningsPerLead"];
     if (runSortKey === "amount") return run.status === "failed" ? undefined : run.revenue;
     if (runSortKey === "cadence") return partner?.billingCadence;
     if (runSortKey === "company") return run.partnerName;
@@ -541,7 +539,12 @@ export function RevenueView({
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="company">Company</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="period">Period</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="cadence">Cadence</SortableTableHead>
-              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="activity">Activity</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="activity">Leads / conversions</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="payableLeads">Payable leads</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="clicks">Clicks</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="earningsPerLead" description="Lead net earnings divided by payable leads for the selected period.">Avg. / lead</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="earningsPerClick" description="Click net earnings divided by clicks for the selected period.">Avg. / click</SortableTableHead>
+
               <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="amount">Amount</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="status">Status / match</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="invoice">Invoice</SortableTableHead>
@@ -560,7 +563,11 @@ export function RevenueView({
                     <td className="counterparty-cell"><strong>{run.partnerName}</strong><small>{run.revenueCategory || "Revenue"} · {run.source === "quinstreet" ? "QuinStreet" : "TUNE"}</small></td>
                     <td>{periodLabel(run.periodStart, run.periodEnd)}</td>
                     <td><span className="cadence-badge">{cadenceLabel(partner?.billingCadence)}</span></td>
-                    <td><span>{run.conversions ?? 0} {run.source === "quinstreet" ? "report rows" : "conversions"}</span><small>{dateTimeLabel(run.createdAt)}</small></td>
+                    <td>{(run.source === "quinstreet" ? run.leads : run.conversions)?.toLocaleString() ?? "—"}</td>
+                    <td>{run.payableLeads?.toLocaleString() ?? "—"}</td>
+                    <td>{run.clicks?.toLocaleString() ?? "—"}</td>
+                    <td className="amount">{run.earningsPerLead === undefined ? "—" : money(run.earningsPerLead, run.currency)}</td>
+                    <td className="amount">{run.earningsPerClick === undefined ? "—" : money(run.earningsPerClick, run.currency)}</td>
                     <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
                     <td><span className={`status-pill invoice-status-${run.status}`}>{run.status}</span>{run.error && <small>{run.error}</small>}</td>
                     <td>{run.invoiceId
@@ -570,7 +577,7 @@ export function RevenueView({
                         : <span className="muted-cell">{run.status === "pulled" && run.revenue > 0 ? "Period still open" : "Not drafted"}</span>}</td>
                   </tr>
                 );
-              }) : <tr><td colSpan={7}>No revenue activity matches these filters</td></tr>}
+              }) : <tr><td colSpan={11}>No revenue activity matches these filters</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1408,8 +1415,10 @@ export function InvoiceEditorDialog({
   const [currency, setCurrency] = useState(invoice?.currency ?? initialDraft?.currency ?? initialProvider?.defaultCurrency ?? "USD");
   const [issueDate, setIssueDate] = useState(toDateInput(invoice?.issueDate ?? initialDraft?.issueDate ?? today));
   const [dueDate, setDueDate] = useState(toDateInput(invoice?.dueDate ?? initialDraft?.dueDate ?? addDays(today, initialProvider?.paymentTermsDays ?? 30)));
-  const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? initialDraft?.periodStart ?? "");
-  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? initialDraft?.periodEnd ?? "");
+  const lastWeek = bankPeriodPresetRange("last-week", today);
+  const defaultStart = invoice || initialDraft ? "" : lastWeek.fromDate;
+  const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? initialDraft?.periodStart ?? defaultStart);
+  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? initialDraft?.periodEnd ?? (defaultStart ? addDays(defaultStart, 7) : ""));
   const initialRule = initialProvider ? dashboard.revenuePartners.find((item) => item.providerId === initialProvider.id) : undefined;
   const [taxId, setTaxId] = useState(invoice?.taxId ?? initialDraft?.taxId ?? initialRule?.defaultMeritTaxId ?? initialProvider?.defaultMeritTaxId ?? "");
   const [description, setDescription] = useState(invoice?.description ?? initialDraft?.description ?? "");
@@ -1523,7 +1532,7 @@ export function InvoiceEditorDialog({
             <div className="invoice-field"><label htmlFor="invoice-due-date">Due date</label><Input id="invoice-due-date" type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></div>
           </div>
           <div className="invoice-form-grid">
-            <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start</label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></div>
+            <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start <Button className="text-link-button" type="button" onClick={() => { setPeriodStart(lastWeek.fromDate); setPeriodEnd(addDays(lastWeek.fromDate, 7)); }}>Last week</Button></label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); setPeriodEnd(event.target.value ? addDays(event.target.value, 7) : ""); }} /></div>
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
           </div>
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>

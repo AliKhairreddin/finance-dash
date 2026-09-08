@@ -91,6 +91,9 @@ function sectionLayout(ctx: CanvasRenderingContext2D, section: Section, width: n
     const names = wrap(ctx, line.name || "Untitled", nameWidth);
     const details: string[] = [];
     if (line.excludedFromTotals) details.push("Excluded from totals");
+    if (line.formula) details.push(...wrap(ctx, `Calculation: ${line.formula}`, width - 56, 15));
+    if (line.notes) details.push(...wrap(ctx, line.notes, width - 56, 15));
+    if (line.dueDate) details.push(`Due ${date(line.dueDate)}`);
     if (section.payable) {
       const months = cashFlowPayableMonths(line.notes);
       if (months.length) details.push(...wrap(ctx, months.map(({ month, amount }) =>
@@ -265,7 +268,7 @@ export function planCashFlowPng(ctx: CanvasRenderingContext2D, snapshot: CashFlo
     ];
     return orders.map(order => {
       const packed = packCashFlowReportCards(order, columns, columnWidth, gap);
-      const footers = wrap(ctx, footer, width - margin * 2 - 170, 14);
+      const footers = wrap(ctx, [snapshot.notes, footer].filter(Boolean).join("\n"), width - margin * 2 - 170, 14);
       const contentHeight = bodyTop + packed.height + 42 + footers.length * 21 + 25;
       const height = Math.max(orientation === "portrait" ? Math.ceil(width / .78) : 1360, contentHeight);
       // Prefer intact company groups and familiar reading order when the space

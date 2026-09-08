@@ -1,3 +1,4 @@
+import { slashReportDateIfDue } from "./telegramSlashReport";
 import type { AccountBalance, FxRate } from "../shared/types";
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
 import { normalizeFinanceUsername, parseTelegramAuthUsers } from "./telegram";
@@ -185,25 +186,26 @@ export async function deliverCashReportParts(
 export async function sendTelegramCashReportIfDue(
   env: Pick<WorkerEnv, "TELEGRAM_CASH_REPORT_RECIPIENTS" | "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_OTP_STATE">,
   scheduledTime: number,
-  buildReport: () => Promise<string>
+  buildReport: () => Promise<string>,
+  kind: "weekly-cash" | "daily-slash" = "weekly-cash"
 ): Promise<number> {
-  const date = cashReportDateIfDue(scheduledTime);
+  const date = kind === "daily-slash" ? slashReportDateIfDue(scheduledTime) : cashReportDateIfDue(scheduledTime);
   if (!date) return 0;
   const names = parseTelegramCommandUsers(env.TELEGRAM_CASH_REPORT_RECIPIENTS, "TELEGRAM_CASH_REPORT_RECIPIENTS");
   let report: Promise<string> | undefined;
   const results = await Promise.allSettled(names.map(async (name) => {
     const recipient = cashReportRecipient(env, name);
-    const state = env.TELEGRAM_OTP_STATE.getByName(`telegram-cash-report:${recipient.normalizedUsername}`);
+    const state = env.TELEGRAM_OTP_STATE.getByName(`${kind === "daily-slash" ? "telegram-slash-report" : "telegram-cash-report"}:${recipient.normalizedUsername}`);
     if (await state.isCashReportDelivered(date)) return false;
     report ??= buildReport();
     const sent = await state.deliverCashReport(date, recipient.username, await report);
-    if (sent) console.log(JSON.stringify({ event: "telegram_cash_report_sent", recipient: recipient.username, date }));
+    if (sent) console.log(JSON.stringify({ event: "telegram_cash_report_sent", recipient: recipient.username, date, kind }));
     return sent;
   }));
   const failures = results.flatMap((result, index) => {
     if (result.status === "fulfilled") return [];
     console.error(JSON.stringify({
-      event: "telegram_cash_report_recipient_failed", recipient: names[index], date,
+      event: "telegram_cash_report_recipient_failed", recipient: names[index], date, kind,
       error: result.reason instanceof Error ? result.reason.message : "Cash report failed"
     }));
     return [result.reason];

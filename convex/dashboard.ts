@@ -1,3 +1,4 @@
+import { evaluateCashFlowAmount } from "../shared/cashFlow";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
@@ -297,6 +298,7 @@ const cashFlowLine = v.object({
   id: v.string(),
   name: v.string(),
   amount: v.number(),
+  formula: v.optional(v.string()),
   currency: v.string(),
   notes: v.optional(v.string()),
   dueDate: v.optional(v.string()),
@@ -348,6 +350,13 @@ const revenueRun = v.object({
   currency: v.string(),
   clicks: v.optional(v.number()),
   conversions: v.optional(v.number()),
+  leads: v.optional(v.number()),
+  payableLeads: v.optional(v.number()),
+  clickRevenue: v.optional(v.number()),
+  leadRevenue: v.optional(v.number()),
+  earningsPerClick: v.optional(v.number()),
+  earningsPerLead: v.optional(v.number()),
+
   status: v.union(
     v.literal("pulled"),
     v.literal("drafted"),
@@ -572,7 +581,8 @@ function normalizedCashFlowLine(line: CashFlowLine): CashFlowLine {
   return {
     id,
     name,
-    amount: Number(line.amount.toFixed(2)),
+    amount: line.formula !== undefined ? evaluateCashFlowAmount(line.formula) : Number(line.amount.toFixed(2)),
+    formula: line.formula?.trim() || undefined,
     currency,
     notes,
     dueDate: line.dueDate,

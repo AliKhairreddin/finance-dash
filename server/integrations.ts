@@ -849,7 +849,13 @@ export async function fetchQuinStreetRevenue(
     timezone: period.timezone,
     revenue: summary.revenue,
     currency: partner.currency,
-    conversions: summary.rowCount,
+    clicks: summary.clicks,
+    leads: summary.leads,
+    payableLeads: summary.payableLeads,
+    clickRevenue: summary.clickRevenue,
+    leadRevenue: summary.leadRevenue,
+    earningsPerClick: summary.earningsPerClick,
+    earningsPerLead: summary.earningsPerLead,
     status: "pulled",
     createdAt: new Date().toISOString()
   };

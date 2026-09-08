@@ -94,6 +94,7 @@ export interface CashFlowLine {
   id: string;
   name: string;
   amount: number;
+  formula?: string;
   currency: string;
   notes?: string;
   dueDate?: string;
@@ -118,6 +119,7 @@ export interface CashFlowSnapshot {
 
 export interface SaveCashFlowSnapshotPayload {
   id?: string;
+  section?: import("./cashFlow").CashFlowSectionKey;
   asOfDate: string;
   cashAccounts: CashFlowLine[];
   receivables: CashFlowLine[];
@@ -303,6 +305,12 @@ export interface RevenueRun {
   currency: string;
   clicks?: number;
   conversions?: number;
+  leads?: number;
+  payableLeads?: number;
+  clickRevenue?: number;
+  leadRevenue?: number;
+  earningsPerClick?: number;
+  earningsPerLead?: number;
   status: RevenueRunStatus;
   invoiceId?: string;
   externalInvoiceId?: string;

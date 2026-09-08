@@ -40,6 +40,12 @@ The system follows three rules:
 - Import the legacy Management Report workbook into a dedicated Management workspace with summary, business-unit, platform, offer, ledger, and ownership views.
 - Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
+Cash Flow Position accepts arithmetic such as `=1000+250-50` in amount cells and preserves the formula alongside its numeric result. Line notes, due dates, and the report note appear in both exported PNG orientations. Each table has live-value and Save controls; Save All saves the complete working snapshot. A section save preserves other saved tables and leaves other local edits pending. Open balances includes search, and table sorting is retained in the URL.
+
+Cash Flow Open invoices supports editing manual receivables, selecting visible items, CSV export, and atomic deletion of eligible manual receivables and local manual invoices. Merit-linked invoices, payment allocations, transaction links, and revenue-generated invoices remain protected. New manual invoices default to the previous week's start with an end date seven days later; changing the start recalculates the end, and Last week restores those dates.
+
+The Telegram `/pending_invoices` command lists unpaid sales invoices (including drafts) with outstanding amounts after allocations, in due-date order. `/slash_report` reads exact rolling 24-hour card activity and current virtual-account balances directly from Slash. The same report is delivered daily at 17:00 `Asia/Beirut` to `TELEGRAM_CASH_REPORT_RECIPIENTS`, with per-recipient retry state separate from the existing weekly cash report. It reports posted spend, pending charges, refunds, and suggested account funding for one further day of gross card activity plus the configured `SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD` reserve per open account. It does not execute transfers or card repayments.
+
 ## Architecture
 
 ```mermaid

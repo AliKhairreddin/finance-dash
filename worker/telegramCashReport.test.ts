@@ -232,3 +232,19 @@ test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes 
     await assert.rejects(getTelegramCashReport(env as never));
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("daily Slash delivery uses a separate durable identity and runs after 17:00 Beirut", async () => {
+ const names: string[] = [];
+ let builds = 0;
+ const env = {
+   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
+   TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali",
+   TELEGRAM_OTP_STATE: { getByName(name: string) { names.push(name); return { async isCashReportDelivered() { return false; }, async deliverCashReport() { return true; } }; } }
+ };
+ const build = async () => { builds++; return "Daily report"; };
+ assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T13:59:00Z"), build, "daily-slash"), 0);
+ assert.equal(builds, 0);
+ assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T14:00:00Z"), build, "daily-slash"), 1);
+ assert.deepEqual(names, ["telegram-slash-report:ali"]);
+ assert.equal(builds, 1);
+});

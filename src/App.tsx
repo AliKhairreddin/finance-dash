@@ -1972,13 +1972,22 @@ function App() {
     setNotice(`${payload.name.trim()} added to receivables.`);
   }
 
-  async function deleteManualReceivable(receivableId: string) {
-    const response = await fetch(`${apiBase}/receivables/${encodeURIComponent(receivableId)}`, {
-      method: "DELETE"
+  async function updateManualReceivable(id: string, payload: CreateManualReceivablePayload) {
+    const response = await fetch(`${apiBase}/receivables/${encodeURIComponent(id)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
-    if (!response.ok) throw new Error(await apiErrorMessage(response, "Manual receivable could not be removed"));
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Manual receivable could not be updated"));
     await loadDashboard();
-    setNotice("Manual receivable removed.");
+    setNotice("Manual receivable updated.");
+  }
+
+  async function deleteOpenItems(ids: string[]) {
+    const response = await fetch(`${apiBase}/receivables`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids })
+    });
+    if (!response.ok) throw new Error(await apiErrorMessage(response, "Open items could not be deleted"));
+    await loadDashboard();
+    setNotice(`${ids.length} open items deleted.`);
   }
 
   async function saveCashFlowSnapshot(payload: SaveCashFlowSnapshotPayload): Promise<CashFlowSnapshot> {
@@ -2426,7 +2435,8 @@ function App() {
         <CashFlowOpenInvoicesView
           dashboard={dashboard}
           onCreateManualReceivable={createManualReceivable}
-          onDeleteManualReceivable={deleteManualReceivable}
+          onUpdateManualReceivable={updateManualReceivable}
+          onDeleteOpenItems={deleteOpenItems}
           onPrepareInvoiceEdit={prepareInvoiceDuplicate}
           onUpdateInvoice={updateInvoiceDraft}
         />

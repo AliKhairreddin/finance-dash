@@ -56,7 +56,7 @@ interface SlashCard {
   last4: string;
 }
 
-interface SlashTransaction {
+export interface SlashTransaction {
   id: string;
   date: string;
   description: string;
@@ -96,6 +96,22 @@ export interface SlashActivityResult {
 export interface SlashVirtualAccountBalance extends SlashVirtualAccount {
   balance: number;
   currency: "USD";
+}
+
+/** Read the precise rolling window from Slash; ledger dates are day-only. */
+export async function fetchSlashDailyCardActivity({ baseUrl, apiKey, legalEntityId, now = Date.now(), fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; now?: number; fetcher?: typeof fetch;
+}): Promise<SlashTransaction[]> {
+  const url = new URL("/transaction", baseUrl);
+  url.searchParams.set("filter:from_date", String(now - 86_400_000));
+  url.searchParams.set("filter:to_date", String(now));
+  const rows = await fetchAllSlashPages(fetcher, url, slashHeaders(apiKey, legalEntityId), parseSlashTransaction, 50_000, maxSlashPages);
+  const unique = new Map<string, SlashTransaction>();
+  for (const row of rows) {
+    const time = Date.parse(row.date);
+    if (time > now - 86_400_000 && time <= now) unique.set(`${row.accountId}:${row.id}`, row);
+  }
+  return [...unique.values()];
 }
 
 export interface SlashTransactionDateRange {

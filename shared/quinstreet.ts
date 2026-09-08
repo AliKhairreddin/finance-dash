@@ -4,6 +4,13 @@ export const quinStreetMaximumReportRecords = 15_000;
 export interface QuinStreetReportSummary {
   revenue: number;
   rowCount: number;
+  clicks: number;
+  leads: number;
+  payableLeads: number;
+  clickRevenue: number;
+  leadRevenue: number;
+  earningsPerClick?: number;
+  earningsPerLead?: number;
 }
 
 interface QuinStreetReportOptions {
@@ -79,6 +86,9 @@ export function summarizeQuinStreetReport(
 
   const revenueIndex = requiredColumnIndex(columns, field);
   const categoryIndex = requiredColumnIndex(columns, categoryField);
+  const metricFields = ["clicks", "grs_leads", "payable_leads", "click_earn", "lead_earn"] as const;
+  const metricIndexes = metricFields.map(name => requiredColumnIndex(columns, name));
+  const metrics = [0, 0, 0, 0, 0];
   const normalizedCategory = categoryValue.toLocaleLowerCase();
   let rowCount = 0;
   const revenue = records.reduce((total, row, rowIndex) => {
@@ -88,8 +98,20 @@ export function summarizeQuinStreetReport(
     }
     if (category.trim().toLocaleLowerCase() !== normalizedCategory) return total;
     rowCount += 1;
+    metricIndexes.forEach((columnIndex, index) => {
+      const value = revenueValue(requiredCell(row, columnIndex, metricFields[index], rowIndex), metricFields[index], rowIndex);
+      if (index < 3 && (!Number.isInteger(value) || value < 0)) throw new Error(`QuinStreet report has an invalid ${metricFields[index]} count`);
+      metrics[index] += value;
+    });
     return total + revenueValue(requiredCell(row, revenueIndex, field, rowIndex), field, rowIndex);
   }, 0);
 
-  return { revenue: Number(revenue.toFixed(2)), rowCount };
+  const [clicks, leads, payableLeads, clickRevenue, leadRevenue] = metrics;
+  return {
+    revenue: Number(revenue.toFixed(2)), rowCount, clicks, leads, payableLeads,
+    clickRevenue: Number(clickRevenue.toFixed(2)), leadRevenue: Number(leadRevenue.toFixed(2)),
+    // Divide aggregate earnings by aggregate units; daily rounded rates cannot be averaged.
+    ...(clicks > 0 ? { earningsPerClick: Number((clickRevenue / clicks).toFixed(4)) } : {}),
+    ...(payableLeads > 0 ? { earningsPerLead: Number((leadRevenue / payableLeads).toFixed(4)) } : {})
+  };
 }

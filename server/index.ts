@@ -66,6 +66,8 @@ import {
   createHolding,
   createInvoice,
   createManualReceivable,
+  updateManualReceivable,
+  deleteOpenItems,
   createProvider,
   createRevenuePartner,
   createTeam,
@@ -939,6 +941,16 @@ app.post("/api/receivables", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.put("/api/receivables/:receivableId", async (request, response, next) => {
+  try { response.json(await updateManualReceivable(request.params.receivableId, request.body as CreateManualReceivablePayload)); }
+  catch (error) { next(error); }
+});
+
+app.delete("/api/receivables", async (request, response, next) => {
+  try { await deleteOpenItems(request.body.ids); response.json({ success: true }); }
+  catch (error) { next(error); }
 });
 
 app.delete("/api/receivables/:receivableId", async (request, response, next) => {

@@ -1,3 +1,8 @@
+import { pendingInvoices } from "../shared/pendingInvoices";
+import { fetchSlashDailyCardActivity } from "../shared/slashApi";
+import { buildTelegramSlashReport } from "./telegramSlashReport";
+import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
+import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
@@ -2158,7 +2163,13 @@ async function fetchQuinStreetRevenue(
     timezone: period.timezone,
     revenue: summary.revenue,
     currency: partner.currency,
-    conversions: summary.rowCount,
+    clicks: summary.clicks,
+    leads: summary.leads,
+    payableLeads: summary.payableLeads,
+    clickRevenue: summary.clickRevenue,
+    leadRevenue: summary.leadRevenue,
+    earningsPerClick: summary.earningsPerClick,
+    earningsPerLead: summary.earningsPerLead,
     status: "pulled",
     createdAt: new Date().toISOString()
   };
@@ -4002,6 +4013,16 @@ function telegramAlertDefaults(env: Env): {
   };
 }
 
+export async function getTelegramSlashReport(env: Env): Promise<string> {
+  const asOf = Date.now();
+  const options = { baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID };
+  const [accounts, transactions] = await Promise.all([
+    fetchSlashVirtualAccountBalancesForLegalEntity(options),
+    fetchSlashDailyCardActivity({ ...options, now: asOf })
+  ]);
+  return buildTelegramSlashReport({ accounts, transactions, asOf, reserveUsd: Number(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD) });
+}
+
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
     .filter((connection) => connection.source === "wise" || connection.source === "revolut");
@@ -5679,32 +5700,28 @@ async function deleteInvoiceDrafts(env: Env, invoiceIds: string[]): Promise<Invo
 }
 
 async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
-  const name = payload.name?.trim();
-  const currency = payload.currency?.trim().toUpperCase();
-  if (!name) throw new ApiError(400, "Receivable name is required");
-  if (!Number.isFinite(payload.amount) || payload.amount <= 0) {
-    throw new ApiError(400, "Receivable amount must be positive");
-  }
-  if (!currency || !/^[A-Z0-9]{2,12}$/.test(currency)) {
-    throw new ApiError(400, "Receivable currency is invalid");
-  }
-  if (payload.dueDate && !isIsoCalendarDate(payload.dueDate)) {
-    throw new ApiError(400, "Expected payment date is invalid");
-  }
-
   const state = await loadPersisted(env);
-  const receivable: LedgerItem = {
-    id: `manual-receivable-${crypto.randomUUID()}`,
-    name,
-    balance: Number(payload.amount.toFixed(2)),
-    currency,
-    source: "manual",
-    notes: cleanOptional(payload.notes),
-    dueDate: payload.dueDate
-  };
+  const receivable = manualReceivableFromPayload(payload, `manual-receivable-${crypto.randomUUID()}`);
   state.manualReceivables = [receivable, ...state.manualReceivables];
   await savePersisted(env, state);
   return receivable;
+}
+
+async function updateManualReceivable(env: Env, id: string, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
+  const state = await loadPersisted(env);
+  if (!state.manualReceivables.some(item => item.id === id)) throw new Error("Manual receivable not found");
+  const receivable = manualReceivableFromPayload(payload, id);
+  state.manualReceivables = state.manualReceivables.map(item => item.id === id ? receivable : item);
+  await savePersisted(env, state);
+  return receivable;
+}
+
+async function deleteOpenItems(env: Env, ids: string[]): Promise<void> {
+  const state = await loadPersisted(env);
+  const selected = validateOpenItemDeletion(ids, state.invoices, state.manualReceivables, state.paymentAllocations);
+  state.manualReceivables = state.manualReceivables.filter(item => !selected.has(item.id));
+  state.invoices = state.invoices.filter(item => !selected.has(item.id));
+  await savePersisted(env, state);
 }
 
 async function deleteManualReceivable(env: Env, receivableId: string): Promise<void> {
@@ -5733,7 +5750,8 @@ function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine
   return {
     id,
     name,
-    amount: Number(line.amount.toFixed(2)),
+    amount: line.formula !== undefined ? evaluateCashFlowAmount(line.formula) : Number(line.amount.toFixed(2)),
+    formula: line.formula?.trim() || undefined,
     currency,
     notes,
     dueDate: line.dueDate,
@@ -5754,6 +5772,14 @@ async function saveCashFlowSnapshot(
   if (!isIsoCalendarDate(payload.asOfDate) || payload.asOfDate > financeOperatingDate()) {
     throw new ApiError(400, "Cash flow date is invalid");
   }
+  const state = await loadPersisted(env);
+  const existing = state.cashFlowSnapshots.find((snapshot) =>
+    snapshot.id === payload.id || snapshot.asOfDate === payload.asOfDate
+  );
+  if (payload.section) {
+    if (!cashFlowSectionKeys.includes(payload.section)) throw new Error("Invalid cash flow section");
+    if (existing) payload = { ...existing, [payload.section]: payload[payload.section], asOfDate: payload.asOfDate };
+  }
   const sections = [
     ["Cash account", payload.cashAccounts],
     ["Receivable", payload.receivables],
@@ -5771,10 +5797,6 @@ async function saveCashFlowSnapshot(
   if (notes && notes.length > maximumCashFlowSnapshotNotesLength) {
     throw new ApiError(400, "Cash flow snapshot note is too long");
   }
-  const state = await loadPersisted(env);
-  const existing = state.cashFlowSnapshots.find((snapshot) =>
-    snapshot.id === payload.id || snapshot.asOfDate === payload.asOfDate
-  );
   const updatedAt = new Date().toISOString();
   const normalized = (label: string, lines: CashFlowLine[]) =>
     lines.map((line, index) => normalizedCashFlowLine(line, `${label} ${index + 1}`));
@@ -7476,7 +7498,15 @@ async function handleApi(
       return json(await createManualReceivable(env, (await request.json()) as CreateManualReceivablePayload), { status: 201 });
     }
 
+    if (url.pathname === "/api/receivables" && request.method === "DELETE") {
+      const payload = await request.json() as { ids: string[] };
+      await deleteOpenItems(env, payload.ids);
+      return json({ success: true });
+    }
     const receivableMatch = url.pathname.match(/^\/api\/receivables\/([^/]+)$/);
+    if (receivableMatch && request.method === "PUT") {
+      return json(await updateManualReceivable(env, decodeURIComponent(receivableMatch[1]), await request.json() as CreateManualReceivablePayload));
+    }
     if (receivableMatch && request.method === "DELETE") {
       await deleteManualReceivable(env, decodeURIComponent(receivableMatch[1]));
       return new Response(null, { status: 204 });
@@ -7898,6 +7928,10 @@ async function telegramReadCommand(
   command: string,
   args: string
 ): Promise<TelegramCommandReply> {
+  if (command === "slash_report") {
+    const messages = splitCashReport(await getTelegramSlashReport(env));
+    return messages.length === 1 ? messages[0] : { messages };
+  }
   if (command === "cash") {
     const messages = splitCashReport(await getTelegramCashReport(env));
     return messages.length === 1 ? messages[0] : { messages };
@@ -8172,6 +8206,15 @@ async function telegramReadCommand(
   if (command === "revenue_runs") return telegramList("🧮 Revenue runs", snapshot.revenueRuns.map((run) =>
     `${run.periodStart}–${run.periodEnd} · ${run.partnerName}: ${telegramMoney(run.revenue, run.currency)} · ${run.status}`
   ), "No revenue runs.");
+  if (command === "pending_invoices") {
+    const rows = pendingInvoices(snapshot.invoices, snapshot.paymentAllocations);
+    if (!rows.length) return "✅ No pending invoices";
+    const totals = rows.reduce<Record<string, number>>((result, row) => { result[row.invoice.currency] = (result[row.invoice.currency] ?? 0) + row.outstanding; return result; }, {});
+    const lines = [`🧾 Pending invoices · ${rows.length}`, `Outstanding: ${telegramTotals(totals)}`, "", ...rows.map(({ invoice, outstanding }) =>
+      `${invoice.invoiceNumber} · ${telegramCompactText(invoice.customerName, 60)}\n${telegramMoney(outstanding, invoice.currency)} remaining · ${invoice.status} · Due ${telegramDateLabel(invoice.dueDate)}`), "", telegramDashboardLink(env, "cash-flow-invoices")];
+    const messages = splitCashReport(lines.join("\n"));
+    return messages.length === 1 ? messages[0] : { messages };
+  }
   if (["invoices", "overdue", "due_soon"].includes(command)) {
     const today = financeOperatingDate();
     const dueSoon = isoDateShift(today, 7);
@@ -8653,6 +8696,12 @@ export default {
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
+        failures.push(error);
+      }
+      try {
+        await sendTelegramCashReportIfDue(env, controller.scheduledTime, () => getTelegramSlashReport(env), "daily-slash");
+      } catch (error) {
+        console.error(JSON.stringify({ event: "telegram_slash_report_failed", scheduledTime: controller.scheduledTime, error: error instanceof Error ? error.message : String(error) }));
         failures.push(error);
       }
       try {

@@ -11615,7 +11615,7 @@ body {
 
 .cash-flow-editor-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(960px, 100%), 1fr));
   gap: 12px;
   align-items: start;
 }
@@ -11642,7 +11642,7 @@ body {
 }
 
 .cash-flow-entry-table {
-  min-width: 720px;
+  min-width: 960px;
 }
 
 .cash-flow-entry-table th,
@@ -11650,9 +11650,11 @@ body {
   padding: 6px 8px;
 }
 
-.cash-flow-entry-table th:nth-child(1) { width: 38%; }
-.cash-flow-entry-table th:nth-child(2) { width: 24%; }
-.cash-flow-entry-table th:nth-child(3) { width: 18%; }
+.cash-flow-entry-table th:nth-child(1) { width: 22%; }
+.cash-flow-entry-table th:nth-child(2) { width: 22%; }
+.cash-flow-entry-table th:nth-child(3) { width: 85px; }
+.cash-flow-entry-table th:nth-child(5) { width: 140px; }
+.cash-flow-entry-table th:nth-child(6) { width: 24%; }
 .cash-flow-entry-table th:nth-child(4) { width: 90px; }
 .cash-flow-entry-table th:last-child { width: 52px; }
 
@@ -12418,3 +12420,10 @@ body {
   .document-selection-count { order: 4; flex-basis: 100%; }
   .document-selection-actions .document-download { margin-left: auto; }
 }
+
+.cash-flow-editor-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.cash-flow-editor-section .compact-panel-header { flex-wrap: wrap; gap: 8px; }
+.cash-flow-editor-section .row-actions { flex-wrap: wrap; }
+.cash-flow-report-note { display: block; padding: 0 16px 12px; font-size: .8rem; }
+.cash-flow-report-note textarea { margin-top: 6px; min-height: 54px; }
+.cash-flow-entry-table .amount small { display: block; font-variant-numeric: tabular-nums; }

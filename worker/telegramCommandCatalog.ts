@@ -39,6 +39,8 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "revenue_runs", description: "Show recent revenue runs", access: "read", input: "tap" },
   { command: "revenue_pull", description: "Pull partner revenue", access: "action", input: "required", arguments: "<JSON SyncRevenuePayload> CONFIRM" },
   { command: "draft_revenue", description: "Prepare revenue invoice drafts", access: "action", input: "required", arguments: "<JSON DraftRevenueRunPayload> CONFIRM" },
+  { command: "pending_invoices", description: "Show unpaid invoices and remaining amounts", access: "read", input: "tap" },
+  { command: "slash_report", description: "Show 24h Slash spend and suggested funding", access: "read", input: "tap" },
   { command: "invoices", description: "List invoices", access: "read", input: "tap" },
   { command: "invoice", description: "Show one invoice", access: "read", input: "required", arguments: "<invoice number or ID>", example: "/invoice INV-2026-001" },
   { command: "overdue", description: "Show overdue invoices", access: "read", input: "tap" },

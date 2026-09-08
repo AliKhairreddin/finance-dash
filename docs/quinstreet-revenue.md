@@ -9,7 +9,7 @@ Create one saved QMP performance report for the lines of business. The report mu
 - be available through **Download via API** in QMP;
 - use **Date-Daily** so arbitrary requested date ranges stay exact;
 - include the **Category** attribute;
-- include **Total Net Earnings($)** (the API column is `total_earn`);
+- include **Total Net Earnings($)** (`total_earn`), Clicks (`clicks`), Gross Leads (`grs_leads`), Payable Leads (`payable_leads`), Click Net Earnings (`click_earn`), and Lead Net Earnings (`lead_earn`);
 - return fewer than 15,000 rows for each requested period.
 
 The production report is named **Finance Dash - Auto + Home Revenue**. Its report key is stored only as a Worker secret. The dashboard applies an exact category filter per revenue rule, so Auto and Home do not overlap.
@@ -54,6 +54,6 @@ For both rules, use:
 - `total_earn` for the revenue column;
 - a blank API-base-URL environment name to use `https://reporting.qmp.ai`.
 
-The Revenue page can then pull either rule for a selected period. A successful QuinStreet row shows the number of report rows used in the calculation. Drafting and sending an invoice remain separate actions.
+The Revenue page can then pull either rule for a selected period. A successful QuinStreet row shows clicks, gross and payable leads, and average net earnings per click and payable lead. Rates divide aggregate earnings by aggregate units; daily rounded rates are never averaged. Zero-unit rates appear as unavailable. Drafting and sending an invoice remain separate actions.
 
 A locally created QuinStreet client can be used for pull-only reporting with automatic drafting disabled. Import the customer from Merit before enabling automatic drafts or sending an invoice.

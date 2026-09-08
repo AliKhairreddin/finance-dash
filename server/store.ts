@@ -1,3 +1,5 @@
+import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
+import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import crypto from "node:crypto";
 import type {
   AiPromptPayload,
@@ -824,7 +826,8 @@ function normalizedCashFlowLine(line: CashFlowLine, field: string): CashFlowLine
   return {
     id,
     name,
-    amount: Number(line.amount.toFixed(2)),
+    amount: line.formula !== undefined ? evaluateCashFlowAmount(line.formula) : Number(line.amount.toFixed(2)),
+    formula: line.formula?.trim() || undefined,
     currency: normalizedCurrency(line.currency),
     notes,
     dueDate: line.dueDate ? normalizedDate(line.dueDate, `${field} due date`) : undefined,
@@ -841,6 +844,14 @@ function normalizedCashFlowGrowth(value: number | undefined, field: string): num
 export async function saveCashFlowSnapshot(
   payload: SaveCashFlowSnapshotPayload
 ): Promise<CashFlowSnapshot> {
+  const asOfDate = normalizedDate(payload.asOfDate, "Cash flow date");
+  const existing = cashFlowSnapshots.find((snapshot) =>
+    snapshot.id === payload.id || snapshot.asOfDate === asOfDate
+  );
+  if (payload.section) {
+    if (!cashFlowSectionKeys.includes(payload.section)) throw new Error("Invalid cash flow section");
+    if (existing) payload = { ...existing, [payload.section]: payload[payload.section], asOfDate: payload.asOfDate };
+  }
   const sections = [
     ["cashAccounts", payload.cashAccounts],
     ["receivables", payload.receivables],
@@ -854,15 +865,11 @@ export async function saveCashFlowSnapshot(
   if (sections.reduce((total, [, lines]) => total + lines.length, 0) > maximumCashFlowLinesPerSnapshot) {
     throw new Error(`A cash flow snapshot is limited to ${maximumCashFlowLinesPerSnapshot} rows`);
   }
-  const asOfDate = normalizedDate(payload.asOfDate, "Cash flow date");
   if (asOfDate > financeOperatingDate()) throw new Error("Cash flow date cannot be in the future");
   const notes = cleanOptional(payload.notes);
   if (notes && notes.length > maximumCashFlowSnapshotNotesLength) {
     throw new Error("Cash flow snapshot note is too long");
   }
-  const existing = cashFlowSnapshots.find((snapshot) =>
-    snapshot.id === payload.id || snapshot.asOfDate === asOfDate
-  );
   const updatedAt = new Date().toISOString();
   const snapshot: CashFlowSnapshot = {
     id: existing?.id ?? `cash-flow-${crypto.randomUUID()}`,
@@ -1433,20 +1440,25 @@ function validateInvoiceAmount(amount: number): number {
 }
 
 export async function createManualReceivable(payload: CreateManualReceivablePayload): Promise<LedgerItem> {
-  const name = payload.name.trim();
-  if (!name) throw new Error("Receivable name is required");
-  const receivable: LedgerItem = {
-    id: `manual-receivable-${crypto.randomUUID()}`,
-    name,
-    balance: validateInvoiceAmount(payload.amount),
-    currency: normalizedCurrency(payload.currency),
-    source: "manual",
-    notes: cleanOptional(payload.notes),
-    dueDate: payload.dueDate ? normalizedDate(payload.dueDate, "Expected payment date") : undefined
-  };
+  const receivable = manualReceivableFromPayload(payload, `manual-receivable-${crypto.randomUUID()}`);
   manualReceivables = [receivable, ...manualReceivables];
   await persist();
   return receivable;
+}
+
+export async function updateManualReceivable(id: string, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
+  if (!manualReceivables.some(item => item.id === id)) throw new Error("Manual receivable not found");
+  const receivable = manualReceivableFromPayload(payload, id);
+  manualReceivables = manualReceivables.map(item => item.id === id ? receivable : item);
+  await persist();
+  return receivable;
+}
+
+export async function deleteOpenItems(ids: string[]): Promise<void> {
+  const selected = validateOpenItemDeletion(ids, invoices, manualReceivables, paymentAllocations);
+  manualReceivables = manualReceivables.filter(item => !selected.has(item.id));
+  invoices = invoices.filter(item => !selected.has(item.id));
+  await persist();
 }
 
 export async function deleteManualReceivable(receivableId: string): Promise<void> {

@@ -17,7 +17,7 @@ media_spend provider_funds distribution management companies teams health sync c
 assign_team create_invoice edit_invoice duplicate_invoice delete_draft match_invoice record_payment
 send_invoice create_expense upload_receipt match_expense add_receivable add_holding update_holding
 save_cashflow alerts alert_add alert_remove alert_pause alert_resume alert_test alert_history digest
-screenshot open
+screenshot open pending_invoices slash_report
 `.trim().split(/\s+/u).sort();
 
 test("Telegram catalog contains every requested command exactly once", () => {
