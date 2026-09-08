@@ -39,21 +39,27 @@ export function buildTelegramSlashReport(input: {
   const balance = accounts.reduce((sum, a) => sum + a.balance, 0);
   const label = (time: number) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Beirut", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(time);
   const unknownSpend = [...spend].filter(([id]) => !accounts.some(a => a.id === id)).reduce((sum, [, row]) => sum + row.posted + row.pending, 0);
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Beirut", weekday: "short" }).format(input.asOf);
+  const coverageDays = weekday === "Fri" ? 3 : weekday === "Sat" ? 2 : 1;
+  const weekend = weekday === "Sat" || weekday === "Sun";
+  const coverage = weekday === "Fri" || weekend ? `${coverageDays} ${coverageDays === 1 ? "day" : "days"} until Monday` : "one more day";
   const lines = ["💳 Daily Slash funding report", `${label(input.asOf - 86_400_000)} – ${label(input.asOf)} · Beirut`, "",
     `Last 24h card spend: ${usd(totals.posted)}`, `Pending card spend: ${usd(totals.pending)}`, `Posted card refunds: ${usd(totals.refunds)}`,
     `Available in Slash: ${usd(balance)}`, ""];
+  if (weekday === "Fri") lines.push("Friday funding: cover 3 days until Monday. Bank transfers are unavailable Saturday and Sunday.", "");
+  if (weekend) lines.push(`Weekend coverage: ${coverage}. Bank transfers resume Monday; amounts below are projected funding gaps.`, "");
   let totalTopUp = 0;
   for (const account of accounts.sort((a, b) => a.name.localeCompare(b.name))) {
     const activity = spend.get(account.id);
     // Available balances already reflect pending authorizations. Use gross recent
-    // activity as tomorrow's budget, without deducting volatile refunds from it.
+    // activity as the daily budget, without deducting volatile refunds from it.
     const dailySpend = (activity?.posted ?? 0) + (activity?.pending ?? 0);
-    const topUp = Math.max(0, dailySpend + input.reserveUsd - account.balance);
+    const topUp = Math.max(0, dailySpend * coverageDays + input.reserveUsd - account.balance);
     totalTopUp += topUp;
-    lines.push(`${account.name.replace(/\s+/g, " ").slice(0, 100)}`, `• Available ${usd(account.balance)} · 24h spend ${usd(dailySpend)}`, `• Suggested transfer ${usd(topUp)}`, "");
+    lines.push(`${account.name.replace(/\s+/g, " ").slice(0, 100)}`, `• Available ${usd(account.balance)} · 24h spend ${usd(dailySpend)}`, `• ${weekend ? "Projected funding gap" : "Suggested transfer"} ${usd(topUp)}`, "");
   }
-  lines.push(unknownSpend > 0 ? "⚠️ Total recommendation unavailable: card spend has no open virtual-account match." : `Suggested total transfer: ${usd(totalTopUp)}`);
+  lines.push(unknownSpend > 0 ? "⚠️ Total recommendation unavailable: card spend has no open virtual-account match." : `${weekend ? "Projected total funding gap" : "Suggested total transfer"}: ${usd(totalTopUp)}`);
   if (unknownSpend > 0) lines.push(`Unassigned / closed-account card spend: ${usd(unknownSpend)}`);
-  lines.push(`Planning rule: cover one more day at the last 24h gross card-spend rate, plus ${usd(input.reserveUsd)} reserve per open account.`, "Cash transfers and card repayments are excluded from spend. No payment or transfer is made.");
+  lines.push(`Planning rule: cover ${coverage} at the last 24h gross card-spend rate, plus ${usd(input.reserveUsd)} reserve per open account.`, "Cash transfers and card repayments are excluded from spend. No payment or transfer is made.");
   return lines.join("\n");
 }
