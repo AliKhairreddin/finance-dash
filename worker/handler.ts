@@ -247,6 +247,7 @@ import {
 import {
   financeTelegramCommands,
   telegramCommandUsage,
+  parseTelegramCommandUsers,
   type FinanceTelegramCommand
 } from "./telegramCommandCatalog";
 import {
@@ -258,7 +259,7 @@ import {
   slashVirtualAccountBalanceObservations,
   type TelegramAlertSettings
 } from "./telegramAlerts";
-import { buildTelegramCashReport, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
+import { buildTelegramCashReport, cashReportRecipient, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -4080,7 +4081,8 @@ async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise
   ].join("\n");
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   if (!users) throw new Error("Telegram user mapping was invalid");
-  const deliveries = await Promise.all(defaults.recipients.map(async (recipientName) => {
+  const recipients = parseTelegramCommandUsers(env.TELEGRAM_CASH_REPORT_RECIPIENTS, "TELEGRAM_CASH_REPORT_RECIPIENTS");
+  const deliveries = await Promise.all(recipients.map(async (recipientName) => {
     const recipient = users.find((user) =>
       user.normalizedUsername === normalizeFinanceUsername(recipientName)
     );
@@ -7929,6 +7931,7 @@ async function telegramReadCommand(
   args: string
 ): Promise<TelegramCommandReply> {
   if (command === "slash_report") {
+    cashReportRecipient(env, user.username, "daily-slash");
     const messages = splitCashReport(await getTelegramSlashReport(env));
     return messages.length === 1 ? messages[0] : { messages };
   }

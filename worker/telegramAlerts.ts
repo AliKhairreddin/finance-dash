@@ -357,15 +357,17 @@ export function buildSlashVirtualAccountBalanceAlertMessage(
 }
 
 export async function sendSlashVirtualAccountBalanceAlert(
-  env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN">,
+  env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_BOT_TOKEN" | "SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS">,
   recipientUsername: string,
   notification: SlashVirtualAccountBalanceNotification
 ): Promise<void> {
+  const allowed = slashVirtualAccountAlertRecipients(env.SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS)
+    .map(normalizeFinanceUsername);
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   const recipient = users?.find(
     (user) => user.normalizedUsername === normalizeFinanceUsername(recipientUsername)
   );
-  if (!recipient) {
+  if (!recipient || !allowed.includes(recipient.normalizedUsername)) {
     throw new Error(`Slash virtual account alert recipient ${recipientUsername} is not an authorized Telegram user`);
   }
   await sendTelegramMessage(

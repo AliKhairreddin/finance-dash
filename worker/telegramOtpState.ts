@@ -9,7 +9,8 @@ import {
   cashReportDeliveryStateKey,
   cashReportRecipient,
   deliverCashReportParts,
-  type CashReportDeliveryState
+  type CashReportDeliveryState,
+  type CashReportKind
 } from "./telegramCashReport";
 import {
   cancelTelegramOtpTransition,
@@ -267,9 +268,9 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
     ));
   }
 
-  async deliverCashReport(date: string, username: string, message: string): Promise<boolean> {
+  async deliverCashReport(date: string, username: string, message: string, kind: CashReportKind): Promise<boolean> {
     return this.serialize(async () => {
-      const recipient = cashReportRecipient(this.env, username);
+      const recipient = cashReportRecipient(this.env, username, kind);
       return deliverCashReportParts(this.ctx.storage, date, message, (part) =>
         sendTelegramMessage(this.env, recipient.chatId, part, true)
       );

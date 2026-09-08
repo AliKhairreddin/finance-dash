@@ -7,11 +7,13 @@ import {
   cashReportDateIfDue,
   cashReportDelivered,
   cashReportDeliveryStateKey,
+  cashReportRecipient,
   deliverCashReportParts,
   sendTelegramCashReportIfDue,
   splitCashReport,
   type CashReportAccount,
-  type CashReportDeliveryState
+  type CashReportDeliveryState,
+  type CashReportKind
 } from "./telegramCashReport";
 import { getTelegramCashReport, handleTelegramCommand } from "./handler";
 
@@ -233,18 +235,52 @@ test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("daily Slash delivery uses a separate durable identity and runs after 17:00 Beirut", async () => {
+test("daily Slash delivery reaches only its three recipients after 17:00 Beirut, independently of weekly recipients", async () => {
  const names: string[] = [];
+ const sent: string[] = [];
  let builds = 0;
  const env = {
-   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264" }),
-   TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali",
-   TELEGRAM_OTP_STATE: { getByName(name: string) { names.push(name); return { async isCashReportDelivered() { return false; }, async deliverCashReport() { return true; } }; } }
+   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Amin: "333", Ali: "111", "Ali M": "222", Ben: "444" }),
+   TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
+   TELEGRAM_SLASH_REPORT_RECIPIENTS: "Amin,Ali,Ali M",
+   TELEGRAM_OTP_STATE: { getByName(name: string) { names.push(name); return {
+     async isCashReportDelivered() { return false; },
+     async deliverCashReport(_date: string, username: string, _message: string, kind: CashReportKind) {
+       assert.equal(kind, "daily-slash");
+       sent.push(cashReportRecipient(env, username, kind).username);
+       return true;
+     }
+   }; } }
  };
  const build = async () => { builds++; return "Daily report"; };
  assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T13:59:00Z"), build, "daily-slash"), 0);
  assert.equal(builds, 0);
- assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T14:00:00Z"), build, "daily-slash"), 1);
- assert.deepEqual(names, ["telegram-slash-report:ali"]);
+ assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T14:00:00Z"), build, "daily-slash"), 3);
+ assert.deepEqual(names, ["telegram-slash-report:amin", "telegram-slash-report:ali", "telegram-slash-report:ali m"]);
+ assert.deepEqual(sent, ["Amin", "Ali", "Ali M"]);
  assert.equal(builds, 1);
+ assert.equal(cashReportRecipient(env, "  AMIN  ", "daily-slash").username, "Amin");
+ assert.throws(() => cashReportRecipient(env, "Ben", "daily-slash"), /not authorized/);
+ assert.throws(() => cashReportRecipient(env, "Amin", "weekly-cash"), /not authorized/);
+});
+
+test("other authenticated readers cannot request the restricted Slash report", async () => {
+  const excluded = ["Sanjin", "Sani", "Ben", "Beno"];
+  const env = {
+    TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M",
+    TELEGRAM_COMMAND_READ_ONLY_USERS: ["Amin", ...excluded].join(","),
+    TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
+    TELEGRAM_SLASH_REPORT_RECIPIENTS: "Amin,Ali,Ali M",
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify(Object.fromEntries(["Amin", "Ali", "Ali M", ...excluded].map((name, i) => [name, String(100 + i)])))
+  };
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests += 1; throw new Error("Report must not be fetched"); };
+  try {
+    for (const username of excluded) {
+      const reply = await handleTelegramCommand(env as never, { username, normalizedUsername: username.toLowerCase(), chatId: "999" }, "read-only", "/slash_report");
+      assert.match(String(reply), /Access denied/);
+    }
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -112,7 +112,7 @@ test("virtual-account alert messages identify the account, balance, and threshol
   assert.match(message, /Checked: Sep 3, 2026 · 8:02 AM EDT/);
 });
 
-test("virtual-account alerts are protected and can target either authorized user", async () => {
+test("low and recovered virtual-account alerts reach only Amin, Ali, and Ali M", async () => {
   const notification = prepareSlashVirtualAccountBalanceAlertTransition(
     undefined,
     observation(9_500),
@@ -127,11 +127,16 @@ test("virtual-account alerts are protected and can target either authorized user
   try {
     const env = {
       TELEGRAM_BOT_TOKEN: "123456:test-token",
-      TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111111111", "Ali M": "222222222" })
+      SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Amin,Ali,Ali M",
+      TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Amin: "333333333", Ali: "111111111", "Ali M": "222222222", Ben: "444444444" })
     } as never;
-    await sendSlashVirtualAccountBalanceAlert(env, "Ali", notification);
-    await sendSlashVirtualAccountBalanceAlert(env, "Ali M", notification);
-    assert.deepEqual(payloads.map((payload) => payload.chat_id), ["111111111", "222222222"]);
+    for (const kind of ["low-balance", "recovered"] as const) {
+      const alert = { ...notification, kind, band: kind === "low-balance" ? "below" as const : "healthy" as const, balance: kind === "low-balance" ? 9500 : 10500 };
+      for (const recipient of ["Amin", "Ali", "Ali M"]) await sendSlashVirtualAccountBalanceAlert(env, recipient, alert);
+      await assert.rejects(() => sendSlashVirtualAccountBalanceAlert(env, "Ben", alert), /is not an authorized Telegram user/);
+    }
+    assert.deepEqual(payloads.map((payload) => payload.chat_id), ["333333333", "111111111", "222222222", "333333333", "111111111", "222222222"]);
+    assert.equal(payloads.slice(3).every(payload => String(payload.text).includes("BALANCE RECOVERED")), true);
     assert.equal(payloads.every((payload) => payload.protect_content === true), true);
     await assert.rejects(
       () => sendSlashVirtualAccountBalanceAlert(env, "Someone Else", notification),

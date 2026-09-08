@@ -140,13 +140,22 @@ export function splitCashReport(message: string): string[] {
   return parts.length > 1 ? parts.map((text, index) => `🏦 ${index + 1}/${parts.length}\n${text}`) : parts;
 }
 
-export function cashReportRecipient(env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_CASH_REPORT_RECIPIENTS">, name: string) {
-  const names = parseTelegramCommandUsers(env.TELEGRAM_CASH_REPORT_RECIPIENTS, "TELEGRAM_CASH_REPORT_RECIPIENTS");
+export type CashReportKind = "weekly-cash" | "daily-slash";
+type CashReportRecipientEnv = Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_CASH_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_REPORT_RECIPIENTS">;
+
+function cashReportRecipientNames(env: CashReportRecipientEnv, kind: CashReportKind): string[] {
+  if (kind !== "weekly-cash" && kind !== "daily-slash") throw new Error("Invalid cash report kind");
+  const field = kind === "daily-slash" ? "TELEGRAM_SLASH_REPORT_RECIPIENTS" : "TELEGRAM_CASH_REPORT_RECIPIENTS";
+  return parseTelegramCommandUsers(env[field], field);
+}
+
+export function cashReportRecipient(env: CashReportRecipientEnv, name: string, kind: CashReportKind) {
+  const names = cashReportRecipientNames(env, kind);
   const normalized = normalizeFinanceUsername(name);
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   const user = users?.find((candidate) => candidate.normalizedUsername === normalized);
   if (!user || !names.some((candidate) => normalizeFinanceUsername(candidate) === normalized)) {
-    throw new Error(`Cash report recipient ${name} is not authorized`);
+    throw new Error(`${kind === "daily-slash" ? "Slash" : "Cash"} report access is not authorized for ${name}`);
   }
   return user;
 }
@@ -184,21 +193,21 @@ export async function deliverCashReportParts(
 }
 
 export async function sendTelegramCashReportIfDue(
-  env: Pick<WorkerEnv, "TELEGRAM_CASH_REPORT_RECIPIENTS" | "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_OTP_STATE">,
+  env: CashReportRecipientEnv & Pick<WorkerEnv, "TELEGRAM_OTP_STATE">,
   scheduledTime: number,
   buildReport: () => Promise<string>,
-  kind: "weekly-cash" | "daily-slash" = "weekly-cash"
+  kind: CashReportKind = "weekly-cash"
 ): Promise<number> {
   const date = kind === "daily-slash" ? slashReportDateIfDue(scheduledTime) : cashReportDateIfDue(scheduledTime);
   if (!date) return 0;
-  const names = parseTelegramCommandUsers(env.TELEGRAM_CASH_REPORT_RECIPIENTS, "TELEGRAM_CASH_REPORT_RECIPIENTS");
+  const names = cashReportRecipientNames(env, kind);
   let report: Promise<string> | undefined;
   const results = await Promise.allSettled(names.map(async (name) => {
-    const recipient = cashReportRecipient(env, name);
+    const recipient = cashReportRecipient(env, name, kind);
     const state = env.TELEGRAM_OTP_STATE.getByName(`${kind === "daily-slash" ? "telegram-slash-report" : "telegram-cash-report"}:${recipient.normalizedUsername}`);
     if (await state.isCashReportDelivered(date)) return false;
     report ??= buildReport();
-    const sent = await state.deliverCashReport(date, recipient.username, await report);
+    const sent = await state.deliverCashReport(date, recipient.username, await report, kind);
     if (sent) console.log(JSON.stringify({ event: "telegram_cash_report_sent", recipient: recipient.username, date, kind }));
     return sent;
   }));
