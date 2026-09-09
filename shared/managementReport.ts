@@ -2135,3 +2135,27 @@ export function buildManagementReport(
   };
   return { dashboard, facts, bankEntries: bankResult.entries, sourceRows };
 }
+
+/** Infer a YTD label only when a unique cumulative set of monthly rows reconciles. */
+export function platformReportingPeriod(
+  row: ManagementReportPlatformPerformance,
+  rows: readonly ManagementReportPlatformPerformance[]
+): { period: string; label: string; sourceLabel?: string } {
+  const original = { period: row.period, label: row.periodLabel };
+  if (!/ytd/i.test(row.periodLabel)) return original;
+  const monthly = rows.filter((item) => item.platform === row.platform && item.isTotal === row.isTotal
+    && !/ytd/i.test(item.periodLabel) && item.period.slice(0, 4) === row.period.slice(0, 4))
+    .sort((a, b) => a.period.localeCompare(b.period));
+  if (new Set(monthly.map((item) => item.period)).size !== monthly.length
+    || monthly.some((item, index) => Number(item.period.slice(5, 7)) !== index + 1)) return original;
+  let revenue = 0, spend = 0, profit = 0;
+  const matches: string[] = [];
+  for (const item of monthly) {
+    revenue += item.revenue; spend += item.spend; profit += item.profit;
+    if (Math.abs(revenue - row.revenue) < 0.02 && Math.abs(spend - row.spend) < 0.02 && Math.abs(profit - row.profit) < 0.02) matches.push(item.period);
+  }
+  if (matches.length !== 1 || matches[0] === row.period) return original;
+  const period = matches[0];
+  const label = `YTD ${new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${period}T00:00:00Z`))}`;
+  return { period, label, sourceLabel: row.periodLabel };
+}

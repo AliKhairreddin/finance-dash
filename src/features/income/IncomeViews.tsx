@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { paymentAllocationMatchLabel, paymentAllocationRecordedDifference } from "../../../shared/income";
 import { Button } from "@/components/ui/button";
 import { CalendarPeriodPicker, calendarDateRangeLabel } from "@/components/ui/calendar-period-picker";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1313,7 +1315,8 @@ export function InvoicesView({
                                 {paymentSourceOptions.find((item) => item.value === allocation.source)?.label ?? allocation.source}
                                 {` · ${dateLabel(allocation.paidAt)} · ${money(allocation.amount, allocation.currency)}`}
                               </span>
-                              <small>{allocation.mode === "automatic" ? allocation.matchReason?.startsWith("AI:") ? "AI match" : "Exact match" : "Manual"}</small>
+                              <small>{paymentAllocationMatchLabel(allocation)}</small>
+                              {paymentAllocationRecordedDifference(allocation) !== null && <small>{money(paymentAllocationRecordedDifference(allocation)!, allocation.currency)} recorded difference <InfoPopover label="payment match difference"><span>{allocation.matchReason}</span><span>The tolerance rule does not verify a bank fee.</span></InfoPopover></small>}
                               {allocation.note && <small>{allocation.note}</small>}
                             </div>
                           )) : <span className="paid-source-copy">Paid in dashboard</span>}
@@ -1482,10 +1485,11 @@ export function InvoiceEditorDialog({
     }
   }
 
-  return createPortal(
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal wide-modal invoice-editor-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-editor-title" onSubmit={handleSubmit}>
-        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : duplicateSourceInvoiceNumber ? `Duplicate ${duplicateSourceInvoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !submitting) onClose(); }}>
+      <DialogContent className="invoice-editor-dialog" showCloseButton={false}>
+      <form className="modal wide-modal invoice-editor-modal" onSubmit={handleSubmit}>
+        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><DialogTitle id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : duplicateSourceInvoiceNumber ? `Duplicate ${duplicateSourceInvoiceNumber}` : "Create manual invoice"}</DialogTitle></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="modal-body-stack invoice-editor-body">
           {error && <div className="inline-error">{error}</div>}
           <div className="invoice-form-grid">
@@ -1545,8 +1549,8 @@ export function InvoiceEditorDialog({
         </div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
       </form>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   );
 }
 

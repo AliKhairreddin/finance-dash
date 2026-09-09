@@ -1,3 +1,4 @@
+import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { DocumentsView } from "@/features/expenses/DocumentsView";
@@ -227,6 +228,8 @@ import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-
 import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
 
+import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
+
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const activeTabs = ["overview", "management", "media-spend", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
@@ -238,6 +241,7 @@ type BankTransactionDateRange = {
   toDate: string;
 };
 type TransactionPageRequest = {
+  slashVirtualAccountId?: string;
   key: string;
   dateRange: BankTransactionDateRange;
   source?: BankSource;
@@ -313,7 +317,6 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
   "team"
 ];
 const transactionTablePageSize = 100;
-const analyticsBuildDefaultRetryMs = 1_000;
 const analyticsLiveRefreshMs = 5 * 60_000;
 const analyticsMonthOptions = [
   "January",
@@ -372,67 +375,20 @@ async function apiErrorMessage(response: Response, fallback: string): Promise<st
   return body?.message || fallback;
 }
 
-function analyticsRetryAfterMs(value: string | null, now = Date.now()): number {
-  if (!value) return analyticsBuildDefaultRetryMs;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
-  const retryAt = Date.parse(value);
-  return Number.isNaN(retryAt) ? analyticsBuildDefaultRetryMs : Math.max(0, retryAt - now);
-}
-
-function waitForAnalyticsRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, delayMs);
-    const abort = () => {
-      window.clearTimeout(timeout);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
-
 function analyticsSnapshotKey(range: AnalyticsDateRange): string {
   return `${range.fromDate}:${range.toDate}`;
 }
 
-async function fetchAnalyticsSnapshotRange(
-  range: AnalyticsDateRange,
-  signal: AbortSignal,
-  onBuildReason?: (reason: "historical-coverage" | "snapshot") => void
-): Promise<BankAnalyticsSnapshot> {
-  const query = new URLSearchParams({
-    fromDate: range.fromDate,
-    toDate: range.toDate
-  });
-  while (!signal.aborted) {
-    const response = await fetch(`${apiBase}/analytics?${query.toString()}`, { signal });
-    if (response.status === 202) {
-      const body = (await response.json().catch(() => null)) as { status?: string; reason?: string } | null;
-      if (body?.status !== "building") {
-        throw new Error("Analytics returned an invalid build status");
-      }
-      onBuildReason?.(body.reason === "historical-coverage" ? "historical-coverage" : "snapshot");
-      await waitForAnalyticsRetry(analyticsRetryAfterMs(response.headers.get("Retry-After")), signal);
-      continue;
-    }
-    if (!response.ok) {
-      throw new Error(await apiErrorMessage(response, "Analytics snapshot could not be loaded"));
-    }
-    const snapshot = (await response.json()) as BankAnalyticsSnapshot;
-    if (
-      snapshot.version !== 3
-      || snapshot.fromDate !== range.fromDate
-      || snapshot.toDate !== range.toDate
-    ) {
-      throw new Error("Analytics returned a snapshot for the wrong period");
-    }
-    return snapshot;
-  }
-  throw new DOMException("Aborted", "AbortError");
+function AnalyticsCoverageNotice({ snapshot, source }: { snapshot: AnalyticsResponse | null; source?: string }) {
+  if (!snapshot) return null;
+  const incomplete = snapshot.coverage.filter((item) => item.missingRanges.length > 0 && (!source || source === "all" || item.source === source));
+  if (incomplete.length === 0) return null;
+  return <div className="income-callout warning" role="status"><CircleAlert size={16} />
+    <span>Partial period totals · {incomplete.map((item) => sourceLabel(item.source)).join(", ")} history incomplete</span>
+    <InfoPopover label="partial period totals"><span>Totals include only stored transactions. Calculated {new Date(snapshot.generatedAt).toLocaleString()}.</span>
+      {incomplete.map((item) => <span key={item.source}>{sourceLabel(item.source)}: {item.missingRanges.map((range) => `${range.fromDate} to ${range.toDate}`).join(", ")}. Review bank history or import the missing statements.</span>)}
+    </InfoPopover>
+  </div>;
 }
 
 const timezoneOptions = [
@@ -760,6 +716,7 @@ function App() {
   });
   const [teamFilter, setTeamFilter] = useUrlState("bankTeam", "all");
   const [bankAccountFilter, setBankAccountFilter] = useUrlState("bankAccount", "all");
+  const [slashVirtualAccountFilter] = useSlashVirtualAccountFilter();
   const [bankCategoryFilter, setBankCategoryFilter] = useUrlState("bankCategory", "all");
   const defaultRevolutRange = useMemo(defaultRevolutTransactionDateRange, []);
   const defaultSlashRange = useMemo(defaultSlashTransactionDateRange, []);
@@ -857,6 +814,9 @@ function App() {
             : allBankDateRange;
     const wiseEntity = source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
     const accountId = bankAccountFilter === "all" ? undefined : bankAccountFilter;
+    const slashVirtualAccountId = source === "slash" && slashVirtualAccountFilter !== "all"
+      ? slashVirtualAccountFilter
+      : undefined;
     const category = bankCategoryFilter === "all" ? undefined : bankCategoryFilter;
     const team = teamFilter === "all" ? undefined : teamFilter;
     const search = debouncedSearchTerm.trim() || undefined;
@@ -868,6 +828,7 @@ function App() {
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(accountId ? { accountId } : {}),
+      ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
       ...(category ? { category } : {}),
       ...(team ? { team } : {}),
       ...(search ? { search } : {}),
@@ -882,6 +843,7 @@ function App() {
     allBankSource,
     allBankDateRange,
     bankAccountFilter,
+    slashVirtualAccountFilter,
     bankCategoryFilter,
     bankDirection,
     bankGroupKey,
@@ -907,30 +869,27 @@ function App() {
   const [editingRevenuePartner, setEditingRevenuePartner] = useState<RevenuePartner | null>(null);
   const [creatingRevenueRuleProviderId, setCreatingRevenueRuleProviderId] = useState<string | null>(null);
   const [directoryDeleteTarget, setDirectoryDeleteTarget] = useState<DirectoryDeleteTarget | null>(null);
-  const [analyticsSnapshots, setAnalyticsSnapshots] = useState<Record<string, BankAnalyticsSnapshot>>({});
-  const [analyticsBuildReasons, setAnalyticsBuildReasons] = useState<Record<string, "historical-coverage" | "snapshot">>({});
+  const [analyticsSnapshots, setAnalyticsSnapshots] = useState<Record<string, AnalyticsResponse>>({});
+  const [analyticsBuildReasons, setAnalyticsBuildReasons] = useState<Record<string, "snapshot">>({});
   const [analyticsDataRevision, setAnalyticsDataRevision] = useState(0);
-  const analyticsSnapshotRequestsRef = useRef(new Map<string, Promise<BankAnalyticsSnapshot>>());
+  const analyticsSnapshotRequestsRef = useRef(new Map<string, Promise<AnalyticsResponse>>());
 
   function invalidateAnalyticsData(): void {
-    setAnalyticsSnapshots({});
     setAnalyticsDataRevision((revision) => revision + 1);
   }
 
-  const ensureAnalyticsSnapshot = useCallback((range: AnalyticsDateRange): Promise<BankAnalyticsSnapshot> => {
+  const ensureAnalyticsSnapshot = useCallback((range: AnalyticsDateRange): Promise<AnalyticsResponse> => {
     const key = analyticsSnapshotKey(range);
     const existing = analyticsSnapshotRequestsRef.current.get(key);
     if (existing) return existing;
 
     const controller = new AbortController();
-    let request: Promise<BankAnalyticsSnapshot>;
-    request = fetchAnalyticsSnapshotRange(range, controller.signal, (reason) => {
-      setAnalyticsBuildReasons((current) => current[key] === reason ? current : { ...current, [key]: reason });
+    let request: Promise<AnalyticsResponse>;
+    request = fetchAnalyticsRange(apiBase, range, controller.signal, () => {
+      setAnalyticsBuildReasons((current) => current[key] === "snapshot" ? current : { ...current, [key]: "snapshot" });
     })
       .then((snapshot) => {
-        setAnalyticsSnapshots((current) => current[key]?.generatedAt === snapshot.generatedAt
-          ? current
-          : { ...current, [key]: snapshot });
+        setAnalyticsSnapshots((current) => ({ ...current, [key]: snapshot }));
         return snapshot;
       })
       .finally(() => {
@@ -1104,6 +1063,7 @@ function App() {
     if (request.direction) query.set("direction", request.direction);
     if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
     if (request.accountId) query.set("accountId", request.accountId);
+    if (request.slashVirtualAccountId) query.set("slashVirtualAccountId", request.slashVirtualAccountId);
     if (request.category) query.set("category", request.category);
     if (request.team) query.set("team", request.team);
     if (request.search) query.set("search", request.search);
@@ -2489,6 +2449,8 @@ function App() {
           amexTransactions={amexTransactions}
           bankPeriodMetrics={bankPeriodMetrics}
           bankPeriodMetricsError={bankPeriodMetricsError}
+          periodSnapshot={bankPeriodRangeKey ? analyticsSnapshots[bankPeriodRangeKey] ?? null : null}
+          onRetryPeriodMetrics={() => setAnalyticsDataRevision((revision) => revision + 1)}
           isLoadingBankPeriodMetrics={isLoadingBankPeriodMetrics}
           providersById={providersById}
           isImportingWise={isImportingWise}
@@ -2613,6 +2575,7 @@ function App() {
           onDeleteCategory={deleteTransactionCategoryDefinition}
           onSaveAiSettings={saveAiSettings}
           onRunAiPrompt={runAiPrompt}
+          onOpenWise={() => { setBankTab("wise"); setActiveTab("banks"); }}
         />
       )}
         </div>
@@ -3726,6 +3689,8 @@ function BanksView({
   amexTransactions,
   bankPeriodMetrics,
   bankPeriodMetricsError,
+  periodSnapshot,
+  onRetryPeriodMetrics,
   isLoadingBankPeriodMetrics,
   providersById,
   isImportingWise,
@@ -3798,6 +3763,8 @@ function BanksView({
   amexTransactions: Transaction[];
   bankPeriodMetrics: BankPeriodMetrics | null;
   bankPeriodMetricsError: string | null;
+  periodSnapshot: AnalyticsResponse | null;
+  onRetryPeriodMetrics: () => void;
   isLoadingBankPeriodMetrics: boolean;
   providersById: Map<string, Provider>;
   isImportingWise: boolean;
@@ -3871,7 +3838,7 @@ function BanksView({
     const selectedAccount = dashboard.accounts.find((account) => account.id === bankAccountFilter);
     if (!selectedAccount || selectedAccount.source !== activeSource.id) setBankAccountFilter("all");
   }, [activeSource, bankAccountFilter, dashboard.accounts, setBankAccountFilter]);
-  const periodMetricsReady = bankPeriodMetrics !== null && bankPeriodMetricsError === null;
+  const periodMetricsReady = bankPeriodMetrics !== null;
   const periodSourceById = new Map(
     periodMetricsReady ? bankPeriodMetrics.sources.map((item) => [item.source, item]) : []
   );
@@ -4143,6 +4110,8 @@ function BanksView({
 
   return (
     <div className="banks-layout">
+      <AnalyticsCoverageNotice snapshot={periodSnapshot} source={activeBank === "all" ? allBankSource : activeBank} />
+      {bankPeriodMetricsError && <div className="income-callout warning" role="alert"><span>{bankPeriodMetricsError}{periodSnapshot ? " Showing the previous calculation." : ""}</span><Button className="secondary-button" disabled={isLoadingBankPeriodMetrics} onClick={onRetryPeriodMetrics}>Retry totals</Button></div>}
       <section className="panel wide-panel bank-overview-bar">
         <div className="panel-header bank-overview-header">
           <div className="bank-overview-title">
@@ -4670,6 +4639,7 @@ function BankReconciliationView({
   rangeControls,
   tableFooter
 }: BankReconciliationViewProps) {
+  const [slashVirtualAccount, setSlashVirtualAccount] = useSlashVirtualAccountFilter();
   const sourceLabel = bankSourceLabel(source);
   const wiseFileInputRef = useRef<HTMLInputElement>(null);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
@@ -4697,17 +4667,13 @@ function BankReconciliationView({
   const accountOptions = dashboard.accounts
     .filter((account) => account.source === source)
     .sort((left, right) => left.name.localeCompare(right.name));
-  const slashVirtualAccounts = [...new Map(
-    dashboard.accounts
-      .filter((account) => account.source === "slash")
-      .flatMap((account) => account.slashVirtualAccounts ?? [])
-      .filter((account) => !account.closedAt)
-      .map((account) => [account.id, account] as const)
-  ).values()].sort((left, right) =>
-    Number(left.accountType !== "primary") - Number(right.accountType !== "primary")
-    || left.name.localeCompare(right.name)
-  );
+  const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts);
   const activeFilters: ActiveFilter[] = [
+    ...(source === "slash" && slashVirtualAccount !== "all" ? [{
+      key: "virtual-account",
+      label: `Virtual account: ${slashVirtualAccounts.find((account) => account.id === slashVirtualAccount)?.name ?? slashVirtualAccount}`,
+      onRemove: () => setSlashVirtualAccount("all")
+    }] : []),
     ...(bankGroupType ? [{
       key: "activity-group",
       label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : source === "slash" ? "Virtual account" : "Account"}: ${bankGroupLabel}`,
@@ -4767,6 +4733,7 @@ function BankReconciliationView({
                     {accountOptions.map((account) => <NativeSelectOption key={account.id} value={account.id}>{account.name}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
+                {source === "slash" && <SlashVirtualAccountFilter accounts={slashVirtualAccounts} value={slashVirtualAccount} onChange={setSlashVirtualAccount} />}
                 <label>
                   Direction
                   <NativeSelect aria-label={`Filter ${sourceLabel} transactions by direction`} value={bankDirection} onValueChange={(value) => setBankDirection(value as "all" | "in" | "out")}>
@@ -4889,6 +4856,7 @@ function BankReconciliationView({
         onClearAll={() => {
           onClearBankGroup();
           setBankAccountFilter("all");
+          if (source === "slash") setSlashVirtualAccount("all");
           setBankDirection("all");
           setMatchFilter("all");
           setBankCategoryFilter("all");
@@ -5130,10 +5098,10 @@ function AnalyticsView({
   onViewCategoryTransactions
 }: {
   dashboard: DashboardSnapshot;
-  analyticsSnapshots: Record<string, BankAnalyticsSnapshot>;
-  analyticsBuildReasons: Record<string, "historical-coverage" | "snapshot">;
+  analyticsSnapshots: Record<string, AnalyticsResponse>;
+  analyticsBuildReasons: Record<string, "snapshot">;
   analyticsDataRevision: number;
-  ensureAnalyticsSnapshot: (range: AnalyticsDateRange) => Promise<BankAnalyticsSnapshot>;
+  ensureAnalyticsSnapshot: (range: AnalyticsDateRange) => Promise<AnalyticsResponse>;
   onViewCategoryTransactions: (selection: AnalyticsCategoryView, range: AnalyticsDateRange) => void;
 }) {
   const analyticsToday = localIsoDate();
@@ -5422,6 +5390,7 @@ function AnalyticsView({
 
   return (
     <div className="categorization-layout">
+      <AnalyticsCoverageNotice snapshot={analytics} />
       <section className="panel wide-panel">
         <div className="panel-header">
           <div>
@@ -5461,19 +5430,20 @@ function AnalyticsView({
               <span className={`analytics-period-value ${analyticsPeriodBusy ? "loading" : ""}`}>
                 {analyticsPeriodBusy && <Loader2 className="spin" aria-hidden="true" size={13} />}
                 {analyticsPeriodBusy
-                  ? `${analyticsBuildReason === "historical-coverage" ? "Syncing" : "Building"} period…`
+                  ? "Building period…"
                   : analytics
                     ? `${analytics.summary.transactionCount.toLocaleString()} transactions`
                     : "No snapshot"}
               </span>
               <InfoPopover label="analytics period data">
                 <span>Every Analytics card and rollup uses this calendar period.</span>
+                {analytics && <span>Calculated {new Date(analytics.generatedAt).toLocaleString()}.</span>}
                 <span>Completed monthly and quarterly snapshots are cached in Convex and warmed while the dashboard is open.</span>
                 <span>Only ranges whose underlying monthly revision changed are rebuilt.</span>
               </InfoPopover>
               {analyticsPeriodError && (
                 <>
-                  <span className="danger-text" role="alert">{analyticsPeriodError}</span>
+                  <span className="danger-text" role="alert">{analyticsPeriodError}{analytics ? " Showing the previous calculation." : ""}</span>
                   <Button
                     type="button"
                     className="icon-button analytics-period-error"
@@ -6275,7 +6245,7 @@ function BridgeRow({
   return (
     <div className="bridge-row">
       <span>{label}</span>
-      <strong className={danger ? "danger-text" : good ? "good-text" : ""}>{formattedValue}</strong>
+      <strong className={typeof value === "number" && value < 0 ? "danger-text" : typeof value === "number" && value === 0 ? "" : danger ? "danger-text" : good ? "good-text" : ""}>{formattedValue}</strong>
     </div>
   );
 }
@@ -7154,7 +7124,7 @@ function DistributionView({
             </NativeSelect>
           </label>
           <label>
-            Currency
+            Currency ledger
             <NativeSelect value={selectedCurrency} onValueChange={setSelectedCurrency}>
               {(selectedMonthCurrencies.length > 0 ? selectedMonthCurrencies : currencyOptions).map((currency) => (
                 <NativeSelectOption key={currency} value={currency}>
@@ -7165,9 +7135,9 @@ function DistributionView({
           </label>
         </div>
         <div className="wise-summary-grid distribution-summary">
-          <SummaryTile label="Payable" value={formatUsdCurrencyTotal(payableTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(payableTotal)} />
-          <SummaryTile label="Paid" value={formatUsdCurrencyTotal(paidTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(paidTotal)} />
-          <SummaryTile label="Remaining" value={formatUsdCurrencyTotal(remainingTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(remainingTotal)} />
+          <SummaryTile label="Payable · USD estimate" value={formatUsdCurrencyTotal(payableTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(payableTotal)} />
+          <SummaryTile label="Paid · USD estimate" value={formatUsdCurrencyTotal(paidTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(paidTotal)} />
+          <SummaryTile label="Remaining · USD estimate" value={formatUsdCurrencyTotal(remainingTotal, dashboard.fxRates)} detail={nativeCurrencyBreakdown(remainingTotal)} />
           <SummaryTile label="Adjustments" value={String(distribution.adjustments.length)} />
         </div>
       </section>
@@ -7872,9 +7842,11 @@ function SettingsView({
   onUpdateCategory,
   onDeleteCategory,
   onSaveAiSettings,
-  onRunAiPrompt
+  onRunAiPrompt,
+  onOpenWise
 }: {
   dashboard: DashboardSnapshot;
+  onOpenWise: () => void;
   onCreateTeam: (payload: CreateTeamPayload) => Promise<void>;
   onCreateCategory: (payload: CreateTransactionCategoryPayload) => Promise<void>;
   onUpdateCategory: (
@@ -7990,6 +7962,52 @@ function SettingsView({
 
   return (
     <div className="settings-stack">
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">API readiness</p>
+            <h2>Connections</h2>
+          </div>
+          <span className="total-pill">{missing.length} configuration fields missing</span>
+        </div>
+
+        <div className="integration-grid">
+          {dashboard.integrationStatus.map((integration) => (
+            <article className="integration-card" key={integration.id}>
+              <div className="integration-head">
+                <strong>{integration.label}</strong>
+                <span className={`status-pill ${integration.mode === "live" ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
+                  {integration.mode}
+                </span>
+              </div>
+              <p className={integration.issue ? "integration-issue" : undefined}>{integration.message}</p>
+              {integration.id === "wise" && integration.issue && <Button className="secondary-button" onClick={onOpenWise}>Open Wise statement imports</Button>}
+              {integration.needs.length > 0 && <span className="field-help">Administrator: configure these server settings to enable this connection.</span>}
+              <div className="need-list">
+                {integration.needs.length > 0 ? (
+                  integration.needs.map((need) => <code key={need}>{need}</code>)
+                ) : integration.issue ? (
+                  <code className="warning-code">statement access</code>
+                ) : (
+                  <code>configured</code>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="docs-note">
+          <strong>Integration shape</strong>
+          <span>
+            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE or QuinStreet QMP without writing to Merit. Only the
+            separately confirmed “Send to Merit” action creates an invoice. That action is currently{" "}
+            {meritIntegration?.writeEnabled
+              ? "enabled and requires both a Merit tax selection and explicit confirmation"
+              : "disabled by the deployment safety switch"}.
+            Marking paid here never marks paid in Merit.
+          </span>
+        </div>
+      </section>
       <section className="panel category-management-panel">
         <div className="panel-header">
           <div>
@@ -8148,51 +8166,6 @@ function SettingsView({
             </div>
           )}
         </form>
-      </section>
-
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">API readiness</p>
-            <h2>Live integrations and credentials needed</h2>
-          </div>
-          <span className="total-pill">{missing.length} missing</span>
-        </div>
-
-        <div className="integration-grid">
-          {dashboard.integrationStatus.map((integration) => (
-            <article className="integration-card" key={integration.id}>
-              <div className="integration-head">
-                <strong>{integration.label}</strong>
-                <span className={`status-pill ${integration.mode === "live" ? "good" : integration.mode === "partial" ? "warning" : ""}`}>
-                  {integration.mode}
-                </span>
-              </div>
-              <p className={integration.issue ? "integration-issue" : undefined}>{integration.message}</p>
-              <div className="need-list">
-                {integration.needs.length > 0 ? (
-                  integration.needs.map((need) => <code key={need}>{need}</code>)
-                ) : integration.issue ? (
-                  <code className="warning-code">statement access</code>
-                ) : (
-                  <code>configured</code>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <div className="docs-note">
-          <strong>Integration shape</strong>
-          <span>
-            Banks groups Wise, Revolut, Slash, and Amex account activity. Partner revenue pulls from TUNE or QuinStreet QMP without writing to Merit. Only the
-            separately confirmed “Send to Merit” action creates an invoice. That action is currently{" "}
-            {meritIntegration?.writeEnabled
-              ? "enabled and requires both a Merit tax selection and explicit confirmation"
-              : "disabled by the deployment safety switch"}.
-            Marking paid here never marks paid in Merit.
-          </span>
-        </div>
       </section>
 
       {categoryEditor && (

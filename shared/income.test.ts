@@ -688,3 +688,15 @@ test("rate refresh keeps an unavailable last-known rate and marks it stale", () 
 
   assert.deepEqual(rates.map((rate) => [rate.asset, rate.stale]), [["EUR", true], ["GBP", false]]);
 });
+
+test("payment labels distinguish an explicitly exact match from the recorded $25 tolerance", async () => {
+  const { paymentAllocationMatchLabel, paymentAllocationRecordedDifference } = await import("./income");
+  const allocation = { mode: "automatic", matchReason: "Amount within $100 fee tolerance (25.00 difference), with matching currency and company or invoice reference" } as PaymentAllocation;
+  assert.equal(paymentAllocationMatchLabel(allocation), "Tolerance match");
+  assert.equal(paymentAllocationRecordedDifference(allocation), 25);
+  assert.equal(paymentAllocationRecordedDifference({ ...allocation, matchReason: "Exact amount" }), null);
+  assert.equal(paymentAllocationMatchLabel({ ...allocation, matchReason: "Exact amount, currency, and company or invoice reference" }), "Exact match");
+  assert.equal(paymentAllocationMatchLabel({ ...allocation, matchReason: undefined }), "Automatic match");
+  assert.equal(paymentAllocationMatchLabel({ ...allocation, matchReason: "AI: matching company" }), "AI match");
+  assert.equal(paymentAllocationMatchLabel({ ...allocation, mode: "manual" }), "Manual");
+});

@@ -2244,6 +2244,7 @@ function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
 }
 
 interface TransactionPageOptions {
+  slashVirtualAccountId?: string;
   fromDate: string;
   toDate: string;
   source?: BankTransactionSource;
@@ -2349,6 +2350,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
     options.search
     || options.wiseEntity
     || options.accountId
+    || options.slashVirtualAccountId
     || options.category
     || options.team
     || options.groupType
@@ -2416,6 +2418,7 @@ function filterAndSortActivity(
   const rows = transactions.filter((transaction) => {
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
     if (options.accountId && transaction.accountId !== options.accountId) return false;
+    if (options.slashVirtualAccountId && (transaction.source !== "slash" || transaction.slashVirtualAccountId !== options.slashVirtualAccountId)) return false;
     if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
     if (options.team === "unassigned" && transaction.teamId) return false;
     if (options.team && options.team !== "unassigned" && transaction.teamId !== options.team) return false;
@@ -6922,12 +6925,14 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const search = url.searchParams.get("search")?.trim();
   const accountId = url.searchParams.get("accountId")?.trim();
+  const slashVirtualAccountId = url.searchParams.get("slashVirtualAccountId")?.trim();
   const category = url.searchParams.get("category")?.trim();
   const team = url.searchParams.get("team")?.trim();
   const groupType = url.searchParams.get("groupType")?.trim();
   const groupKey = url.searchParams.get("groupKey")?.trim();
   if (search && search.length > 200) throw new ApiError(400, "Transaction search is too long");
   if (accountId && accountId.length > 256) throw new ApiError(400, "Transaction account is invalid");
+  if (slashVirtualAccountId && slashVirtualAccountId.length > 256) throw new ApiError(400, "Slash virtual account is invalid");
   if (category && category.length > 160) throw new ApiError(400, "Transaction category is invalid");
   if (team && team.length > 256) throw new ApiError(400, "Transaction owner is invalid");
   if (groupType && groupType !== "merchant" && groupType !== "card" && groupType !== "account") {
@@ -6943,6 +6948,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
     ...(accountId ? { accountId } : {}),
+    ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
     ...(category ? { category } : {}),
     ...(team ? { team } : {}),
     ...(groupType ? { groupType: groupType as BankActivityGroupType, groupKey } : {}),
@@ -7087,28 +7093,15 @@ async function handleApi(
       const range = bankAnalyticsDateRange(url);
       const coverage = await getConvexClient(env).query(api.banking.getActivityCoverage, {
         serviceToken: getConvexServiceToken(env),
-        connections: await bankConnectionDirectory(env),
+        connections: await bankStorageConnectionDirectory(env),
         fromDate: range.fromDate,
         toDate: range.toDate
       });
-      const missingSources = coverage.filter((item) => item.missingRanges.length > 0);
-      if (missingSources.length > 0) {
-        const jobs = await Promise.all(missingSources.flatMap((item) =>
-          item.missingRanges.map((missingRange) => enqueueBankBackfill(env, item.source, missingRange))
-        ));
-        const failedJob = jobs.find((job) => job.status === "failed");
-        if (failedJob) {
-          throw new ApiError(502, failedJob.lastError ?? `${failedJob.source} history sync failed`);
-        }
-        const run = Promise.allSettled(jobs.map((job) => runBankBackfillJob(env, job.key))).then(() => undefined);
-        if (executionContext) executionContext.waitUntil(run);
-        else void run;
-        return json(
-          { status: "building", reason: "historical-coverage", jobs: jobs.map((job) => job.key) },
-          { status: 202, headers: { "Retry-After": "1" } }
-        );
-      }
-      return await getBankAnalyticsSnapshot(env, range);
+      // History completeness is independent of calculating the records already stored.
+      // Bank history controls own backfill/retry; a denied source must not block all totals.
+      const response = await getBankAnalyticsSnapshot(env, range);
+      if (response.status !== 200) return response;
+      return json({ ...await response.json() as BankAnalyticsSnapshot, coverage });
     }
 
     if (url.pathname === "/api/analytics/category-companies" && request.method === "GET") {

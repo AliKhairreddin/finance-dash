@@ -310,9 +310,9 @@ export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowS
   const heroY = 143;
   box(ctx, margin, heroY, innerWidth, 155, palette.dark, 22);
   const hero = [
-    { label: "TOTAL ASSETS", value: totals.assets, detail: "Profit + investments", color: palette.mint },
+    { label: "TOTAL ASSETS", value: totals.assets, detail: "Net position + investments", color: palette.mint },
     { label: "APPROXIMATE CASH", value: totals.approximateCash, detail: "Cash + receivables + open balances", color: palette.white },
-    { label: "PROFIT", value: totals.profit, detail: "Approximate cash − payables", color: palette.white }
+    { label: "NET OPERATING POSITION", value: totals.profit, detail: "Approximate cash − payables", color: palette.white }
   ];
   hero.forEach((item, index) => {
     const x = margin + 34 + index * innerWidth / 3;

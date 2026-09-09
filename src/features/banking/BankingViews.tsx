@@ -16,7 +16,6 @@ import type {
   HoldingAssetType,
   HoldingKind,
   Provider,
-  SlashVirtualAccount,
   Transaction,
   TransactionOverrideScope,
   TransactionMatchFilter,
@@ -43,6 +42,7 @@ import {
   wiseEntityShortLabel
 } from "../../../shared/wiseEntities";
 import { exportBankTransactionsCsv } from "./exportTransactions";
+import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./SlashVirtualAccountFilter";
 import {
   BankActivityViewToggle,
   BankAccountActivityView,
@@ -77,20 +77,6 @@ function dateLabel(value: string): string {
 
 function sourceLabel(source: DataSource): string {
   return transactionSources.find((item) => item.value === source)?.label ?? source;
-}
-
-function slashVirtualAccountOptions(accounts: DashboardSnapshot["accounts"]): SlashVirtualAccount[] {
-  const options = new Map<string, SlashVirtualAccount>();
-  for (const account of accounts) {
-    if (account.source !== "slash") continue;
-    for (const virtualAccount of account.slashVirtualAccounts ?? []) {
-      if (!virtualAccount.closedAt) options.set(virtualAccount.id, virtualAccount);
-    }
-  }
-  return [...options.values()].sort((left, right) =>
-    Number(left.accountType !== "primary") - Number(right.accountType !== "primary")
-    || left.name.localeCompare(right.name)
-  );
 }
 
 export function AllBankTransactionsView({
@@ -186,6 +172,7 @@ export function AllBankTransactionsView({
   onUpdateCategory: (transaction: Transaction, category: string, scope: TransactionOverrideScope) => void;
   onMatchInvoice: (transaction: Transaction) => void;
 }) {
+  const [slashVirtualAccount, setSlashVirtualAccount] = useSlashVirtualAccountFilter();
   const query = searchTerm;
   const setQuery = setSearchTerm;
   const direction = bankDirection;
@@ -264,6 +251,11 @@ export function AllBankTransactionsView({
     : pendingOverride?.value;
 
   const bankActiveFilters: ActiveFilter[] = [
+    ...(source === "slash" && slashVirtualAccount !== "all" ? [{
+      key: "virtual-account",
+      label: `Virtual account: ${virtualAccounts.find((account) => account.id === slashVirtualAccount)?.name ?? slashVirtualAccount}`,
+      onRemove: () => setSlashVirtualAccount("all")
+    }] : []),
     ...(bankGroupType ? [{
       key: "activity-group",
       label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : source === "slash" ? "Virtual account" : "Account"}: ${bankGroupLabel}`,
@@ -389,6 +381,7 @@ export function AllBankTransactionsView({
                       ))}
                   </NativeSelect>
                 </label>
+                {source === "slash" && <SlashVirtualAccountFilter accounts={virtualAccounts} value={slashVirtualAccount} onChange={setSlashVirtualAccount} />}
                 <label>
                   Direction
                   <NativeSelect aria-label="Filter bank transactions by direction" value={direction} onValueChange={(value) => setDirection(value as "all" | "in" | "out")}>
@@ -455,6 +448,7 @@ export function AllBankTransactionsView({
           onClearBankGroup();
           setSource("all");
           setAccount("all");
+          setSlashVirtualAccount("all");
           setDirection("all");
           setCategory("all");
           setMatch("all");

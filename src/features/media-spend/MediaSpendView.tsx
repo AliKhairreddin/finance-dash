@@ -247,7 +247,7 @@ function providerSpendSortValue(
   if (sortKey === "businessManagers") return group.businessManagerCount;
   if (sortKey === "days") return group.dayCount;
   if (sortKey === "platforms") return group.platforms.join(" ");
-  if (sortKey === "provider") return group.provider.name;
+  if (sortKey === "provider") return (group.provider?.name ?? "Unassigned provider");
   if (sortKey === "spend") return group.spend;
   return group.workspaces.join(" ");
 }
@@ -440,7 +440,7 @@ export function MediaSpendView({
     }
     return (
       (!selectedBusinessManagerKey || businessManagerKey(row) === selectedBusinessManagerKey)
-      && (!selectedProviderId || rowFunding(row).provider?.id === selectedProviderId)
+      && (!selectedProviderId || (rowFunding(row).provider?.id ?? "unassigned") === selectedProviderId)
     );
   }), [funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedProviderId, spendRows]);
   const visibleAccountGroups = useMemo(() => {
@@ -517,7 +517,7 @@ export function MediaSpendView({
         providerSpendSortValue(left, providerSortKey),
         providerSpendSortValue(right, providerSortKey),
         providerSortDirection
-      ) || left.provider.name.localeCompare(right.provider.name)
+      ) || (left.provider?.name ?? "Unassigned provider").localeCompare(right.provider?.name ?? "Unassigned provider")
     );
   }, [providerSortDirection, providerSortKey, providerSpendGroups, search]);
   const showingAccountDetail = viewMode === "accounts" && Boolean(selectedAccountKey);
@@ -652,7 +652,7 @@ export function MediaSpendView({
     setSearch("");
     setSelectedAccountKey("");
     setSelectedBusinessManagerKey("");
-    setSelectedProviderId(group.provider.id);
+    setSelectedProviderId(group.key);
     setViewMode("accounts");
   }
 
@@ -891,7 +891,7 @@ export function MediaSpendView({
             }] : []),
             ...(selectedProviderId ? [{
               key: "provider",
-              label: `Provider: ${selectedProvider?.name ?? "Selected"}`,
+              label: `Provider: ${selectedProvider?.name ?? (selectedProviderId === "unassigned" ? "Unassigned provider" : "Selected")}`,
               onRemove: () => setSelectedProviderId("")
             }] : [])
           ] : []}
@@ -1077,7 +1077,7 @@ export function MediaSpendView({
                   <tr key={group.key}>
                     <td className="counterparty-cell">
                       <button className="bank-group-drilldown" onClick={() => openProvider(group)} type="button">
-                        <span><FundingProviderBadge provider={group.provider} /><small>View assigned ad accounts</small></span>
+                        <span>{group.provider ? <FundingProviderBadge provider={group.provider} /> : <strong>Unassigned provider</strong>}<small>View ad accounts</small></span>
                         <ChevronRight aria-hidden="true" size={15} />
                       </button>
                     </td>
@@ -1100,7 +1100,7 @@ export function MediaSpendView({
               : `${visibleAccountGroups.length.toLocaleString()} shown · ${activitySummary.accounts.toLocaleString()} active · ${(data?.summary.accounts ?? 0).toLocaleString()} total ad accounts`
             : viewMode === "businessManagers"
               ? `${visibleBusinessManagers.length.toLocaleString()} shown · ${activitySummary.businessManagers.toLocaleString()} active · ${(data?.summary.businessManagers ?? 0).toLocaleString()} total BMs`
-              : `${visibleProviders.length.toLocaleString()} shown · ${providerSpendGroups.length.toLocaleString()} assigned · ${providerSpendGroups.reduce((total, group) => total + group.rows.length, 0).toLocaleString()} assigned account-day rows`} · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
+              : `${visibleProviders.length.toLocaleString()} shown · ${providerSpendGroups.length.toLocaleString()} groups · ${providerSpendGroups.reduce((total, group) => total + group.rows.length, 0).toLocaleString()} account-day rows · ${money(visibleProviders.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} shown / ${money(providerSpendGroups.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} total`} · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
           <div className="media-spend-pagination">
             <span>Page {page + 1} of {pageCount}</span>
             <Button className="icon-button" aria-label="Previous media spend page" disabled={page === 0} onClick={() => setPage((current) => current - 1)} type="button">

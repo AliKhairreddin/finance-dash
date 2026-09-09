@@ -712,3 +712,18 @@ function pad2(value: number): string {
 function roundMoney(value: number): number {
   return Number(value.toFixed(2));
 }
+
+/** Automatic association alone does not establish an exact amount match. */
+export function paymentAllocationMatchLabel(allocation: PaymentAllocation): string {
+  if (allocation.mode === "manual") return "Manual";
+  if (allocation.matchReason?.startsWith("AI:")) return "AI match";
+  if (allocation.matchReason?.toLowerCase().includes("tolerance")) return "Tolerance match";
+  if (allocation.matchReason?.startsWith("Exact amount")) return "Exact match";
+  return "Automatic match";
+}
+
+export function paymentAllocationRecordedDifference(allocation: PaymentAllocation): number | null {
+  if (paymentAllocationMatchLabel(allocation) !== "Tolerance match") return null;
+  const value = allocation.matchReason?.match(/\((\d+(?:\.\d+)?) difference\)/)?.[1];
+  return value === undefined ? null : Number(value);
+}

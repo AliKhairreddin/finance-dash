@@ -98,7 +98,7 @@ export interface MediaFundingProviderSpendGroup {
   dayCount: number;
   key: string;
   platforms: string[];
-  provider: MediaFundingProvider;
+  provider: MediaFundingProvider | null;
   rows: MediaSpendRow[];
   searchText: string;
   spend: number;
@@ -265,7 +265,7 @@ export function groupMediaSpendByFundingProvider(
     businessManagerKeys: Set<string>;
     dates: Set<string>;
     platforms: Set<string>;
-    provider: MediaFundingProvider;
+    provider: MediaFundingProvider | null;
     rows: MediaSpendRow[];
     searchTerms: Set<string>;
     spend: number;
@@ -275,16 +275,16 @@ export function groupMediaSpendByFundingProvider(
   for (const row of rows) {
     const assignment = resolveMediaFundingAssignment(assignments, row);
     const provider = assignment ? providersById.get(assignment.providerId) : undefined;
-    if (!provider) continue;
+    const key = provider?.id ?? "unassigned";
 
-    const existing = groups.get(provider.id) ?? {
+    const existing = groups.get(key) ?? {
       accountKeys: new Set<string>(),
       businessManagerKeys: new Set<string>(),
       dates: new Set<string>(),
       platforms: new Set<string>(),
-      provider,
+      provider: provider ?? null,
       rows: [],
-      searchTerms: new Set<string>([provider.id, provider.name]),
+      searchTerms: new Set<string>([key, provider?.name ?? "Unassigned provider"]),
       spend: 0,
       workspaces: new Set<number>()
     };
@@ -301,15 +301,15 @@ export function groupMediaSpendByFundingProvider(
     existing.searchTerms.add(String(row.workspace));
     existing.spend += row.spend;
     existing.workspaces.add(row.workspace);
-    groups.set(provider.id, existing);
+    groups.set(key, existing);
   }
 
   return [...groups.values()].map((group) => ({
     accountCount: group.accountKeys.size,
     businessManagerCount: group.businessManagerKeys.size,
-    currency: group.provider.currency,
+    currency: mediaFundingCurrency,
     dayCount: group.dates.size,
-    key: group.provider.id,
+    key: group.provider?.id ?? "unassigned",
     platforms: [...group.platforms].sort((left, right) => left.localeCompare(right)),
     provider: group.provider,
     rows: group.rows,

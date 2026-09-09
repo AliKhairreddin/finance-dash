@@ -448,7 +448,7 @@ function FundingProviderDialog({
   const supplierCompanies = useMemo(() => companies
     .filter((company) => company.type === "supplier" && (company.id === provider?.companyProviderId || !configuredCompanyIds.includes(company.id)))
     .sort((left, right) => left.name.localeCompare(right.name)), [companies, configuredCompanyIds, provider?.companyProviderId]);
-  const [companyProviderId, setCompanyProviderId] = useState(provider?.companyProviderId ?? supplierCompanies[0]?.id ?? "");
+  const [companyProviderId, setCompanyProviderId] = useState(provider?.companyProviderId ?? "");
   const [feePercent, setFeePercent] = useState(provider ? String(provider.defaultFeePercent) : "0");
   const [openingBalance, setOpeningBalance] = useState(provider ? String(provider.openingBalance) : "0");
   const [openingBalanceDate, setOpeningBalanceDate] = useState(provider?.openingBalanceDate ?? coveredThrough ?? shiftFinanceOperatingDate(financeOperatingDate(), -1));
@@ -489,7 +489,7 @@ function FundingProviderDialog({
         {supplierCompanies.length === 0 ? (
           <div className="empty-state compact"><CircleDollarSign size={20} /><strong>Add a supplier company first</strong><Button className="secondary-button" onClick={() => { onClose(); onOpenCompanies(); }} type="button">Open companies</Button></div>
         ) : (
-          <label>Supplier company<NativeSelect value={companyProviderId} onValueChange={setCompanyProviderId}>{supplierCompanies.map((company) => <NativeSelectOption key={company.id} value={company.id}>{company.name}</NativeSelectOption>)}</NativeSelect></label>
+          <label>Supplier company<NativeSelect value={companyProviderId} onValueChange={setCompanyProviderId}><NativeSelectOption value="">Choose supplier</NativeSelectOption>{supplierCompanies.map((company) => <NativeSelectOption key={company.id} value={company.id}>{company.name}</NativeSelectOption>)}</NativeSelect></label>
         )}
         <div className="form-grid">
           <label>Default fee %<Input min="0" max="99.99" step="0.0001" type="number" value={feePercent} onChange={(event) => setFeePercent(event.target.value)} /></label>

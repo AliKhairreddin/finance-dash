@@ -1,3 +1,4 @@
+import type { AnalyticsResponse } from "../shared/analyticsRequest";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import crypto from "node:crypto";
@@ -12,7 +13,6 @@ import type {
   AutoCategorizeTransactionsPayload,
   AutoCategorizeTransactionsResult,
   BankAnalyticsCategoryCompaniesPage,
-  BankAnalyticsSnapshot,
   BankTransactionSource,
   BulkRecordInvoicePaymentsPayload,
   CreateHoldingPayload,
@@ -2753,6 +2753,7 @@ export async function syncExternalActivity(
 }
 
 type LocalTransactionPageOptions = {
+  slashVirtualAccountId?: string;
   fromDate: string;
   toDate: string;
   source?: BankTransactionSource;
@@ -2857,6 +2858,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
       && (!options.accountId || transaction.accountId === options.accountId)
+      && (!options.slashVirtualAccountId || (transaction.source === "slash" && transaction.slashVirtualAccountId === options.slashVirtualAccountId))
       && (!options.category || transactionBusinessCategory(transaction.category) === options.category)
       && (!options.team || (options.team === "unassigned" ? !transaction.teamId : transaction.teamId === options.team))
       && (!options.groupType || transactionBankActivityGroupKey(transaction, options.groupType, providers) === options.groupKey)
@@ -2876,7 +2878,7 @@ export function getBankActivitySummary(options: LocalTransactionPageOptions): Ba
   return summarizeBankActivity(localScopedTransactions(options), providers);
 }
 
-export function getAnalyticsSnapshot(fromDate: string, toDate: string): BankAnalyticsSnapshot {
+export function getAnalyticsSnapshot(fromDate: string, toDate: string): AnalyticsResponse {
   const accumulator = createBankAnalyticsAccumulator({
     fromDate,
     toDate,
@@ -2895,7 +2897,10 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): BankAnal
       )
       .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
   );
-  return accumulator.finish();
+  // The local in-memory store has no verified history intervals.
+  // Its existing records are useful, but must not be presented as complete history.
+  const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
+  return { ...accumulator.finish(), coverage: sources.map((source) => ({ source, missingRanges: [{ fromDate, toDate }] })) };
 }
 
 export function getAnalyticsCategoryCompaniesPage(options: {

@@ -13,7 +13,7 @@ import {
   Upload,
   X
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -285,6 +285,14 @@ export function ExpenseEditorDialog({
   onCreateExpense: (payload: CreateExpensePayload) => Promise<ExpenseRecord>;
   onMatchPayment: (expenseId: string, transactionId: string) => Promise<void>;
 }) {
+  const errorRef = useRef<HTMLDivElement>(null);
+  const [validationAttempt, setValidationAttempt] = useState(0);
+  useEffect(() => {
+    if (validationAttempt > 0) {
+      errorRef.current?.focus();
+      errorRef.current?.scrollIntoView({ block: "center" });
+    }
+  }, [validationAttempt]);
   const supplierOptions = dashboard.providers
     .filter((provider) => provider.type === "supplier")
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -406,6 +414,7 @@ export function ExpenseEditorDialog({
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Expense record could not be saved");
+      setValidationAttempt((attempt) => attempt + 1);
       setSubmitting(false);
     }
   }
@@ -427,7 +436,7 @@ export function ExpenseEditorDialog({
             <button className={mode === "record" ? "active" : ""} type="button" onClick={() => setMode("record")}>Record paid expense</button>
           </div>
         )}
-        {error && <div className="inline-error">{error}</div>}
+        {error && <div ref={errorRef} tabIndex={-1} role="alert" className="inline-error">{error}</div>}
         {mode === "match" ? (
           <>
             <div className="income-callout"><Check size={16} /><span>These unpaid bills have the same currency and gross amount as the outgoing transaction.</span></div>

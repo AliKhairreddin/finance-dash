@@ -1,3 +1,5 @@
+import { platformReportingPeriod } from "../../../shared/managementReport";
+import { InfoPopover } from "@/components/ui/finance-visuals";
 import {
   AlertCircle,
   ArrowDownRight,
@@ -722,7 +724,7 @@ function OfferPerformance({ dashboard }: { dashboard: ManagementReportDashboard 
   const kpis: ManagementReportKpi[] = [
     { id: "offer-redtrack", label: "RedTrack revenue", value: reconciliation.redtrackRevenue, unit: "currency", currency: "USD", tone: "neutral", detail: reconciliation.reportLabel },
     { id: "offer-dashboard", label: "Dashboard revenue", value: reconciliation.dashboardRevenue, unit: "currency", currency: "USD", tone: "neutral", detail: reconciliation.reportLabel },
-    { id: "offer-variance", label: "Revenue variance", value: reconciliation.variance, unit: "currency", currency: "USD", tone: Math.abs(reconciliation.variance) < 1 ? "positive" : "warning", detail: "RedTrack minus dashboard" },
+    { id: "offer-variance", label: "Revenue variance", value: reconciliation.variance, unit: "currency", currency: "USD", tone: Math.abs(reconciliation.variance) < 1 ? "positive" : "warning", detail: "Dashboard minus RedTrack" },
     { id: "offer-spend-variance", label: "Manager spend variance", value: reconciliation.managerSpendVariance, unit: "currency", currency: "USD", tone: Math.abs(reconciliation.managerSpendVariance) < 1 ? "positive" : "warning", detail: "Source minus dashboard" }
   ];
   const unitsById = new Map(dashboard.businessUnits.map((unit) => [unit.id, unit.name]));
@@ -759,14 +761,20 @@ function OfferRow({ offer, businessUnitName }: { offer: ManagementReportOfferRec
 }
 
 function PlatformPerformance({ platforms }: { platforms: ManagementReportPlatformPerformance[] }) {
+  type SortKey = "period" | "platform" | "revenue" | "spend" | "profit" | "profitMargin" | "leads" | "cpl";
+  const [sortKey, setSortKey] = useUrlState<SortKey>("managementPlatformSort", "period", { allowedValues: ["period", "platform", "revenue", "spend", "profit", "profitMargin", "leads", "cpl"] });
+  const [direction, setDirection] = useUrlState<TableSortDirection>("managementPlatformOrder", "desc", { allowedValues: ["asc", "desc"] });
+  const periods = new Map(platforms.map((row) => [row.platformMetricId, platformReportingPeriod(row, platforms)]));
+  const rows = [...platforms].sort((a, b) => compareTableValues(sortKey === "period" ? periods.get(a.platformMetricId)!.period : a[sortKey], sortKey === "period" ? periods.get(b.platformMetricId)!.period : b[sortKey], direction) || a.platformMetricId.localeCompare(b.platformMetricId));
+  const requestSort = (key: SortKey) => { if (key === sortKey) setDirection(direction === "asc" ? "desc" : "asc"); else { setSortKey(key); setDirection(key === "platform" ? "asc" : "desc"); } };
   return (
     <section className="management-report-panel" aria-labelledby="management-report-platform-title">
       <div className="management-report-panel-header"><div className="management-report-panel-heading"><h3 id="management-report-platform-title">Platform profitability</h3><p>Revenue, spend, profit, leads, and CPL from the PLP workbook tab.</p></div></div>
       <div className="management-report-table-wrap">
         <table className="management-report-table">
           <caption>Platform profitability</caption>
-          <thead><tr><th scope="col">Period</th><th scope="col">Platform</th><th className="amount" scope="col">Revenue</th><th className="amount" scope="col">Spend</th><th className="amount" scope="col">Profit</th><th className="amount" scope="col">Margin</th><th className="amount" scope="col">Leads</th><th className="amount" scope="col">CPL</th></tr></thead>
-          <tbody>{platforms.length > 0 ? platforms.map((row) => <tr className={row.isTotal ? "total-row" : ""} key={row.platformMetricId}><td>{row.periodLabel}</td><td>{row.platform}</td><td className="amount">{money(row.revenue)}</td><td className="amount">{money(row.spend)}</td><td className={`amount ${valueTone(row.profit)}`}>{money(row.profit)}</td><td className={`amount ${valueTone(row.profitMargin)}`}>{percent(row.profitMargin)}</td><td className="amount">{wholeNumber.format(row.leads)}</td><td className="amount">{money(row.cpl)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No platform profitability rows were parsed.</td></tr>}</tbody>
+          <thead><tr><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="period">Period</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="platform">Platform</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="revenue" className="amount">Revenue</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="spend" className="amount">Spend</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="profit" className="amount">Profit</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="profitMargin" className="amount">Margin</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="leads" className="amount">Leads</SortableTableHead><SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="cpl" className="amount">CPL</SortableTableHead></tr></thead>
+          <tbody>{platforms.length > 0 ? rows.map((row) => <tr className={row.isTotal ? "total-row" : ""} key={row.platformMetricId}><td>{periods.get(row.platformMetricId)!.label}{periods.get(row.platformMetricId)!.sourceLabel && <InfoPopover label="source period label"><span>Source: {row.periodLabel}. These totals reconcile to the monthly rows through {periods.get(row.platformMetricId)!.period}.</span></InfoPopover>}</td><td>{row.platform}</td><td className="amount">{money(row.revenue)}</td><td className="amount">{money(row.spend)}</td><td className={`amount ${valueTone(row.profit)}`}>{money(row.profit)}</td><td className={`amount ${valueTone(row.profitMargin)}`}>{percent(row.profitMargin)}</td><td className="amount">{wholeNumber.format(row.leads)}</td><td className="amount">{money(row.cpl)}</td></tr>) : <tr><td className="management-report-empty-row" colSpan={8}>No platform profitability rows were parsed.</td></tr>}</tbody>
         </table>
       </div>
     </section>

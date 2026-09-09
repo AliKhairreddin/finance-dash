@@ -173,16 +173,17 @@ test("groups assigned media spend by the effective provider", () => {
     spendRow({ key: "row-4", accountId: "unassigned", spend: 200, businessManagerId: "bm-2" })
   ], assignments, providers);
 
-  assert.equal(groups.length, 2);
+  assert.equal(groups.length, 3);
   assert.deepEqual(groups.map((group) => ({
-    provider: group.provider.name,
+    provider: group.provider?.name ?? "Unassigned provider",
     accounts: group.accountCount,
     businessManagers: group.businessManagerCount,
     days: group.dayCount,
     spend: group.spend
   })), [
     { provider: "Alpha Funding", accounts: 1, businessManagers: 1, days: 2, spend: 125 },
-    { provider: "Beta Funding", accounts: 1, businessManagers: 1, days: 1, spend: 50 }
+    { provider: "Beta Funding", accounts: 1, businessManagers: 1, days: 1, spend: 50 },
+    { provider: "Unassigned provider", accounts: 1, businessManagers: 1, days: 1, spend: 200 }
   ]);
   assert.match(groups[1].searchText, /account two/);
 });

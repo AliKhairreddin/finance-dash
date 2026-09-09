@@ -439,7 +439,7 @@ export function CashFlowPositionView({
         <CashFlowMetric label="Open balances" value={totals.openBalances} tone="open-balance" />
         <CashFlowMetric label="Approximate cash" value={totals.approximateCash} tone="approximate" />
         <CashFlowMetric label="Payables" value={totals.payables} tone="payable" />
-        <CashFlowMetric label="Profit" value={totals.profit} tone="profit" />
+        <CashFlowMetric label="Net operating position" value={totals.profit} tone="profit" />
         <CashFlowMetric label="Investments" value={totals.investments} tone="investment" />
         <CashFlowMetric label="Total assets" value={totals.assets} tone="assets" />
       </section>
