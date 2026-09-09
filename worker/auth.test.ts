@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
-import { pbkdf2Sync } from "node:crypto";
 import test from "node:test";
 import {
   createAuthSessionToken,
   enforceSiteAuthentication,
   getDashboardSession,
   transactionReviewerCanAccess,
-  verifyAuthSessionToken,
-  verifyLoginCredentials
+  verifyAuthSessionToken
 } from "./auth";
 import {
   cancelTelegramOtpTransition,
@@ -18,15 +16,6 @@ import {
 import type { TelegramSignInAlertDetails } from "./telegram";
 
 const testSessionSecret = "test-session-secret-with-enough-entropy";
-const testSalt = Buffer.from("0123456789abcdef", "utf8");
-const testSlashPassword = "slash-testing-password-456!";
-const testSlashPasswordHash = [
-  "pbkdf2-sha256",
-  100_000,
-  testSalt.toString("base64url"),
-  pbkdf2Sync(testSlashPassword, testSalt, 100_000, 32, "sha256").toString("base64url")
-].join("$");
-
 class FakeTelegramOtpState {
   state: TelegramOtpStoredState | undefined;
 
@@ -64,12 +53,6 @@ function telegramEnv(state = new FakeTelegramOtpState(), passwordlessUsers: stri
   } as never;
 }
 
-const slashEnv = {
-  AUTH_SESSION_SECRET: testSessionSecret,
-  SLASH_AUTH_USERNAME: "slash-test",
-  SLASH_AUTH_PASSWORD_HASH: testSlashPasswordHash
-} as never;
-
 function formRequest(url: string, values: Record<string, string>, cookie?: string): Request {
   return new Request(url, {
     method: "POST",
@@ -87,36 +70,48 @@ function cookieFrom(response: Response, name: string): string {
   return match[0];
 }
 
-test("password verification accepts only the configured Slash credential", async () => {
-  const credential = { username: "slash-test", passwordHash: testSlashPasswordHash };
-  assert.equal(await verifyLoginCredentials("slash-test", testSlashPassword, credential), true);
-  assert.equal(await verifyLoginCredentials("slash-test", "wrong-password", credential), false);
-  assert.equal(await verifyLoginCredentials("wrong-user", testSlashPassword, credential), false);
-});
-
 test("signed sessions expire and reject tampering or a different hostname", async () => {
   const now = Date.parse("2026-07-28T12:00:00.000Z");
   const token = await createAuthSessionToken(
     testSessionSecret,
-    "slash.thatcanadian.dev",
-    "slash-test",
+    "finance.thatcanadian.dev",
+    "ali",
     now
   );
-  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, "slash.thatcanadian.dev", now), true);
-  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, "finance.thatcanadian.dev", now), false);
+  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, "finance.thatcanadian.dev", now), true);
+  assert.equal(await verifyAuthSessionToken(token, testSessionSecret, "other.example", now), false);
   assert.equal(
-    await verifyAuthSessionToken(`${token}tampered`, testSessionSecret, "slash.thatcanadian.dev", now),
+    await verifyAuthSessionToken(`${token}tampered`, testSessionSecret, "finance.thatcanadian.dev", now),
     false
   );
   assert.equal(
     await verifyAuthSessionToken(
       token,
       testSessionSecret,
-      "slash.thatcanadian.dev",
+      "finance.thatcanadian.dev",
       now + 12 * 60 * 60 * 1000
     ),
     false
   );
+});
+
+test("the retired Slash hostname cannot select password authentication or accept a Slash-only session", async () => {
+  const env = telegramEnv();
+  const response = await enforceSiteAuthentication(
+    new Request("https://slash.thatcanadian.dev/login"),
+    env
+  );
+  assert.equal(response?.status, 200);
+  const html = await response!.text();
+  assert.match(html, /name="step" value="request"/);
+  assert.doesNotMatch(html, /type="password"/);
+
+  const token = await createAuthSessionToken(testSessionSecret, "slash.thatcanadian.dev", "slash-test");
+  const request = new Request("https://slash.thatcanadian.dev/api/dashboard", {
+    headers: { Cookie: `__Host-finance_session=${token}` }
+  });
+  assert.equal((await enforceSiteAuthentication(request, env))?.status, 401);
+  assert.equal(await getDashboardSession(request, env), null);
 });
 
 test("configured transaction reviewers resolve to a restricted session role", async () => {
@@ -470,42 +465,6 @@ test("unknown usernames do not send a message or reveal whether an account exist
   assert.equal(response?.status, 200);
   assert.equal(messages, 0);
   assert.match(await response?.text() ?? "", /Enter the 6-digit code sent to Unknown on Telegram/);
-});
-
-test("Slash credentials authenticate only the Slash hostname", async () => {
-  const slashLoginResponse = await enforceSiteAuthentication(
-    formRequest("https://slash.thatcanadian.dev/login", {
-      username: "slash-test",
-      password: testSlashPassword,
-      returnTo: "/"
-    }),
-    slashEnv
-  );
-  assert.equal(slashLoginResponse?.status, 303);
-
-  const cookie = cookieFrom(slashLoginResponse as Response, "__Host-finance_session");
-  assert.equal(
-    await enforceSiteAuthentication(
-      new Request("https://slash.thatcanadian.dev/", { headers: { Cookie: cookie } }),
-      slashEnv
-    ),
-    null
-  );
-
-  const financeSessionResponse = await enforceSiteAuthentication(
-    new Request("https://finance.thatcanadian.dev/", { headers: { Cookie: cookie } }),
-    telegramEnv()
-  );
-  assert.equal(financeSessionResponse?.status, 303);
-  assert.equal(financeSessionResponse?.headers.get("Location"), "/login?returnTo=%2F");
-});
-
-test("Slash fails closed when its credential is not configured", async () => {
-  const response = await enforceSiteAuthentication(
-    new Request("https://slash.thatcanadian.dev/login"),
-    telegramEnv()
-  );
-  assert.equal(response?.status, 503);
 });
 
 test("logout clears both authentication cookies", async () => {

@@ -35,10 +35,6 @@
     {
       "pattern": "finance.thatcanadian.dev",
       "custom_domain": true
-    },
-    {
-      "pattern": "slash.thatcanadian.dev",
-      "custom_domain": true
     }
   ],
   "vars": {

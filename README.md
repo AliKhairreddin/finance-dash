@@ -107,23 +107,11 @@ Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker 
 
 ### Whole-Site Authentication
 
-The Cloudflare Worker authenticates every page, API request, and application asset before serving it. Only the non-sensitive favicon, home-screen icons, and web app manifest are public so browsers can identify the app on the login screen. A successful login creates a signed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie that expires after 12 hours. The password is stored only as a salted PBKDF2-SHA-256 verifier, while the username, verifier, and independent session-signing key are encrypted Cloudflare Worker secrets.
+The Cloudflare Worker authenticates every page, API request, and application asset before serving it. Only the non-sensitive favicon, home-screen icons, and web app manifest are public so browsers can identify the app on the login screen. Users sign in with their configured username and a one-time Telegram code; explicitly configured passwordless users receive a Telegram sign-in alert instead. A successful login creates a signed, `HttpOnly`, `Secure`, `SameSite=Strict` cookie that expires after 12 hours and is bound to the issuing hostname.
 
-Configure or rotate the production credentials from an interactive terminal:
+Store `AUTH_SESSION_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AUTH_USERS_JSON`, and `TELEGRAM_PASSWORDLESS_USERS_JSON` as Cloudflare Worker secrets. Missing or malformed authentication configuration locks the site and API closed.
 
-```bash
-npm run auth:configure
-```
-
-The password prompt is hidden. The setup command sends the derived verifier and generated signing key directly to Cloudflare without printing them or writing them to disk. Missing or malformed authentication secrets lock the site and API closed.
-
-Configure or rotate the additional credential accepted only by `slash.thatcanadian.dev`:
-
-```bash
-npm run auth:configure:slash
-```
-
-Sessions are signed for the hostname that issued them, so a Slash session cannot be replayed against `finance.thatcanadian.dev`.
+Slash activity is available in Banks → Slash on `finance.thatcanadian.dev`, including grouped merchants, filters, history sync, card and virtual-account views, and expense PDF exports. The separate Slash site and password login have been retired.
 
 Create the transaction-review-only Telegram login from an interactive terminal:
 

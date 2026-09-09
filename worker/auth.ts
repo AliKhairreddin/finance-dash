@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import {
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
@@ -13,10 +12,7 @@ const AUTH_COOKIE_NAME = "__Host-finance_session";
 const LOGIN_COOKIE_NAME = "__Host-finance_login";
 const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
-const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
-const PASSWORD_HASH_ITERATIONS = 100_000;
 const PASSWORDLESS_SESSION_SUBJECT_PREFIX = "passwordless:";
-const SLASH_APP_HOSTNAME = "slash.thatcanadian.dev";
 const textEncoder = new TextEncoder();
 const PUBLIC_APP_ASSET_PATHS = new Set([
   "/apple-touch-icon.png",
@@ -30,8 +26,6 @@ const PUBLIC_APP_ASSET_PATHS = new Set([
 type AuthEnv = Pick<
   WorkerEnv,
   | "AUTH_SESSION_SECRET"
-  | "SLASH_AUTH_PASSWORD_HASH"
-  | "SLASH_AUTH_USERNAME"
   | "TELEGRAM_AUTH_USERS_JSON"
   | "TELEGRAM_BOT_TOKEN"
   | "TELEGRAM_OTP_STATE"
@@ -39,17 +33,6 @@ type AuthEnv = Pick<
 > & {
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
 };
-
-interface AuthCredential {
-  username: string;
-  passwordHash: string;
-}
-
-interface PasswordVerifier {
-  iterations: number;
-  salt: Uint8Array<ArrayBuffer>;
-  hash: Uint8Array<ArrayBuffer>;
-}
 
 interface TelegramAuthConfig {
   users: TelegramAuthUser[];
@@ -70,7 +53,7 @@ interface AuthDependencies {
   sendTelegramSignInAlert?: typeof sendTelegramSignInAlert;
 }
 
-type LoginMode = "telegram-username" | "telegram-code" | "password";
+type LoginMode = "telegram-username" | "telegram-code";
 
 interface LoginPageOptions {
   mode: LoginMode;
@@ -99,33 +82,6 @@ function base64UrlDecode(value: string): Uint8Array<ArrayBuffer> | null {
   } catch {
     return null;
   }
-}
-
-function parsePasswordVerifier(value: string): PasswordVerifier | null {
-  const [algorithm, iterationsValue, saltValue, hashValue, extra] = value.split("$");
-  const iterations = Number(iterationsValue);
-  const salt = base64UrlDecode(saltValue ?? "");
-  const hash = base64UrlDecode(hashValue ?? "");
-  if (
-    algorithm !== PASSWORD_HASH_ALGORITHM ||
-    extra !== undefined ||
-    iterations !== PASSWORD_HASH_ITERATIONS ||
-    !salt ||
-    salt.byteLength < 16 ||
-    !hash ||
-    hash.byteLength !== 32
-  ) {
-    return null;
-  }
-  return { iterations, salt, hash };
-}
-
-function slashCredential(env: AuthEnv): { credential: AuthCredential; sessionSecret: string } | null {
-  const username = env.SLASH_AUTH_USERNAME?.trim();
-  const passwordHash = env.SLASH_AUTH_PASSWORD_HASH?.trim();
-  const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
-  if (!username || !passwordHash || !sessionSecret || !parsePasswordVerifier(passwordHash)) return null;
-  return { credential: { username, passwordHash }, sessionSecret };
 }
 
 function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
@@ -181,38 +137,6 @@ function parsePasswordlessTelegramUsers(
     passwordlessUsernames.add(normalizedUsername);
   }
   return passwordlessUsernames;
-}
-
-async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {
-  const [leftDigest, rightDigest] = await Promise.all([
-    crypto.subtle.digest("SHA-256", textEncoder.encode(left)),
-    crypto.subtle.digest("SHA-256", textEncoder.encode(right))
-  ]);
-  return timingSafeEqual(new Uint8Array(leftDigest), new Uint8Array(rightDigest));
-}
-
-export async function verifyLoginCredentials(
-  username: string,
-  password: string,
-  config: AuthCredential
-): Promise<boolean> {
-  const verifier = parsePasswordVerifier(config.passwordHash);
-  if (!verifier || username.length > 256 || password.length > 1024) return false;
-  const key = await crypto.subtle.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const [usernameMatches, candidateHash] = await Promise.all([
-    timingSafeStringEqual(username, config.username),
-    crypto.subtle.deriveBits(
-      {
-        name: "PBKDF2",
-        hash: "SHA-256",
-        salt: verifier.salt,
-        iterations: verifier.iterations
-      },
-      key,
-      256
-    )
-  ]);
-  return usernameMatches && timingSafeEqual(new Uint8Array(candidateHash), verifier.hash);
 }
 
 async function sessionKey(secret: string): Promise<CryptoKey> {
@@ -467,15 +391,6 @@ function loginForm(options: LoginPageOptions): string {
         <a href="/login?returnTo=${encodeURIComponent(options.returnTo)}">Use another username</a>
       </div>`;
   }
-  if (options.mode === "password") {
-    return `<p class="subhead">Use your Slash credentials to continue.</p>
-      <form method="post" action="/login">
-        <input type="hidden" name="returnTo" value="${returnTo}">
-        <div class="field"><label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
-        <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
-        <button class="submit" type="submit">Sign in</button>
-      </form>`;
-  }
   return `<p class="subhead">Enter your username to continue.</p>
       <form method="post" action="/login">
         <input type="hidden" name="step" value="request">
@@ -584,11 +499,6 @@ function authUnavailable(pathname: string): Response {
   );
 }
 
-async function hasValidSession(request: Request, secret: string, audience: string): Promise<boolean> {
-  const token = cookieValue(request, AUTH_COOKIE_NAME);
-  return token ? verifyAuthSessionToken(token, secret, audience) : false;
-}
-
 async function hasValidTelegramSession(
   request: Request,
   config: TelegramAuthConfig,
@@ -619,53 +529,6 @@ async function telegramSessionUsername(
 function telegramUser(config: TelegramAuthConfig, username: string): TelegramAuthUser | undefined {
   const normalized = normalizeFinanceUsername(username);
   return config.users.find((user) => user.normalizedUsername === normalized);
-}
-
-async function enforceSlashAuth(request: Request, env: AuthEnv, url: URL): Promise<Response | null> {
-  const config = slashCredential(env);
-  if (!config) return authUnavailable(url.pathname);
-  if (url.pathname === "/logout") return redirect("/login", [expiredCookie(AUTH_COOKIE_NAME)]);
-  if (url.pathname === "/login") {
-    const returnTo = safeReturnTo(request.method === "GET" ? url.searchParams.get("returnTo") : null);
-    if (request.method === "GET") {
-      return (await hasValidSession(request, config.sessionSecret, url.hostname))
-        ? redirect(returnTo)
-        : loginHtmlResponse({ mode: "password", returnTo });
-    }
-    if (request.method !== "POST") {
-      return loginHtmlResponse({ mode: "password", returnTo }, { status: 405, headers: { Allow: "GET, POST" } });
-    }
-    try {
-      const form = await readLoginForm(request);
-      const formReturnTo = safeReturnTo(form.get("returnTo"));
-      const username = form.get("username") ?? "";
-      const password = form.get("password") ?? "";
-      if (await verifyLoginCredentials(username, password, config.credential)) {
-        const token = await createAuthSessionToken(
-          config.sessionSecret,
-          url.hostname,
-          normalizeFinanceUsername(username)
-        );
-        return redirect(formReturnTo, [sessionCookie(token)]);
-      }
-      return loginHtmlResponse(
-        { mode: "password", returnTo: formReturnTo, error: "Invalid username or password." },
-        { status: 401 }
-      );
-    } catch (error) {
-      if (!(error instanceof InvalidLoginBodyError)) throw error;
-      return loginHtmlResponse(
-        { mode: "password", returnTo: "/", error: "Invalid sign-in request." },
-        { status: 400 }
-      );
-    }
-  }
-  if (await hasValidSession(request, config.sessionSecret, url.hostname)) return null;
-  if (url.pathname.startsWith("/api/")) {
-    return Response.json({ message: "Authentication required" }, { status: 401, headers: { "Cache-Control": "no-store" } });
-  }
-  const returnTo = safeReturnTo(`${url.pathname}${url.search}${url.hash}`);
-  return redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`);
 }
 
 function requestIpAddress(request: Request): string {
@@ -954,9 +817,7 @@ export async function enforceSiteAuthentication(
   if ((request.method === "GET" || request.method === "HEAD") && PUBLIC_APP_ASSET_PATHS.has(url.pathname)) {
     return null;
   }
-  return url.hostname === SLASH_APP_HOSTNAME
-    ? enforceSlashAuth(request, env, url)
-    : enforceTelegramAuth(request, env, url, dependencies);
+  return enforceTelegramAuth(request, env, url, dependencies);
 }
 
 export async function getDashboardSession(
@@ -964,18 +825,6 @@ export async function getDashboardSession(
   env: AuthEnv
 ): Promise<DashboardSession | null> {
   const url = new URL(request.url);
-  if (url.hostname === SLASH_APP_HOSTNAME) {
-    const config = slashCredential(env);
-    if (!config) return null;
-    const token = cookieValue(request, AUTH_COOKIE_NAME);
-    const username = token
-      ? await verifiedAuthSessionSubject(token, config.sessionSecret, url.hostname)
-      : null;
-    return username === normalizeFinanceUsername(config.credential.username)
-      ? { username: config.credential.username, role: "administrator" }
-      : null;
-  }
-
   const config = telegramConfig(env);
   if (!config) return null;
   const normalizedUsername = await telegramSessionUsername(request, config, url.hostname);
