@@ -235,7 +235,7 @@ test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("daily Slash delivery reaches only its three recipients after 17:00 Beirut, independently of weekly recipients", async () => {
+test("daily Slash delivery reaches only its three recipients at 13:00 Beirut, independently of weekly recipients", async () => {
  const names: string[] = [];
  const sent: string[] = [];
  let builds = 0;
@@ -253,9 +253,9 @@ test("daily Slash delivery reaches only its three recipients after 17:00 Beirut,
    }; } }
  };
  const build = async () => { builds++; return "Daily report"; };
- assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T13:59:00Z"), build, "daily-slash"), 0);
+ assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T09:59:00Z"), build, "daily-slash"), 0);
  assert.equal(builds, 0);
- assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T14:00:00Z"), build, "daily-slash"), 3);
+ assert.equal(await sendTelegramCashReportIfDue(env as never, Date.parse("2026-09-08T10:00:00Z"), build, "daily-slash"), 3);
  assert.deepEqual(names, ["telegram-slash-report:amin", "telegram-slash-report:ali", "telegram-slash-report:ali m"]);
  assert.deepEqual(sent, ["Amin", "Ali", "Ali M"]);
  assert.equal(builds, 1);

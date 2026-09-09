@@ -5,8 +5,8 @@ import type { SlashTransaction, SlashVirtualAccountBalance } from "../shared/sla
 const asOf=Date.parse("2026-09-08T14:00:00Z");
 const account={id:"va",name:"Primary",balance:9000,currency:"USD",accountId:"a",accountType:"primary"} as SlashVirtualAccountBalance;
 const charge={id:"charge",date:"2026-09-08T13:00:00Z",description:"Meta",amountCents:-20000,accountId:"a",accountSubtype:"credit",virtualAccountId:"va",cardId:"c",status:"posted"} as SlashTransaction;
-test("daily report becomes due at 17:00 Beirut in summer and winter, on every weekday",()=>{
- for(const [before,due] of [["2026-09-08T13:59:59Z","2026-09-08T14:00:00Z"],["2026-01-04T14:59:59Z","2026-01-04T15:00:00Z"],["2026-03-29T13:59:59Z","2026-03-29T14:00:00Z"],["2026-10-25T14:59:59Z","2026-10-25T15:00:00Z"]]) {
+test("daily report becomes due at 13:00 Beirut in summer, winter and across DST transitions",()=>{
+ for(const [before,due] of [["2026-09-08T09:59:59Z","2026-09-08T10:00:00Z"],["2026-01-04T10:59:59Z","2026-01-04T11:00:00Z"],["2026-03-29T09:59:59Z","2026-03-29T10:00:00Z"],["2026-10-25T10:59:59Z","2026-10-25T11:00:00Z"]]) {
   assert.equal(slashReportDateIfDue(Date.parse(before)),null);assert.equal(slashReportDateIfDue(Date.parse(due)),due.slice(0,10));
  }
 });

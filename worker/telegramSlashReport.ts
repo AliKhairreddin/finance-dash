@@ -5,7 +5,7 @@ export function slashReportDateIfDue(timestamp: number): string | null {
     timeZone: "Asia/Beirut", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
   }).formatToParts(timestamp);
   const part = (key: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === key)!.value;
-  return Number(part("hour")) >= 17 ? `${part("year")}-${part("month")}-${part("day")}` : null;
+  return Number(part("hour")) >= 13 ? `${part("year")}-${part("month")}-${part("day")}` : null;
 }
 
 const usd = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);

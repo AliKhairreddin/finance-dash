@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { paymentAllocationMatchLabel } from "../../../shared/income";
 import { Button } from "@/components/ui/button";
 import { CalendarPeriodPicker, calendarDateRangeLabel } from "@/components/ui/calendar-period-picker";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -70,7 +72,7 @@ import { financeOperatingDate } from "../../../shared/operatingDate";
 type InvoiceTab = "all" | "pending" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open";
 type InvoiceDeliveryFilter = "all" | MeritDeliveryStatus;
-type RevenueRunSortKey = "clicks" | "leads" | "payableLeads" | "earningsPerClick" | "earningsPerLead" | "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
+type RevenueRunSortKey = "clicks" | "leads" | "payableLeads" | "earningsPerClick" | "earningsPerLead" | "leadRevenue" | "clickRevenue" | "activity" | "amount" | "cadence" | "company" | "invoice" | "period" | "status";
 type RevenueAccrualSortKey = "accruedThrough" | "amount" | "cadence" | "company" | "period" | "status";
 type InvoiceSortKey = "amount" | "cadence" | "company" | "created" | "forecast" | "period" | "status";
 type InvoiceSendRequest = {
@@ -269,7 +271,7 @@ export function RevenueView({
   const [pullResults, setPullResults] = useState<RevenueRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [runSortKey, setRunSortKey] = useUrlState<RevenueRunSortKey>("revenueRunSort", "period", {
-    allowedValues: ["activity", "amount", "cadence", "company", "invoice", "period", "status", "clicks", "leads", "payableLeads", "earningsPerClick", "earningsPerLead"]
+    allowedValues: ["activity", "amount", "cadence", "company", "invoice", "period", "status", "clicks", "leads", "payableLeads", "earningsPerClick", "earningsPerLead", "leadRevenue", "clickRevenue"]
   });
   const [runSortDirection, setRunSortDirection] = useUrlState<TableSortDirection>("revenueRunOrder", "desc", {
     allowedValues: ["asc", "desc"]
@@ -303,6 +305,7 @@ export function RevenueView({
   function revenueRunSortValue(run: RevenueRun): boolean | number | string | undefined {
     const partner = partnersById.get(run.partnerId);
     if (runSortKey === "activity") return run.source === "quinstreet" ? run.leads : run.conversions;
+    if (runSortKey === "leadRevenue" || runSortKey === "clickRevenue") return run.status === "failed" ? undefined : run[runSortKey];
     if (["clicks", "leads", "payableLeads", "earningsPerClick", "earningsPerLead"].includes(runSortKey)) return run[runSortKey as "clicks" | "leads" | "payableLeads" | "earningsPerClick" | "earningsPerLead"];
     if (runSortKey === "amount") return run.status === "failed" ? undefined : run.revenue;
     if (runSortKey === "cadence") return partner?.billingCadence;
@@ -545,7 +548,9 @@ export function RevenueView({
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="earningsPerLead" description="Lead net earnings divided by payable leads for the selected period.">Avg. / lead</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="earningsPerClick" description="Click net earnings divided by clicks for the selected period.">Avg. / click</SortableTableHead>
 
-              <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="amount">Amount</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="leadRevenue" description="Total lead net earnings for this reporting period.">Lead revenue</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="clickRevenue" description="Total click net earnings for this reporting period.">Click revenue</SortableTableHead>
+              <SortableTableHead activeSortKey={runSortKey} className="amount" direction={runSortDirection} onSort={requestRunSort} sortKey="amount">Total revenue</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="status">Status / match</SortableTableHead>
               <SortableTableHead activeSortKey={runSortKey} direction={runSortDirection} onSort={requestRunSort} sortKey="invoice">Invoice</SortableTableHead>
             </tr></thead>
@@ -568,6 +573,8 @@ export function RevenueView({
                     <td>{run.clicks?.toLocaleString() ?? "—"}</td>
                     <td className="amount">{run.earningsPerLead === undefined ? "—" : money(run.earningsPerLead, run.currency)}</td>
                     <td className="amount">{run.earningsPerClick === undefined ? "—" : money(run.earningsPerClick, run.currency)}</td>
+                    <td className="amount">{run.status === "failed" || run.leadRevenue === undefined ? "—" : money(run.leadRevenue, run.currency)}</td>
+                    <td className="amount">{run.status === "failed" || run.clickRevenue === undefined ? "—" : money(run.clickRevenue, run.currency)}</td>
                     <td className="amount">{run.status === "failed" ? "—" : money(run.revenue, run.currency)}</td>
                     <td><span className={`status-pill invoice-status-${run.status}`}>{run.status}</span>{run.error && <small>{run.error}</small>}</td>
                     <td>{run.invoiceId
@@ -577,7 +584,7 @@ export function RevenueView({
                         : <span className="muted-cell">{run.status === "pulled" && run.revenue > 0 ? "Period still open" : "Not drafted"}</span>}</td>
                   </tr>
                 );
-              }) : <tr><td colSpan={11}>No revenue activity matches these filters</td></tr>}
+              }) : <tr><td colSpan={13}>No revenue activity matches these filters</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1308,7 +1315,8 @@ export function InvoicesView({
                                 {paymentSourceOptions.find((item) => item.value === allocation.source)?.label ?? allocation.source}
                                 {` · ${dateLabel(allocation.paidAt)} · ${money(allocation.amount, allocation.currency)}`}
                               </span>
-                              <small>{allocation.mode === "automatic" ? allocation.matchReason?.startsWith("AI:") ? "AI match" : "Exact match" : "Manual"}</small>
+                              <small>{paymentAllocationMatchLabel(allocation)}</small>
+                              {allocation.mode === "automatic" && allocation.matchReason?.includes("tolerance") && <small>{allocation.matchReason}</small>}
                               {allocation.note && <small>{allocation.note}</small>}
                             </div>
                           )) : <span className="paid-source-copy">Paid in dashboard</span>}
@@ -1477,10 +1485,11 @@ export function InvoiceEditorDialog({
     }
   }
 
-  return createPortal(
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal wide-modal invoice-editor-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-editor-title" onSubmit={handleSubmit}>
-        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><h2 id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : duplicateSourceInvoiceNumber ? `Duplicate ${duplicateSourceInvoiceNumber}` : "Create manual invoice"}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !submitting) onClose(); }}>
+      <DialogContent className="invoice-editor-dialog" showCloseButton={false}>
+      <form className="modal wide-modal invoice-editor-modal" onSubmit={handleSubmit}>
+        <div className="modal-header"><div><p className="eyebrow">Sales invoice</p><DialogTitle id="invoice-editor-title">{invoice ? `Edit ${invoice.invoiceNumber}` : duplicateSourceInvoiceNumber ? `Duplicate ${duplicateSourceInvoiceNumber}` : "Create manual invoice"}</DialogTitle></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="modal-body-stack invoice-editor-body">
           {error && <div className="inline-error">{error}</div>}
           <div className="invoice-form-grid">
@@ -1540,8 +1549,8 @@ export function InvoiceEditorDialog({
         </div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
       </form>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   );
 }
 

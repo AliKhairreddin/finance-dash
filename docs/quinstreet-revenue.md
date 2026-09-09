@@ -54,6 +54,6 @@ For both rules, use:
 - `total_earn` for the revenue column;
 - a blank API-base-URL environment name to use `https://reporting.qmp.ai`.
 
-The Revenue page can then pull either rule for a selected period. A successful QuinStreet row shows clicks, gross and payable leads, and average net earnings per click and payable lead. Rates divide aggregate earnings by aggregate units; daily rounded rates are never averaged. Zero-unit rates appear as unavailable. Drafting and sending an invoice remain separate actions.
+The Revenue page can then pull either rule for a selected period. A successful QuinStreet row shows clicks, gross and payable leads, average net earnings per click and payable lead, and separate Lead revenue and Click revenue dollar totals alongside Total revenue. The revenue totals use the report's net earnings columns directly. Both revenue columns support ascending and descending sorting, with the selection saved in the URL. Rates divide aggregate earnings by aggregate units; daily rounded rates are never averaged. Zero-unit rates appear as unavailable. Drafting and sending an invoice remain separate actions.
 
 A locally created QuinStreet client can be used for pull-only reporting with automatic drafting disabled. Import the customer from Merit before enabling automatic drafts or sending an invoice.
