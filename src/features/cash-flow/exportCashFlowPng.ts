@@ -1,4 +1,5 @@
 import {
+  cashFlowCashAccountGroups,
   cashFlowOpenBalanceGroups,
   cashFlowPayableMonths,
   cashFlowPayableMonthTotals,
@@ -7,8 +8,8 @@ import {
   cashFlowSnapshotTotals,
   cashFlowUsdTotal
 } from "../../../shared/cashFlowReport";
-import { cashFlowReportLayoutScore, packCashFlowReportCards, splitCashFlowReportRows, type CashFlowReportOrientation } from "../../../shared/cashFlowReportLayout";
-import { convertCurrencyTotalsToUsd } from "../../../shared/currencyTotals";
+import { packCashFlowReportCards, splitCashFlowReportRows } from "../../../shared/cashFlowReportLayout";
+import { convertCurrencyTotalsToUsd, sumCurrencyTotals, type UsdCurrencyTotal } from "../../../shared/currencyTotals";
 import type { CashFlowLine, CashFlowSnapshot, FxRate } from "../../../shared/types";
 
 const palette = {
@@ -73,35 +74,45 @@ function rule(ctx: CanvasRenderingContext2D, x: number, y: number, width: number
   ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + width, y); ctx.stroke();
 }
 
+type ReportRow = { id: string; name: string; lines: CashFlowLine[]; usd?: UsdCurrencyTotal };
+const rowAmount = (row: ReportRow) => row.usd
+  ? row.usd.excludedCurrencies.length ? "FX unavailable" : money(row.usd.totalUsd)
+  : nativeAmount(row.lines[0]);
+const rowExcluded = (row: ReportRow) => row.lines.every(line => line.excludedFromTotals);
+const rowsTotal = (rows: ReportRow[], rates: FxRate[]) => cashFlowUsdTotal(rows.flatMap(row => row.lines), rates);
 type Section = {
-  id: string; title: string; color: string; lines: CashFlowLine[]; total: number; payable?: boolean; part?: string;
+  id: string; title: string; color: string; rows: ReportRow[]; total: number; payable?: boolean; part?: string; usd?: boolean;
 };
-type RowLayout = { line: CashFlowLine; names: string[]; details: string[]; height: number };
+type RowLayout = { row: ReportRow; names: string[]; details: string[]; height: number };
 function sectionLayout(ctx: CanvasRenderingContext2D, section: Section, width: number) {
   ctx.font = `600 23px ${font}`;
   const totalWidth = Math.min(width * .42, ctx.measureText(money(section.total)).width);
   const headings = wrap(ctx, section.title, width - 96 - totalWidth, 23, 600);
   const headerExtra = (headings.length - 1) * 28;
-  const amountWidth = Math.max(228, ...section.lines.map((line) => {
+  const amountWidth = Math.max(228, ...section.rows.map((row) => {
     ctx.font = `600 18px ${font}`;
-    return ctx.measureText(nativeAmount(line)).width + 24;
+    return ctx.measureText(rowAmount(row)).width + 24;
   }));
   const nameWidth = Math.max(150, width - 56 - amountWidth - 24);
-  const rows: RowLayout[] = section.lines.map((line) => {
-    const names = wrap(ctx, line.name || "Untitled", nameWidth);
+  const rows: RowLayout[] = section.rows.map((row) => {
+    const names = wrap(ctx, row.name || "Untitled", nameWidth);
     const details: string[] = [];
-    if (line.excludedFromTotals) details.push("Excluded from totals");
-    if (line.formula) details.push(...wrap(ctx, `Calculation: ${line.formula}`, width - 56, 15));
-    if (line.notes) details.push(...wrap(ctx, line.notes, width - 56, 15));
-    if (line.dueDate) details.push(`Due ${date(line.dueDate)}`);
-    if (section.payable) {
-      const months = cashFlowPayableMonths(line.notes);
-      if (months.length) details.push(...wrap(ctx, months.map(({ month, amount }) =>
-        `${month.slice(0, 3)} ${nativeAmount({ amount, currency: line.currency })}`.replaceAll(" ", "\u00a0")).join("   ·   "), width - 56, 15));
+    if (row.usd?.excludedCurrencies.length) details.push(`Missing FX: ${row.usd.excludedCurrencies.join(", ")}`);
+    for (const line of row.lines) {
+      const prefix = row.lines.length > 1 ? `${line.name} (${line.currency}): ` : "";
+      if (line.excludedFromTotals) details.push(...wrap(ctx, `${prefix}Excluded from totals${row.usd ? ` · ${nativeAmount(line)}` : ""}`, width - 56, 15));
+      if (line.formula) details.push(...wrap(ctx, `${prefix}Calculation: ${line.formula}`, width - 56, 15));
+      if (line.notes) details.push(...wrap(ctx, `${prefix}${line.notes}`, width - 56, 15));
+      if (line.dueDate) details.push(...wrap(ctx, `${prefix}Due ${date(line.dueDate)}`, width - 56, 15));
+      if (section.payable) {
+        const months = cashFlowPayableMonths(line.notes);
+        if (months.length) details.push(...wrap(ctx, months.map(({ month, amount }) =>
+          `${month.slice(0, 3)} ${nativeAmount({ amount, currency: line.currency })}`.replaceAll(" ", "\u00a0")).join("   ·   "), width - 56, 15));
+      }
     }
-    return { line, names, details, height: Math.max(34, names.length * 23 + 13) + details.length * 21 };
+    return { row, names, details, height: Math.max(34, names.length * 23 + 13) + details.length * 21 };
   });
-  const monthTotals = section.payable ? cashFlowPayableMonthTotals(section.lines) : [];
+  const monthTotals = section.payable ? cashFlowPayableMonthTotals(section.rows.flatMap(row => row.lines)) : [];
   const monthSummary = monthTotals.length ? wrap(ctx, monthTotals.map(({ month, amount, currency }) =>
     `${month.slice(0, 3)} ${nativeAmount({ amount, currency })}`.replaceAll(" ", "\u00a0")).join("   ·   "), width - 56, 15) : [];
   const height = 112 + headerExtra + (rows.length ? rows.reduce((sum, row) => sum + row.height, 0) : 38)
@@ -115,15 +126,15 @@ function drawSection(ctx: CanvasRenderingContext2D, section: Section, x: number,
   box(ctx, x + 26, y + 26, 5, 28, section.color, 2);
   layout.headings.forEach((heading, index) => text(ctx, heading, x + 44, y + 39 + index * 28, { size: 23, weight: 600 }));
   text(ctx, money(section.total), x + width - 28, y + 39, { size: 23, weight: 600, align: "right", maxWidth: width * .42 });
-  text(ctx, `${section.lines.length} ${section.lines.length === 1 ? "entry" : "entries"}${section.part ? ` · ${section.part} · Subtotal` : ""}`, x + 28, y + 77 + layout.headerExtra, { size: 14, color: palette.muted });
-  text(ctx, "NATIVE BALANCE", x + width - 28, y + 77 + layout.headerExtra, { size: 13, color: palette.muted, align: "right" });
+  text(ctx, `${section.rows.length} ${section.rows.length === 1 ? "entry" : "entries"}${section.part ? ` · ${section.part} · Subtotal` : ""}`, x + 28, y + 77 + layout.headerExtra, { size: 14, color: palette.muted });
+  text(ctx, section.usd ? "USD EQUIVALENT" : "NATIVE BALANCE", x + width - 28, y + 77 + layout.headerExtra, { size: 13, color: palette.muted, align: "right" });
   rule(ctx, x + 28, y + 94 + layout.headerExtra, width - 56);
   let rowY = y + 100 + layout.headerExtra;
   if (!layout.rows.length) text(ctx, "No entries", x + 28, rowY + 18, { color: palette.muted });
   layout.rows.forEach((row, index) => {
-    const color = row.line.excludedFromTotals ? palette.muted : palette.ink;
+    const color = rowExcluded(row.row) ? palette.muted : palette.ink;
     row.names.forEach((name, lineIndex) => text(ctx, name, x + 28, rowY + 17 + lineIndex * 23, { color }));
-    text(ctx, nativeAmount(row.line), x + width - 28, rowY + 17, { weight: 600, color, align: "right", maxWidth: width - 56 - layout.nameWidth - 24 });
+    text(ctx, rowAmount(row.row), x + width - 28, rowY + 17, { weight: 600, color, align: "right", maxWidth: width - 56 - layout.nameWidth - 24 });
     row.details.forEach((detail, index) => text(ctx, detail, x + 28, rowY + row.names.length * 23 + 17 + index * 21, { size: 15, color: palette.muted }));
     rowY += row.height;
     if (index < layout.rows.length - 1) rule(ctx, x + 28, rowY, width - 56, "#f0f3f1");
@@ -233,24 +244,36 @@ function reportSections(snapshot: CashFlowSnapshot, rates: FxRate[]): Section[] 
     ...(groups.length ? groups.map(group => ({ id: `open-${group.key}`, title: `Open balances · ${group.label}`, color: palette.openBalances, lines: group.lines }))
       : [{ id: "open", title: "Open balances", color: palette.openBalances, lines: [] }])
   ];
-  return definitions.map(section => ({ ...section, total: cashFlowUsdTotal(section.lines, rates) }));
+  return definitions.map(({ lines, ...section }) => ({
+    ...section,
+    usd: section.id === "cash",
+    rows: section.id === "cash"
+      ? cashFlowCashAccountGroups(lines).map(group => {
+        const included = group.lines.filter(line => !line.excludedFromTotals);
+        const usd = convertCurrencyTotalsToUsd(sumCurrencyTotals(included, line => line.amount), rates);
+        // Offsetting unquoted balances must not masquerade as a complete total.
+        usd.excludedCurrencies = convertCurrencyTotalsToUsd(sumCurrencyTotals(included, line => Math.abs(line.amount)), rates).excludedCurrencies;
+        return { id: group.key, name: group.name, lines: group.lines, usd };
+      })
+      : lines.map(line => ({ id: line.id, name: line.name, lines: [line] })),
+    total: cashFlowUsdTotal(lines, rates)
+  }));
 }
 
 /** Compare measured layouts rather than stretching the page around fixed columns. */
-export function planCashFlowPng(ctx: CanvasRenderingContext2D, snapshot: CashFlowSnapshot, rates: FxRate[], orientation: CashFlowReportOrientation, footer = "") {
+export function planCashFlowPng(ctx: CanvasRenderingContext2D, snapshot: CashFlowSnapshot, rates: FxRate[], footer = "") {
   const sections = reportSections(snapshot, rates);
-  const formats = orientation === "landscape"
-    ? [{ width: 2560, columns: 3 }, { width: 3200, columns: 4 }, { width: 3920, columns: 5 }, { width: 4640, columns: 6 }, { width: 6080, columns: 8 }]
-    : [{ width: 1600, columns: 2 }];
-  const candidates = formats.flatMap(({ width, columns }) => [740, 980, 1240].flatMap(maximumCardHeight => {
+  const width = 1600;
+  const columns = 2;
+  const candidates = [740, 980, 1240].flatMap(maximumCardHeight => {
     const columnWidth = (width - margin * 2 - gap * (columns - 1)) / columns;
     const chunks = sections.flatMap(section => {
-      const parts = splitCashFlowReportRows(section.lines, maximumCardHeight, lines => sectionLayout(ctx, { ...section, lines, total: cashFlowUsdTotal(lines, rates) }, columnWidth).height);
-      return parts.map((lines, index) => ({ ...section, id: `${section.id}:${index}`, lines, total: cashFlowUsdTotal(lines, rates),
+      const parts = splitCashFlowReportRows(section.rows, maximumCardHeight, rows => sectionLayout(ctx, { ...section, rows, total: rowsTotal(rows, rates) }, columnWidth).height);
+      return parts.map((rows, index) => ({ ...section, id: `${section.id}:${index}`, rows, total: rowsTotal(rows, rates),
         part: parts.length > 1 ? `Part ${index + 1}/${parts.length}` : undefined }));
     });
     const details = chunks.map(section => ({ id: section.id, height: sectionLayout(ctx, section, columnWidth).height, span: 1, preferRight: section.id.startsWith("open") }));
-    const trend = { id: "trend", span: 2, height: Math.max(470, Math.ceil(width * (orientation === "portrait" ? .325 : .15))) };
+    const trend = { id: "trend", span: 2, height: Math.max(470, Math.ceil(width * .325)) };
     const composition = { id: "composition", span: 1, height: Math.max(380, Math.ceil(width * .12)) };
     const growth = { id: "growth", span: 1, height: 158 };
     const open = details.filter(card => card.preferRight && card.id.endsWith(":0")).sort((a, b) => b.height - a.height);
@@ -270,19 +293,19 @@ export function planCashFlowPng(ctx: CanvasRenderingContext2D, snapshot: CashFlo
       const packed = packCashFlowReportCards(order, columns, columnWidth, gap);
       const footers = wrap(ctx, [snapshot.notes, footer].filter(Boolean).join("\n"), width - margin * 2 - 170, 14);
       const contentHeight = bodyTop + packed.height + 42 + footers.length * 21 + 25;
-      const height = Math.max(orientation === "portrait" ? Math.ceil(width / .78) : 1360, contentHeight);
+      const height = Math.max(Math.ceil(width / .78), contentHeight);
       // Prefer intact company groups and familiar reading order when the space
       // savings from splitting or moving charts first would be negligible.
       const readabilityCost = 1 + (chunks.length - sections.length) * .06 + (order.indexOf(trend) < order.indexOf(primary[0]) ? .02 : 0);
       return { width, height, columnWidth, placements: packed.placements, sections: chunks, footers,
-        score: cashFlowReportLayoutScore(width, height, orientation) * readabilityCost };
+        score: height * readabilityCost };
     });
-  }));
+  });
   return candidates.reduce((best, candidate) => candidate.score < best.score ? candidate : best);
 }
 
 /** Render to a supplied canvas so the downloaded artifact and visual QA use the same path. */
-export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[], orientation: CashFlowReportOrientation) {
+export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]) {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("PNG export could not create an image canvas.");
   const totals = cashFlowSnapshotTotals(snapshot, rates);
@@ -291,11 +314,11 @@ export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowS
     // Absolute amounts keep offsetting balances from concealing a missing quote.
     result[line.currency] = (result[line.currency] ?? 0) + Math.abs(line.amount); return result;
   }, {}), rates);
-  const footer = ["Totals in USD equivalent · Detail balances in original currencies",
+  const footer = ["Totals and cash accounts in USD equivalent · Other detail balances in original currencies",
     fx.asOf ? `FX quotes as of ${date(fx.asOf.slice(0, 10))}` : "",
     fx.excludedCurrencies.length ? `Unconverted currencies excluded: ${fx.excludedCurrencies.join(", ")}` : "",
     fx.staleCurrencies.length ? `Stale FX: ${fx.staleCurrencies.join(", ")}` : ""].filter(Boolean).join("   /   ");
-  const plan = planCashFlowPng(ctx, snapshot, rates, orientation, footer);
+  const plan = planCashFlowPng(ctx, snapshot, rates, footer);
   const { width, height, columnWidth, footers } = plan;
   // Keep unusually large snapshots within browser canvas memory limits.
   const scale = Math.min(2, Math.sqrt(32_000_000 / (width * height)), 16000 / width, 16000 / height);
@@ -345,32 +368,26 @@ export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowS
   return plan;
 }
 
-/** Build both images before starting the single download. PNGs are already compressed. */
-export async function buildCashFlowPngArchive(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]): Promise<Blob> {
+/** Render one portrait image before starting the direct PNG download. */
+export async function buildCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]): Promise<Blob> {
   await document.fonts.load(`500 18px ${font}`);
   await document.fonts.load(`600 23px ${font}`);
-  const { zipSync } = await import("fflate");
-  const files: Record<string, Uint8Array> = {};
-  for (const orientation of ["landscape", "portrait"] as const) {
-    // Let the browser paint the exporting state before measuring each layout.
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    const canvas = document.createElement("canvas");
-    try {
-      renderCashFlowPng(canvas, snapshot, history, rates, orientation);
-      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => {
-        if (value) resolve(value); else reject(new Error(`Could not encode the ${orientation} PNG.`));
-      }, "image/png"));
-      files[`cash-flow-${snapshot.asOfDate}-${orientation}.png`] = new Uint8Array(await blob.arrayBuffer());
-    } finally { canvas.width = 1; canvas.height = 1; }
-  }
-  return new Blob([new Uint8Array(zipSync(files, { level: 0 }))], { type: "application/zip" });
+  // Let the browser paint the exporting state before measuring the layout.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  const canvas = document.createElement("canvas");
+  try {
+    renderCashFlowPng(canvas, snapshot, history, rates);
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => {
+      if (value) resolve(value); else reject(new Error("Could not encode the portrait PNG."));
+    }, "image/png"));
+  } finally { canvas.width = 1; canvas.height = 1; }
 }
 
-export async function downloadCashFlowPngs(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]) {
-  const blob = await buildCashFlowPngArchive(snapshot, history, rates);
+export async function downloadCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]) {
+  const blob = await buildCashFlowPng(snapshot, history, rates);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.download = `cash-flow-${snapshot.asOfDate}-pngs.zip`; link.href = url;
+  link.download = `cash-flow-${snapshot.asOfDate}-portrait.png`; link.href = url;
   document.body.appendChild(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }

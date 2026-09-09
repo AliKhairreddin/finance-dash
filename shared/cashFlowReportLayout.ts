@@ -1,4 +1,3 @@
-export type CashFlowReportOrientation = "landscape" | "portrait";
 export type ReportCardSize = { id: string; height: number; span: number; preferRight?: boolean };
 export type ReportCardPlacement = ReportCardSize & { column: number; y: number; width: number };
 
@@ -49,11 +48,4 @@ export function splitCashFlowReportRows<T>(rows: T[], maximumHeight: number, mea
     }
   }
   return chunks;
-}
-
-export function cashFlowReportLayoutScore(width: number, height: number, orientation: CashFlowReportOrientation) {
-  const ratio = width / height;
-  const target = orientation === "landscape" ? 1.65 : 0.72;
-  const wrongOrientation = orientation === "landscape" ? ratio < 1.2 : ratio > 0.85;
-  return width * height * (1 + Math.abs(Math.log(ratio / target)) * 0.7 + (wrongOrientation ? 5 : 0));
 }

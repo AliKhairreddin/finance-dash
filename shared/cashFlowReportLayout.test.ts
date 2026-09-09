@@ -3,7 +3,7 @@ import test from "node:test";
 import { packCashFlowReportCards, splitCashFlowReportRows } from "./cashFlowReportLayout";
 import { planCashFlowPng } from "../src/features/cash-flow/exportCashFlowPng";
 import { cashFlowSections, cashFlowUsdTotal } from "./cashFlowReport";
-import type { CashFlowLine, CashFlowSnapshot } from "./types";
+import type { CashFlowLine, CashFlowSnapshot, FxRate } from "./types";
 
 test("packing reserves space for charts beside tall cards without overlap", () => {
   const result = packCashFlowReportCards([
@@ -38,6 +38,63 @@ const snapshot = (patch: Partial<CashFlowSnapshot> = {}): CashFlowSnapshot => ({
 // separately checked using the browser-generated PNGs.
 const context = { font: "", measureText: (value: string) => ({ width: value.length * 10 }) } as CanvasRenderingContext2D;
 
+test("cash export converts and consolidates each provider while keeping Wise entities and source details separate", () => {
+  const cashAccounts: CashFlowLine[] = [
+    { id: "cash-flow-account-wise-1-1", name: "Digital nudge OÜ · Wise EUR", amount: 100, currency: "EUR", notes: "Operating reserve", formula: "=50+50" },
+    { id: "cash-flow-account-wise-1-2", name: "Digital nudge OÜ · Wise USD", amount: 20, currency: "USD" },
+    { id: "cash-flow-account-wise-1-3", name: "Digital nudge OÜ · Wise GBP", amount: -10, currency: "GBP" },
+    { id: "cash-flow-account-wise-2-1", name: "LOVEMEDO B.V. · Wise USD", amount: 7, currency: "USD" },
+    { id: "cash-flow-account-wise-2-2", name: "LOVEMEDO B.V. · Wise EUR", amount: 900, currency: "EUR", excludedFromTotals: true },
+    { id: "cash-flow-account-revolut-eur", name: "Main", amount: 10, currency: "EUR" },
+    { id: "cash-flow-account-revolut-usd", name: "WGNR", amount: 8, currency: "USD" },
+    { id: "cash-flow-account-slash-cash", name: "Business Platinum Cash", amount: 15, currency: "USD" },
+    { id: "manual-eur", name: "Kraken EUR", amount: 5, currency: "EUR" },
+    { id: "manual-usd", name: "Kraken USD", amount: 4, currency: "USD" }
+  ];
+  const rates: FxRate[] = [
+    { asset: "EUR", rateUsd: 1.2, provider: "coinbase", asOf: "2026-09-07" },
+    { asset: "GBP", rateUsd: 1.3, provider: "coinbase", asOf: "2026-09-07" }
+  ];
+  const original = structuredClone(cashAccounts);
+  const plan = planCashFlowPng(context, snapshot({ cashAccounts }), rates);
+  const cash = plan.sections.filter(section => section.id.startsWith("cash:"));
+  const rows = cash.flatMap(section => section.rows);
+  assert.deepEqual(rows.map(row => [row.name, row.usd?.totalUsd]), [
+    ["Wise DN", 127], ["Wise LMD", 7], ["Revolut", 20], ["Slash", 15], ["Kraken", 10]
+  ]);
+  assert.deepEqual(rows.flatMap(row => row.lines), cashAccounts);
+  assert.equal(cash.reduce((sum, section) => sum + section.total, 0), 179);
+  assert.deepEqual(cashAccounts, original);
+  assert.ok(cash.every(section => section.usd));
+});
+
+test("cash export recognizes manual entity labels and keeps unrelated accounts separate", () => {
+  const input = snapshot({ cashAccounts: [
+    { ...row("a", "Wise · DN"), amount: 20 },
+    { ...row("b", "Wise DN EUR"), amount: 10, currency: "EUR" },
+    { ...row("c", "Wise LMD"), amount: 5 },
+    row("d", "Slash"), row("e", "Slash cashback"), row("f", "Other treasury")
+  ] });
+  const plan = planCashFlowPng(context, input, [{ asset: "EUR", rateUsd: 1.2, provider: "coinbase", asOf: "2026-09-07" }]);
+  const rows = plan.sections.filter(section => section.id.startsWith("cash:")).flatMap(section => section.rows);
+  assert.deepEqual(rows.map(row => row.name), ["Wise DN", "Wise LMD", "Slash", "Slash cashback", "Other treasury"]);
+  assert.equal(rows[0].usd?.totalUsd, 32);
+});
+
+test("cash export flags missing rates even for offsetting balances and excludes unchecked currencies", () => {
+  const input = snapshot({ cashAccounts: [
+    { ...row("a", "Wise DN"), amount: 20 },
+    { ...row("b", "Wise DN EUR"), amount: 10, currency: "EUR" },
+    { ...row("c", "Wise DN EUR"), amount: -10, currency: "EUR" },
+    { ...row("d", "Wise DN GBP"), amount: 50, currency: "GBP", excludedFromTotals: true }
+  ] });
+  const plan = planCashFlowPng(context, input, []);
+  const rows = plan.sections.filter(section => section.id.startsWith("cash:")).flatMap(section => section.rows);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].usd?.excludedCurrencies, ["EUR"]);
+  assert.equal(rows[0].lines.length, 4);
+});
+
 for (const [name, input] of Object.entries({
   empty: snapshot(),
   "long open balances": snapshot({
@@ -50,11 +107,11 @@ for (const [name, input] of Object.entries({
     openBalances: Array.from({ length: 60 }, (_, index) => row(`open-${index}`, `${"Long advertising account ".repeat(7)}-cog`))
   })
 })) {
-  for (const orientation of ["landscape", "portrait"] as const) test(`${name}: ${orientation} preserves all rows, orientation, chart area, and subtotals`, () => {
-    const plan = planCashFlowPng(context, input, [], orientation);
-    assert.equal(plan.width > plan.height, orientation === "landscape");
+  test(`${name}: portrait preserves all source rows, chart area, and subtotals`, () => {
+    const plan = planCashFlowPng(context, input, []);
+    assert.ok(plan.width < plan.height);
     const expected = cashFlowSections.flatMap(key => input[key]);
-    const actual = plan.sections.flatMap(section => section.lines);
+    const actual = plan.sections.flatMap(section => section.rows.flatMap(row => row.lines));
     assert.deepEqual(actual.map(item => item.id).sort(), expected.map(item => item.id).sort());
     assert.equal(plan.sections.reduce((sum, section) => sum + section.total, 0), cashFlowUsdTotal(expected, []));
     assert.ok(plan.placements.find(card => card.id === "trend")!.height >= 470);

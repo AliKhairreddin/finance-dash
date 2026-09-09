@@ -1,8 +1,35 @@
 import { convertCurrencyTotalsToUsd } from "./currencyTotals";
 import type { CashFlowLine, CashFlowSnapshot, CurrencyTotals, FxRate } from "./types";
+import { wiseEntityFromAccountName, wiseEntityShortLabel } from "./wiseEntities";
 
 export const cashFlowSections = ["cashAccounts", "receivables", "openBalances", "payables", "investments"] as const;
 type Position = Pick<CashFlowSnapshot, (typeof cashFlowSections)[number]>;
+
+/** Group only the exported cash rows; keep every source balance for conversion,
+ * exclusions and notes, and keep the two Wise entities separate. */
+export function cashFlowCashAccountGroups(lines: CashFlowLine[]): Array<{ key: string; name: string; lines: CashFlowLine[] }> {
+  const groups = new Map<string, { key: string; name: string; lines: CashFlowLine[] }>();
+  for (const line of lines) {
+    let name = line.name.trim().replace(/\s+/g, " ");
+    const words = name.split(" ");
+    if (words.length > 1 && words.at(-1)?.toUpperCase() === line.currency.trim().toUpperCase()) {
+      name = words.slice(0, -1).join(" ").replace(/[\s·–—-]+$/, "");
+    }
+    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex)-/)?.[1];
+    if (source === "wise" || /\bwise\b/i.test(name)) {
+      const entity = wiseEntityFromAccountName(name);
+      const shortEntity = name.match(/^wise[\s·–—-]+(dn|lmd)$/i)?.[1].toUpperCase();
+      if (entity || shortEntity) name = `Wise ${entity ? wiseEntityShortLabel(entity) : shortEntity}`;
+    } else if (source) {
+      name = { revolut: "Revolut", slash: "Slash", amex: "Amex" }[source]!;
+    }
+    const key = name ? name.toLowerCase() : line.id;
+    const group = groups.get(key);
+    if (group) group.lines.push(line);
+    else groups.set(key, { key, name, lines: [line] });
+  }
+  return [...groups.values()];
+}
 
 export function cashFlowUsdTotal(lines: CashFlowLine[], rates: FxRate[]): number {
   const totals = lines.filter((item) => !item.excludedFromTotals).reduce<CurrencyTotals>((result, item) => {
