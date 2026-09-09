@@ -9,7 +9,12 @@ interface BrowserRun {
 	quickAction(
 		name: "screenshot",
 		options: {
-			url: string;
+			url?: string;
+			html?: string;
+			addScriptTag?: Array<{ content: string }>;
+			waitForSelector?: { selector: string; timeout?: number };
+			selector?: string;
+			cacheTTL?: number;
 			cookies?: Array<{
 				name: string;
 				value: string;
@@ -74,6 +79,7 @@ interface ExportedHandler<Env> {
 	scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
 }
 interface __BaseEnv_WorkerEnv {
+  PARTNER_UPDATES: DurableObjectNamespace<import("./worker/index").PartnerUpdates>;
   DOCUMENT_AI_MODEL: string;
   TELEGRAM_INBOX: DurableObjectNamespace<import("./worker/index").TelegramInbox>;
 	ASSETS: Fetcher;
@@ -153,7 +159,7 @@ interface __BaseEnv_WorkerEnv {
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./worker/index");
-		durableNamespaces: "TelegramOtpState";
+		durableNamespaces: "PartnerUpdates" | "TelegramInbox" | "TelegramOtpState";
 	}
 	interface Env extends __BaseEnv_WorkerEnv {}
 }

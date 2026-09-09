@@ -2388,12 +2388,13 @@ function App() {
       )}
 
       {activeTab === "cash-flow" && (
-        <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} />
+        <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} canShareUpdates={["ali", "ali m"].includes(session?.username.trim().toLowerCase() ?? "")} />
       )}
 
       {activeTab === "cash-flow-invoices" && (
         <CashFlowOpenInvoicesView
           dashboard={dashboard}
+          canShareUpdates={["ali", "ali m"].includes(session?.username.trim().toLowerCase() ?? "")}
           onCreateManualReceivable={createManualReceivable}
           onUpdateManualReceivable={updateManualReceivable}
           onDeleteOpenItems={deleteOpenItems}

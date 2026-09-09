@@ -16,7 +16,7 @@
     "revolut:setup": "tsx scripts/setup-revolut.ts",
     "ledger:cutover": "tsx scripts/migrate-bank-ledger.ts",
     "ledger:verify": "tsx scripts/verify-bank-ledger.ts",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build --config vite.partner-report.config.ts",
     "convex:dev": "convex dev --once --env-file .env.local",
     "test": "tsx --test server/*.test.ts shared/*.test.ts worker/*.test.ts",
     "check": "npm run lint && npm test && npm run build",

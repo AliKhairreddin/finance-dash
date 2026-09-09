@@ -1,4 +1,6 @@
 import { pendingInvoices } from "../shared/pendingInvoices";
+import { buildPartnerReportData, canSharePartnerUpdates } from "../shared/partnerUpdates";
+import { partnerRecipients, partnerSender } from "./partnerUpdateDelivery";
 import { fetchSlashDailyCardActivity } from "../shared/slashApi";
 import { buildTelegramSlashReport } from "./telegramSlashReport";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
@@ -6994,6 +6996,15 @@ function analyticsCategoryCompaniesOptions(url: URL): {
   };
 }
 
+async function getPartnerReportData(env: Env) {
+  const state = await loadPersisted(env);
+  return buildPartnerReportData({
+    asOf: new Date().toISOString(), cashFlowSnapshots: state.cashFlowSnapshots, fxRates: state.fxRates,
+    invoices: assignMeritStyleDraftNumbers(state.invoices), paymentAllocations: state.paymentAllocations,
+    providers: state.providers, receivables: state.manualReceivables
+  });
+}
+
 async function handleApi(
   request: Request,
   env: Env,
@@ -7002,6 +7013,27 @@ async function handleApi(
   const url = new URL(request.url);
 
   try {
+    if (url.pathname.startsWith("/api/partner-updates")) {
+      const session = await getDashboardSession(request, env);
+      if (!session || session.role !== "administrator" || !canSharePartnerUpdates(session.username)) throw new ApiError(403, "Partner sharing is available to Ali and Ali M only.");
+      partnerSender(env, session.username);
+      if (url.pathname === "/api/partner-updates" && request.method === "GET") return json({ recipients: partnerRecipients(env).map(user => user.username) });
+      const match = url.pathname.match(/^\/api\/partner-updates\/([a-f0-9-]{36})(\/retry)?$/);
+      if (!match) throw new ApiError(404, "Partner update was not found.");
+      const job = env.PARTNER_UPDATES.getByName(match[1]);
+      if (request.method === "GET" && !match[2]) {
+        const status = await job.status();
+        if (!status) throw new ApiError(404, "Partner update was not found.");
+        return json(status);
+      }
+      if (request.method !== "POST") throw new ApiError(405, "Method not allowed.");
+      if (request.headers.get("Origin") !== url.origin) throw new ApiError(403, "Open partner sharing from this website.");
+      if (match[2]) return json(await job.retry(session.username), { status: 202 });
+      const existing = await job.status();
+      if (existing) return json(existing);
+      partnerRecipients(env);
+      return json(await job.start(match[1], session.username, await getPartnerReportData(env)), { status: 202 });
+    }
     const documentResponse = await handleDocumentApi(request, env);
     if (documentResponse) return documentResponse;
 
@@ -7769,7 +7801,7 @@ function telegramMenu(role: TelegramCommandRole): string {
   const optional = commands.filter((item) => item.input === "optional").map((item) => `/${item.command}`);
   const details = commands.filter((item) => item.input === "required" && item.access === "read")
     .map((item) => item.command);
-  const actions = commands.filter((item) => item.access === "action").map((item) => item.command);
+  const actions = commands.filter((item) => item.access === "action" && item.input === "required").map((item) => item.command);
   return [
     "📊 Finance Dash commands",
     `Access: ${role === "administrator" ? "Full administrator" : "CEO read-only"}`,
@@ -8600,6 +8632,14 @@ export async function handleTelegramCommand(
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
       if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
+      if (command === "share_updates") {
+        if (args) throw new ApiError(400, "Use /share_updates to send cash flow and open invoices to Amin, Sani, Ben, Ali, and Ali M.");
+        partnerSender(env, user.username);
+        partnerRecipients(env);
+        const id = crypto.randomUUID();
+        await env.PARTNER_UPDATES.getByName(id).start(id, user.username, await getPartnerReportData(env));
+        return `Preparing cash-flow and open-invoice PNGs for Amin, Sani, Ben, Ali, and Ali M. I’ll send you the delivery results.\n\n${new URL(`/?page=cash-flow&partnerUpdate=${id}`, env.PUBLIC_APP_URL)}`;
+      }
       if (definition.input === "required" && !args) return telegramMissingInput(definition);
       return telegramBoundedText(await telegramActionCommand(env, command, args));
     }

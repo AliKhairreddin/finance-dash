@@ -17,7 +17,7 @@ media_spend provider_funds distribution management companies teams health sync c
 assign_team create_invoice edit_invoice duplicate_invoice delete_draft match_invoice record_payment
 send_invoice create_expense upload_receipt match_expense add_receivable add_holding update_holding
 save_cashflow alerts alert_add alert_remove alert_pause alert_resume alert_test alert_history digest
-screenshot open pending_invoices slash_report
+screenshot open pending_invoices slash_report share_updates
 `.trim().split(/\s+/u).sort();
 
 test("Telegram catalog contains every requested command exactly once", () => {
@@ -50,7 +50,8 @@ test("every command declares whether it is one-tap, optional, or requires detail
   assert.equal(financeTelegramCommands.find(({ command }) => command === "overview")?.input, "tap");
   assert.equal(financeTelegramCommands.find(({ command }) => command === "transactions")?.input, "optional");
   assert.equal(financeTelegramCommands.find(({ command }) => command === "search")?.input, "required");
-  assert.equal(financeTelegramCommands.filter(({ access }) => access === "action").every(({ input }) => input === "required"), true);
+  assert.equal(financeTelegramCommands.filter(({ access, command }) => access === "action" && command !== "share_updates").every(({ input }) => input === "required"), true);
+  assert.equal(financeTelegramCommands.find(({ command }) => command === "share_updates")?.input, "tap");
 });
 
 test("Telegram role lists normalize whitespace and reject duplicates", () => {

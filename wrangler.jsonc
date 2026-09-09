@@ -15,6 +15,7 @@
   },
   "durable_objects": {
     "bindings": [
+      { "name": "PARTNER_UPDATES", "class_name": "PartnerUpdates" },
       { "name": "TELEGRAM_INBOX", "class_name": "TelegramInbox" },
       {
         "name": "TELEGRAM_OTP_STATE",
@@ -23,6 +24,7 @@
     ]
   },
   "exports": {
+    "PartnerUpdates": { "type": "durable-object", "storage": "sqlite" },
     "TelegramInbox": { "type": "durable-object", "storage": "sqlite" },
     "TelegramOtpState": {
       "type": "durable-object",

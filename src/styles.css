@@ -10156,6 +10156,11 @@ body {
   display: inline-flex;
 }
 
+.partner-update-source > .note-popover {
+  position: static;
+  display: inline-flex;
+}
+
 .note-popover-positioner {
   z-index: 500;
 }

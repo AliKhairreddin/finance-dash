@@ -20,6 +20,7 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "cash", description: "Show bank cash, Slash accounts and Bitcoin value", access: "read", input: "tap" },
   { command: "balances", description: "Show bank and asset balances", access: "read", input: "optional", arguments: "[all|slash|wise|revolut|amex|holdings]", example: "/balances slash" },
   { command: "cashflow", description: "Show cash-flow totals", access: "read", input: "tap" },
+  { command: "share_updates", description: "Send cash-flow + invoice PNGs to partners and both Alis", access: "action", input: "tap" },
   { command: "receivables", description: "Show current receivables", access: "read", input: "tap" },
   { command: "payables", description: "Show current payables", access: "read", input: "tap" },
   { command: "holdings", description: "Show cash, exchange, and wallet holdings", access: "read", input: "tap" },

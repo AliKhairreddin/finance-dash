@@ -276,6 +276,40 @@ export async function sendTelegramDocument(
   if (!response.ok || !envelope?.ok) throw new Error("Telegram sendDocument request failed");
 }
 
+export class TelegramDeliveryError extends Error {
+  constructor(message: string, readonly unconfirmed: boolean) { super(message); }
+}
+
+/** One album per recipient keeps the exact two exported PNGs together, without image compression. */
+export async function sendTelegramImageAlbum(
+  env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
+  chatId: string,
+  documents: TelegramCommandDocument[]
+): Promise<void> {
+  if (documents.length !== 2 || documents.some(document => document.contentType !== "image/png"
+    || !document.bytes.byteLength || document.bytes.byteLength > TELEGRAM_DOCUMENT_LIMIT_BYTES
+    || (document.caption?.length ?? 0) > 1024)) throw new TelegramDeliveryError("Report images are invalid or exceed 10 MB.", false);
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  form.set("protect_content", "true");
+  form.set("media", JSON.stringify(documents.map((document, index) => ({
+    type: "document", media: `attach://report${index}`, caption: document.caption, disable_content_type_detection: true
+  }))));
+  documents.forEach((document, index) => form.set(`report${index}`, new Blob([document.bytes], { type: "image/png" }), document.fileName));
+  let response: Response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMediaGroup`, {
+      method: "POST", body: form, signal: AbortSignal.timeout(30_000)
+    });
+  } catch { throw new TelegramDeliveryError("Telegram did not confirm delivery. Check the chat before resending.", true); }
+  let envelope: TelegramApiEnvelope | null = null;
+  try { envelope = telegramApiEnvelope(await readBoundedResponseJson(response)); } catch { /* An unreadable result may already have delivered. */ }
+  if (envelope?.ok === false) throw new TelegramDeliveryError("Telegram rejected the images. Check that this recipient has started the bot.", false);
+  if (!response.ok || !envelope?.ok || !Array.isArray(envelope.result) || envelope.result.length !== documents.length) {
+    throw new TelegramDeliveryError("Telegram did not confirm both images. Check the chat before resending.", true);
+  }
+}
+
 export function buildTelegramOtpMessage(chatId: string, code: string): TelegramOtpMessagePayload {
   if (!/^[0-9]{6}$/u.test(code)) throw new Error("Telegram OTP was invalid");
   const text = `${code} — your Finance Dash sign-in code.\nExpires in 5 minutes. If you didn’t request it, ignore this message.`;

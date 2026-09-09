@@ -29,6 +29,7 @@ import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { useUrlState } from "@/lib/url-state";
 import { cashFlowSnapshotTotals as snapshotTotals, cashFlowUsdTotal as usdTotal } from "../../../shared/cashFlowReport";
 import { downloadCashFlowPng } from "./exportCashFlowPng";
+import { SharePartnerUpdate } from "../partner-updates/SharePartnerUpdate";
 import { financeOperatingDate } from "../../../shared/operatingDate";
 import { invoiceOutstanding, isLiquidAccountBalance } from "../../../shared/income";
 import type {
@@ -329,9 +330,11 @@ function CompositionChart({ snapshot, rates }: { snapshot: Pick<CashFlowSnapshot
 
 export function CashFlowPositionView({
   dashboard,
+  canShareUpdates,
   onSave
 }: {
   dashboard: DashboardSnapshot;
+  canShareUpdates: boolean;
   onSave: (payload: SaveCashFlowSnapshotPayload) => Promise<CashFlowSnapshot>;
 }) {
   const [selectedSnapshotId, setSelectedSnapshotId] = useUrlState("cashFlowSnapshot", "live");
@@ -427,6 +430,7 @@ export function CashFlowPositionView({
           <Input disabled={saving} aria-label="Cash flow date" type="date" value={draft.asOfDate} max={financeOperatingDate()} onChange={(event) => setDraft((current) => ({ ...current, asOfDate: event.target.value }))} />
           <Button className="icon-text-button" type="button" disabled={saving} onClick={() => { dirtySections.current.clear(); setSelectedSnapshotId("live"); setDraft(liveCashFlowDraft(dashboard)); }}><RefreshCw size={15} /> Use live values</Button>
           <Button className="icon-text-button" type="button" title="Download portrait PNG" disabled={exporting || !draft.asOfDate || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNG</Button>
+          {canShareUpdates && <SharePartnerUpdate />}
           <Button className="primary-button" type="button" disabled={saving || !draft.asOfDate || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void save()}>{saving ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save all</Button>
         </div>
       </section>
@@ -484,6 +488,7 @@ type OpenReceivableRow = {
 
 export function CashFlowOpenInvoicesView({
   dashboard,
+  canShareUpdates,
   onCreateManualReceivable,
   onUpdateManualReceivable,
   onDeleteOpenItems,
@@ -491,6 +496,7 @@ export function CashFlowOpenInvoicesView({
   onUpdateInvoice
 }: {
   dashboard: DashboardSnapshot;
+  canShareUpdates: boolean;
   onCreateManualReceivable: (payload: CreateManualReceivablePayload) => Promise<void>;
   onUpdateManualReceivable: (id: string, payload: CreateManualReceivablePayload) => Promise<void>;
   onDeleteOpenItems: (ids: string[]) => Promise<void>;
@@ -621,6 +627,7 @@ export function CashFlowOpenInvoicesView({
         <div><p className="eyebrow">Cash Flow</p><h1>Open invoices</h1></div>
         <div className="cash-flow-topbar-actions">
           <Button className="icon-text-button" type="button" disabled={!visibleRows.length} onClick={exportRows}><Download size={15} /> {selectedRows.length ? `Export selected (${selectedRows.length})` : "Export all"}</Button>
+          {canShareUpdates && <SharePartnerUpdate />}
           <Button className="icon-text-button destructive-icon-button" type="button" disabled={!selectedRows.length || Boolean(deletionReason) || selectedRows.length > 200} onClick={() => setDeleteRows(selectedRows)}><Trash2 size={15} /> Delete selected{selectedRows.length ? ` (${selectedRows.length})` : ""}</Button>
           {deletionReason && <InfoPopover label="Why these items cannot be deleted">{deletionReason}</InfoPopover>}
 
