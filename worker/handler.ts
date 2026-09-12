@@ -1,3 +1,4 @@
+import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
 import { pendingInvoices } from "../shared/pendingInvoices";
 import { buildPartnerReportData, canSharePartnerUpdates } from "../shared/partnerUpdates";
 import { partnerRecipients, partnerSender } from "./partnerUpdateDelivery";
@@ -163,9 +164,8 @@ import {
 } from "../shared/slashApi";
 import {
   emptyWiseActivity,
-  fetchWiseActivityBatch,
+  fetchWiseBalancesForAccessibleBusinesses,
   parseWiseProfileIds,
-  summarizeWiseStatementIssues,
   type WiseActivityResult
 } from "../shared/wiseApi";
 import {
@@ -417,7 +417,7 @@ async function bankStorageConnectionDirectory(env: Env): Promise<Array<{
 
 function bankSourceConfigured(env: Env, source: BankTransactionSource): boolean {
   if (source === "wise") {
-    return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim());
+    return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim() && env.ZOHO_CLIENT_ID?.trim() && env.ZOHO_CLIENT_SECRET?.trim() && env.ZOHO_REFRESH_TOKEN?.trim());
   }
   if (source === "revolut") {
     return Boolean(
@@ -3167,7 +3167,7 @@ function integrationStatus(
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
 ): IntegrationStatus[] {
-  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !env[name as keyof Env]);
+  const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS", "ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN"].filter((name) => !env[name as keyof Env]);
   const wiseBalanceIssue = wiseNeeds.length === 0 ? bankIssues.wise ?? wiseActivity?.balanceIssue : undefined;
 
   const revolutNeeds = [
@@ -3213,8 +3213,8 @@ function integrationStatus(
       message:
         wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Balances and transactions are saved in Convex and refreshed incrementally every 5 minutes or on Sync."
-          : "Wise rows stay empty until an API token and selected profile IDs are configured."),
+          ? "Wise balances refresh every 5 minutes. Zoho transaction feeds sync daily, with repeat pulls checked by statement ID."
+          : "Configure Wise balance access and Zoho API credentials to sync these accounts."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
     },
@@ -3320,6 +3320,7 @@ function wiseImportId(payload: ImportWiseStatementPayload): string {
 
 async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload): Promise<ImportWiseStatementResult> {
   const state = await loadPersisted(env);
+  rejectZohoWiseCsvOverlap(payload);
   validateWiseStatementImportPayload(payload, state.wiseStatementImports);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
   const stored = await upsertLedgerTransactions(env, "wise", importedTransactions);
@@ -3759,57 +3760,48 @@ async function syncSlashActivity(
   });
 }
 
-async function syncWiseActivity(
+export async function syncWiseActivity(
   env: Env,
-  requestedRange?: SlashTransactionDateRange,
-  laneKey = "live",
-  pageBudget = 10
+  requestedRange?: SlashTransactionDateRange
 ): Promise<boolean> {
+  if (requestedRange && requestedRange.fromDate < zohoWiseStartDate) {
+    throw new Error(`Wise API coverage begins ${zohoWiseStartDate}; earlier CSV history is preserved`);
+  }
   const connectionKey = await requireBankConnectionKey(env, "wise");
   return withBankSyncLease(env, "wise", connectionKey, async (lease) => {
-    const storedCheckpoint = await bankSyncCheckpoint(env, "wise", connectionKey, laneKey);
-    if (
-      storedCheckpoint
-      && requestedRange
-      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
-    ) return false;
-    const range = storedCheckpoint
-      ?? requestedRange
-      ?? incrementalBankDateRange(await bankSyncState(env, "wise", connectionKey));
-    const activity = await fetchWiseActivityBatch({
-      baseUrl: wiseBaseUrl(env),
-      token: env.WISE_API_TOKEN,
-      profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS),
-      ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
-      pageBudget,
-      collectTransactions: false,
-      onAccountsDiscovered: async (accounts) => {
-        await registerDiscoveredBankAccountSet(
-          env,
-          "wise",
-          laneKey,
-          storedCheckpoint,
-          accounts,
-          lease
-        );
-      },
-      onTransactionPage: async (transactions) => {
-        await upsertSyncedLedgerTransactions(env, "wise", transactions, lease);
-      }
+    const balances = await fetchWiseBalancesForAccessibleBusinesses({
+      baseUrl: wiseBaseUrl(env), token: env.WISE_API_TOKEN,
+      profileIds: parseWiseProfileIds(env.WISE_PROFILE_IDS)
     });
-    await persistCheckpointedBankSync(
-      env,
-      "wise",
-      range,
-      laneKey,
-      storedCheckpoint?.checkpoint ?? null,
-      storedCheckpoint?.accountIds ?? null,
-      lease,
-      activity
-    );
-    const statementIssue = summarizeWiseStatementIssues(activity.statementIssues);
-    if (statementIssue) throw new Error(statementIssue);
-    return activity.complete;
+    await persistBankAccountSnapshot(env, "wise", balances.accounts, lease);
+    const state = await bankSyncState(env, "wise", connectionKey);
+    if (!requestedRange && state && Date.now() - Date.parse(state.lastSyncedAt) < 24 * 3600_000) return true;
+    // Fetch and validate every page before touching the ledger. Always revisit
+    // the cutover window so late-posted rows are picked up without duplicates.
+    const activity = await fetchZohoWiseActivity(env);
+    for (const accountId of activity.accountIds) {
+      if (!balances.accounts.some((account) => account.id === accountId)) {
+        throw new Error(`Zoho account mapping ${accountId} is absent from Wise`);
+      }
+    }
+    if (balances.accounts.some((account) => !activity.accountIds.includes(account.id))) {
+      throw new Error("A Wise balance is not connected to Zoho; connect and map every balance before syncing transactions");
+    }
+    await registerDiscoveredBankAccountSet(env, "wise", "live", null, balances.accounts, lease);
+    const counts = await upsertSyncedLedgerTransactions(env, "wise", activity.transactions, lease);
+    if (activity.throughDate >= zohoWiseStartDate) {
+      await lease.renew();
+      await getConvexClient(env).mutation(api.banking.completeSync, {
+        serviceToken: getConvexServiceToken(env), source: "wise", connectionKey,
+        fromDate: zohoWiseStartDate, toDate: activity.throughDate,
+        syncedAt: new Date().toISOString(), accountIds: activity.accountIds,
+        leaseToken: lease.token, leaseFence: lease.fence
+      });
+    }
+    console.log(JSON.stringify({ event: "zoho_wise_sync_completed", ...counts,
+      statements: activity.transactions.length, pages: activity.pagesFetched,
+      coveredThrough: activity.throughDate }));
+    return !requestedRange || requestedRange.toDate <= activity.throughDate;
   });
 }
 
@@ -3892,8 +3884,8 @@ async function syncLatestBankActivity(
   const laneKey = options.dateRange
     ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
     : "live";
-  if (includes("wise") && env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim()) {
-    jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange, laneKey) });
+  if (includes("wise") && bankSourceConfigured(env, "wise")) {
+    jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange) });
   }
   if (
     includes("revolut")
@@ -4110,7 +4102,7 @@ async function syncBankSourceRange(
   range: SlashTransactionDateRange,
   laneKey: string
 ): Promise<boolean> {
-  if (source === "wise") return syncWiseActivity(env, range, laneKey, 1);
+  if (source === "wise") return syncWiseActivity(env, range);
   if (source === "revolut") return syncRevolutActivity(env, range, laneKey, 1);
   if (source === "slash") return syncSlashActivity(env, range, laneKey, 1);
   return syncAmexActivity(env, range, laneKey, 1);
@@ -4123,6 +4115,10 @@ async function enqueueBankBackfill(
 ): Promise<BankBackfillJob> {
   if (!bankSourceConfigured(env, source)) {
     throw new ApiError(409, `${source} is not configured for transaction sync`);
+  }
+  if (source === "wise") {
+    if (range.toDate < zohoWiseStartDate) throw new ApiError(409, `Wise API coverage starts ${zohoWiseStartDate}; existing CSV history is preserved`);
+    range = { ...range, fromDate: range.fromDate < zohoWiseStartDate ? zohoWiseStartDate : range.fromDate };
   }
   const connectionKey = await requireBankConnectionKey(env, source);
   return getConvexClient(env).mutation(api.bankSync.enqueueBackfill, {

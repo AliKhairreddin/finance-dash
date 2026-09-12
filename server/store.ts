@@ -1,3 +1,4 @@
+import { rejectZohoWiseCsvOverlap } from "../shared/zohoWise";
 import type { AnalyticsResponse } from "../shared/analyticsRequest";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
@@ -898,6 +899,7 @@ function wiseImportId(payload: ImportWiseStatementPayload): string {
 }
 
 export async function importWiseStatement(payload: ImportWiseStatementPayload): Promise<ImportWiseStatementResult> {
+  rejectZohoWiseCsvOverlap(payload);
   validateWiseStatementImportPayload(payload, wiseStatementImports);
   const importedTransactions = normalizeImportedWiseTransactions(payload);
   const summary = summarizeWiseStatementImport(wiseStatementTransactions, importedTransactions);

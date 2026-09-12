@@ -99,6 +99,9 @@ interface __BaseEnv_WorkerEnv {
 	TELEGRAM_AUTH_USERS_JSON: string;
 	TELEGRAM_PASSWORDLESS_USERS_JSON: string;
 	OPENROUTER_API_KEY: string;
+	ZOHO_CLIENT_ID: string;
+	ZOHO_CLIENT_SECRET: string;
+	ZOHO_REFRESH_TOKEN: string;
 	WISE_API_TOKEN: string;
 	WISE_CONNECTION_ID: string;
 	WISE_PROFILE_IDS: string;
