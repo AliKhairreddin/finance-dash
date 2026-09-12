@@ -1,4 +1,5 @@
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
+import { historicalCoverageGaps } from "../shared/analyticsCoverage";
 import { claimAutomaticHistoryRequests, waitForBankHistorySync } from "../shared/bankHistorySync";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
@@ -374,7 +375,7 @@ function analyticsSnapshotKey(range: AnalyticsDateRange): string {
 
 function AnalyticsCoverageNotice({ snapshot, source }: { snapshot: AnalyticsResponse | null; source?: string }) {
   if (!snapshot) return null;
-  const incomplete = snapshot.coverage.filter((item) => item.missingRanges.length > 0 && (!source || source === "all" || item.source === source));
+  const incomplete = historicalCoverageGaps(snapshot.coverage).filter((item) => !source || source === "all" || item.source === source);
   if (incomplete.length === 0) return null;
   return <div className="income-callout warning analytics-coverage-notice" role="status"><CircleAlert size={16} />
     <span>Period coverage unverified · {incomplete.map((item) => sourceLabel(item.source)).join(", ")}</span>
