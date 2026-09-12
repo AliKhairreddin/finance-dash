@@ -801,15 +801,15 @@ function App() {
           : source === "slash"
             ? slashDateRange
             : allBankDateRange;
-    const wiseEntity = source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
+    const wiseEntity = !isTransactionReviewer && source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
     const accountId = bankAccountFilter === "all" ? undefined : bankAccountFilter;
-    const slashVirtualAccountId = source === "slash" && slashVirtualAccountFilter !== "all"
+    const slashVirtualAccountId = !isTransactionReviewer && source === "slash" && slashVirtualAccountFilter !== "all"
       ? slashVirtualAccountFilter
       : undefined;
     const category = bankCategoryFilter === "all" ? undefined : bankCategoryFilter;
     const team = teamFilter === "all" ? undefined : teamFilter;
     const search = debouncedSearchTerm.trim() || undefined;
-    const groupType = bankGroupType && bankGroupKey ? bankGroupType : undefined;
+    const groupType = !isTransactionReviewer && bankGroupType && bankGroupKey ? bankGroupType : undefined;
     const groupKey = groupType ? bankGroupKey : undefined;
     const request = {
       dateRange,
@@ -2690,7 +2690,6 @@ function TransactionReviewerWorkspace({
   }, [account, accountOptions, setAccount]);
 
   const filters: ActiveFilter[] = [
-    ...(source === "all" ? [] : [{ key: "source", label: `Source: ${sourceLabel(source)}`, onRemove: () => setSource("all") }]),
     ...(account === "all" ? [] : [{ key: "account", label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`, onRemove: () => setAccount("all") }]),
     ...(direction === "all" ? [] : [{ key: "direction", label: `Direction: ${direction === "in" ? "Money in" : "Money out"}`, onRemove: () => setDirection("all") }]),
     ...(category === "all" ? [] : [{ key: "category", label: `Category: ${category}`, onRemove: () => setCategory("all") }]),
@@ -2705,6 +2704,12 @@ function TransactionReviewerWorkspace({
     }
     setSortKey(nextSortKey);
     setSortDirection("asc");
+  }
+
+  function selectBank(nextSource: "all" | BankSource) {
+    if (nextSource === source) return;
+    setAccount("all");
+    setSource(nextSource);
   }
 
   return (
@@ -2728,9 +2733,19 @@ function TransactionReviewerWorkspace({
             <Button aria-label="Dismiss" onClick={onDismissMessage}><X size={14} /></Button>
           </div>
         )}
+        <nav className="segmented-control transaction-reviewer-bank-tabs" aria-label="Banks">
+          <Button type="button" className={source === "all" ? "active" : ""} aria-current={source === "all" ? "page" : undefined} onClick={() => selectBank("all")}>
+            All banks
+          </Button>
+          {bankSources.map((bank) => (
+            <Button key={bank.id} type="button" className={source === bank.id ? "active" : ""} aria-current={source === bank.id ? "page" : undefined} onClick={() => selectBank(bank.id)}>
+              {bank.label}
+            </Button>
+          ))}
+        </nav>
         <section className="panel wide-panel transaction-reviewer-panel">
           <div className="panel-header compact transaction-reviewer-panel-header">
-            <div><p className="eyebrow">Bank transactions</p><h2>Review and correct</h2></div>
+            <div><p className="eyebrow">Transaction review</p><h2>{source === "all" ? "All banks" : sourceLabel(source)}</h2></div>
             <div className="list-toolbar transaction-reviewer-toolbar">
               <div className="list-toolbar-main">
                 <ToolbarSearchField
@@ -2742,12 +2757,6 @@ function TransactionReviewerWorkspace({
                 />
                 <FilterPopover activeCount={filters.length} title="Transaction filters">
                   <FilterFieldGroup title="Transaction">
-                    <label>Source
-                      <NativeSelect aria-label="Filter transactions by source" value={source} onValueChange={(value) => setSource(value as "all" | BankSource)}>
-                        <NativeSelectOption value="all">All sources</NativeSelectOption>
-                        {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
-                      </NativeSelect>
-                    </label>
                     <label>Account
                       <NativeSelect aria-label="Filter transactions by account" value={account} onValueChange={setAccount}>
                         <NativeSelectOption value="all">All accounts</NativeSelectOption>
@@ -2796,7 +2805,6 @@ function TransactionReviewerWorkspace({
             filters={filters}
             resultLabel={totalCount === undefined ? `${transactions.length} transactions on this page` : `${transactions.length} of ${totalCount.toLocaleString("en-US")} matching transactions`}
             onClearAll={() => {
-              setSource("all");
               setAccount("all");
               setDirection("all");
               setCategory("all");

@@ -11156,6 +11156,13 @@ body {
   overflow: hidden;
 }
 
+.transaction-reviewer-bank-tabs {
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
 .transaction-reviewer-panel-header {
   align-items: center;
   gap: 14px;
@@ -11183,6 +11190,18 @@ body {
 }
 
 @media (max-width: 760px) {
+  .transaction-reviewer-bank-tabs {
+    display: flex;
+    width: 100%;
+    gap: 2px;
+  }
+
+  .transaction-reviewer-bank-tabs button {
+    flex: 1;
+    padding: 0 6px;
+    font-size: 0.8rem;
+  }
+
   .transaction-reviewer-header,
   .transaction-reviewer-panel-header,
   .transaction-reviewer-toolbar {
