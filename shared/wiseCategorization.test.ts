@@ -46,7 +46,7 @@ test("Wise charges are fees regardless of size, and jar movements are internal t
 
 test("bank names, small amounts, invoice references and fee mentions do not identify a movement", () => {
   for (const description of [
-    "Sent money to Mojo Labs LLC (fee: 1.13 USD)",
+    "Sent money to Point2Web LLC (fee: 1.13 USD)",
     "Received money from Unrelated Company with reference invoice 123",
     "Card transaction of 3.00 USD issued by Wise Software",
     "Invoice for currency conversion consulting",
@@ -54,7 +54,7 @@ test("bank names, small amounts, invoice references and fee mentions do not iden
   ]) assert.equal(wiseMovementClassification(transaction(description, { amount: 1 })), undefined);
   assert.equal(wiseMovementClassification(transaction("Converted 10.00 USD to 9.00 EUR", { source: "slash" })), undefined);
   assert.equal(wiseMovementClassification(transaction("Converted 10.00 USD to 9.00 EUR", { status: "voided" })), undefined);
-  const parent = enrichTransactions([transaction("Sent money to Mojo Labs LLC (fee: 1.13 USD)", {
+  const parent = enrichTransactions([transaction("Sent money to Point2Web LLC (fee: 1.13 USD)", {
     category: "Uncategorized", categorySource: undefined
   })], [], memory)[0];
   assert.equal(parent.category, "Uncategorized");
@@ -66,6 +66,8 @@ test("owner-confirmed DN/LMD funding is intercompany; transfers to another accou
     ["lmd", "Received money from Digital nudge OÜ with reference", "Intercompany transfer"],
     ["lmd", "Sent money to Digital Nudge OÜ", "Intercompany transfer"],
     ["dn", "Received money from LOVEMEDO B.V. with reference Funding", "Intercompany transfer"],
+    ["dn", "Sent money to Mojo Labs LLC (fee: 1.13 USD)", "Intercompany transfer"],
+    ["lmd", "Received money from MOJO LABS LLC with reference Funding", "Intercompany transfer"],
     ["lmd", "Sent money to LoveMeDo B.V.", "Internal transfer"],
     ["dn", "Sent money to Digital Nudge OÜ", "Internal transfer"]
   ] as const) {

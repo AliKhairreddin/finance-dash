@@ -23,15 +23,17 @@ export function wiseMovementCategory(transaction: WiseClassificationInput): {
   const transfer = /^(?:Sent money to|Received money from) (.+?)(?: with reference(?: .*)?| \(fee:[^)]*\))?$/i.exec(description);
   if (transfer && transaction.wiseEntity) {
     const recipient = transfer[1].normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
-    const entity = recipient === "digitalnudgeou" ? "dn" : recipient === "lovemedobv" ? "lmd" : undefined;
+    const entity = recipient === "digitalnudgeou" ? "dn"
+      : recipient === "lovemedobv" ? "lmd"
+        : recipient === "mojolabsllc" ? "mojo" : undefined;
     if (entity === transaction.wiseEntity) {
       return { category: "Internal transfer", reason: "Transfer between bank accounts belonging to the same company" };
     }
     if (entity) {
       return {
         category: "Intercompany transfer",
-        reason: "Operational funding between Digital Nudge and LOVEMEDO, as confirmed by the owner; not a supplier expense or loan classification",
-        merchantName: entity === "dn" ? "Digital Nudge" : "LOVEMEDO"
+        reason: "Operational funding between related companies, as confirmed by the owner; not a supplier expense or loan classification",
+        merchantName: entity === "dn" ? "Digital Nudge" : entity === "lmd" ? "LOVEMEDO" : "Mojo Labs LLC"
       };
     }
   }
