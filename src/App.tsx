@@ -376,7 +376,7 @@ function AnalyticsCoverageNotice({ snapshot, source }: { snapshot: AnalyticsResp
   if (!snapshot) return null;
   const incomplete = snapshot.coverage.filter((item) => item.missingRanges.length > 0 && (!source || source === "all" || item.source === source));
   if (incomplete.length === 0) return null;
-  return <div className="income-callout warning" role="status"><CircleAlert size={16} />
+  return <div className="income-callout warning analytics-coverage-notice" role="status"><CircleAlert size={16} />
     <span>Period coverage unverified · {incomplete.map((item) => sourceLabel(item.source)).join(", ")}</span>
     <InfoPopover label="period coverage"><span>The app has not confirmed a complete transaction import for the dates below. Transactions may already be present, but period money in and money out could be incomplete. Live balances are fetched separately.</span>
       {incomplete.map((item) => <span key={item.source}>{sourceLabel(item.source)}: {item.missingRanges.map((range) => `${range.fromDate} to ${range.toDate}`).join(", ")}.</span>)}
