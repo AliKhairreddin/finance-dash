@@ -28,6 +28,7 @@ import {
   transactionBusinessCategory
 } from "../shared/categories";
 import { isSlashDailyCardPayment } from "../shared/transactionPresentation";
+import { wiseMovementClassification } from "../shared/wiseCategorization";
 
 export const semanticMatchThreshold = 0.86;
 const maximumProviderAliasCount = 128;
@@ -389,7 +390,7 @@ export function transactionsShareMerchant(
 export function transactionAiGroupKey(
   transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
 ): string {
-  const genericTokens = new Set(["ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
+  const genericTokens = new Set(["wise", "revolut", "slash", "amex", "ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
   const counterpartyTokens = canonicalTransactionText(transaction.counterparty)
     .split(" ")
     .filter((token) => {
@@ -553,7 +554,7 @@ export function providerMatchesTransactionDirection(transaction: Pick<Transactio
 }
 
 function transactionHaystack(transaction: Transaction): string {
-  return canonicalTransactionText([transaction.rawName, transaction.counterparty, transaction.description, transaction.category].join(" "));
+  return canonicalTransactionText([transaction.rawName, transaction.counterparty, transaction.description].join(" "));
 }
 
 function hasPhrase(haystack: string, phrase: string): boolean {
@@ -635,7 +636,11 @@ function hardTypedReason(transaction: Transaction, provider: Provider): string |
 }
 
 function businessCategory(transaction: Transaction): { category: string; reason: string } | undefined {
-  const haystack = transactionHaystack(transaction);
+  // A fee annotation describes a component, not the purpose of the payment.
+  const haystack = transactionHaystack({
+    ...transaction,
+    description: transaction.description.replace(/\s*\(fee:[^)]*\)/gi, "")
+  });
   for (const rule of categoryRules) {
     if (rule.direction && rule.direction !== transaction.direction) continue;
     if (rule.phrases.some((phrase) => hasPhrase(haystack, phrase))) {
@@ -656,7 +661,7 @@ function learnedCategory(
     .flatMap((rule) =>
       rule.aliases
         .map((alias) => normalizeName(alias))
-        .filter(Boolean)
+        .filter((alias) => Boolean(alias) && !isGenericTransactionCategoryAlias(alias))
         .map((alias) => {
           if (haystack === alias) return { rule, alias, confidence: 0.99 };
           if (alias.split(" ").length === 1 && txTokens.has(alias)) return { rule, alias, confidence: Math.min(0.94, 0.76 + alias.length / 80) };
@@ -740,6 +745,8 @@ export function enrichTransactions(
   categoryMemory: TransactionCategoryRule[] = []
 ): Transaction[] {
   return transactions.map((transaction) => {
+    const wiseClassification = wiseMovementClassification(transaction);
+    if (wiseClassification) return { ...transaction, ...wiseClassification };
     if (isSlashDailyCardPayment(transaction)) {
       const merchantName = "Slash card payment";
       return {
@@ -837,7 +844,7 @@ export function semanticCategorizeTransaction(
   categoryMemory: TransactionCategoryRule[] = []
 ): Transaction {
   const enriched = enrichTransactions([transaction], providers, categoryMemory)[0];
-  return enriched.matchedProviderId || enriched.category !== transaction.category ? enriched : transaction;
+  return enriched.classificationComplete || enriched.matchedProviderId || enriched.category !== transaction.category ? enriched : transaction;
 }
 
 export function finalizeDeterministicCategorization(

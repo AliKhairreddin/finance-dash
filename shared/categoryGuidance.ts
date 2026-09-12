@@ -1,0 +1,45 @@
+import { initialTransactionCategories } from "./categories";
+
+/** Business definitions sent to the classifier alongside the allowed names. */
+export const transactionCategoryDescriptions: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(initialTransactionCategories
+    .filter((category) => category.id.startsWith("offer-"))
+    .map((category) => [category.name, `Incoming earned revenue for the ${category.name} offer vertical. Use only when the description or client context identifies this vertical.`])),
+  "Media buying direct": "Earned revenue from direct media-buying clients when no specific offer vertical is identified.",
+  "Partner network revenue": "Earned revenue received from a partner or advertising network, excluding loans, own-account transfers and refunds.",
+  "Affiliate team revenue": "Earned revenue attributable to an affiliate team, excluding capital and own-account transfers.",
+  "Revenue adjustment": "An adjustment or correction to previously recorded earned revenue.",
+  "Refunds and chargebacks": "Money returned for an earlier purchase, payment reversal or chargeback. Not new earned revenue.",
+  "Currency conversion": "Exchange of money between currencies held by the same entity. Classify BOTH the outgoing and incoming principal here. Not revenue, an operating expense, capital funding or a bank fee. A fee mentioned in the description does not make the whole converted amount a fee; separately posted charges are Bank fees.",
+  "Internal transfer": "Movement between the same entity's own accounts, balances or jars without a currency exchange. Not revenue or an operating expense. A transfer to another party is not internal merely because Wise processed it.",
+  "Intercompany transfer": "Cash funding between distinct related legal entities. The owner confirms Digital Nudge (DN) ↔ LOVEMEDO (LMD) transfers are operational funding to pay through the required company, never loans. Common ownership does not make them the same company. Classify the eventual supplier payment by its expense purpose; do not count the funding transfer as an expense or earned revenue. This label does not determine legal equity treatment.",
+  "Capital movement": "Financing such as owner contributions, capital injections, investment funding, loan proceeds or principal repayment. Not currency exchange or ordinary movements between own balances.",
+  "Bank fees": "A separately identifiable bank service charge, transfer fee, conversion fee or account fee. Wise Charges for: identifies a fee entry. Never classify a payment or conversion's entire principal as fees merely because its text mentions a fee or its counterparty is Wise. Amount alone does not identify fees.",
+  "Ad account funding": "Money prepaid or added to an advertising account or ad account provider balance.",
+  "Ad spend": "Advertising purchases billed by an ad platform for delivering campaigns, excluding account top-ups.",
+  "Affiliate payout": "Payments owed to an affiliate or affiliate team for performance or services.",
+  "Partner payout": "Settlement or profit-share payments to a business partner, excluding own-account transfers.",
+  "Distribution": "Profit or dividend distributions to owners or stakeholders.",
+  "Creative production": "Design, video, UGC and other creative production services or assets.",
+  "Software": "Software and SaaS subscriptions or licences, except a more specific listed tool category.",
+  "Cloud and hosting": "Cloud infrastructure, compute, servers, hosting and domain services.",
+  "Tracking and analytics": "Tracking, attribution, analytics and measurement services.",
+  "Food and meals": "Food, restaurants, cafes and meal delivery.",
+  "Travel": "Transport, flights, accommodation and travel-related costs.",
+  "Salary and payroll": "Employee wages, salary and payroll service payments.",
+  "Contractors and freelancers": "Independent contractor or freelance services without a more specific category.",
+  "Taxes and government": "Tax payments, duties and government levies.",
+  "Office and rent": "Office premises, rent and coworking costs.",
+  "Payment processing": "Payment processor service charges. Not the gross settlement, merchant purchase or transfer principal processed by that service.",
+  "Legal and accounting": "Legal, bookkeeping, accounting and related professional services.",
+  "Recruiting": "Recruitment agencies, job advertisements and hiring services.",
+  "Education and training": "Courses, professional training and educational events.",
+  "Marketing tools": "Marketing, CRM, outreach and research tools other than ad spend.",
+  "Telecom and internet": "Telephone, mobile and internet connectivity services.",
+  "Equipment": "Physical equipment, hardware and business devices.",
+  "Insurance": "Insurance premiums and coverage costs.",
+  "Utilities": "Electricity, water, gas and other utility services.",
+  "Security and compliance": "Security, compliance and verification services.",
+  "Shipping and postage": "Delivery, freight, courier and postage costs.",
+  "Uncategorized": "Unresolved classification; not a valid completed AI assessment."
+};

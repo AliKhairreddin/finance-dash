@@ -35,6 +35,8 @@ export const initialTransactionCategories: readonly TransactionCategorySeed[] = 
   { id: "revenue-adjustment", name: "Revenue adjustment", direction: "in", color: "#16a34a", system: true },
   { id: "refunds-and-chargebacks", name: "Refunds and chargebacks", direction: "in", color: "#65a30d", system: true },
   { id: "capital-movement", name: "Capital movement", direction: "both", color: "#7c3aed", system: true },
+  { id: "currency-conversion", name: "Currency conversion", direction: "both", color: "#0891b2", system: true },
+  { id: "intercompany-transfer", name: "Intercompany transfer", direction: "both", color: "#6366f1", system: true },
   { id: "ad-account-funding", name: "Ad account funding", direction: "out", color: "#dc2626", system: true },
   { id: "ad-spend", name: "Ad spend", direction: "out", color: "#ea580c", system: true },
   { id: "affiliate-payout", name: "Affiliate payout", direction: "out", color: "#d97706", system: true },
@@ -95,6 +97,10 @@ function normalizedCategoryKey(category?: string): string {
 }
 
 const genericTransactionCategoryAliasTokens = new Set([
+  "wise",
+  "revolut",
+  "slash",
+  "amex",
   "ach",
   "bank",
   "card",

@@ -151,6 +151,27 @@ test("transaction AI requires one category and normalized merchant for every suc
   }
 });
 
+test("transaction AI receives category definitions and original descriptions without the previous category as evidence", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = JSON.parse(body.messages.at(-1).content);
+    const definitions = new Map(prompt.category_definitions.map((item: { name: string; description: string }) => [item.name, item.description]));
+    assert.match(String(definitions.get("Currency conversion")), /BOTH/);
+    assert.match(String(definitions.get("Bank fees")), /Never classify.*principal/);
+    assert.match(String(definitions.get("Intercompany transfer")), /never loans/);
+    assert.equal(prompt.transactions[0].description, aiTransaction.description);
+    assert.equal("bankCategory" in prompt.transactions[0], false);
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ matches: [{
+      transactionId: aiTransaction.id, category: "Food and meals", merchantName: "Pizza Hut", confidence: 0.9, reason: "Restaurant"
+    }] }) } }] });
+  };
+  try {
+    const result = await runOpenRouterTransactionCategorization({ provider: "openrouter", model: "test", openRouterApiKey: "test" }, [aiTransaction], []);
+    assert.equal(result.length, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("transaction AI isolates an invalid multi-row response and retries smaller batches", async () => {
   const originalFetch = globalThis.fetch;
   const secondTransaction: Transaction = {

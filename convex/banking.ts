@@ -12,6 +12,7 @@ import { assertBankActivityBatchBudget } from "../shared/bankRecordValidation";
 import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import { transactionBusinessCategory } from "../shared/categories";
 import { isSlashDailyCardPayment } from "../shared/transactionPresentation";
+import { wiseMovementClassification } from "../shared/wiseCategorization";
 import {
   bankProviderTransactionId,
   isCurrentBankTransactionId,
@@ -1592,6 +1593,7 @@ async function applyActivityBatch(
         teamId: coalescedLegacy?.teamId ?? existing.teamId ?? fresh.teamId,
         confidence: coalescedLegacy?.confidence ?? existing.confidence ?? fresh.confidence,
         matchReason: coalescedLegacy?.matchReason ?? existing.matchReason ?? fresh.matchReason,
+        ...wiseMovementClassification(fresh),
         connectionKey: args.connectionKey,
         syncedAt: args.syncedAt,
         identityVersion: 2
@@ -1619,7 +1621,7 @@ async function applyActivityBatch(
     } else {
       const insert = fresh.status === "voided"
         ? { ...fresh, classificationComplete: true }
-        : fresh;
+        : { ...fresh, ...wiseMovementClassification(fresh) };
       addProfitFactContribution(factDeltas, profitDistributionContribution(insert), 1);
       await ctx.db.insert("bankTransactions", {
         ...insert,
@@ -1799,7 +1801,8 @@ export const saveTransactionUpdates = mutation({
         invoiceMatchConfidence: item.invoiceMatchConfidence,
         invoiceMatchReason: item.invoiceMatchReason,
         confidence: item.confidence,
-        matchReason: item.matchReason
+        matchReason: item.matchReason,
+        ...wiseMovementClassification(existing)
       };
       const next = { ...existing, ...update };
       addVersionedProfitFactChange(factDeltas, existing, next);
@@ -2779,7 +2782,8 @@ export const applyMerchantCategory = mutation({
         category: args.category,
         categorySource: "manual" as const,
         categoryConfidence: 1,
-        categoryReason: `Manual rule for ${args.merchantName}`
+        categoryReason: `Manual rule for ${args.merchantName}`,
+        ...wiseMovementClassification(row)
       };
       const next = { ...row, ...update };
       addVersionedProfitFactChange(factDeltas, row, next);
@@ -2792,6 +2796,63 @@ export const applyMerchantCategory = mutation({
       updated: result.page.length,
       hasMore: !result.isDone,
       continueCursor: result.isDone ? null : result.continueCursor
+    };
+  }
+});
+
+export const repairWiseMovementCategories = mutation({
+  args: {
+    serviceToken: v.string(),
+    dryRun: v.boolean(),
+    cursor: v.union(v.string(), v.null())
+  },
+  returns: v.object({
+    scanned: v.number(),
+    recognized: v.number(),
+    changed: v.number(),
+    changes: v.array(v.object({ fromCategory: v.string(), toCategory: v.string(), count: v.number() })),
+    isDone: v.boolean(),
+    continueCursor: v.union(v.string(), v.null())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await assertBankLedgerReady(ctx);
+    const result = await ctx.db.query("bankTransactions")
+      .withIndex("by_source", (q) => q.eq("source", "wise"))
+      .paginate({
+        numItems: maximumMaintenanceBatchSize,
+        cursor: args.cursor,
+        maximumRowsRead: maximumMaintenanceBatchSize,
+        maximumBytesRead: maximumActivityBytesRead
+      });
+    const factDeltas = new Map<string, ProfitFactDelta>();
+    const changedDates = new Set<string>();
+    const changes = new Map<string, { fromCategory: string; toCategory: string; count: number }>();
+    let recognized = 0;
+    let changed = 0;
+    for (const row of result.page) {
+      const update = wiseMovementClassification(row);
+      if (!update) continue;
+      recognized += 1;
+      const next = { ...row, ...update };
+      if (!transactionVisibleChanged(row, next)) continue;
+      changed += 1;
+      const key = JSON.stringify([row.category, update.category]);
+      const change = changes.get(key) ?? { fromCategory: row.category, toCategory: update.category, count: 0 };
+      change.count += 1;
+      changes.set(key, change);
+      if (args.dryRun) continue;
+      addVersionedProfitFactChange(factDeltas, row, next);
+      changedDates.add(row.date);
+      await ctx.db.patch(row._id, update);
+    }
+    if (!args.dryRun) {
+      await applyProfitFactDeltas(ctx, factDeltas);
+      if (changedDates.size > 0) await bumpLedgerRevision(ctx, changedDates);
+    }
+    return {
+      scanned: result.page.length, recognized, changed, changes: [...changes.values()],
+      isDone: result.isDone, continueCursor: result.isDone ? null : result.continueCursor
     };
   }
 });

@@ -104,7 +104,7 @@ function partnerForTransaction(transaction: Transaction): ProfitDistributionPart
 function isOperatingRevenue(transaction: Transaction): boolean {
   if (transaction.direction !== "in") return false;
   const category = transactionBusinessCategory(transaction.category);
-  return category !== "Capital movement" && category !== "Internal transfer";
+  return category !== "Capital movement" && category !== "Internal transfer" && category !== "Currency conversion" && category !== "Intercompany transfer";
 }
 
 function paymentBucketForTransaction(transaction: Transaction): {
@@ -132,7 +132,7 @@ function paymentBucketForTransaction(transaction: Transaction): {
 function isGeneralCost(transaction: Transaction): boolean {
   if (transaction.direction !== "out") return false;
   const category = transactionBusinessCategory(transaction.category);
-  if (category === "Capital movement" || category === "Internal transfer" || category === "Distribution") return false;
+  if (category === "Capital movement" || category === "Internal transfer" || category === "Currency conversion" || category === "Intercompany transfer" || category === "Distribution") return false;
   return paymentBucketForTransaction(transaction) === null;
 }
 

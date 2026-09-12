@@ -2,13 +2,14 @@ import type { Transaction } from "./types";
 import { transactionBusinessCategory } from "./categories";
 
 export function isInternalTransferTransaction(transaction: Transaction): boolean {
-  return transactionBusinessCategory(transaction.category) === "Internal transfer";
+  const category = transactionBusinessCategory(transaction.category);
+  return category === "Internal transfer" || category === "Currency conversion";
 }
 
 export function isNonOperatingMovementTransaction(transaction: Transaction): boolean {
   if (transaction.status === "voided") return true;
   const category = transactionBusinessCategory(transaction.category);
-  return category === "Internal transfer" || category === "Capital movement";
+  return isInternalTransferTransaction(transaction) || category === "Capital movement" || category === "Intercompany transfer";
 }
 
 export function isSlashDailyCardPayment(transaction: Transaction): boolean {
