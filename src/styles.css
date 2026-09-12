@@ -2163,7 +2163,7 @@ th.amount .sortable-table-heading {
 
 .transaction-table {
   table-layout: fixed;
-  min-width: 1008px;
+  min-width: 1120px;
   font-size: 0.82rem;
 }
 
@@ -2202,11 +2202,11 @@ th.amount .sortable-table-heading {
 }
 
 .transaction-document-col {
-  width: 76px;
+  width: 132px;
 }
 
 .transaction-actions-col {
-  width: 52px;
+  width: 88px;
 }
 
 .invoice-table {
