@@ -735,7 +735,7 @@ export function parseWiseProfileIds(value: string | undefined): Set<number> {
 export function wiseSyncIssue(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Wise sync error";
   if (/^403\b/.test(message)) {
-    return "Wise denied live statement API access for one or more business profiles. Upload Wise statement CSVs for those accounts instead.";
+    return "Wise API access was denied. Check the Wise connection permissions.";
   }
   if (/^401\b/.test(message)) {
     return "Wise rejected the API token. Refresh the Wise token and update WISE_API_TOKEN.";

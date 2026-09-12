@@ -3213,7 +3213,7 @@ function integrationStatus(
       message:
         wiseBalanceIssue ??
         (wiseNeeds.length === 0
-          ? "Wise balances refresh every 5 minutes. Zoho transaction feeds sync daily, with repeat pulls checked by statement ID."
+          ? "Balances refresh every 5 minutes. Transactions sync daily through Zoho."
           : "Configure Wise balance access and Zoho API credentials to sync these accounts."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue

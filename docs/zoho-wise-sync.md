@@ -63,6 +63,12 @@ rows; LMD 28 after excluding the already-imported receipt and fee. A live replay
 must insert zero rows. Reconcile counts and signed totals by entity/currency,
 and verify every pre-existing CSV row remains unchanged before declaring success.
 
+Production verification on September 12, 2026 at 02:20 UTC: the scheduled Worker
+inserted all 90 rows, retained the source fields of all 1,976 existing Wise rows,
+and reported healthy. Replaying the complete batch inserted **zero** rows and
+updated the same 90 identities. The dashboard's CSV upload controls and per-account
+upload warnings were removed; CSV export remains available.
+
 Zoho and bank-feed access need to remain enabled after the trial. No subscription
 was purchased during setup. Token's consent screen displayed December 10, 2026;
 renew through Zoho when requested. An OAuth refresh token does not renew bank
