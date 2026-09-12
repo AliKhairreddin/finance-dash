@@ -1,4 +1,5 @@
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
+import { claimAutomaticHistoryRequests, waitForBankHistorySync } from "../shared/bankHistorySync";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { DocumentsView } from "@/features/expenses/DocumentsView";
@@ -271,7 +272,7 @@ type BankActivitySummaryState = {
   error: string | null;
 };
 type BankBackgroundSyncState = {
-  phase: "syncing" | "complete" | "error";
+  phase: "syncing" | "pending" | "error";
   message: string;
 };
 type TransactionDetailPopover = {
@@ -764,6 +765,7 @@ function App() {
   const bankActivitySummaryAbortRef = useRef<AbortController | null>(null);
   const [bankActivitySummaryRetry, setBankActivitySummaryRetry] = useState(0);
   const historicalSyncRequestKeysRef = useRef(new Set<string>());
+  const historicalSyncAbortRef = useRef<AbortController | null>(null);
   const [bankBackgroundSync, setBankBackgroundSync] = useState<BankBackgroundSyncState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -779,6 +781,14 @@ function App() {
     allowedValues: ["asc", "desc"]
   });
   const isTransactionReviewer = session?.role === "transaction-reviewer";
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => { setNotice(null); }, [activeTab, bankTab]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
@@ -1065,16 +1075,10 @@ function App() {
     return query;
   }
 
-  async function waitForHistoricalTransactionSync(jobKey: string, requestKey?: string): Promise<void> {
-    while (requestKey === undefined || transactionPageRequestRef.current?.key === requestKey) {
-      await new Promise((resolve) => window.setTimeout(resolve, 5_000));
-      const query = new URLSearchParams({ key: jobKey });
-      const response = await fetch(`${apiBase}/transactions/sync?${query.toString()}`);
-      if (response.status === 202) continue;
-      if (!response.ok) {
-        throw new Error(await apiErrorMessage(response, "Historical transaction sync failed"));
-      }
-      return;
+  async function waitForHistoricalTransactionSync(jobKey: string): Promise<void> {
+    const result = await waitForBankHistorySync(apiBase, jobKey, new AbortController().signal);
+    if (result === "pending") {
+      throw new Error("History sync is continuing in the background. Check again later.");
     }
   }
 
@@ -1140,52 +1144,46 @@ function App() {
         isLoading: false,
         error: null
       });
-      if (!isTransactionReviewer && navigation === "reset" && page.coverage?.some((item) => item.missingRanges.length > 0)) {
-        const requests = page.coverage.flatMap((item) => {
-          if (item.missingRanges.length === 0) return [];
-          const fromDate = item.missingRanges.reduce(
-            (earliest, range) => range.fromDate < earliest ? range.fromDate : earliest,
-            item.missingRanges[0].fromDate
-          );
-          const toDate = item.missingRanges.reduce(
-            (latest, range) => range.toDate > latest ? range.toDate : latest,
-            item.missingRanges[0].toDate
-          );
-          const key = `${item.source}:${fromDate}:${toDate}`;
-          if (historicalSyncRequestKeysRef.current.has(key)) return [];
-          historicalSyncRequestKeysRef.current.add(key);
-          return [{ key, source: item.source, fromDate, toDate }];
-        });
+      if (!isTransactionReviewer && navigation === "reset") {
+        const requests = claimAutomaticHistoryRequests(page.coverage, request.dateRange, historicalSyncRequestKeysRef.current);
         if (requests.length > 0) {
+          historicalSyncAbortRef.current?.abort();
+          const syncController = new AbortController();
+          historicalSyncAbortRef.current = syncController;
           setBankBackgroundSync({
             phase: "syncing",
             message: "Historical bank activity is syncing in the background."
           });
-          void Promise.all(requests.map(async ({ key, ...payload }) => {
+          void Promise.all(requests.map(async (payload) => {
             const response = await fetch(`${apiBase}/transactions/sync`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(payload),
+              signal: AbortSignal.any([syncController.signal, AbortSignal.timeout(15_000)])
             });
             if (!response.ok) {
               throw new Error(await apiErrorMessage(response, "Historical transaction sync could not be queued"));
             }
             const queued = (await response.json()) as { key?: string };
             if (!queued.key) throw new Error("Historical transaction sync returned no job key");
-            await waitForHistoricalTransactionSync(queued.key, request.key);
-          })).then(() => {
-            for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
+            return waitForBankHistorySync(apiBase, queued.key, syncController.signal);
+          })).then((results) => {
+            if (syncController.signal.aborted || transactionPageRequestRef.current?.key !== request.key) return;
+            // Keep the attempt guard after completion: reloading a period with
+            // remaining gaps must never recursively enqueue the same history.
+            setBankBackgroundSync(results.includes("pending") ? {
+              phase: "pending",
+              message: "History sync is continuing in the background."
+            } : null);
+            if (!results.includes("complete")) return;
             invalidateAnalyticsData();
-            setBankBackgroundSync({
-              phase: "complete",
-              message: "Historical bank activity is up to date."
-            });
             const latestRequest = transactionPageRequestRef.current;
             if (latestRequest?.key === request.key) {
               void loadTransactionPage(latestRequest, null, "reset");
             }
           }).catch((syncError: unknown) => {
-            for (const requestItem of requests) historicalSyncRequestKeysRef.current.delete(requestItem.key);
+            if (syncController.signal.aborted || transactionPageRequestRef.current?.key !== request.key) return;
+            syncController.abort();
             setBankBackgroundSync({
               phase: "error",
               message: syncError instanceof Error ? syncError.message : "Historical transaction sync failed"
@@ -1212,6 +1210,8 @@ function App() {
   }
 
   useEffect(() => {
+    historicalSyncAbortRef.current?.abort();
+    setBankBackgroundSync(null);
     if (!transactionPageRequest) {
       transactionPageAbortRef.current?.abort();
       transactionPageRequestVersionRef.current += 1;
@@ -1228,7 +1228,10 @@ function App() {
       return;
     }
     void loadTransactionPage(transactionPageRequest, null, "reset");
-    return () => transactionPageAbortRef.current?.abort();
+    return () => {
+      transactionPageAbortRef.current?.abort();
+      historicalSyncAbortRef.current?.abort();
+    };
   }, [transactionPageRequest?.key]);
 
   async function loadNextTransactionPage(): Promise<void> {
@@ -4339,12 +4342,13 @@ function BankSyncStatus({
 }) {
   const issues = integrationStatuses.filter((status) => status.issue);
   const backgroundIsRunning = backgroundSync?.phase === "syncing";
+  const backgroundPending = backgroundSync?.phase === "pending";
   const backgroundFailed = backgroundSync?.phase === "error";
   const allLive = integrationStatuses.length > 0
     && integrationStatuses.every((status) => status.mode === "live");
   const tone = backgroundIsRunning
     ? "syncing"
-    : issues.length > 0 || backgroundFailed || (integrationStatuses.length > 0 && !allLive)
+    : issues.length > 0 || backgroundFailed || backgroundPending || (integrationStatuses.length > 0 && !allLive)
       ? "warning"
       : "good";
   const label = backgroundIsRunning
@@ -4355,8 +4359,8 @@ function BankSyncStatus({
         ? `${issues.length} sources need attention`
         : backgroundFailed
           ? "Historical sync failed"
-          : backgroundSync?.phase === "complete"
-            ? "History up to date"
+          : backgroundPending
+            ? "History pending"
             : allLive
               ? "Bank data live"
               : integrationStatuses.length > 0
@@ -4366,7 +4370,7 @@ function BankSyncStatus({
     ? [backgroundSync.message]
     : issues.length > 0
       ? issues.map((status) => `${status.label}: ${status.issue}`)
-      : backgroundFailed || backgroundSync?.phase === "complete"
+      : backgroundFailed || backgroundPending
         ? [backgroundSync.message]
         : integrationStatuses.length > 0
           ? integrationStatuses.map((status) => `${status.label}: ${status.message}`)

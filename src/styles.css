@@ -5226,10 +5226,16 @@ th.amount .sortable-table-heading {
 }
 
 .toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 100;
+  width: fit-content;
+  max-width: min(460px, calc(100vw - 40px));
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 14px;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--green-border);
   border-radius: 8px;
