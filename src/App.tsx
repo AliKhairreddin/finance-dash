@@ -377,9 +377,10 @@ function AnalyticsCoverageNotice({ snapshot, source }: { snapshot: AnalyticsResp
   const incomplete = snapshot.coverage.filter((item) => item.missingRanges.length > 0 && (!source || source === "all" || item.source === source));
   if (incomplete.length === 0) return null;
   return <div className="income-callout warning" role="status"><CircleAlert size={16} />
-    <span>Partial period totals · {incomplete.map((item) => sourceLabel(item.source)).join(", ")} history incomplete</span>
-    <InfoPopover label="partial period totals"><span>Totals include only stored transactions. Calculated {new Date(snapshot.generatedAt).toLocaleString()}.</span>
-      {incomplete.map((item) => <span key={item.source}>{sourceLabel(item.source)}: {item.missingRanges.map((range) => `${range.fromDate} to ${range.toDate}`).join(", ")}. Review bank history or import the missing statements.</span>)}
+    <span>Period coverage unverified · {incomplete.map((item) => sourceLabel(item.source)).join(", ")}</span>
+    <InfoPopover label="period coverage"><span>The app has not confirmed a complete transaction import for the dates below. Transactions may already be present, but period money in and money out could be incomplete. Live balances are fetched separately.</span>
+      {incomplete.map((item) => <span key={item.source}>{sourceLabel(item.source)}: {item.missingRanges.map((range) => `${range.fromDate} to ${range.toDate}`).join(", ")}.</span>)}
+      <span>Totals calculated {new Date(snapshot.generatedAt).toLocaleString()}.</span>
     </InfoPopover>
   </div>;
 }
@@ -3978,7 +3979,6 @@ function BanksView({
 
   return (
     <div className="banks-layout">
-      <AnalyticsCoverageNotice snapshot={periodSnapshot} source={activeBank === "all" ? allBankSource : activeBank} />
       {bankPeriodMetricsError && <div className="income-callout warning" role="alert"><span>{bankPeriodMetricsError}{periodSnapshot ? " Showing the previous calculation." : ""}</span><Button className="secondary-button" disabled={isLoadingBankPeriodMetrics} onClick={onRetryPeriodMetrics}>Retry totals</Button></div>}
       <section className="panel wide-panel bank-overview-bar">
         <div className="panel-header bank-overview-header">
@@ -4326,6 +4326,7 @@ function BanksView({
           open={bankDetailsOpen}
           onOpenChange={setBankDetailsOpen}
         >
+          <AnalyticsCoverageNotice snapshot={periodSnapshot} source={activeBank === "all" ? allBankSource : activeBank} />
           {bankDetails}
         </BankDetailsDrawer>
       )}
