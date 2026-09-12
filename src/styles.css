@@ -9934,16 +9934,6 @@ body {
   display: inline-flex;
 }
 
-.analytics-coverage-notice > .note-popover {
-  position: static;
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.analytics-coverage-notice > svg {
-  flex: 0 0 auto;
-}
-
 .note-popover-positioner {
   z-index: 500;
 }
