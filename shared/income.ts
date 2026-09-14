@@ -380,6 +380,7 @@ export function invoicePaymentAiCandidates({
       || !isPaymentSource(transaction.source)
       || transaction.invoiceMatchSource === "manual"
       || Boolean(transaction.matchedInvoiceId)
+      || invoices.some(invoice => invoice.transactionId === transaction.id)
       || allocations.some((allocation) => allocation.transactionId === transaction.id)
     ) {
       return [];
@@ -419,7 +420,7 @@ export function reconcileAiInvoicePayments({
   matches: AiInvoicePaymentMatch[];
   minimumConfidence?: number;
   now?: Date;
-}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number } {
+}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number; paid: number } {
   let nextInvoices = [...invoices];
   const nextAllocations = [...allocations];
   const candidateIds = new Map(
@@ -462,11 +463,13 @@ export function reconcileAiInvoicePayments({
     };
   });
 
+  const payments = recordExactLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now);
   return {
-    invoices: nextInvoices,
+    invoices: payments.invoices,
     transactions: nextTransactions,
-    allocations: nextAllocations,
-    matched: accepted.size
+    allocations: payments.allocations,
+    matched: accepted.size,
+    paid: payments.paid
   };
 }
 
@@ -482,26 +485,31 @@ export function reconcileExactInvoicePayments({
   allocations: PaymentAllocation[];
   providers: Provider[];
   now?: Date;
-}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number; exactMatched: number; toleranceMatched: number } {
+}): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number; exactMatched: number; toleranceMatched: number; paid: number } {
   let nextInvoices = [...invoices];
   let nextAllocations = [...allocations];
   let matched = 0;
   let exactMatched = 0;
   let toleranceMatched = 0;
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const nextTransactions = transactions.map((transaction) => {
+  const candidatesByTransaction = new Map<string, Invoice[]>();
+  const exactCountByInvoice = new Map<string, number>();
+  const eligibleCountByInvoice = new Map<string, number>();
+  // Assess both sides before assigning anything, so transaction order cannot choose between duplicate payments.
+  for (const transaction of transactions) {
     if (
       transaction.direction !== "in" ||
       (transaction.status !== "posted" && transaction.status !== "settled") ||
       !isPaymentSource(transaction.source) ||
       transaction.invoiceMatchSource === "manual" ||
       Boolean(transaction.matchedInvoiceId) ||
+      invoices.some(invoice => invoice.transactionId === transaction.id) ||
       nextAllocations.some((allocation) => allocation.transactionId === transaction.id)
     ) {
-      return transaction;
+      continue;
     }
 
-    const eligibleInvoices = nextInvoices.filter((invoice) => {
+    const eligibleInvoices = invoices.filter((invoice) => {
       if (
         invoice.documentType !== "sales_invoice" ||
         invoice.status !== "open" ||
@@ -517,12 +525,20 @@ export function reconcileExactInvoicePayments({
     const exactCandidates = eligibleInvoices.filter(
       (invoice) => Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) <= 0.01
     );
+    for (const invoice of eligibleInvoices) eligibleCountByInvoice.set(invoice.id, (eligibleCountByInvoice.get(invoice.id) ?? 0) + 1);
+    for (const invoice of exactCandidates) exactCountByInvoice.set(invoice.id, (exactCountByInvoice.get(invoice.id) ?? 0) + 1);
     const candidates = exactCandidates.length > 0 ? exactCandidates : eligibleInvoices;
+    candidatesByTransaction.set(transaction.id, candidates);
+  }
+  const nextTransactions = transactions.map((transaction) => {
+    const candidates = candidatesByTransaction.get(transaction.id) ?? [];
     if (candidates.length !== 1) return transaction;
 
     const invoice = candidates[0];
     const difference = Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount));
     const isExact = difference <= 0.01;
+    if (isExact ? exactCountByInvoice.get(invoice.id) !== 1
+      : (exactCountByInvoice.get(invoice.id) ?? 0) > 0 || eligibleCountByInvoice.get(invoice.id) !== 1) return transaction;
     const matchReason = isExact
       ? "Exact amount, currency, and company or invoice reference"
       : `Amount within $${invoicePaymentAmountTolerance} fee tolerance (${difference.toFixed(2)} difference), with matching currency and company or invoice reference`;
@@ -544,7 +560,57 @@ export function reconcileExactInvoicePayments({
     };
   });
 
-  return { invoices: nextInvoices, transactions: nextTransactions, allocations: nextAllocations, matched, exactMatched, toleranceMatched };
+  const payments = recordExactLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now);
+  return { invoices: payments.invoices, transactions: nextTransactions, allocations: payments.allocations, matched, exactMatched, toleranceMatched, paid: payments.paid };
+}
+
+function recordExactLinkedInvoicePayments(
+  invoices: Invoice[], transactions: Transaction[], allocations: PaymentAllocation[], now: Date
+): { invoices: Invoice[]; allocations: PaymentAllocation[]; paid: number } {
+  const nextAllocations = [...allocations];
+  const transactionById = new Map(transactions.map(transaction => [transaction.id, transaction]));
+  const paidIds = new Set<string>();
+  const createdAt = now.toISOString();
+  const nextInvoices = invoices.map(invoice => {
+    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") return invoice;
+    const linkedTransactions = transactions.filter(transaction => transaction.matchedInvoiceId === invoice.id);
+    const transaction = invoice.transactionId ? transactionById.get(invoice.transactionId)
+      : linkedTransactions.length === 1 ? linkedTransactions[0] : undefined;
+    if (!transaction || linkedTransactions.some(item => item.id !== transaction.id)
+      || (transaction.matchedInvoiceId && transaction.matchedInvoiceId !== invoice.id)
+      || invoices.some(other => other.id !== invoice.id && other.transactionId === transaction.id)
+      || transaction.direction !== "in" || !isPaymentSource(transaction.source)
+      || (transaction.status !== "posted" && transaction.status !== "settled")
+      || transaction.currency.toUpperCase() !== invoice.currency.toUpperCase()
+      || transaction.date.slice(0, 10) < invoice.issueDate.slice(0, 10)) return invoice;
+    const entity = transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName);
+    if (invoice.entity && entity && invoice.entity !== entity) return invoice;
+    const trustedLink = transaction.invoiceMatchSource === "exact"
+      || (transaction.invoiceMatchSource === "ai" && (transaction.invoiceMatchConfidence ?? 0) >= 0.9)
+      || (transaction.invoiceMatchSource === "manual" && transaction.matchedInvoiceId === invoice.id);
+    if (!trustedLink) return invoice;
+    const transactionAllocations = nextAllocations.filter(allocation => allocation.transactionId === transaction.id);
+    if (transactionAllocations.some(allocation => allocation.invoiceId !== invoice.id)) return invoice;
+    const available = Math.abs(transaction.amount) - transactionAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+    const outstanding = invoiceOutstanding(invoice, nextAllocations);
+    // Compare currency cents: never write off a fee or record more than the bank actually received.
+    if (outstanding <= 0 || Math.round(outstanding * 100) !== Math.round(available * 100)) return invoice;
+    const id = `payment-auto-${invoice.id}-${transaction.id}`;
+    if (nextAllocations.some(allocation => allocation.id === id)) return invoice;
+    nextAllocations.push({
+      id, invoiceId: invoice.id, transactionId: transaction.id, amount: roundMoney(outstanding),
+      currency: invoice.currency, source: transaction.source, accountName: transaction.accountName,
+      reference: transaction.id, mode: "automatic", confidence: transaction.invoiceMatchConfidence ?? 1,
+      matchReason: transaction.invoiceMatchSource === "ai" ? `AI: ${transaction.invoiceMatchReason ?? "Confirmed invoice match"}; exact amount and currency`
+        : "Exact amount and currency with a confirmed invoice match",
+      paidAt: transaction.date, createdAt
+    });
+    paidIds.add(invoice.id);
+    return { ...invoice, transactionId: transaction.id, updatedAt: createdAt };
+  });
+  const paidInvoices = new Map(applyPaymentState(nextInvoices.filter(invoice => paidIds.has(invoice.id)), nextAllocations)
+    .map(invoice => [invoice.id, invoice]));
+  return { invoices: nextInvoices.map(invoice => paidInvoices.get(invoice.id) ?? invoice), allocations: nextAllocations, paid: paidIds.size };
 }
 
 export function pruneSupersededAccrualRun(

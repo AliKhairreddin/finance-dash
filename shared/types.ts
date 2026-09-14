@@ -1068,6 +1068,7 @@ export interface AutoMatchInvoicePaymentsResult {
   exactMatches: number;
   toleranceMatches: number;
   aiMatches: number;
+  paidInvoices: number;
   reviewed: number;
 }
 

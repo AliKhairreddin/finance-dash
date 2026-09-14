@@ -4918,6 +4918,7 @@ async function loadInvoicePaymentMatchTransactions(
     );
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
+    let searchComplete = false;
     for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
       const page: {
         transactions: Transaction[];
@@ -4931,13 +4932,17 @@ async function loadInvoicePaymentMatchTransactions(
       });
       for (const transaction of page.transactions) transactions.set(transaction.id, transaction);
       const oldestDate = page.transactions.at(-1)?.date;
-      if (!page.hasMore || (oldestDate && oldestDate < earliestIssueDate)) break;
+      if (!page.hasMore || (oldestDate && oldestDate < earliestIssueDate)) {
+        searchComplete = true;
+        break;
+      }
       if (!page.continueCursor || seenCursors.has(page.continueCursor)) {
         throw new ApiError(503, "Invoice payment candidate pagination did not advance");
       }
       seenCursors.add(page.continueCursor);
       cursor = page.continueCursor;
     }
+    if (!searchComplete) throw new ApiError(503, "Invoice payment matching could not cover all candidate history; no payments were recorded");
   }
   return [...transactions.values()];
 }
@@ -4972,7 +4977,7 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
     }
   }
   // Persist deterministic links before any AI request can fail or outlive this state revision.
-  if (exact.matched > 0) await savePersisted(env, state);
+  if (exact.matched > 0 || exact.paid > 0) await savePersisted(env, state);
 
   const eligibleForAi = invoicePaymentAiCandidates({
     invoices: exact.invoices,
@@ -4992,7 +4997,7 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
       )
     : [];
   if (aiMatches.length === 0) {
-    return { exactMatches: exact.exactMatched, toleranceMatches: exact.toleranceMatched, aiMatches: 0, reviewed: eligibleForAi.length };
+    return { exactMatches: exact.exactMatched, toleranceMatches: exact.toleranceMatched, aiMatches: 0, paidInvoices: exact.paid, reviewed: eligibleForAi.length };
   }
   // Revalidate against current records after the external AI call, including intervening manual decisions.
   const currentState = await loadPersisted(env);
@@ -5018,11 +5023,12 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
       upsertPersistedTransaction(currentState, transaction);
     }
   }
-  if (ai.matched > 0) await savePersisted(env, currentState);
+  if (ai.matched > 0 || ai.paid > 0) await savePersisted(env, currentState);
   return {
     exactMatches: exact.exactMatched,
     toleranceMatches: exact.toleranceMatched,
     aiMatches: ai.matched,
+    paidInvoices: exact.paid + ai.paid,
     reviewed: eligibleForAi.length
   };
 }
@@ -8844,6 +8850,7 @@ export default {
           exactMatches: result.exactMatches,
           toleranceMatches: result.toleranceMatches,
           aiMatches: result.aiMatches,
+          paidInvoices: result.paidInvoices,
           reviewed: result.reviewed
         }));
       } catch (error) {

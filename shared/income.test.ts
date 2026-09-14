@@ -234,9 +234,12 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
     now: new Date("2026-07-10T12:00:00.000Z")
   });
   assert.equal(result.matched, 1);
-  assert.equal(result.invoices[0].status, "open");
+  assert.equal(result.invoices[0].status, "paid");
   assert.equal(result.invoices[0].transactionId, transaction.id);
-  assert.equal(result.allocations.length, 0);
+  assert.equal(result.paid, 1);
+  assert.equal(result.allocations.length, 1);
+  assert.equal(result.allocations[0].transactionId, transaction.id);
+  assert.equal(result.allocations[0].paidAt, transaction.date);
   assert.equal(result.transactions[0].matchedInvoiceId, invoice.id);
   assert.equal(result.transactions[0].invoiceMatchSource, "exact");
   assert.equal(result.transactions[0].invoiceMatchConfidence, 1);

@@ -756,12 +756,13 @@ export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymen
   transactions = transactions.map((transaction) => transactionById.get(transaction.id) ?? transaction);
   invoices = ai.invoices;
   paymentAllocations = ai.allocations;
-  if (exact.matched > 0 || ai.matched > 0) await persist();
+  if (exact.matched > 0 || ai.matched > 0 || exact.paid > 0 || ai.paid > 0) await persist();
   return {
     dashboard: getSnapshot(),
     exactMatches: exact.exactMatched,
     toleranceMatches: exact.toleranceMatched,
     aiMatches: ai.matched,
+    paidInvoices: exact.paid + ai.paid,
     reviewed: eligibleForAi.length
   };
 }

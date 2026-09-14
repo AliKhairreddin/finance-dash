@@ -1781,7 +1781,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
   const [suggestions, setSuggestions] = useState<InvoicePaymentSuggestions | null>(null);
   const [amount, setAmount] = useState(String(remaining));
   const [paidAt, setPaidAt] = useState(financeOperatingDate());
-  const [source, setSource] = useState<PaymentSource>("wise");
+  const [source, setSource] = useState<PaymentSource | "">("");
   const [transactionId, setTransactionId] = useState("");
   const [accountName, setAccountName] = useState("");
   const [reference, setReference] = useState("");
@@ -1793,7 +1793,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
     const row = availableInvoicePaymentTransactions(invoice, transactions, paymentAllocations).find(item => item.transaction.id === value);
     setTransactionId(row ? value : "");
     const nextSource = row?.transaction.source;
-    setSource(nextSource && paymentSourceOptions.some(item => item.value === nextSource) ? nextSource as PaymentSource : "wise");
+    setSource(nextSource && paymentSourceOptions.some(item => item.value === nextSource) ? nextSource as PaymentSource : "");
     setAccountName(row?.transaction.accountName ?? "");
     setReference(row?.transaction.id ?? "");
     setPaidAt(row ? toDateInput(row.transaction.date) : financeOperatingDate());
@@ -1906,6 +1906,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!source) { setError("Choose a payment source"); return; }
     setSubmitting(true);
     setError(null);
     try {
@@ -1931,7 +1932,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
         <div className="merit-unchanged-banner"><CircleAlert size={18} /><div><strong>Merit will stay unchanged</strong><span>This only updates payment status and history in this dashboard.</span></div></div>
         {error && <div className="inline-error">{error}</div>}
         <label>
-          Matched bank transaction (optional)
+          Bank transaction (all banks, optional)
           <NativeSelect
             value={transactionId}
             disabled={candidatesLoading}
@@ -1947,11 +1948,11 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
                   ? "Transactions unavailable · manual payment only"
                   : eligibleTransactions.length === 0
                     ? "No matches · manual payment only"
-                    : "No transaction · manual payment only"}
+                    : "Choose a bank transaction (optional)"}
             </NativeSelectOption>
             {eligibleTransactions.map(({ transaction, available }) => (
               <NativeSelectOption key={transaction.id} value={transaction.id}>
-                {suggestions?.suggestions.find(item => item.transaction.id === transaction.id)?.kind === "linked" ? "Matched · " : suggestedIds.has(transaction.id) ? "Suggested · " : ""}{dateLabel(transaction.date)} · {transaction.accountName} · {transaction.counterparty} · {money(available, transaction.currency)} remaining
+                {suggestions?.suggestions.find(item => item.transaction.id === transaction.id)?.kind === "linked" ? "Matched · " : suggestedIds.has(transaction.id) ? "Suggested · " : ""}{dateLabel(transaction.date)} · {paymentSourceOptions.find(item => item.value === transaction.source)?.label} · {transaction.accountName} · {transaction.counterparty} · {money(available, transaction.currency)} remaining
               </NativeSelectOption>
             ))}
           </NativeSelect>
@@ -1975,15 +1976,15 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
             </Button>
           )}
         </label>
-        {selectedSuggestion && <div className="row-actions payment-match-status"><span className="status-pill good">{selectedSuggestion.kind === "linked" ? "Matched to invoice" : selectedSuggestion.kind === "exact" ? "Exact match found" : "Review amount difference"}</span><InfoPopover label="Payment match details"><p>{selectedSuggestion.reason}</p><p>Confirming this payment adds it to the collection forecast history. Payment status changes only when you record it.</p></InfoPopover></div>}
+        {selectedSuggestion && <div className="row-actions payment-match-status"><span className="status-pill good">{selectedSuggestion.kind === "linked" ? "Matched to invoice" : selectedSuggestion.kind === "exact" ? "Exact match found" : "Review amount difference"}</span><InfoPopover label="Payment match details"><p>{selectedSuggestion.reason}</p><p>Confirming this payment adds it to the collection forecast history. Full exact matches are recorded as paid automatically. Amount differences need review.</p></InfoPopover></div>}
         {!candidatesLoading && suggestions && !suggestions.searchComplete && <div className="inline-error">The automatic search could not cover all bank history. Review the match or load older transactions.</div>}
         {!candidatesLoading && suggestions && !suggestions.recommendedTransactionId && suggestions.suggestions.length > 0 && <div className="field-help" role="status">Review the possible matches before recording payment.</div>}
         <div className="form-grid"><label>Amount<Input type="number" min="0.01" max={maximumPayment || undefined} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label></div>
-        <div className="form-grid"><label>Paid in / source<NativeSelect value={source} onValueChange={(value) => { paymentEditedRef.current = true; setSource(value as PaymentSource); }}>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label><label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="e.g. Wise USD balance" /></label></div>
+        <div className="form-grid"><label>Payment source<NativeSelect value={source} disabled={Boolean(selectedTransaction)} onValueChange={(value) => { paymentEditedRef.current = true; setSource(value as PaymentSource); }}><NativeSelectOption value="" disabled>Choose payment source</NativeSelectOption>{paymentSourceOptions.map((item) => <NativeSelectOption key={item.value} value={item.value}>{item.label}</NativeSelectOption>)}</NativeSelect></label><label>Account / wallet<Input value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Bank account or wallet" /></label></div>
         <label>Transaction reference<Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Bank or internal reference" /></label>
         <label>Payment note<Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context for this payment" /></label>
         <div className="payment-balance-line"><span>Invoice {money(invoice.amount, invoice.currency)}</span><span>Already recorded {money(allocated, invoice.currency)}</span>{selectedTransaction && <span>Transaction available {money(selectedTransaction.available, invoice.currency)}</span>}<strong>Remaining {money(remaining, invoice.currency)}</strong></div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || candidatesLoading || Number(amount) <= 0 || Number(amount) > maximumPayment || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record in dashboard</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || candidatesLoading || !source || Number(amount) <= 0 || Number(amount) > maximumPayment || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record in dashboard</Button></div>
       </form>
     </div>,
     document.body
