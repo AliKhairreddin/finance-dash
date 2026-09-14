@@ -84,6 +84,7 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import { loadInvoicePaymentSuggestions } from "../shared/invoicePaymentSuggestions";
 import {
   summarizeBankActivity,
   transactionBankActivityGroupKey,
@@ -3351,6 +3352,7 @@ async function importWiseStatement(env: Env, payload: ImportWiseStatementPayload
     ...state.wiseStatementImports.filter((item) => item.id !== importRecord.id)
   ]);
   await savePersisted(env, state);
+  await runInvoicePaymentMatching(env, false);
   await autoCategorizeBankTransactions(env, publicImportedTransactions);
   await rebuildProfitDistributionCache(env);
   return {
@@ -4941,6 +4943,11 @@ async function loadInvoicePaymentMatchTransactions(
 }
 
 async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePaymentsResult> {
+  const summary = await runInvoicePaymentMatching(env);
+  return { dashboard: await getSnapshot(env), ...summary };
+}
+
+export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise<Omit<AutoMatchInvoicePaymentsResult, "dashboard">> {
   const state = await loadPersisted(env);
   const candidates = await loadInvoicePaymentMatchTransactions(env, state.invoices);
   const originalTransactions = new Map(candidates.map((transaction) => [transaction.id, transaction]));
@@ -4959,6 +4966,14 @@ async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePayme
   state.invoices = exact.invoices;
   state.paymentAllocations = exact.allocations;
 
+  for (const transaction of exact.transactions) {
+    if (JSON.stringify(transaction) !== JSON.stringify(originalTransactions.get(transaction.id))) {
+      upsertPersistedTransaction(state, transaction);
+    }
+  }
+  // Persist deterministic links before any AI request can fail or outlive this state revision.
+  if (exact.matched > 0) await savePersisted(env, state);
+
   const eligibleForAi = invoicePaymentAiCandidates({
     invoices: exact.invoices,
     transactions: exact.transactions,
@@ -4966,7 +4981,7 @@ async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePayme
     providers: state.providers
   });
   const activeAiSettings = runtimeAiSettings(env, state.aiSettings);
-  const aiMatches = activeAiSettings.openRouterApiKey && eligibleForAi.length > 0
+  const aiMatches = useAi && activeAiSettings.openRouterApiKey && eligibleForAi.length > 0
     ? await runOpenRouterInvoicePaymentMatching(
         activeAiSettings,
         exact.transactions,
@@ -4976,27 +4991,35 @@ async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePayme
         env.PUBLIC_APP_URL
       )
     : [];
+  if (aiMatches.length === 0) {
+    return { exactMatches: exact.exactMatched, toleranceMatches: exact.toleranceMatched, aiMatches: 0, reviewed: eligibleForAi.length };
+  }
+  // Revalidate against current records after the external AI call, including intervening manual decisions.
+  const currentState = await loadPersisted(env);
+  const currentTransactions = await loadInvoicePaymentMatchTransactions(env, currentState.invoices);
+  const currentOriginals = new Map(currentTransactions.map(transaction => [transaction.id, transaction]));
+  for (const transaction of currentTransactions) {
+    upsertPersistedTransaction(currentState, transaction);
+    currentState.bankTransactionBaseline.set(transaction.id, JSON.stringify(transaction));
+    currentState.dirtyBankTransactionIds.delete(transaction.id);
+  }
   const ai = reconcileAiInvoicePayments({
-    invoices: exact.invoices,
-    transactions: exact.transactions,
-    allocations: exact.allocations,
-    providers: state.providers,
+    invoices: currentState.invoices,
+    transactions: currentTransactions,
+    allocations: currentState.paymentAllocations,
+    providers: currentState.providers,
     matches: aiMatches
   });
-  state.invoices = ai.invoices;
-  state.paymentAllocations = ai.allocations;
+  currentState.invoices = ai.invoices;
+  currentState.paymentAllocations = ai.allocations;
 
   for (const transaction of ai.transactions) {
-    if (JSON.stringify(transaction) !== JSON.stringify(originalTransactions.get(transaction.id))) {
-      upsertPersistedTransaction(state, transaction);
+    if (JSON.stringify(transaction) !== JSON.stringify(currentOriginals.get(transaction.id))) {
+      upsertPersistedTransaction(currentState, transaction);
     }
   }
-  if (exact.matched > 0 || ai.matched > 0) {
-    await savePersisted(env, state);
-    await saveBankTransactionUpdates(env, state);
-  }
+  if (ai.matched > 0) await savePersisted(env, currentState);
   return {
-    dashboard: await getSnapshot(env),
     exactMatches: exact.exactMatched,
     toleranceMatches: exact.toleranceMatched,
     aiMatches: ai.matched,
@@ -7294,6 +7317,20 @@ async function handleApi(
       ));
     }
 
+    const paymentSuggestionsMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/payment-suggestions$/);
+    if (paymentSuggestionsMatch && request.method === "GET") {
+      const convex = getConvexClient(env);
+      const serviceToken = getConvexServiceToken(env);
+      const state = await convex.query(api.dashboard.getState, { serviceToken });
+      const invoice = state?.invoices.find(item => item.id === decodeURIComponent(paymentSuggestionsMatch[1]));
+      if (!state || !invoice) throw new ApiError(404, "Invoice not found");
+      return json(await loadInvoicePaymentSuggestions({
+        invoice, invoices: state.invoices, allocations: state.paymentAllocations, providers: state.providers,
+        getTransaction: id => convex.query(api.banking.getTransaction, { serviceToken, id }),
+        getPage: cursor => invoicePaymentCandidates(env, invoice.currency, 200, cursor)
+      }));
+    }
+
     if (url.pathname === "/api/management-report" && request.method === "GET") {
       return json(await getManagementReportDashboard(env));
     }
@@ -7332,6 +7369,7 @@ async function handleApi(
         syncLatestBankActivity(env),
         syncMeritActivity(env)
       ]);
+      await runInvoicePaymentMatching(env, false);
       const failure = syncResults.find((result) => result.status === "rejected");
       if (failure?.status === "rejected") {
         const reason = failure.reason instanceof Error ? failure.reason.message : String(failure.reason);
@@ -8372,6 +8410,7 @@ async function telegramActionCommand(env: Env, command: string, args: string): P
   if (command === "sync") {
     if (args.toUpperCase() !== "CONFIRM") throw new ApiError(400, telegramHelp.sync);
     const results = await Promise.allSettled([syncLatestBankActivity(env), syncMeritActivity(env)]);
+    await runInvoicePaymentMatching(env, false);
     const failed = results.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
     await rebuildProfitDistributionCache(env);
@@ -8799,6 +8838,23 @@ export default {
         failures.push(error);
       }
       try {
+        const result = await runInvoicePaymentMatching(env);
+        console.log(JSON.stringify({
+          event: "invoice_payment_auto_match_completed",
+          exactMatches: result.exactMatches,
+          toleranceMatches: result.toleranceMatches,
+          aiMatches: result.aiMatches,
+          reviewed: result.reviewed
+        }));
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "invoice_payment_auto_match_failed",
+          scheduledTime: controller.scheduledTime,
+          error: error instanceof Error ? error.message : String(error)
+        }));
+        failures.push(error);
+      }
+      try {
         await checkSlashVirtualAccountBalanceAlerts(env);
       } catch (error) {
         console.error(JSON.stringify({
@@ -8818,25 +8874,6 @@ export default {
         }));
         failures.push(error);
       }
-      try {
-        const result = await autoMatchInvoicePayments(env);
-        if (result.exactMatches > 0 || result.toleranceMatches > 0 || result.aiMatches > 0) {
-          console.log(JSON.stringify({
-            event: "invoice_payment_auto_match_completed",
-            exactMatches: result.exactMatches,
-            toleranceMatches: result.toleranceMatches,
-            aiMatches: result.aiMatches,
-            reviewed: result.reviewed
-          }));
-        }
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "invoice_payment_auto_match_failed",
-          scheduledTime: controller.scheduledTime,
-          error: error instanceof Error ? error.message : String(error)
-        }));
-        failures.push(error);
-      }
     }
     if (controller.cron === "*/15 * * * *") {
       try { await archiveInvoiceOriginals(env); }
@@ -8844,6 +8881,7 @@ export default {
 
       try {
         await syncMeritActivity(env);
+        await runInvoicePaymentMatching(env, false);
       } catch (error) {
         console.error(JSON.stringify({
           event: "merit_activity_sync_failed",

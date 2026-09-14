@@ -101,6 +101,8 @@ Successful read-only Merit syncs import customers and vendors into Companies wit
 
 Invoices follow the dashboard lifecycle `draft → open → paid`. Merit payment status is read-only metadata and never controls or receives a local paid action. Payment allocations record source, date, amount, reference, and notes; allocations can cover part of an invoice or combine several payments.
 
+Bank transactions are matched to open invoices every five minutes and immediately after manual bank/Merit sync, Merit refresh, and statement import. Exact and fee-tolerant links are saved before the AI pass; AI decisions are checked against current records before saving. Automatic matching links the transaction but leaves payment confirmation manual. Record payment preselects a saved match (including older transactions outside the first page), fills its bank details, and searches for a unique exact candidate when no link exists. Ambiguous or fee-different candidates require review.
+
 ### Secret Boundaries
 
 Bank, partner, accounting, and OpenRouter credentials stay in the server/Worker environment. Merit API ID/key and `OPENROUTER_API_KEY` are never stored in Convex or returned to the browser. Calls into Convex require a matching `CONVEX_SERVICE_TOKEN`.

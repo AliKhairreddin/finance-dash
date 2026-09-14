@@ -6367,6 +6367,11 @@ th.amount .sortable-table-heading {
   width: min(640px, calc(100vw - 30px));
 }
 
+.payment-match-status > .note-popover {
+  position: static;
+  display: inline-flex;
+}
+
 .merit-unchanged-banner {
   margin: 0 0 12px;
   color: var(--amber);

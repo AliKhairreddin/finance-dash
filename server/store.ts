@@ -72,6 +72,7 @@ import type {
   WiseCardHolderTeamAssignment,
   WiseStatementImport
 } from "../shared/types";
+import { suggestInvoicePayments } from "../shared/invoicePaymentSuggestions";
 import {
   summarizeBankActivity,
   transactionBankActivityGroupKey,
@@ -2972,4 +2973,10 @@ export function getInvoicePaymentCandidates(
       limit
     }
   );
+}
+
+export function getInvoicePaymentSuggestions(invoiceId: string) {
+  const invoice = invoices.find(item => item.id === invoiceId);
+  if (!invoice) throw new Error("Invoice not found");
+  return suggestInvoicePayments({ invoice, invoices, transactions: getMatchedTransactions(), allocations: paymentAllocations, providers });
 }

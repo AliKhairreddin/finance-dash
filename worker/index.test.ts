@@ -974,6 +974,9 @@ test("five-minute scheduled handler drains the transaction classification backlo
       events.some((event) => event.includes('"event":"transaction_classification_backlog_failed"')),
       true
     );
+    const matchingIndex = events.findIndex(event => event.includes('"event":"invoice_payment_auto_match_failed"'));
+    const classificationIndex = events.findIndex(event => event.includes('"event":"transaction_classification_backlog_failed"'));
+    assert.ok(matchingIndex >= 0 && matchingIndex < classificationIndex, "Invoice matching must run before the historical classification backlog");
   } finally {
     console.error = originalConsoleError;
   }

@@ -331,7 +331,7 @@ export interface InvoicePaymentMatchCandidateGroup {
   invoices: Invoice[];
 }
 
-function invoicePaymentIdentityMatched(
+export function invoicePaymentIdentityMatched(
   transaction: Transaction,
   invoice: Invoice,
   provider: Provider | undefined,

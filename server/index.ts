@@ -84,6 +84,7 @@ import {
   getBankActivitySummary,
   getTransactionPage,
   getInvoicePaymentCandidates,
+  getInvoicePaymentSuggestions,
   getOpenRouterZdrModels,
   expenseDocumentById,
   getAnalyticsCategoryCompaniesPage,
@@ -561,6 +562,14 @@ app.get("/api/invoice-payment-candidates", (request, response, next) => {
     }
     const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
     response.json(getInvoicePaymentCandidates(currency, cursor, limit));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/invoices/:invoiceId/payment-suggestions", (request, response, next) => {
+  try {
+    response.json(getInvoicePaymentSuggestions(request.params.invoiceId));
   } catch (error) {
     next(error);
   }
