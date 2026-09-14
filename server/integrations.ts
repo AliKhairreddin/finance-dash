@@ -647,8 +647,7 @@ export async function createMeritInvoice(
         Amount: taxAmount
       }
     ],
-    TotalAmount: invoice.amount,
-    Hcomment: "Created from finance dashboard. Paid status is managed locally and is not written back to Merit."
+    TotalAmount: invoice.amount
   });
 
   const externalId = response.InvoiceId ?? response.SIHId ?? response.Id;

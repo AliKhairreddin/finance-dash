@@ -1978,8 +1978,7 @@ export async function createMeritInvoice(
           Amount: taxAmount
         }
       ],
-      TotalAmount: payload.amount,
-      Hcomment: "Created from finance dashboard. Paid status is managed locally in finance dashboard and is not written back to Merit."
+      TotalAmount: payload.amount
     }
   );
 
