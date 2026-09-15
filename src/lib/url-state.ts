@@ -119,6 +119,12 @@ function commitUrl(url: URL, history: UrlHistoryMode): void {
   window.dispatchEvent(new Event(urlStateChangeEvent));
 }
 
+export function useUrlStateHref(key: string, value: string, defaultValue: string): string {
+  const snapshot = useSyncExternalStore(subscribeToUrl, currentUrlSnapshot, serverUrlSnapshot);
+  const url = writeUrlState(snapshot, key, value, defaultValue);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 export function useUrlState<T extends string = string>(
   key: string,
   defaultValue: NoInfer<T>,

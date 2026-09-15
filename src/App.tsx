@@ -66,7 +66,8 @@ import {
   useState
 } from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { UrlStateLink } from "@/components/ui/url-state-link";
 import { BankPeriodPicker, CalendarPeriodPicker } from "@/components/ui/calendar-period-picker";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ActiveFilterBar, type ActiveFilter, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
@@ -2182,7 +2183,6 @@ function App() {
     <main className="app-shell">
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
@@ -2325,7 +2325,6 @@ function App() {
           dashboard={dashboard}
           backgroundSync={bankBackgroundSync}
           activeBank={bankTab}
-          setActiveBank={setBankTab}
           activityView={bankActivityView}
           setActivityView={changeBankActivityView}
           bankGroupType={bankGroupType}
@@ -2940,7 +2939,6 @@ function SidebarActions({
 
 function Sidebar({
   activeTab,
-  setActiveTab,
   incomeAutomationUnreadCount,
   themeMode,
   onToggleTheme,
@@ -2948,7 +2946,6 @@ function Sidebar({
   isSyncing
 }: {
   activeTab: ActiveTab;
-  setActiveTab: React.Dispatch<React.SetStateAction<ActiveTab>>;
   incomeAutomationUnreadCount: number;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
@@ -3012,24 +3009,25 @@ function Sidebar({
     };
   }, [actionsMenuOpen, mobileMenuOpen]);
 
-  function selectTab(id: ActiveTab) {
-    setActiveTab(id);
+  function closeNavigationMenus() {
     setMobileMenuOpen(false);
     setActionsMenuOpen(false);
   }
 
-  function navigationButton(item: SidebarItem, nested = false, mobile = false) {
+  function navigationLink(item: SidebarItem, nested = false, mobile = false) {
     const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : 0;
     return (
-      <Button
+      <UrlStateLink
         key={item.id}
+        stateKey="page"
+        value={item.id}
+        defaultValue="overview"
         aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} unread automation ${unreadCount === 1 ? "update" : "updates"}` : item.label}
-        className={`${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-meta" : ""}`}
-        onClick={() => selectTab(item.id)}
+        className={`${buttonVariants()} ${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-meta" : ""}`}
+        onNavigate={closeNavigationMenus}
         aria-current={activeTab === item.id ? "page" : undefined}
         role={mobile ? "menuitem" : undefined}
         title={item.label}
-        type="button"
       >
         {item.icon}
         <span>{item.label}</span>
@@ -3038,7 +3036,7 @@ function Sidebar({
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
-      </Button>
+      </UrlStateLink>
     );
   }
 
@@ -3063,18 +3061,18 @@ function Sidebar({
           </Button>
           {mobileMenuOpen && (
             <div className="mobile-nav-menu" data-testid="mobile-nav-menu" id="mobile-navigation-menu" role="menu">
-              {primaryItems.map((item) => navigationButton(item, false, true))}
+              {primaryItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label">Accounting</div>
-              {accountingItems.map((item) => navigationButton(item, false, true))}
+              {accountingItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label">Cash Flow</div>
-              {cashFlowItems.map((item) => navigationButton(item, false, true))}
+              {cashFlowItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
               </div>
-              {operationsItems.map((item) => navigationButton(item, false, true))}
+              {operationsItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label">Workspace</div>
-              {workspaceItems.map((item) => navigationButton(item, false, true))}
+              {workspaceItems.map((item) => navigationLink(item, false, true))}
             </div>
           )}
         </div>
@@ -3097,25 +3095,25 @@ function Sidebar({
         <strong>Finance</strong>
       </div>
       <nav className="sidebar-nav">
-        {primaryItems.map((item) => navigationButton(item))}
+        {primaryItems.map((item) => navigationLink(item))}
         <div className="sidebar-section-label">Accounting</div>
         <div className="sidebar-income-group">
-          {accountingItems.map((item) => navigationButton(item, true))}
+          {accountingItems.map((item) => navigationLink(item, true))}
         </div>
         <div className="sidebar-section-label">Cash Flow</div>
         <div className="sidebar-income-group">
-          {cashFlowItems.map((item) => navigationButton(item, true))}
+          {cashFlowItems.map((item) => navigationLink(item, true))}
         </div>
         <div className="sidebar-section-label has-badge">
           <span>Operations</span>
           <span className="sidebar-beta-badge">Beta</span>
         </div>
         <div className="sidebar-income-group">
-          {operationsItems.map((item) => navigationButton(item, true))}
+          {operationsItems.map((item) => navigationLink(item, true))}
         </div>
         <div className="sidebar-section-label">Workspace</div>
         <div className="sidebar-income-group">
-          {workspaceItems.map((item) => navigationButton(item, true))}
+          {workspaceItems.map((item) => navigationLink(item, true))}
         </div>
       </nav>
       <div className="sidebar-footer">
@@ -3536,7 +3534,6 @@ function BanksView({
   dashboard,
   backgroundSync,
   activeBank,
-  setActiveBank,
   activityView,
   setActivityView,
   bankGroupType,
@@ -3609,7 +3606,6 @@ function BanksView({
   dashboard: DashboardSnapshot;
   backgroundSync: BankBackgroundSyncState | null;
   activeBank: BankTab;
-  setActiveBank: (source: BankTab) => void;
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
   bankGroupType: "" | BankActivityGroupType;
@@ -3680,6 +3676,7 @@ function BanksView({
   onRefreshRates: () => Promise<void>;
 }) {
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false);
+  const [bankNavigationOpen, setBankNavigationOpen] = useState(false);
 
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
@@ -4012,19 +4009,33 @@ function BanksView({
               </NativeSelect>
             )}
             <div className="bank-source-select">
-              <NativeSelect
-                aria-label="Bank source"
-                value={activeBank}
-                onValueChange={(value) => setActiveBank(value as BankTab)}
-              >
-                <NativeSelectOption value="all">All</NativeSelectOption>
-                {bankSources.map((source) => (
-                  <NativeSelectOption key={source.id} value={source.id}>
-                    {source.label}
-                  </NativeSelectOption>
-                ))}
-                <NativeSelectOption value="holdings">Cash & wallets</NativeSelectOption>
-              </NativeSelect>
+              <Menu.Root open={bankNavigationOpen} onOpenChange={setBankNavigationOpen}>
+                <Menu.Trigger
+                  aria-label="Bank source"
+                  className="searchable-select-control simple-select-control bank-navigation-trigger"
+                >
+                  <span className="searchable-select-input simple-select-value">
+                    {activeBank === "all" ? "All" : activeSource?.label ?? "Cash & wallets"}
+                  </span>
+                </Menu.Trigger>
+                <Menu.Portal>
+                  <Menu.Positioner align="start" sideOffset={5} className="searchable-select-positioner">
+                    <Menu.Popup aria-label="Banks" className="searchable-select-popup bank-navigation-menu">
+                      {[{ id: "all", label: "All" }, ...bankSources, { id: "holdings", label: "Cash & wallets" }].map((source) => (
+                        <Menu.LinkItem
+                          key={source.id}
+                          className="searchable-select-option"
+                          aria-current={activeBank === source.id ? "page" : undefined}
+                          data-selected={activeBank === source.id ? "" : undefined}
+                          render={<UrlStateLink stateKey="bankView" value={source.id} defaultValue="all" onNavigate={() => setBankNavigationOpen(false)} />}
+                        >
+                          <span className="searchable-select-option-label">{source.label}</span>
+                        </Menu.LinkItem>
+                      ))}
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
             </div>
           </div>
         </div>

@@ -1159,7 +1159,7 @@ button:disabled {
 }
 
 .sidebar-brand,
-.sidebar-nav button {
+.sidebar-nav a {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
@@ -1201,7 +1201,8 @@ button:disabled {
   gap: 3px;
 }
 
-.sidebar-nav button {
+.sidebar-nav a {
+  text-decoration: none;
   min-height: 40px;
   width: 100%;
   justify-content: stretch;
@@ -1216,17 +1217,17 @@ button:disabled {
   line-height: 1.25;
 }
 
-.sidebar-nav button svg {
+.sidebar-nav a svg {
   justify-self: center;
 }
 
-.sidebar-nav button:hover {
+.sidebar-nav a:hover {
   color: var(--ink);
   background: var(--hover-bg);
   border-color: var(--line-soft);
 }
 
-.sidebar-nav button.active {
+.sidebar-nav a.active {
   color: var(--sidebar-accent-foreground);
   background: var(--sidebar-accent);
   border-color: transparent;
@@ -1234,8 +1235,8 @@ button:disabled {
   box-shadow: none;
 }
 
-.sidebar-nav button.has-meta,
-.mobile-nav-menu button.has-meta {
+.sidebar-nav a.has-meta,
+.mobile-nav-menu a.has-meta {
   grid-template-columns: 18px minmax(0, 1fr) auto;
 }
 
@@ -5581,7 +5582,7 @@ th.amount .sortable-table-heading {
   margin-bottom: 6px;
 }
 
-.sidebar-nav button.nested {
+.sidebar-nav a.nested {
   min-height: 36px;
   padding-left: 10px;
 }
@@ -7154,7 +7155,8 @@ th.amount .sortable-table-heading {
     display: none;
   }
 
-  .mobile-nav-menu button {
+  .mobile-nav-menu a {
+    text-decoration: none;
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
     min-height: 40px;
@@ -7174,15 +7176,15 @@ th.amount .sortable-table-heading {
     text-align: left;
   }
 
-  .mobile-nav-menu button.has-meta {
+  .mobile-nav-menu a.has-meta {
     grid-template-columns: 18px minmax(0, 1fr) auto;
   }
 
-  .mobile-nav-menu button svg {
+  .mobile-nav-menu a svg {
     justify-self: center;
   }
 
-  .mobile-nav-menu button.active {
+  .mobile-nav-menu a.active {
     color: var(--sidebar-accent-foreground);
     border-color: transparent;
     background: var(--sidebar-accent);
@@ -7224,7 +7226,7 @@ th.amount .sortable-table-heading {
     display: none;
   }
 
-  .sidebar-nav button {
+  .sidebar-nav a {
     width: auto;
     flex: 0 0 auto;
     justify-content: center;
@@ -7780,6 +7782,18 @@ th.amount .sortable-table-heading {
 
 .wise-entity-select {
   width: 132px;
+}
+
+.bank-navigation-trigger {
+  width: 100%;
+}
+
+.bank-navigation-menu {
+  padding: 4px;
+}
+
+.bank-navigation-menu a {
+  text-decoration: none;
 }
 
 .bank-source-select .searchable-select,
@@ -9692,20 +9706,20 @@ body {
   display: none;
 }
 
-.sidebar-nav button {
+.sidebar-nav a {
   min-height: 39px;
   border-radius: 11px;
   font-size: 0.84rem;
 }
 
-.sidebar-nav button.active {
+.sidebar-nav a.active {
   color: var(--sidebar-accent-foreground);
   border-color: transparent;
   background: var(--sidebar-accent);
   box-shadow: none;
 }
 
-.sidebar-nav button.active svg {
+.sidebar-nav a.active svg {
   color: currentColor;
 }
 
