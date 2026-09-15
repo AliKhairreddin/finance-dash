@@ -1,3 +1,4 @@
+import { handleAmexStatementApi } from "./amexStatements";
 import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
 import { pendingInvoices } from "../shared/pendingInvoices";
 import { buildPartnerReportData, canSharePartnerUpdates } from "../shared/partnerUpdates";
@@ -3250,7 +3251,7 @@ function integrationStatus(
       message:
         bankIssues.amex ?? (amexNeeds.length === 0
           ? "Balances and transactions use the configured Amex cursor contract and resume in bounded pages."
-          : "Amex rows stay empty until OAuth, account, response-path, and cursor settings are configured."),
+          : "Import Amex PDF or CSV statements from Banks → Amex or send them to Telegram. Live connectivity is not configured."),
       needs: amexNeeds,
       issue: bankIssues.amex
     },
@@ -7058,6 +7059,8 @@ async function handleApi(
       partnerRecipients(env);
       return json(await job.start(match[1], session.username, await getPartnerReportData(env)), { status: 202 });
     }
+    const statementResponse = await handleAmexStatementApi(request, env);
+    if (statementResponse) return statementResponse;
     const documentResponse = await handleDocumentApi(request, env);
     if (documentResponse) return documentResponse;
 
@@ -8672,6 +8675,7 @@ export async function handleTelegramCommand(
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
       if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
+      if (command === "amex") return "📥 Import Amex statements\n\nSend an Amex PDF or CSV here. Netherlands defaults: EUR and day/month/year. For CSVs or unclear filenames, add a caption: /amex EUR 1234 (primary card’s last four digits). Use the same primary card on every upload. Add mdy for US date order.\n\nClear statements import automatically; unclear PDF details are held for review in Banks → Amex. Originals are saved, existing classifications are kept, and duplicate rows are skipped.\n\n" + new URL("/?page=banks&bankView=amex&amexImport=open", env.PUBLIC_APP_URL);
       if (command === "share_updates") {
         if (args) throw new ApiError(400, "Use /share_updates to send cash flow and open invoices to Amin, Sani, Ben, Ali, and Ali M.");
         partnerSender(env, user.username);
@@ -8732,6 +8736,10 @@ export default {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try { const body = await request.json() as { ids?: string[] }; if (body.ids && (!Array.isArray(body.ids) || body.ids.length > 8 || body.ids.some(id => typeof id !== "string"))) return json({ message: "Invalid invoice batch" }, { status: 400 }); return json(await archiveInvoiceOriginals(env, body.ids)); }
       catch { return json({ message: "Invoice archive could not run" }, { status: 502 }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/amex/classify") {
+      if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try { return json(await categorizeHistoricalBankBacklog(env)); } catch { return json({ message: "Classification deferred to the scheduled backlog" }, { status: 503 }); }
     }
     if (new URL(request.url).pathname === "/api/internal/documents/process") {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });

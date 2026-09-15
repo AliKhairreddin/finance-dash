@@ -60,6 +60,7 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "companies", description: "List companies", access: "read", input: "tap" },
   { command: "teams", description: "List teams", access: "read", input: "tap" },
   { command: "health", description: "Show integration health", access: "read", input: "tap" },
+  { command: "amex", description: "Import Amex PDF or CSV statements", access: "action", input: "tap" },
   { command: "sync", description: "Run bank and Merit synchronization", access: "action", input: "required", arguments: "CONFIRM", example: "/sync CONFIRM" },
   { command: "categorize", description: "Categorize a transaction", access: "action", input: "required", arguments: "<transaction ID> | <category> | <transaction|merchant> | CONFIRM" },
   { command: "assign_company", description: "Assign a transaction company", access: "action", input: "required", arguments: "<transaction ID> | <company ID> | <transaction|merchant> | CONFIRM" },

@@ -1,3 +1,4 @@
+import { useAmexStatementAccounts } from "./useAmexStatementAccounts";
 import { ArrowDownRight, ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -194,11 +195,12 @@ export function AllBankTransactionsView({
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
     [dashboard.expenses]
   );
+  const statementAccounts = useAmexStatementAccounts(source === "amex" || source === "all");
   const accountOptions = useMemo(
-    () => dashboard.accounts
+    () => [...dashboard.accounts, ...statementAccounts]
       .filter((item) => bankSources.some((bankSource) => bankSource.id === item.source))
       .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
-    [dashboard.accounts]
+    [dashboard.accounts, statementAccounts]
   );
   const virtualAccounts = useMemo(
     () => slashVirtualAccountOptions(dashboard.accounts),
@@ -221,6 +223,7 @@ export function AllBankTransactionsView({
   useEffect(() => {
     if (account === "all") return;
     const selectedAccount = accountOptions.find((item) => item.id === account);
+    if (!selectedAccount && account.startsWith("amex-statement-") && (source === "all" || source === "amex")) return;
     if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
   }, [account, accountOptions, setAccount, source]);
 

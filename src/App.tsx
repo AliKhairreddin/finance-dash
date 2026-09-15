@@ -1,3 +1,5 @@
+import { useAmexStatementAccounts } from "./features/banking/useAmexStatementAccounts";
+import { AmexStatementImport } from "./features/banking/AmexStatementImport";
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
 import { claimAutomaticHistoryRequests, waitForBankHistorySync } from "../shared/bankHistorySync";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
@@ -2360,6 +2362,7 @@ function App() {
           revolutDateRange={revolutDateRange}
           slashTransactions={slashTransactions}
           slashDateRange={slashDateRange}
+          onStatementImported={async () => { await loadDashboard(); await refreshCurrentTransactionPage(); setAnalyticsDataRevision(revision => revision + 1); }}
           amexTransactions={amexTransactions}
           bankPeriodMetrics={bankPeriodMetrics}
           bankPeriodMetricsError={bankPeriodMetricsError}
@@ -3570,6 +3573,7 @@ function BanksView({
   revolutDateRange,
   slashTransactions,
   slashDateRange,
+  onStatementImported,
   amexTransactions,
   bankPeriodMetrics,
   bankPeriodMetricsError,
@@ -3642,6 +3646,7 @@ function BanksView({
   revolutDateRange: RevolutTransactionDateRange;
   slashTransactions: Transaction[];
   slashDateRange: SlashTransactionDateRange;
+  onStatementImported: () => Promise<void>;
   amexTransactions: Transaction[];
   bankPeriodMetrics: BankPeriodMetrics | null;
   bankPeriodMetricsError: string | null;
@@ -3675,6 +3680,7 @@ function BanksView({
   onRefreshRates: () => Promise<void>;
 }) {
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false);
+
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
   for (const status of dashboard.integrationStatus) {
@@ -3715,6 +3721,7 @@ function BanksView({
 
   useEffect(() => {
     if (bankAccountFilter === "all" || !activeSource) return;
+    if (activeSource.id === "amex" && bankAccountFilter.startsWith("amex-statement-")) return;
     const selectedAccount = dashboard.accounts.find((account) => account.id === bankAccountFilter);
     if (!selectedAccount || selectedAccount.source !== activeSource.id) setBankAccountFilter("all");
   }, [activeSource, bankAccountFilter, dashboard.accounts, setBankAccountFilter]);
@@ -3986,11 +3993,11 @@ function BanksView({
               {headerMetrics}
             </div>
           )}
-          <BankSyncStatus
-            backgroundSync={backgroundSync}
-            integrationStatuses={relevantIntegrationStatuses}
-          />
+          {activeBank === "amex" && !activeSourceStatus?.configured
+            ? <span className="status-pill">Statement imports</span>
+            : <BankSyncStatus backgroundSync={backgroundSync} integrationStatuses={relevantIntegrationStatuses} />}
           <div className="bank-header-controls">
+            {activeBank === "amex" && <AmexStatementImport onImported={onStatementImported} />}
             {activeBank === "wise" && (
               <NativeSelect
                 aria-label="Wise entity"
@@ -4521,9 +4528,12 @@ function BankReconciliationView({
     : matchFilter === "all"
       ? "All transactions"
       : "Needs category";
-  const accountOptions = dashboard.accounts
-    .filter((account) => account.source === source)
-    .sort((left, right) => left.name.localeCompare(right.name));
+  const statementAccounts = useAmexStatementAccounts(source === "amex");
+  const accountOptions = [...new Map([
+    ...statementAccounts.map(account => [account.id, account] as const),
+    ...dashboard.accounts.filter(account => account.source === source).map(account => [account.id, { id: account.id, name: account.name }] as const),
+    ...rows.filter(row => row.accountId).map(row => [row.accountId!, { id: row.accountId!, name: row.accountName }] as const)
+  ]).values()].sort((left, right) => left.name.localeCompare(right.name));
   const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts);
   const activeFilters: ActiveFilter[] = [
     ...(source === "slash" && slashVirtualAccount !== "all" ? [{

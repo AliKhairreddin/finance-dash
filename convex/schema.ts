@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { financialDocumentFields } from "./documentSchema";
+import { amexStatementFields } from "./amexStatementSchema";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -589,6 +590,8 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  amexStatementImports: defineTable(amexStatementFields).index("by_content_hash", ["contentHash"]),
+  amexStatementAccounts: defineTable({ id: v.string(), name: v.string(), source: v.literal("amex"), currency: v.string() }).index("by_account_id", ["id"]),
   financialDocuments: defineTable(financialDocumentFields)
     .index("by_storage", ["storageId"])
     .index("by_content_hash", ["contentHash"])

@@ -3,6 +3,9 @@ import { prepareTelegramReply, sendTelegramMessage, sendTelegramDocument, telegr
 import { handleTelegramCommand } from "./handler";
 import { financeTelegramCommands } from "./telegramCommandCatalog";
 import { ingestDocument } from "./documentIntake";
+import { amexStatementHint, stageAmexStatement, telegramAmexOptions } from "./amexStatements";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../convex/_generated/api";
 
 export interface TelegramConversationTurn { question: string; answer: string; at: number }
 type PreparedReply = NonNullable<Awaited<ReturnType<typeof prepareTelegramReply>>>;
@@ -13,8 +16,24 @@ export async function ingestTelegramDocument(env: WorkerEnv, user: TelegramAuthU
   const file = message.attachment!;
   try {
     const caption = message.caption ?? "";
+    const bytes = new Uint8Array(await downloadTelegramAttachment(env, file));
+    const explicitAmex = amexStatementHint(file.fileName, caption);
+    const pdf = new TextDecoder().decode(bytes.subarray(0, 5)) === "%PDF-";
+    if (explicitAmex || pdf || /\.csv$/i.test(file.fileName)) {
+      const statement = await stageAmexStatement(env, { bytes, fileName: file.fileName, source: "telegram" }, telegramAmexOptions(caption), pdf ? !/^\/amex\b/i.test(caption.trim()) : !explicitAmex);
+      if (statement) {
+        const convex = new ConvexHttpClient(env.CONVEX_URL), serviceToken = env.CONVEX_SERVICE_TOKEN;
+        const detail = await convex.query(api.amexStatements.get, { serviceToken, id: statement.id });
+        if (!detail) throw new Error("Statement could not be read");
+        const link = new URL(`/?page=banks&bankView=amex&amexStatement=${statement.id}`, env.PUBLIC_APP_URL);
+        if (detail.record.reviewReasons.length && ["ready", "failed"].includes(detail.record.status)) return `Amex statement saved for review: ${file.fileName}\n\n${detail.record.reviewReasons.join("\n")}\n\n${link}`;
+        if (detail.record.status === "imported") return `Already imported: ${file.fileName}\n${detail.record.inserted} new transactions · ${detail.record.duplicates} duplicates\n\n${link}`;
+        await convex.mutation(api.amexStatements.start, { serviceToken, id: statement.id, reviewed: false });
+        return `Amex import queued: ${file.fileName}\n${detail.record.transactionCount} transactions · ${detail.record.currency} · card •${detail.record.cardLastFour}\n\nClassification runs automatically. View progress and duplicate counts:\n${link}`;
+      }
+    }
     const entity = /\bdigital nudge\b|\bdn\b/i.test(caption) ? "dn" : /\blove me do\b|\blmd\b/i.test(caption) ? "lmd" : undefined;
-    const result = await ingestDocument(env, { bytes: new Uint8Array(await downloadTelegramAttachment(env, file)), fileName: file.fileName, contentType: file.contentType, source: "telegram", sourceContext: caption, sender: user.username, intakeKey: `telegram:${file.uniqueId}`, entity });
+    const result = await ingestDocument(env, { bytes, fileName: file.fileName, contentType: file.contentType, source: "telegram", sourceContext: caption, sender: user.username, intakeKey: `telegram:${file.uniqueId}`, entity });
     return `${result.duplicate ? "Already saved" : "Saved and processing"}: ${file.fileName}\n\n${new URL(`/?page=documents&documentSearch=${encodeURIComponent(file.fileName)}`, env.PUBLIC_APP_URL)}\n\nMatching will leave payment confirmation for review.`;
   } catch (error) { return `Couldn’t process the document: ${error instanceof Error ? error.message : "Upload failed"}`; }
 }

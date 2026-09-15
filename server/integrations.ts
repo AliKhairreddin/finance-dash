@@ -219,7 +219,7 @@ export function getIntegrationStatus(
       message:
         bankIssues.amex ?? (amexNeeds.length === 0
           ? "Ready to mint an Amex access token and pull card balances plus transaction activity."
-          : "Amex rows stay empty until OAuth credentials, account IDs, and approved API paths are configured."),
+          : "Import Amex PDF or CSV statements from Banks → Amex or send them to Telegram. Live connectivity is not configured."),
       needs: amexNeeds,
       issue: bankIssues.amex
     },

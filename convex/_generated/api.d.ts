@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as amexStatementProcessing from "../amexStatementProcessing.js";
+import type * as amexStatementSchema from "../amexStatementSchema.js";
+import type * as amexStatements from "../amexStatements.js";
 import type * as analytics from "../analytics.js";
 import type * as bankLease from "../bankLease.js";
 import type * as bankSync from "../bankSync.js";
@@ -27,6 +30,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  amexStatementProcessing: typeof amexStatementProcessing;
+  amexStatementSchema: typeof amexStatementSchema;
+  amexStatements: typeof amexStatements;
   analytics: typeof analytics;
   bankLease: typeof bankLease;
   bankSync: typeof bankSync;

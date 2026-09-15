@@ -1390,7 +1390,7 @@ export const getTransaction = query({
   }
 });
 
-async function applyActivityBatch(
+export async function applyActivityBatch(
   ctx: MutationCtx,
   args: ActivityBatchArgs
 ): Promise<{

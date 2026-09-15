@@ -12294,3 +12294,26 @@ body {
   .expense-table td:nth-child(2) { grid-column: 2; grid-row: 2; }
   .expense-table td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
 }
+
+/* Amex statement upload and review */
+.amex-import-dialog { width: min(1040px, calc(100vw - 32px)); max-width: min(1040px, calc(100vw - 32px)); max-height: 90dvh; overflow: auto; padding: 24px; }
+.amex-import-heading, .amex-statement-title, .amex-statement-summary, .amex-import-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.amex-import-heading { padding-right: 24px; }
+.amex-upload-form { display: grid; gap: 14px; }
+.amex-upload-form label { display: grid; gap: 6px; font-size: 12px; }
+.amex-upload-options { display: grid; grid-template-columns: 90px 155px minmax(170px, 1fr) auto; gap: 12px; align-items: end; }
+.amex-statement-table { max-height: 42dvh; overflow: auto; }
+.amex-statement-table table { width: 100%; }
+.amex-statement-table td { max-width: 400px; overflow-wrap: anywhere; }
+.amex-statement-summary { font-size: 12px; }
+.amex-statement-title strong { flex: 1; overflow-wrap: anywhere; }
+.amex-import-actions { justify-content: flex-end; }
+.amex-import-result { font-size: 13px; }
+.amex-review-check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+@media (max-width: 640px) { .amex-import-dialog { padding: 16px; } .amex-upload-options { grid-template-columns: 1fr 1fr; } .amex-statement-table { max-height: 35dvh; } }
+.amex-import-heading .note-popover { position: relative; inset: auto; display: inline-flex; }
+.amex-statement-table table { min-width: 680px; border-collapse: collapse; }
+.amex-statement-table th, .amex-statement-table td { padding: 9px 12px; text-align: left; }
+.amex-statement-table th:first-child, .amex-statement-table td:first-child { padding-left: 0; white-space: nowrap; }
+.amex-statement-table tr + tr td { border-top: 1px solid var(--border); }
+.amex-statement-table th { border-bottom: 1px solid var(--border); }

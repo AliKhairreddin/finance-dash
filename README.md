@@ -38,7 +38,7 @@ The system follows three rules:
 - Show a clearly labeled approximate USD total from keyless Coinbase rates while retaining exact native balances.
 - Track profit-share, salary, payable, paid, waived, deferred, and manually adjusted distribution amounts.
 - Import the legacy Management Report workbook into a dedicated Management workspace with summary, business-unit, platform, offer, ledger, and ownership views.
-- Display Wise, Revolut, Slash, Amex-ready, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
+- Display Wise, Revolut, Slash, statement-based Amex, revenue, receivable, payable, company, and distribution workflows without fabricating unavailable data.
 
 Cash Flow Position accepts arithmetic such as `=1000+250-50` in amount cells and preserves the formula alongside its numeric result. Export PNG downloads one portrait image directly, with each cash account/provider consolidated into a USD total and Wise DN and Wise LMD kept separate. Line notes, due dates, and the report note remain in the export. Each table has live-value and Save controls; Save All saves the complete working snapshot. A section save preserves other saved tables and leaves other local edits pending. Open balances includes search, and table sorting is retained in the URL.
 
@@ -82,6 +82,16 @@ Counterparty and category aliases are created from reviewed matches. Revenue rul
 ### Stale-Write Protection
 
 Convex state includes revision-aware write protection so an older browser snapshot cannot silently overwrite newer decisions.
+
+### Amex statement imports
+
+Banks → Amex → **Statements** accepts PDF statements and CSV activity exports, with a sortable preview and recent import history. Netherlands defaults are EUR and day/month/year; currency, date order, and primary card last four digits can be changed before upload. Originals remain protected and downloadable. Imports do not create a live card balance.
+
+The Telegram **/amex** command explains the workflow. Ali and Ali M can send a PDF directly: American Express statements are detected separately from supplier receipts/invoices. For CSVs or unclear filenames, add the caption `/amex EUR 1234`, replacing `1234` with the primary card’s last four digits. Use the same primary card for each upload; supplementary-card identifiers and cardholders remain attached to their rows. Add `mdy` for month/day/year CSV dates. Clear statements import automatically; uncertain PDF extraction is held for review in the dashboard. The bot returns a protected link to progress and duplicate counts.
+
+Files are limited to 10 MB, 1,000 transactions, and 600 KB of normalized rows. Dutch/English CSV headers, decimal commas, quoted fields, refunds and repayments are supported. Invalid rows reject the whole preview. PDF extraction must finish completely and reconcile any printed charge/credit control totals; absent totals require review. A statement is not a supplier VAT invoice and never enters the expense-document intake path.
+
+The original file hash prevents repeated extraction/import. Transaction identities use primary and supplementary card identifiers, currency, transaction date, amount, normalized description and occurrence count. Overlapping exports with matching transaction details retain existing categories, companies, owners and invoice links; identical repeated charges remain separate. Export complete days and consistent descriptions: descriptions that differ materially between PDF and CSV do not identify the same transaction automatically. Imports run as durable batches of 100; a failed import shows its progress and can resume. They update the shared ledger, analytics and profit facts, and enter the existing category/company classification queue immediately, with the scheduled queue processing remaining work every five minutes. Card repayments are internal transfers.
 
 ### Expense Source Documents
 
