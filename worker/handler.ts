@@ -3,8 +3,9 @@ import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } fr
 import { pendingInvoices } from "../shared/pendingInvoices";
 import { buildPartnerReportData, canSharePartnerUpdates } from "../shared/partnerUpdates";
 import { partnerRecipients, partnerSender } from "./partnerUpdateDelivery";
-import { fetchSlashDailyCardActivity } from "../shared/slashApi";
+import { fetchSlashCashbackActivity, fetchSlashDailyCardActivity } from "../shared/slashApi";
 import { buildTelegramSlashReport } from "./telegramSlashReport";
+import { buildTelegramSlashCashbackReport, slashCashbackReportPeriod } from "./telegramSlashCashbackReport";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
@@ -4023,6 +4024,14 @@ export async function getTelegramSlashReport(env: Env): Promise<string> {
   return buildTelegramSlashReport({ accounts, transactions, asOf, reserveUsd: Number(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD) });
 }
 
+export async function getTelegramSlashCashbackReport(env: Env, asOf = Date.now()): Promise<string> {
+  const activity = await fetchSlashCashbackActivity({
+    baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
+    ...slashCashbackReportPeriod(asOf)
+  });
+  return buildTelegramSlashCashbackReport({ ...activity, asOf });
+}
+
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
     .filter((connection) => connection.source === "wise" || connection.source === "revolut");
@@ -7997,6 +8006,11 @@ async function telegramReadCommand(
   command: string,
   args: string
 ): Promise<TelegramCommandReply> {
+  if (command === "cashback_report") {
+    cashReportRecipient(env, user.username, "daily-slash-cashback");
+    const messages = splitCashReport(await getTelegramSlashCashbackReport(env));
+    return messages.length === 1 ? messages[0] : { messages };
+  }
   if (command === "slash_report") {
     cashReportRecipient(env, user.username, "daily-slash");
     const messages = splitCashReport(await getTelegramSlashReport(env));
@@ -8786,6 +8800,13 @@ export default {
         await sendTelegramCashReportIfDue(env, controller.scheduledTime, () => getTelegramSlashReport(env), "daily-slash");
       } catch (error) {
         console.error(JSON.stringify({ event: "telegram_slash_report_failed", scheduledTime: controller.scheduledTime, error: error instanceof Error ? error.message : String(error) }));
+        failures.push(error);
+      }
+      try {
+        await sendTelegramCashReportIfDue(env, controller.scheduledTime,
+          () => getTelegramSlashCashbackReport(env, controller.scheduledTime), "daily-slash-cashback");
+      } catch (error) {
+        console.error(JSON.stringify({ event: "telegram_slash_cashback_report_failed", scheduledTime: controller.scheduledTime, error: error instanceof Error ? error.message : String(error) }));
         failures.push(error);
       }
       try {

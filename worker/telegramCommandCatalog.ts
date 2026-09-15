@@ -30,6 +30,7 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "needs_review", description: "Show transactions needing review", access: "read", input: "optional", arguments: "[period] [bank]", example: "/needs_review last-7-days" },
   { command: "search", description: "Search this month's transactions", access: "read", input: "required", arguments: "<text>", example: "/search Meta" },
   { command: "cashback", description: "Show Slash cashback", access: "read", input: "optional", arguments: "[period]", example: "/cashback last-month" },
+  { command: "cashback_report", description: "Show yesterday's Slash cards below 2.3% cashback", access: "read", input: "tap" },
   { command: "export_transactions", description: "Export transactions as CSV", access: "read", input: "optional", arguments: "[period] [bank] [search text]", example: "/export_transactions this-month slash" },
   { command: "analytics", description: "Show period analytics", access: "read", input: "optional", arguments: "[period]", example: "/analytics last-month" },
   { command: "spend", description: "Show spend totals", access: "read", input: "optional", arguments: "[period]", example: "/spend last-7-days" },

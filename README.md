@@ -235,6 +235,12 @@ The Slash view loads the most recent 45 calendar days by default. Use the From a
 
 Eligible Slash card purchases retain the API's native cashback amount and rate. The Slash summary separates cashback earned on purchases from cashback credits posted to the account, and each eligible transaction displays its earned amount and effective rate.
 
+### Daily Slash cashback exceptions
+
+At 13:00 `Asia/Beirut`, Ali and Ali M receive a protected Telegram report of the previous Beirut calendar day's posted Slash card purchases, read directly from Slash with complete pagination. `TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS` controls this separate recipient list and access to `/cashback_report`, which runs the same report on demand. Delivery retries unfinished recipients and message parts independently of the funding and weekly cash reports.
+
+The target is **2.3%**. Each card with a purchase below that rate or cashback amount is listed with its name, last four digits, virtual account, spend, reported cashback, expected cashback, and shortfall. Cent rounding on individual purchases is allowed. Higher rewards on other purchases do not hide a shortfall. Missing `cashbackInfo` is labeled unconfirmed and excluded from the reported shortfall, rather than treated as zero. Pending/failed charges, refunds, repayments, and transfers are excluded. Days with no purchases or no exceptions receive an explicit summary. API or incomplete-card errors stop delivery and retry on the next minute tick; they never produce an all-clear message.
+
 ## Integration Status
 
 | Integration | Current role |

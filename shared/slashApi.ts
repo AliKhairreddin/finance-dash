@@ -51,9 +51,10 @@ interface SlashAccount {
   balances: SlashBalanceType[];
 }
 
-interface SlashCard {
+export interface SlashCard {
   id: string;
   last4: string;
+  name?: string;
 }
 
 export interface SlashTransaction {
@@ -112,6 +113,31 @@ export async function fetchSlashDailyCardActivity({ baseUrl, apiKey, legalEntity
     if (time > now - 86_400_000 && time <= now) unique.set(`${row.accountId}:${row.id}`, row);
   }
   return [...unique.values()];
+}
+
+/** Posted purchases in an exact, half-open window, with card and account labels. */
+export async function fetchSlashCashbackActivity({ baseUrl, apiKey, legalEntityId, fromTime, toTime, fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; fromTime: number; toTime: number; fetcher?: typeof fetch;
+}): Promise<{ transactions: SlashTransaction[]; cards: SlashCard[]; accounts: SlashVirtualAccountBalance[] }> {
+  if (!Number.isSafeInteger(fromTime) || !Number.isSafeInteger(toTime) || fromTime >= toTime) {
+    throw new Error("Invalid Slash cashback report window");
+  }
+  const headers = slashHeaders(apiKey, legalEntityId);
+  const url = new URL("/transaction", baseUrl);
+  url.searchParams.set("filter:from_date", String(fromTime));
+  url.searchParams.set("filter:to_date", String(toTime - 1));
+  url.searchParams.set("filter:status", "posted");
+  const rows = await fetchAllSlashPages(fetcher, url, headers, parseSlashTransaction, 50_000, maxSlashPages);
+  const transactions = [...new Map(rows.filter((row) =>
+    row.status === "posted" && row.cardId && row.amountCents < 0
+    && Date.parse(row.date) >= fromTime && Date.parse(row.date) < toTime
+  ).map((row) => [JSON.stringify([row.accountId, row.id]), row])).values()];
+  if (transactions.length === 0) return { transactions, cards: [], accounts: [] };
+  const [cards, accounts] = await Promise.all([
+    createSlashCardResolver(fetcher, baseUrl, headers)(transactions.map((row) => row.cardId!)),
+    fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers)
+  ]);
+  return { transactions, cards: [...cards.values()], accounts };
 }
 
 export interface SlashTransactionDateRange {
@@ -376,7 +402,8 @@ function parseSlashCard(value: unknown): SlashCard {
   }
   return {
     id: requiredString(payload.id, "card.id", maximumSlashProviderIdLength),
-    last4
+    last4,
+    ...(payload.name ? { name: requiredString(payload.name, "card.name", 512) } : {})
   };
 }
 

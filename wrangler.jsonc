@@ -55,6 +55,7 @@
     "TELEGRAM_COMMAND_ADMIN_USERS": "Ali,Ali M",
     "TELEGRAM_CASH_REPORT_RECIPIENTS": "Ali,Ali M",
     "TELEGRAM_SLASH_REPORT_RECIPIENTS": "Amin,Ali,Ali M",
+    "TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS": "Ali,Ali M",
     "TELEGRAM_COMMAND_READ_ONLY_USERS": "Amin,Sanjin,Sani,Ben,Beno",
     "MERIT_API_BASE_URL": "https://aktiva.merit.ee/api",
     "MERIT_GET_INVOICES_PATH": "/v1/getinvoices",
