@@ -51,3 +51,9 @@ test("PDF control totals must reconcile without invented balancing rows", () => 
   assert.throws(() => validateAmexStatement({ ...data, rows: [] }), /1–1,000/);
   assert.throws(() => validateAmexStatement({ ...data, rows: [{ ...data.rows[0], amount: 1.234 }] }), /invalid amount/);
 });
+test("pending activity cannot become posted spend and positive collection fees remain expenses", async () => {
+  assert.throws(() => parseAmexStatementCsv('Date,Description,Amount,Status\n15/09/2026,Vendor,12,pending', options), /posted activity only/);
+  const data = parseAmexStatementCsv('Datum;Omschrijving;Bedrag;Status\n15/09/2026;Incasso kosten;12,00;geboekt', options);
+  const [row] = await amexStatementTransactions(data);
+  assert.equal(row.category, "Uncategorized"); assert.equal(row.direction, "out");
+});

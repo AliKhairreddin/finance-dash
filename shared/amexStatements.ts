@@ -116,10 +116,12 @@ export function parseAmexStatementCsv(text: string, options: AmexStatementOption
   const card = indexOf(["account", "accountnumber", "cardnumber", "cardlastfour", "kaartnummer", "rekeningnummer", "kaart", "accountnummer"]);
   const holder = indexOf(["cardmember", "cardholder", "cardmembername", "kaartlid", "kaarthouder", "naamkaarthouder"]);
   const currency = indexOf(["currency", "valuta", "billingcurrency", "muntsoort"]);
+  const status = indexOf(["status", "transactionstatus", "transactiestatus"]);
   const rows = candidate.rows.slice(candidate.index + 1).map((row, index): AmexStatementRow => {
     const line = candidate.index + index + 2;
     if (row.length !== headers.length) throw new Error(`CSV row ${line} has ${row.length} fields; expected ${headers.length}`);
     if (currency >= 0 && row[currency].toUpperCase() !== options.currency) throw new Error(`CSV row ${line} has a different currency; select the statement billing currency`);
+    if (status >= 0 && !["posted", "settled", "completed", "geboekt", "verwerkt"].includes(row[status].toLowerCase())) throw new Error(`CSV row ${line} is not a confirmed posted transaction; export posted activity only`);
     try {
       const cardLastFour = card >= 0 ? lastFour(row[card]) : undefined;
       return { date: amexStatementDate(row[date], options.dateFormat), description: row[description], amount: amexStatementAmount(row[amount]), ...(cardLastFour ? { cardLastFour } : {}), ...(holder >= 0 && row[holder] ? { cardHolderName: row[holder] } : {}) };
@@ -170,7 +172,7 @@ export async function amexStatementTransactions(input: AmexStatementData): Promi
 
 export function amexTransactionFromStatementRow(data: Pick<AmexStatementData, "currency" | "cardLastFour">, row: AmexStatementRow, id: string): Transaction {
   const accountId = `amex-statement-${data.currency}-${data.cardLastFour}`;
-  const payment = /\b(payment received|payment thank you|payment received thank you|betaling ontvangen|uw betaling|incasso|automatische incasso|direct debit|sepa betaling)\b/i.test(row.description);
+  const payment = row.amount < 0 && /\b(payment received|payment thank you|payment received thank you|betaling ontvangen|uw betaling|incasso|automatische incasso|direct debit|sepa betaling)\b/i.test(row.description);
   const transaction: Transaction = {
       id, source: "amex", accountId,
       accountName: `Amex •${data.cardLastFour}`, date: row.date, description: row.description,
