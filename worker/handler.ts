@@ -8689,7 +8689,7 @@ export async function handleTelegramCommand(
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
       if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
-      if (command === "amex") return "📥 Import Amex statements\n\nSend an Amex PDF or CSV here. Netherlands defaults: EUR and day/month/year. For CSVs or unclear filenames, add a caption: /amex EUR 1234 (primary card’s last four digits). Use the same primary card on every upload. Add mdy for US date order.\n\nClear statements import automatically; unclear PDF details are held for review in Banks → Amex. Originals are saved, existing classifications are kept, and duplicate rows are skipped.\n\n" + new URL("/?page=banks&bankView=amex&amexImport=open", env.PUBLIC_APP_URL);
+      if (command === "amex") return "📥 Import Amex statements\n\nSend an Amex PDF or CSV here. Currency defaults to EUR; CSV dates are detected automatically, including Dutch Account Activity exports. For CSVs or unclear filenames, add a caption: /amex EUR 1234 (primary card’s last four digits). Use the same primary card on every upload. Add mdy or dmy to choose date order explicitly.\n\nClear statements import automatically; unclear PDF details are held for review in Banks → Amex. Originals are saved, existing classifications are kept, and duplicate rows are skipped.\n\n" + new URL("/?page=banks&bankView=amex&amexImport=open", env.PUBLIC_APP_URL);
       if (command === "share_updates") {
         if (args) throw new ApiError(400, "Use /share_updates to send cash flow and open invoices to Amin, Sani, Ben, Ali, and Ali M.");
         partnerSender(env, user.username);

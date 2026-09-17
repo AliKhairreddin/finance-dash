@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConvexHttpClient } from "convex/browser";
+import { getFunctionName } from "convex/server";
+import type { AmexStatementData } from "../shared/amexStatements";
 import { amexStatementHint, extractAmexPdf, handleAmexStatementApi, stageAmexStatement, telegramAmexOptions } from "./amexStatements";
 import { handleTelegramCommand } from "./handler";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", OPENROUTER_API_KEY: "test", PUBLIC_APP_URL: "https://finance.example", DOCUMENT_AI_MODEL: "test-model" };
@@ -30,6 +32,33 @@ test("identical originals return their saved preview without extracting or stori
   t.mock.method(globalThis, "fetch", async () => { assert.fail("Duplicate originals must not be re-extracted"); });
   assert.deepEqual(await stageAmexStatement(env, file, options), { id: "saved-id", duplicate: true });
 });
+test("upload API stages the unchanged native CSV with automatic dates and distinct card identifiers", async t => {
+  const csv = 'Datum,Omschrijving,Kaartlid,Rekening #,Bedrag\n09/12/2026,Vendor,Cardholder A,-41234,"9,99"\n09/11/2026,Refund,Cardholder B,-45678,"-5,00"';
+  let staged: AmexStatementData | undefined;
+  t.mock.method(ConvexHttpClient.prototype, "query", async () => null);
+  t.mock.method(ConvexHttpClient.prototype, "mutation", async (fn: Parameters<typeof getFunctionName>[0], args: AmexStatementData) => {
+    const name = getFunctionName(fn);
+    if (name === "dashboard:generateExpenseDocumentUploadUrl") return "https://storage.example/upload";
+    assert.equal(name, "amexStatements:stage");
+    staged = args;
+    return { id: "statement-id", duplicate: false };
+  });
+  t.mock.method(globalThis, "fetch", async (url: unknown, init: RequestInit) => {
+    assert.equal(url, "https://storage.example/upload");
+    assert.equal(await (init.body as Blob).text(), csv);
+    return Response.json({ storageId: "original-file" });
+  });
+  const response = await handleAmexStatementApi(new Request("https://finance.example/api/amex/statements/upload", {
+    method: "POST", body: csv, headers: { "Content-Type": "text/csv", "X-File-Name": "Account%20Activity%20(1).csv", "X-Amex-Card": "1234" },
+  }), env);
+  assert.equal(response?.status, 201);
+  assert.deepEqual(await response?.json(), { id: "statement-id", duplicate: false });
+  assert.ok(staged);
+  assert.deepEqual(staged.rows.map(row => row.date), ["2026-09-12", "2026-09-11"]);
+  assert.deepEqual(staged.rows.map(row => row.cardLastFour), ["1234", "5678"]);
+  assert.equal(staged.cardLastFour, "1234");
+  assert.equal(staged.currency, "EUR");
+});
 test("oversized and unrelated CSVs never reach storage; review acknowledgment is server checked", async t => {
   let calls = 0;
   t.mock.method(ConvexHttpClient.prototype, "query", async () => null);
@@ -41,8 +70,9 @@ test("oversized and unrelated CSVs never reach storage; review acknowledgment is
   assert.equal(result?.status, 400); assert.equal(calls, 1);
 });
 test("Telegram /amex is administrator-only, explains attachment captions and uses the real bank URL", async () => {
-  assert.deepEqual(telegramAmexOptions("/amex EUR 1234"), options);
+  assert.deepEqual(telegramAmexOptions("/amex EUR 1234"), { ...options, dateFormat: "auto" });
   assert.equal(telegramAmexOptions("/amex USD 1234 mdy").dateFormat, "mdy");
+  assert.equal(telegramAmexOptions("/amex EUR 1234 dmy").dateFormat, "dmy");
   assert.equal(amexStatementHint("Amex_September.csv", ""), true);
   const runtime = { ...env, TELEGRAM_COMMAND_ADMIN_USERS: "Ali", TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin" } as WorkerEnv;
   const reply = await handleTelegramCommand(runtime, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/amex");

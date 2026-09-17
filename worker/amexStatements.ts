@@ -13,7 +13,7 @@ const isPdf = (bytes: Uint8Array) => new TextDecoder().decode(bytes.subarray(0, 
 export function telegramAmexOptions(caption: string): AmexStatementOptions {
   const currency = /(?:^|\s)(EUR|USD|GBP|CAD|CHF|AUD)(?=\s|$)/i.exec(caption)?.[1];
   const cardLastFour = /(?:^|\s)(\d{4})(?=\s|$)/.exec(caption)?.[1];
-  return amexStatementOptions({ currency, cardLastFour, dateFormat: /\bmdy\b/i.test(caption) ? "mdy" : "dmy" });
+  return amexStatementOptions({ currency, cardLastFour, dateFormat: /\bmdy\b/i.test(caption) ? "mdy" : /\bdmy\b/i.test(caption) ? "dmy" : "auto" });
 }
 export function amexStatementHint(fileName: string, caption: string): boolean {
   return /(?:\b|_)amex(?:\b|_)|american[\s_-]*express/i.test(`${fileName} ${caption}`);
@@ -83,7 +83,7 @@ export async function handleAmexStatementApi(request: Request, env: DocumentEnv)
     if (route === "/api/amex/statements/accounts" && request.method === "GET") return Response.json(await convex.query(api.amexStatements.accounts, auth(env)));
     if (route === "/api/amex/statements" && request.method === "GET") return Response.json(await convex.query(api.amexStatements.list, auth(env)));
     if (route === "/api/amex/statements/upload" && request.method === "POST") {
-      const settings = amexStatementOptions({ currency: request.headers.get("X-Amex-Currency") ?? "EUR", cardLastFour: request.headers.get("X-Amex-Card") ?? undefined, dateFormat: (request.headers.get("X-Amex-Date-Format") ?? "dmy") as "dmy" | "mdy" });
+      const settings = amexStatementOptions({ currency: request.headers.get("X-Amex-Currency") ?? "EUR", cardLastFour: request.headers.get("X-Amex-Card") ?? undefined, dateFormat: (request.headers.get("X-Amex-Date-Format") ?? "auto") as AmexStatementOptions["dateFormat"] });
       return Response.json(await stageAmexStatement(env, { bytes: await boundedBytes(request.body, amexStatementMaximumBytes), fileName: decodeURIComponent(request.headers.get("X-File-Name") ?? "statement.pdf"), source: "upload" }, settings), { status: 201 });
     }
     const match = /^\/api\/amex\/statements\/([^/]+)(?:\/(import|file))?$/.exec(route);

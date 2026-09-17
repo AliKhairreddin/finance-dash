@@ -30,7 +30,7 @@ export function AmexStatementImport({ onImported }: { onImported: () => Promise<
   const [detail, setDetail] = useState<AmexStatementDetail | null>(null);
   const [currency, setCurrency] = useState("EUR");
   const [card, setCard] = useState("");
-  const [dateFormat, setDateFormat] = useState("dmy");
+  const [dateFormat, setDateFormat] = useState("auto");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -94,7 +94,7 @@ export function AmexStatementImport({ onImported }: { onImported: () => Promise<
     <Button className="secondary-button" onClick={() => setOpenState("open")}><Upload size={15} /> Statements</Button>
     <Dialog open={open} onOpenChange={value => { if (!value && !busy) { setId(""); setOpenState(""); } }}>
       <DialogContent className="amex-import-dialog" aria-describedby={undefined}>
-        <div className="amex-import-heading"><DialogTitle>Amex statements</DialogTitle><InfoPopover label="Amex statement import help">Upload PDFs or CSVs up to 10 MB and 1,000 transactions. Netherlands defaults to EUR and day/month/year. Use the same primary card’s last four digits on every upload. Purchases and fees are charges; refunds and repayments are credits. No live balance is inferred from statements. In Telegram, send the file with a caption such as /amex EUR 1234. Duplicate matching uses the card, date, amount, description and repeated-row count; export complete days with consistent descriptions.</InfoPopover></div>
+        <div className="amex-import-heading"><DialogTitle>Amex statements</DialogTitle><InfoPopover label="Amex statement import help">Upload PDFs or CSVs up to 10 MB and 1,000 transactions. Currency defaults to EUR. CSV dates are detected automatically, including month/day/year in Dutch Account Activity exports. Choose a date format if an export is ambiguous. Use the same primary card’s last four digits on every upload. Purchases and fees are charges; refunds and repayments are credits. No live balance is inferred from statements. In Telegram, send the file with a caption such as /amex EUR 1234. Duplicate matching uses the card, date, amount, description and repeated-row count; export complete days with consistent descriptions.</InfoPopover></div>
         {error && <div className="income-callout warning" role="alert">{error}</div>}
         {loading && <span role="status"><Loader2 size={15} className="spin" /> Loading statement…</span>}
         {!id ? <>
@@ -103,7 +103,7 @@ export function AmexStatementImport({ onImported }: { onImported: () => Promise<
             <div className="amex-upload-options">
               <label>Currency<Input value={currency} maxLength={3} required disabled={busy} onChange={event => setCurrency(event.target.value.toUpperCase())} /></label>
               <label>Primary card · last 4<Input value={card} inputMode="numeric" pattern="[0-9]{4}" maxLength={4} placeholder="Auto-detect" disabled={busy} onChange={event => setCard(event.target.value)} /></label>
-              <label>Date format<NativeSelect value={dateFormat} disabled={busy} onValueChange={value => setDateFormat(value ?? "dmy")}><NativeSelectOption value="dmy">Day / month / year</NativeSelectOption><NativeSelectOption value="mdy">Month / day / year</NativeSelectOption></NativeSelect></label>
+              <label>Date format<NativeSelect value={dateFormat} disabled={busy} onValueChange={value => setDateFormat(value ?? "auto")}><NativeSelectOption value="auto">Automatic</NativeSelectOption><NativeSelectOption value="dmy">Day / month / year</NativeSelectOption><NativeSelectOption value="mdy">Month / day / year</NativeSelectOption></NativeSelect></label>
               <Button type="submit" disabled={!file || busy}>{busy ? <Loader2 size={15} className="spin" /> : <Upload size={15} />}{busy ? "Reading statement…" : "Preview statement"}</Button>
             </div>
           </form>

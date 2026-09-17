@@ -4,7 +4,7 @@ import { assertBankTransactionInput } from "./bankRecordValidation";
 
 export const amexStatementMaximumBytes = 10 * 1024 * 1024;
 export const amexStatementMaximumRows = 1000;
-export interface AmexStatementOptions { currency: string; dateFormat: "dmy" | "mdy"; cardLastFour?: string }
+export interface AmexStatementOptions { currency: string; dateFormat: "auto" | "dmy" | "mdy"; cardLastFour?: string }
 export interface AmexStatementRow {
   date: string; description: string; amount: number; cardLastFour?: string; cardHolderName?: string;
 }
@@ -24,8 +24,8 @@ export interface AmexStatementDetail { record: AmexStatementRecord; rows: AmexSt
 export function amexStatementOptions(value: Partial<AmexStatementOptions>): AmexStatementOptions {
   const currency = value.currency?.trim().toUpperCase() || "EUR";
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error("Choose a three-letter billing currency, such as EUR");
-  const dateFormat = value.dateFormat ?? "dmy";
-  if (dateFormat !== "dmy" && dateFormat !== "mdy") throw new Error("Choose day/month/year or month/day/year dates");
+  const dateFormat = value.dateFormat ?? "auto";
+  if (!["auto", "dmy", "mdy"].includes(dateFormat)) throw new Error("Choose automatic, day/month/year or month/day/year dates");
   const cardLastFour = value.cardLastFour?.trim() || undefined;
   if (cardLastFour && !/^\d{4}$/.test(cardLastFour)) throw new Error("Enter only the last four digits of the primary Amex card");
   return { currency, dateFormat, ...(cardLastFour ? { cardLastFour } : {}) };
@@ -99,6 +99,26 @@ const descriptionHeaders = ["description", "omschrijving", "beschrijving", "merc
 const amountHeaders = ["amount", "bedrag", "transactionamount", "transactiebedrag"];
 const lastFour = (value: string) => { const digits = value.replace(/\D/g, ""); return digits.length >= 4 ? digits.slice(-4) : undefined; };
 
+function detectCsvDateFormat(headers: string[], dates: string[]): "dmy" | "mdy" {
+  let dayFirst = false, monthFirst = false, ambiguous = false;
+  for (const value of dates) {
+    const numeric = /^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/.exec(value);
+    if (!numeric) continue;
+    const first = Number(numeric[1]), second = Number(numeric[2]);
+    dayFirst ||= first > 12;
+    monthFirst ||= second > 12;
+    ambiguous ||= first !== second;
+  }
+  if (dayFirst && monthFirst) throw new Error("The CSV mixes day/month/year and month/day/year dates; export a file with one consistent date format");
+  if (dayFirst) return "dmy";
+  if (monthFirst) return "mdy";
+  // Amex's Dutch Account Activity export uses month-first dates even when every day is <= 12.
+  if (["datum", "omschrijving", "kaartlid", "rekening", "bedrag"].every(header => headers.includes(header))) return "mdy";
+  if (ambiguous) throw new Error("The CSV dates are ambiguous; choose day/month/year or month/day/year (Telegram caption: add dmy or mdy)");
+  // ISO dates, named months and equal day/month values do not depend on date order.
+  return "dmy";
+}
+
 export function parseAmexStatementCsv(text: string, options: AmexStatementOptions): AmexStatementData {
   options = amexStatementOptions(options);
   if (new TextEncoder().encode(text).length > amexStatementMaximumBytes) throw new Error("Send a statement up to 10 MB");
@@ -113,18 +133,20 @@ export function parseAmexStatementCsv(text: string, options: AmexStatementOption
   if (new Set(headers.filter(Boolean)).size !== headers.filter(Boolean).length) throw new Error("The CSV has duplicate column names");
   const indexOf = (names: string[]) => headers.findIndex(h => names.includes(h));
   const date = indexOf(dateHeaders), description = indexOf(descriptionHeaders), amount = indexOf(amountHeaders);
-  const card = indexOf(["account", "accountnumber", "cardnumber", "cardlastfour", "kaartnummer", "rekeningnummer", "kaart", "accountnummer"]);
+  const card = indexOf(["account", "accountnumber", "cardnumber", "cardlastfour", "kaartnummer", "rekening", "rekeningnummer", "kaart", "accountnummer"]);
   const holder = indexOf(["cardmember", "cardholder", "cardmembername", "kaartlid", "kaarthouder", "naamkaarthouder"]);
   const currency = indexOf(["currency", "valuta", "billingcurrency", "muntsoort"]);
   const status = indexOf(["status", "transactionstatus", "transactiestatus"]);
-  const rows = candidate.rows.slice(candidate.index + 1).map((row, index): AmexStatementRow => {
+  const sourceRows = candidate.rows.slice(candidate.index + 1);
+  const dateFormat = options.dateFormat === "auto" ? detectCsvDateFormat(headers, sourceRows.map(row => row[date])) : options.dateFormat;
+  const rows = sourceRows.map((row, index): AmexStatementRow => {
     const line = candidate.index + index + 2;
     if (row.length !== headers.length) throw new Error(`CSV row ${line} has ${row.length} fields; expected ${headers.length}`);
     if (currency >= 0 && row[currency].toUpperCase() !== options.currency) throw new Error(`CSV row ${line} has a different currency; select the statement billing currency`);
     if (status >= 0 && !["posted", "settled", "completed", "geboekt", "verwerkt"].includes(row[status].toLowerCase())) throw new Error(`CSV row ${line} is not a confirmed posted transaction; export posted activity only`);
     try {
       const cardLastFour = card >= 0 ? lastFour(row[card]) : undefined;
-      return { date: amexStatementDate(row[date], options.dateFormat), description: row[description], amount: amexStatementAmount(row[amount]), ...(cardLastFour ? { cardLastFour } : {}), ...(holder >= 0 && row[holder] ? { cardHolderName: row[holder] } : {}) };
+      return { date: amexStatementDate(row[date], dateFormat), description: row[description], amount: amexStatementAmount(row[amount]), ...(cardLastFour ? { cardLastFour } : {}), ...(holder >= 0 && row[holder] ? { cardHolderName: row[holder] } : {}) };
     } catch (error) { throw new Error(`CSV row ${line}: ${error instanceof Error ? error.message : "Invalid transaction"}`); }
   });
   const cards = [...new Set(rows.flatMap(row => row.cardLastFour ? [row.cardLastFour] : []))];

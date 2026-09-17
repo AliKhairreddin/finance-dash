@@ -20,6 +20,36 @@ test("English CSV supports escaped quotes, embedded lines and card auto-detectio
   const data = parseAmexStatementCsv('Date,Description,Amount,Account\n09/15/2026,"Vendor ""One""\nAmsterdam","1,200.50",-12345', { currency: "USD", dateFormat: "mdy" });
   assert.equal(data.cardLastFour, "2345"); assert.equal(data.rows[0].description, 'Vendor "One" Amsterdam'); assert.equal(data.rows[0].amount, 1200.5);
 });
+test("native Dutch Account Activity exports preserve all cards without editing headers or date settings", async () => {
+  const data = parseAmexStatementCsv('Datum,Omschrijving,Kaartlid,Rekening #,Bedrag\r\n09/13/2026,VENDOR ONE,Cardholder A,-41234,"9,99"\r\n09/12/2026,"VENDOR, TWO",Cardholder B,-45678,"17,72"\r\n01/02/2026,REFUND,Cardholder C,-49012,"-12,00"', amexStatementOptions({ cardLastFour: "1234" }));
+  assert.deepEqual(data.rows, [
+    { date: "2026-09-13", description: "VENDOR ONE", cardHolderName: "Cardholder A", cardLastFour: "1234", amount: 9.99 },
+    { date: "2026-09-12", description: "VENDOR, TWO", cardHolderName: "Cardholder B", cardLastFour: "5678", amount: 17.72 },
+    { date: "2026-01-02", description: "REFUND", cardHolderName: "Cardholder C", cardLastFour: "9012", amount: -12 },
+  ]);
+  const transactions = await amexStatementTransactions(data);
+  assert.deepEqual(transactions.map(row => row.cardLastFour), ["1234", "5678", "9012"]);
+  assert.deepEqual(transactions.map(row => row.direction), ["out", "out", "in"]);
+  assert.ok(transactions.every(row => row.accountId === "amex-statement-EUR-1234"));
+});
+test("short Dutch Account Activity exports have a known month-first format and allow explicit overrides", () => {
+  const text = '\uFEFFDatum,Omschrijving,Kaartlid,Rekening #,Bedrag\n09/12/2026,Vendor,Cardholder A,-41234,"12,00"';
+  const automatic = parseAmexStatementCsv(text, amexStatementOptions({}));
+  assert.equal(automatic.cardLastFour, "1234");
+  assert.equal(automatic.rows[0].date, "2026-09-12");
+  assert.equal(parseAmexStatementCsv(text, options).rows[0].date, "2026-12-09");
+  assert.throws(() => parseAmexStatementCsv(text + '\n09/11/2026,Other,Cardholder B,-45678,"10,00"', amexStatementOptions({})), /primary card/);
+});
+test("automatic dates use the entire export, reject mixed orders and require a choice for unknown ambiguous formats", () => {
+  const automatic = amexStatementOptions({ cardLastFour: "1234" });
+  const header = "Date,Description,Amount\n";
+  assert.deepEqual(parseAmexStatementCsv(header + "09/02/2026,First,10\n09/13/2026,Second,20", automatic).rows.map(row => row.date), ["2026-09-02", "2026-09-13"]);
+  assert.deepEqual(parseAmexStatementCsv(header + "09/02/2026,First,10\n13/02/2026,Second,20", automatic).rows.map(row => row.date), ["2026-02-09", "2026-02-13"]);
+  assert.throws(() => parseAmexStatementCsv(header + "09/13/2026,First,10\n14/09/2026,Second,20", automatic), /mixes/);
+  assert.throws(() => parseAmexStatementCsv(header + "09/02/2026,Vendor,10", automatic), /ambiguous/);
+  assert.deepEqual(parseAmexStatementCsv(header + "2026-09-02,First,10\n2 september 2026,Second,20\n09/09/2026,Third,30", automatic).rows.map(row => row.date), ["2026-09-02", "2026-09-02", "2026-09-09"]);
+  assert.throws(() => parseAmexStatementCsv(header + "02/30/2026,Vendor,10", automatic), /Invalid transaction date/);
+});
 test("amount/date parsing fails closed for malformed, ambiguous and impossible values", () => {
   for (const amount of ["12x", "1,23,45", "1.234", "NaN", "", "-12CR"]) assert.throws(() => amexStatementAmount(amount));
   assert.equal(amexStatementAmount("€ 1.234,56"), 1234.56); assert.equal(amexStatementAmount("(12.50)"), -12.5);
@@ -27,6 +57,7 @@ test("amount/date parsing fails closed for malformed, ambiguous and impossible v
   assert.equal(amexStatementDate("1 maart 2026", "dmy"), "2026-03-01");
   assert.equal(amexStatementDate("2 oktober 2026", "dmy"), "2026-10-02");
   assert.equal(amexStatementOptions({}).currency, "EUR");
+  assert.equal(amexStatementOptions({}).dateFormat, "auto");
 });
 test("malformed CSV rows, missing metadata and mixed currencies reject the whole file", () => {
   for (const text of ['Date,Description,Amount\n15/09/2026,Vendor,12\nwrong', 'Date,Description,Amount\n15/09/2026,"unfinished,12', 'Date,Description,Amount\n15/09/2026,Vendor,garbage']) assert.throws(() => parseAmexStatementCsv(text, options));
