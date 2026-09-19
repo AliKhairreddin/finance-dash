@@ -2,9 +2,9 @@
 
 Finance Operations Dashboard is a full-stack cash-flow and reconciliation workspace for a media-buying business. It replaces a spreadsheet-driven process with durable transaction imports, counterparty/category learning, team-attributed revenue, invoice drafting and collection, profit distribution, holdings, and currency-aware operating views.
 
-**Showcase:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
+**Production:** [finance.thatcanadian.dev](https://finance.thatcanadian.dev)
 
-> **Status:** Development deployment. The Cloudflare deployment is protected by whole-site authentication and currently points at development Convex state. Do not treat the development data store as the final production environment.
+> **Status:** Production deployment. The authenticated Cloudflare site uses Convex production `famous-oyster-878`. Local development uses a separate database.
 
 ## Problem and Approach
 
@@ -266,19 +266,17 @@ The gate runs TypeScript validation, regression tests, and the production fronte
 ## Deployment
 
 ```bash
-CONVEX_SERVICE_TOKEN="$(npx convex env get CONVEX_SERVICE_TOKEN)" npm run deploy
+npm run check
+npm run deploy
 ```
 
-This command builds the app, deploys Convex functions using `.env.local`, verifies that the normalized bank ledger has completed its guarded cutover, and only then publishes the Cloudflare Worker. It fails closed before the Worker deployment when the ledger is not ready. The current showcase route is `finance.thatcanadian.dev`.
+The release command explicitly selects `prod:famous-oyster-878` from `.env.production`, rejects deployment overrides for another environment, builds the app, deploys Convex, verifies the **production** bank ledger using production's service token, and only then publishes the Cloudflare Worker. It also checks that the Worker's `CONVEX_URL` matches production. It fails before publishing when any of these checks fail. Production is served at `finance.thatcanadian.dev`.
 
 The first normalized-ledger rollout requires this order: verified Convex backup, `npm run deploy:convex`, `npm run ledger:cutover` with the configured stable connection IDs and any explicit audited legacy dispositions, `npm run ledger:verify`, then `npm run deploy:cloudflare`.
 
-Before moving from showcase to production:
+`npm run verify:production` verifies the production ledger without publishing. `npm run deploy:convex` deploys only the production backend; `npm run deploy:cloudflare` builds, verifies production, and publishes the Worker. `npm run convex:dev` is exclusively for local development against `.env.local`.
 
-1. point the Worker at the production Convex deployment;
-2. configure integration secrets in Cloudflare and Convex rather than local files;
-3. validate each live banking/accounting integration with non-destructive tests;
-4. establish audit, backup, and incident procedures for financial data.
+The September 19, 2026 cutover transfers the complete development snapshot, including stored files and original document IDs, to production. Routine releases deploy code only and must never reimport development data. Before another database migration, back up both environments, stop source writes for the final snapshot, and compare the restored records and files before changing the live connection.
 
 ## External Documentation
 

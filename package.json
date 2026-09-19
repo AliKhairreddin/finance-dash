@@ -19,9 +19,10 @@
     "convex:dev": "convex dev --once --env-file .env.local",
     "test": "tsx --test server/*.test.ts shared/*.test.ts worker/*.test.ts",
     "check": "npm run lint && npm test && npm run build",
-    "deploy:convex": "npm run convex:dev",
-    "deploy:cloudflare": "npm run build && wrangler deploy",
-    "deploy": "npm run build && npm run deploy:convex && npm run ledger:verify && wrangler deploy",
+    "deploy:convex": "tsx scripts/deploy-production.ts convex",
+    "deploy:cloudflare": "tsx scripts/deploy-production.ts cloudflare",
+    "deploy": "tsx scripts/deploy-production.ts all",
+    "verify:production": "tsx scripts/deploy-production.ts verify",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc -b --pretty false"
   },

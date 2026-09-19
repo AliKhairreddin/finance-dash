@@ -4,7 +4,15 @@ ALWAYS WORK ON `main` ONLY UNLESS THE USER EXPLICITLY REQUESTS ANOTHER BRANCH. D
 
 DO NOT CREATE BACKWARDS COMPATIBILITY OR FALLBACK.
 
-We are creating this dashboard now, so backwards compatibility and fallback paths are not important yet. Once this is in full production live mode, this instruction can be edited if fallback or backwards compatibility starts to matter.
+This dashboard is live. Preserve existing financial data and verify migrations before switching deployments.
+
+## Production deployment
+
+- The live site `finance.thatcanadian.dev` MUST use the Convex production deployment `famous-oyster-878` (`https://famous-oyster-878.convex.cloud`).
+- `fabulous-elephant-597` is a development deployment. Never point the live Cloudflare Worker at it or use `convex dev` as a production release step.
+- Use `npm run deploy` for releases. It explicitly selects production, verifies the production bank ledger, and deploys Cloudflare. Use `npm run verify:production` to check production separately.
+- `.env.local` is for local development. Its deployment URL or service token must never choose the release destination or the database verified during a release.
+- Before any future database cutover, back up both environments including file storage, stop source writes for the final snapshot, preserve document/file IDs, compare the restored data, and verify the live Worker binding. Do not replace production data with development data during routine releases.
 
 Treat vertical and horizontal interface space as valuable. Do not add persistent explanatory or helper copy when the interface is understandable without it. Put nonessential explanations in an accessible `i` information control with a tooltip or popover, while keeping essential labels, values, validation, errors, and actionable state visible.
 
