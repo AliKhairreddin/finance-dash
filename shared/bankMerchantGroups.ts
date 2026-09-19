@@ -1,5 +1,5 @@
 import type { CurrencyTotals, Provider, Transaction } from "./types";
-import { isSlashDailyCardPayment } from "./transactionPresentation";
+import { isNonOperatingMovementTransaction, isSlashDailyCardPayment } from "./transactionPresentation";
 
 export type BankMerchantProvider = Pick<Provider, "id" | "name" | "legalName" | "aliases">;
 export type BankActivityGroupType = "merchant" | "card" | "account";
@@ -247,6 +247,12 @@ function settledBankTransaction(transaction: Transaction): boolean {
   );
 }
 
+function merchantActivityTransaction(transaction: Transaction): boolean {
+  return settledBankTransaction(transaction)
+    && !isNonOperatingMovementTransaction(transaction)
+    && !isSlashDailyCardPayment(transaction);
+}
+
 function normalizedCardLastFour(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const digits = value.replace(/\D/g, "");
@@ -258,7 +264,7 @@ export function transactionCardLastFour(transaction: Transaction): string | unde
 }
 
 export function bankCardGroupKey(transaction: Transaction): string | undefined {
-  if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) return undefined;
+  if (!merchantActivityTransaction(transaction)) return undefined;
   const cardLastFour = transactionCardLastFour(transaction);
   if (!cardLastFour) return undefined;
   const accountIdentity = transaction.accountId?.trim() || transaction.accountName;
@@ -284,7 +290,7 @@ export function bankMerchantGroupKey(
   transaction: Transaction,
   providers: readonly BankMerchantProvider[] = []
 ): string | undefined {
-  if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) return undefined;
+  if (!merchantActivityTransaction(transaction)) return undefined;
   const providersById = new Map(providers.map((provider) => [provider.id, provider]));
   return merchantIdentity(transaction, providersById, providerAliasDirectory(providers)).key;
 }
@@ -302,7 +308,7 @@ export function transactionBankActivityGroupKey(
 export function groupBankTransactionsByCard(transactions: readonly Transaction[]): BankCardGroup[] {
   const groups = new Map<string, BankCardGroup>();
   for (const transaction of transactions) {
-    if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) continue;
+    if (!merchantActivityTransaction(transaction)) continue;
     const cardLastFour = transactionCardLastFour(transaction);
     const key = bankCardGroupKey(transaction);
     if (!cardLastFour || !key) continue;
@@ -401,7 +407,7 @@ export function groupBankTransactions(
   const groups = new Map<string, BankMerchantGroup>();
 
   for (const transaction of transactions) {
-    if (!settledBankTransaction(transaction) || isSlashDailyCardPayment(transaction)) continue;
+    if (!merchantActivityTransaction(transaction)) continue;
 
     const identity = merchantIdentity(transaction, providersById, providerAliases);
     const label = merchantLabels(transaction)[0] ?? identity.name;

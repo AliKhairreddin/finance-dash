@@ -422,8 +422,8 @@ export function BankAccountActivityView({
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="firstDate">First activity</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="lastDate">Latest activity</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spent</SortableTableHead>
-            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="credits">Credits</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Money out</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="credits">Money in</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="cashback">Cashback</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="cashbackRate">Cashback %</SortableTableHead>
           </tr></thead>
