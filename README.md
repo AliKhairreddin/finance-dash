@@ -276,7 +276,7 @@ The first normalized-ledger rollout requires this order: verified Convex backup,
 
 `npm run verify:production` verifies the production ledger without publishing. `npm run deploy:convex` deploys only the production backend; `npm run deploy:cloudflare` builds, verifies production, and publishes the Worker. `npm run convex:dev` is exclusively for local development against `.env.local`.
 
-The September 19, 2026 cutover transfers the complete development snapshot, including stored files and original document IDs, to production. Routine releases deploy code only and must never reimport development data. Before another database migration, back up both environments, stop source writes for the final snapshot, and compare the restored records and files before changing the live connection.
+The September 19, 2026 cutover transferred 249,274 application records and 206 stored files to production. Every restored table, document ID, value, and file matched the frozen source snapshot. The former live development deployment remains paused to prevent stale clients from writing to it; resume it only for intentional, isolated development. Routine releases deploy code only and must never reimport development data. Before another database migration, back up both environments, stop source writes for the final snapshot, and compare the restored records and files before changing the live connection.
 
 ## External Documentation
 

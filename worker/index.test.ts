@@ -312,8 +312,8 @@ test("transaction page API validates every bound before reading storage", async 
   }
 });
 
-test("transaction page API rejects unconfigured bank sources before reading storage", async () => {
-  for (const source of ["wise", "revolut", "slash", "amex"] as const) {
+test("transaction page API rejects unconfigured banks without statement import support", async () => {
+  for (const source of ["wise", "revolut", "slash"] as const) {
     const response = await worker.fetch(
       await authenticatedRequest(
         `https://finance.example/api/transactions?fromDate=2026-06-01&toDate=2026-06-30&source=${source}&direction=out&order=asc&limit=200`
@@ -327,6 +327,41 @@ test("transaction page API rejects unconfigured bank sources before reading stor
       source
     );
   }
+});
+
+test("Amex statement transactions and summaries are readable without live bank API credentials", async (t) => {
+  const transaction: Transaction = {
+    id: "amex-imported-transaction", source: "amex", accountId: "amex-statement-EUR-1003",
+    accountName: "Amex •1003", date: "2026-09-10", description: "Statement purchase",
+    rawName: "Statement purchase", counterparty: "Statement purchase", cardLastFour: "1029",
+    amount: 25, currency: "EUR", direction: "out", status: "posted", category: "Uncategorized"
+  };
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(String(input), "https://test-production.convex.cloud/api/query");
+    const body = JSON.parse(String(init?.body)) as { path: string };
+    calls.push(body.path);
+    const value = body.path === "banking:getActivityPage"
+      ? { page: [transaction], isDone: true, continueCursor: "" }
+      : body.path === "banking:getActivityCoverage"
+        ? []
+        : body.path === "dashboard:getAnalyticsDirectory"
+          ? { providers: [], teams: [], transactionCategories: [], documentedTransactionIds: [] }
+          : assert.fail(`Unexpected query ${body.path}`);
+    return Response.json({ status: "success", value });
+  });
+  const env = authenticatedEnv({ CONVEX_URL: "https://test-production.convex.cloud", CONVEX_SERVICE_TOKEN: "test-token" });
+  const period = "source=amex&fromDate=2026-09-01&toDate=2026-09-17";
+  const page = await worker.fetch(await authenticatedRequest(`https://finance.example/api/transactions?${period}`), env);
+  assert.equal(page.status, 200);
+  assert.deepEqual((await page.json() as { transactions: Transaction[] }).transactions, [transaction]);
+  const summary = await worker.fetch(await authenticatedRequest(`https://finance.example/api/transactions/summary?${period}`), env);
+  assert.equal(summary.status, 200);
+  const groups = await summary.json() as { transactionCount: number; cardGroups: Array<{ cardLastFour: string }> };
+  assert.equal(groups.transactionCount, 1);
+  assert.equal(groups.cardGroups[0].cardLastFour, "1029");
+  assert.ok(calls.includes("banking:getActivityPage"));
+  assert.ok(calls.includes("dashboard:getAnalyticsDirectory"));
 });
 
 test("Analytics API validates its bounded period before reading storage", async () => {

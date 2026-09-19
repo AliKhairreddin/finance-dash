@@ -7202,7 +7202,7 @@ async function handleApi(
 
     if (url.pathname === "/api/transactions/summary" && request.method === "GET") {
       const options = transactionPageOptions(url);
-      if (options.source && !bankSourceConfigured(env, options.source)) {
+      if (options.source && options.source !== "amex" && !bankSourceConfigured(env, options.source)) {
         throw new ApiError(409, `${options.source} is not configured for transaction sync`);
       }
       return json(await readBankActivitySummary(env, options));
@@ -7211,7 +7211,7 @@ async function handleApi(
     if (url.pathname === "/api/transactions" && request.method === "GET") {
       const startedAt = Date.now();
       const options = transactionPageOptions(url);
-      if (options.source && !bankSourceConfigured(env, options.source)) {
+      if (options.source && options.source !== "amex" && !bankSourceConfigured(env, options.source)) {
         throw new ApiError(409, `${options.source} is not configured for transaction sync`);
       }
       const page = await readScopedTransactionPage(env, options);
