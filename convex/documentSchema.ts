@@ -14,6 +14,6 @@ export const financialDocumentFields = {
   sourceContext: v.string(), sender: v.optional(v.string()), status: documentStatus, entity: v.optional(documentEntity), kind: documentKind, month: v.string(),
   extraction: v.optional(documentExtraction), expenseId: v.optional(v.string()), invoiceId: v.optional(v.string()), transactionId: v.optional(v.string()),
   matchReason: v.optional(v.string()), error: v.optional(v.string()), attempts: v.number(), attemptToken: v.optional(v.string()),
-  createdAt: v.string(), updatedAt: v.string(), processedAt: v.optional(v.string()), matchedAt: v.optional(v.string()), nextMatchAt: v.optional(v.string())
+  createdAt: v.string(), updatedAt: v.string(), processedAt: v.optional(v.string()), matchedAt: v.optional(v.string()), nextMatchAt: v.optional(v.string()), deletedAt: v.optional(v.string())
 };
 export const financialDocumentValidator = v.object({ _id: v.id("financialDocuments"), _creationTime: v.number(), ...financialDocumentFields });

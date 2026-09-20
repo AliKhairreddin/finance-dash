@@ -15,7 +15,8 @@ function database(initial: Record<string, Row[]> = {}) {
         const builder = {
           withIndex(_index: string, select?: (q: any) => unknown) {
             const conditions: Array<(row: Row) => boolean> = [];
-            const q = { eq(field: string, value: unknown) { conditions.push(row => row[field] === value); return q; }, gte(field: string, value: number) { conditions.push(row => row[field] >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => row[field] <= value); return q; } };
+            const fieldValue = (row: Row, field: string): any => field.split(".").reduce<any>((value, part) => value?.[part], row);
+            const q = { eq(field: string, value: unknown) { conditions.push(row => fieldValue(row, field) === value); return q; }, gte(field: string, value: number) { conditions.push(row => fieldValue(row, field) >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => fieldValue(row, field) <= value); return q; } };
             select?.(q); rows = rows.filter(row => conditions.every(check => check(row))); return builder;
           }, async first() { return rows[0] ?? null; }, async unique() { assert.ok(rows.length <= 1); return rows[0] ?? null; }, async take(count: number) { return rows.slice(0, count); }
         }; return builder;
@@ -161,4 +162,100 @@ test("a receipt and invoice for the same expense share its confirmed Amex link",
   assert.equal(second.transactionId, first.transactionId); assert.equal(second.expenseId, first.expenseId); assert.equal(second.status, "matched");
   assert.equal(ledger.expenses.length, 1); assert.equal(ledger.expenses[0].documents.length, 2);
   assert.equal(ledger.expenses[0].paymentStatus, "unpaid");
+});
+
+test("semantic copies with renamed suppliers reuse one expense and retain both source files", async () => {
+  const db = setup([]);
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "copy", storageId: "copy-blob", fileName: "forwarded.pdf" });
+  await db.run(documents.complete, { id: "copy", token: "lease", extraction: { ...extraction, counterparty: "Acme, LLC" } });
+  const ledger = await db.ctx.db.get("state");
+  assert.equal(ledger.expenses.length, 1);
+  assert.equal((await db.ctx.db.get("copy")).expenseId, ledger.expenses[0].id);
+  assert.deepEqual(ledger.expenses[0].documents.map((d: Row) => d.storageId).sort(), ["blob", "copy-blob"]);
+});
+
+test("bulk trash and restore preserve originals, financial records and bank links", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup(); await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  const before = structuredClone(await db.ctx.db.get("state")), bank = structuredClone(await db.ctx.db.get("tx-1"));
+  const args = { serviceToken: "test-service", ids: ["document", "document"] };
+  assert.equal(await db.run(documents.trash, args), 1);
+  assert.ok((await db.ctx.db.get("document")).deletedAt);
+  assert.equal(await db.run(documents.trash, args), 0, "trash is idempotent");
+  assert.equal((db.tables.get("documentFolders") ?? []).find(f => f.key === "dn:2026-08")?.count, 0);
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service", id: "document" }), 0);
+  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+  assert.deepEqual(await db.ctx.db.get("state"), before); assert.deepEqual(await db.ctx.db.get("tx-1"), bank);
+  assert.equal((await db.run(documents.get, { serviceToken: "test-service", id: "document" })).url, "https://storage.example/blob");
+  assert.equal(await db.run(documents.restore, args), 1); assert.equal(await db.run(documents.restore, args), 0);
+  assert.equal((await db.ctx.db.get("document")).deletedAt, undefined);
+  assert.equal((db.tables.get("documentFolders") ?? []).find(f => f.key === "dn:2026-08")?.count, 1);
+  assert.deepEqual(db.deletedFiles, []); assert.deepEqual(await db.ctx.db.get("state"), before);
+});
+
+test("trash preflights the whole batch, requires authorization and validates size", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup(); await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "ready", status: "unmatched" });
+  const args = { serviceToken: "test-service", ids: ["ready", "document"] };
+  await assert.rejects(db.run(documents.trash, args), /finish processing/);
+  assert.equal((await db.ctx.db.get("ready")).deletedAt, undefined);
+  await assert.rejects(db.run(documents.trash, { ...args, ids: ["ready", "missing"] }), /no longer exists/);
+  assert.equal((await db.ctx.db.get("ready")).deletedAt, undefined);
+  for (const fn of [documents.trash, documents.restore]) {
+    await assert.rejects(db.run(fn, { ...args, serviceToken: "incorrect" }), /Unauthorized/);
+    await assert.rejects(db.run(fn, { ...args, ids: [] }), /1 and 200/);
+    await assert.rejects(db.run(fn, { ...args, ids: Array(201).fill("ready") }), /1 and 200/);
+  }
+});
+
+test("trashed queued files cannot process and restoring schedules work again", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup([]); await db.ctx.db.patch("document", { status: "queued" });
+  await db.run(documents.trash, { serviceToken: "test-service", ids: ["document"] });
+  assert.equal(await db.run(documents.claim, { id: "document", token: "new" }), false);
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+  await assert.rejects(db.run(documents.review, { serviceToken: "test-service", id: "document", extraction }), /unrecorded/);
+  await assert.rejects(db.run(documents.retry, { serviceToken: "test-service", id: "document" }), /reprocessed/);
+  await db.run(documents.restore, { serviceToken: "test-service", ids: ["document"] });
+  assert.equal(db.scheduled.length, 1);
+  assert.equal(await db.run(documents.claim, { id: "document", token: "new" }), true);
+});
+
+test("trashing an earlier copy never permits the same purchase to create another expense", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup([]); await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  await db.run(documents.trash, { serviceToken: "test-service", ids: ["document"] });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "copy", storageId: "copy-blob" });
+  await db.run(documents.complete, { id: "copy", token: "lease", extraction: { ...extraction, counterparty: "Acme LLC" } });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 1);
+  assert.equal((await db.ctx.db.get("copy")).expenseId, (await db.ctx.db.get("document")).expenseId);
+  assert.ok((await db.ctx.db.get("document")).deletedAt);
+});
+
+test("same filename or reused invoice number in another month does not reuse an expense", async () => {
+  const db = setup([]); await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "next-month", storageId: "next-blob" });
+  await db.run(documents.complete, { id: "next-month", token: "lease", extraction: { ...extraction, issueDate: "2026-09-15" } });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 2);
+  assert.notEqual((await db.ctx.db.get("next-month")).expenseId, (await db.ctx.db.get("document")).expenseId);
+});
+
+test("copies associated with conflicting existing records stop for review", async () => {
+  const db = setup([]);
+  for (const id of ["one", "two"]) await db.ctx.db.insert("financialDocuments", { ...doc(), _id: id, kind: "expense", status: "unmatched", extraction, expenseId: id });
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  assert.equal((await db.ctx.db.get("document")).status, "needs_review");
+  assert.match((await db.ctx.db.get("document")).extraction.reviewReasons.join(" "), /different accounting records/);
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+});
+
+test("duplicate searches never silently create records after reaching the candidate limit", async () => {
+  const db = setup([]);
+  for (let index = 0; index < 101; index++) await db.ctx.db.insert("financialDocuments", { ...doc(), _id: `old-${index}`, kind: "expense", status: "unmatched", extraction: { ...extraction, counterparty: `Vendor ${index}` } });
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  assert.equal((await db.ctx.db.get("document")).status, "needs_review");
+  assert.match((await db.ctx.db.get("document")).extraction.reviewReasons.join(" "), /Too many similar/);
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
 });

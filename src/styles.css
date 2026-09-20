@@ -12406,3 +12406,9 @@ body {
 .amex-statement-table th:first-child, .amex-statement-table td:first-child { padding-left: 0; white-space: nowrap; }
 .amex-statement-table tr + tr td { border-top: 1px solid var(--border); }
 .amex-statement-table th { border-bottom: 1px solid var(--border); }
+
+.document-original-link { display: block; margin-top: 3px; }
+.document-relationship { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.document-relationship .note-popover { margin-left: 0; }
+.document-bulk-message { margin: 0; padding: 0 14px 12px; font-size: 13px; }
+.document-delete-files { overflow-wrap: anywhere; font-size: 13px; color: var(--app-muted); }

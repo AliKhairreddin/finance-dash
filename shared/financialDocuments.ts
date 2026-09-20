@@ -38,6 +38,7 @@ export interface FinancialDocument {
   createdAt: string;
   processedAt?: string;
   matchedAt?: string;
+  deletedAt?: string;
 }
 
 export function validDocumentDate(value: unknown): value is string {

@@ -7,6 +7,7 @@ import { documentEntity, documentExtraction, financialDocumentValidator } from "
 import { documentMatchCandidates, documentReviewMatchKind, documentMaximumBytes, documentContentTypes, validateExtraction, type DocumentExtraction } from "../shared/financialDocuments";
 import { bumpBankLedgerRevision } from "./dashboard";
 import { wiseEntityFromAccountName } from "../shared/wiseEntities";
+import { documentRelationship } from "../shared/documentDuplicates";
 
 function authorize(token: string): void {
   if (!process.env.CONVEX_SERVICE_TOKEN || token !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized");
@@ -114,12 +115,32 @@ async function unclaimed(ctx: QueryCtx | MutationCtx, transactionId: string, doc
   return claims.length < 20 && claims.every(claim => claim._id === document._id || (invoiceId && claim.invoiceId === invoiceId) || (expenseId && claim.expenseId === expenseId));
 }
 
-function existingDocumentExpense(expenses: Doc<"dashboardState">["expenses"], document: Doc<"financialDocuments">, extraction: DocumentExtraction) {
-  if (extraction.kind !== "expense") return undefined;
-  return expenses.find(e => e.id === document.expenseId || (extraction.documentNumber && normalized(e.sourceDocumentNumber ?? "") === normalized(extraction.documentNumber) && e.currency === extraction.currency && Math.abs(e.grossAmount - (extraction.amount ?? 0)) < 0.01 && (!e.entity || e.entity === extraction.entity) && normalized(e.supplierName) === normalized(extraction.counterparty)));
+function existingDocumentExpenses(expenses: Doc<"dashboardState">["expenses"], document: Doc<"financialDocuments">, extraction: DocumentExtraction) {
+  if (extraction.kind !== "expense") return [];
+  const linked = expenses.find(e => e.id === document.expenseId);
+  if (linked) return [linked];
+  return expenses.filter(e => extraction.documentNumber && normalized(e.sourceDocumentNumber ?? "") === normalized(extraction.documentNumber)
+    && Math.abs(Date.parse(e.issueDate) - Date.parse(extraction.issueDate ?? "")) <= 7 * 86400000
+    && e.currency === extraction.currency && Math.abs(e.grossAmount - (extraction.amount ?? 0)) < 0.01
+    && (!e.entity || e.entity === extraction.entity) && normalized(e.supplierName) === normalized(extraction.counterparty));
+}
+
+async function relatedDocuments(ctx: QueryCtx | MutationCtx, document: Doc<"financialDocuments">, extraction: DocumentExtraction) {
+  const issuedAt = Date.parse(extraction.issueDate ?? "");
+  if (extraction.kind === "unknown" || !extraction.amount || !extraction.currency || !Number.isFinite(issuedAt)) return { rows: [], limited: false };
+  const rows = await ctx.db.query("financialDocuments").withIndex("by_kind_currency_amount_date", q => q
+    .eq("kind", extraction.kind).eq("extraction.currency", extraction.currency!).eq("extraction.amount", extraction.amount!)
+    .gte("extraction.issueDate", new Date(issuedAt - 7 * 86400000).toISOString().slice(0, 10))
+    .lte("extraction.issueDate", new Date(issuedAt + 7 * 86400000).toISOString().slice(0, 10))).take(101);
+  return { limited: rows.length === 101, rows: rows.filter(other => {
+    // Trashing a file must not permit the same purchase to create another expense.
+    const relation = documentRelationship({ ...document, extraction, kind: extraction.kind, status: "needs_review" }, { ...other, deletedAt: undefined });
+    return relation && relation.kind !== "possible";
+  }) };
 }
 
 async function recordAndMatch(ctx: MutationCtx, document: Doc<"financialDocuments">, extracted: DocumentExtraction, manualTransactionId?: string, confirmCurrencyConversion = false): Promise<void> {
+  if (document.deletedAt) throw new ConvexError("Restore this document from Trash before processing it");
   const extraction = validateExtraction(extracted);
   const now = nowIso();
   const next = { entity: extraction.entity ?? undefined, month: extraction.issueDate?.slice(0, 7) ?? document.month };
@@ -127,8 +148,16 @@ async function recordAndMatch(ctx: MutationCtx, document: Doc<"financialDocument
   if (!state) throw new ConvexError("Dashboard is not initialized");
   if (document.invoiceId && extraction.kind !== "invoice" || document.expenseId && extraction.kind !== "expense") extraction.reviewReasons.push("Document type differs from its existing record");
   const provider = state.providers.find(p => p.type === (extraction.kind === "invoice" ? "client" : "supplier") && [p.name, p.legalName, ...p.aliases].some(name => name && normalized(name) === normalized(extraction.counterparty)));
-  const existingInvoice = extraction.kind === "invoice" ? state.invoices.find(i => i.id === document.invoiceId || (extraction.documentNumber && normalized(i.invoiceNumber) === normalized(extraction.documentNumber) && i.currency === extraction.currency && Math.abs(i.amount - (extraction.amount ?? 0)) < 0.01 && (!i.entity || i.entity === extraction.entity) && (i.providerId && i.providerId === provider?.id || normalized(i.customerName) === normalized(extraction.counterparty)))) : undefined;
-  let existingExpense = existingDocumentExpense(state.expenses, document, extraction);
+  const { rows: related, limited: duplicateSearchLimited } = await relatedDocuments(ctx, document, extraction);
+  if (duplicateSearchLimited) extraction.reviewReasons.push("Too many similar documents to verify duplicates safely; review the existing records");
+  const relatedExpenseIds = [...new Set(related.flatMap(d => d.expenseId ? [d.expenseId] : []))];
+  const relatedInvoiceIds = [...new Set(related.flatMap(d => d.invoiceId ? [d.invoiceId] : []))];
+  if (relatedExpenseIds.length > 1 || relatedInvoiceIds.length > 1) extraction.reviewReasons.push("Possible duplicates have different accounting records; review those records first");
+  const existingInvoice = extraction.kind === "invoice" ? state.invoices.find(i => i.id === document.invoiceId || relatedInvoiceIds.length === 1 && i.id === relatedInvoiceIds[0] || (extraction.documentNumber && normalized(i.invoiceNumber) === normalized(extraction.documentNumber) && i.currency === extraction.currency && Math.abs(i.amount - (extraction.amount ?? 0)) < 0.01 && (!i.entity || i.entity === extraction.entity) && (i.providerId && i.providerId === provider?.id || normalized(i.customerName) === normalized(extraction.counterparty)))) : undefined;
+  const existingExpenses = existingDocumentExpenses(state.expenses, document, extraction);
+  if (existingExpenses.length > 1) extraction.reviewReasons.push("Several existing expenses have this document identity; review those records first");
+  let existingExpense = existingExpenses.length === 1 ? existingExpenses[0] : undefined;
+  if (!existingExpense && relatedExpenseIds.length === 1) existingExpense = state.expenses.find(e => e.id === relatedExpenseIds[0]);
   const existing = existingInvoice ?? existingExpense;
   const existingAmount = existingInvoice?.amount ?? existingExpense?.grossAmount;
   if (existing && (existing.currency !== extraction.currency || Math.abs((existingAmount ?? 0) - (extraction.amount ?? 0)) > 0.009 || existing.entity && existing.entity !== extraction.entity)) extraction.reviewReasons.push("Details differ from the existing invoice or expense");
@@ -182,12 +211,12 @@ async function recordAndMatch(ctx: MutationCtx, document: Doc<"financialDocument
   } else {
     existingExpense ??= match ? expenses.find(e => e.transactionId === match.id) : undefined;
     expenseId = existingExpense?.id ?? expenseId ?? `document-expense-${document._id}`;
-    const attachment = { id: `source-${document._id}`, kind: "vendor_receipt" as const, fileName: document.fileName, contentType: document.contentType, size: document.size, storageId: String(document.storageId), createdAt: document.createdAt };
-    expenses = existingExpense ? expenses.map(e => e.id === expenseId ? { ...e, entity: extraction.entity!, documents: e.documents.some(d => d.storageId === document.storageId) ? e.documents : [...e.documents, attachment], ...(match ? { transactionId: match.id } : {}), updatedAt: now } : e) : [...expenses, {
+    const attachments = [document, ...related.filter(d => !d.deletedAt)].map(file => ({ id: `source-${file._id}`, kind: "vendor_receipt" as const, fileName: file.fileName, contentType: file.contentType, size: file.size, storageId: String(file.storageId), createdAt: file.createdAt }));
+    expenses = existingExpense ? expenses.map(e => e.id === expenseId ? { ...e, entity: extraction.entity!, documents: [...e.documents, ...attachments.filter(file => !e.documents.some(d => d.storageId === file.storageId))], ...(match ? { transactionId: match.id } : {}), updatedAt: now } : e) : [...expenses, {
       id: expenseId, entity: extraction.entity, recordNumber: `EXP-${document._id.slice(-8).toUpperCase()}`, recordType: "supplier_bill" as const, paymentStatus: "unpaid" as const,
       providerId: provider?.id, supplierName: extraction.counterparty, sourceDocumentNumber: extraction.documentNumber || undefined, issueDate: extraction.issueDate, dueDate: extraction.dueDate ?? undefined,
       category: "Uncategorized", businessPurpose: "", description: extraction.description, netAmount: extraction.amount, vatAmount: 0, grossAmount: extraction.amount, vatTreatment: "not_applicable" as const, currency: extraction.currency,
-      documents: [attachment], transactionId: match?.id, createdAt: now, updatedAt: now
+      documents: attachments, transactionId: match?.id, createdAt: now, updatedAt: now
     }];
   }
   await ctx.db.patch(state._id, { invoices, expenses, updatedAt: new Date(Math.max(Date.now(), Date.parse(state.updatedAt) + 1)).toISOString() });
@@ -203,11 +232,14 @@ export const candidates = query({
   args: { serviceToken: v.string(), id: v.id("financialDocuments"), extraction: v.optional(documentExtraction) },
   returns: v.array(v.object({ id: v.string(), date: v.string(), counterparty: v.string(), accountName: v.string(), amount: v.number(), currency: v.string(), cardLastFour: v.optional(v.string()), cardHolderName: v.optional(v.string()), matchKind: v.union(v.literal("exact"), v.literal("foreign_currency")) })),
   handler: async (ctx, args) => {
-    authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || !["unmatched", "needs_review", "failed"].includes(doc.status)) return [];
+    authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["unmatched", "needs_review", "failed"].includes(doc.status)) return [];
     const extraction = args.extraction ? validateExtraction(args.extraction) : doc.extraction;
     if (!extraction) return [];
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
-    const expenseId = existingDocumentExpense(state?.expenses ?? [], doc, extraction)?.id ?? doc.expenseId;
+    const existingExpenses = existingDocumentExpenses(state?.expenses ?? [], doc, extraction);
+    const { rows: related } = await relatedDocuments(ctx, doc, extraction);
+    const expenseIds = [...new Set([...existingExpenses.map(e => e.id), ...related.flatMap(file => file.expenseId ? [file.expenseId] : [])])];
+    const expenseId = doc.expenseId ?? (expenseIds.length === 1 ? expenseIds[0] : undefined);
     const candidates = await bankCandidates(ctx, extraction, false); const rows = [];
     for (const tx of candidates.rows) if ((!tx.matchedInvoiceId || tx.matchedInvoiceId === doc.invoiceId) && await unclaimed(ctx, tx.id, doc, doc.invoiceId, expenseId)) rows.push({ id: tx.id, date: tx.date, counterparty: tx.counterparty, accountName: tx.accountName, amount: tx.amount, currency: tx.currency, cardLastFour: tx.cardLastFour, cardHolderName: tx.cardHolderName, matchKind: documentReviewMatchKind(extraction, tx)! });
     return rows.slice(0, 60);
@@ -217,15 +249,34 @@ export const confirmMatch = mutation({
   args: { serviceToken: v.string(), id: v.id("financialDocuments"), transactionId: v.string(), confirmCurrencyConversion: v.optional(v.boolean()) }, returns: v.null(),
   handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc?.extraction || doc.status !== "unmatched") throw new ConvexError("Only unmatched documents can be linked"); await recordAndMatch(ctx, doc, doc.extraction, args.transactionId, args.confirmCurrencyConversion); return null; }
 });
-export const discard = mutation({
-  args: { serviceToken: v.string(), id: v.id("financialDocuments") }, returns: v.null(),
-  handler: async (ctx, args) => {
-    authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc) return null;
-    if (doc.invoiceId || doc.expenseId || !["needs_review", "failed"].includes(doc.status)) throw new ConvexError("Only unrecorded documents can be discarded");
-    const key = `${doc.entity ?? "unassigned"}:${doc.month}`; const folder = await ctx.db.query("documentFolders").withIndex("by_key", q => q.eq("key", key)).unique();
-    if (folder) await ctx.db.patch(folder._id, { count: Math.max(0, folder.count - 1) });
-    await ctx.storage.delete(doc.storageId); await ctx.db.delete(doc._id); return null;
+async function setTrashed(ctx: MutationCtx, ids: Id<"financialDocuments">[], trash: boolean): Promise<number> {
+  if (!ids.length || ids.length > 200) throw new ConvexError("Select between 1 and 200 files per batch");
+  const documents = await Promise.all([...new Set(ids)].map(id => ctx.db.get(id)));
+  if (documents.some(doc => !doc)) throw new ConvexError("A selected document no longer exists; refresh the list");
+  if (trash && documents.some(doc => doc?.status === "processing")) throw new ConvexError("Wait for the selected documents to finish processing before deleting them");
+  let count = 0;
+  for (const doc of documents) {
+    if (!doc || Boolean(doc.deletedAt) === trash) continue;
+    await ctx.db.patch(doc._id, { deletedAt: trash ? nowIso() : undefined, updatedAt: nowIso() });
+    if (trash) {
+      const key = `${doc.entity ?? "unassigned"}:${doc.month}`;
+      const folder = await ctx.db.query("documentFolders").withIndex("by_key", q => q.eq("key", key)).unique();
+      if (folder) await ctx.db.patch(folder._id, { count: Math.max(0, folder.count - 1) });
+    } else {
+      await moveFolder(ctx, null, doc);
+      if (doc.status === "queued") await ctx.scheduler.runAfter(0, internal.documentProcessing.process, { id: doc._id });
+    }
+    count++;
   }
+  return count;
+}
+export const trash = mutation({
+  args: { serviceToken: v.string(), ids: v.array(v.id("financialDocuments")) }, returns: v.number(),
+  handler: async (ctx, args) => { authorize(args.serviceToken); return setTrashed(ctx, args.ids, true); }
+});
+export const restore = mutation({
+  args: { serviceToken: v.string(), ids: v.array(v.id("financialDocuments")) }, returns: v.number(),
+  handler: async (ctx, args) => { authorize(args.serviceToken); return setTrashed(ctx, args.ids, false); }
 });
 export const forInvoice = query({
   args: { serviceToken: v.string(), invoiceId: v.string() }, returns: v.union(v.object({ id: v.id("financialDocuments"), fileName: v.string(), contentType: v.string(), url: v.union(v.string(), v.null()) }), v.null()),
@@ -234,27 +285,27 @@ export const forInvoice = query({
 
 export const claim = internalMutation({
   args: { id: v.id("financialDocuments"), token: v.string() }, returns: v.boolean(),
-  handler: async (ctx, { id, token }) => { const doc = await ctx.db.get(id); if (!doc || doc.status !== "queued") return false; await ctx.db.patch(id, { status: "processing", attemptToken: token, attempts: doc.attempts + 1, updatedAt: nowIso() }); await ctx.scheduler.runAfter(150_000, internal.documents.recover, { id, token }); return true; }
+  handler: async (ctx, { id, token }) => { const doc = await ctx.db.get(id); if (!doc || doc.deletedAt || doc.status !== "queued") return false; await ctx.db.patch(id, { status: "processing", attemptToken: token, attempts: doc.attempts + 1, updatedAt: nowIso() }); await ctx.scheduler.runAfter(150_000, internal.documents.recover, { id, token }); return true; }
 });
 export const complete = internalMutation({
   args: { id: v.id("financialDocuments"), token: v.string(), extraction: documentExtraction }, returns: v.null(),
-  handler: async (ctx, args) => { const doc = await ctx.db.get(args.id); if (doc?.attemptToken === args.token && doc.status === "processing") await recordAndMatch(ctx, doc, args.extraction); return null; }
+  handler: async (ctx, args) => { const doc = await ctx.db.get(args.id); if (doc && !doc.deletedAt && doc.attemptToken === args.token && doc.status === "processing") await recordAndMatch(ctx, doc, args.extraction); return null; }
 });
 export const recover = internalMutation({
   args: { id: v.id("financialDocuments"), token: v.string(), error: v.optional(v.string()) }, returns: v.null(),
-  handler: async (ctx, args) => { const doc = await ctx.db.get(args.id); if (!doc || doc.attemptToken !== args.token || doc.status !== "processing") return null; const retry = doc.attempts < 3; await ctx.db.patch(doc._id, { status: retry ? "queued" : "failed", attemptToken: undefined, error: args.error?.slice(0, 400) ?? "Processing timed out", updatedAt: nowIso() }); if (retry) await ctx.scheduler.runAfter(5_000 * doc.attempts, internal.documentProcessing.process, { id: doc._id }); return null; }
+  handler: async (ctx, args) => { const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || doc.attemptToken !== args.token || doc.status !== "processing") return null; const retry = doc.attempts < 3; await ctx.db.patch(doc._id, { status: retry ? "queued" : "failed", attemptToken: undefined, error: args.error?.slice(0, 400) ?? "Processing timed out", updatedAt: nowIso() }); if (retry) await ctx.scheduler.runAfter(5_000 * doc.attempts, internal.documentProcessing.process, { id: doc._id }); return null; }
 });
 export const retry = mutation({
   args: { serviceToken: v.string(), id: v.id("financialDocuments") }, returns: v.null(),
-  handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || !["failed", "needs_review"].includes(doc.status) || doc.invoiceId || doc.expenseId) throw new ConvexError("This document cannot be reprocessed"); await ctx.db.patch(doc._id, { status: "queued", attempts: 0, error: undefined }); await ctx.scheduler.runAfter(0, internal.documentProcessing.process, { id: doc._id }); return null; }
+  handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["failed", "needs_review"].includes(doc.status) || doc.invoiceId || doc.expenseId) throw new ConvexError("This document cannot be reprocessed"); await ctx.db.patch(doc._id, { status: "queued", attempts: 0, error: undefined }); await ctx.scheduler.runAfter(0, internal.documentProcessing.process, { id: doc._id }); return null; }
 });
 export const review = mutation({
   args: { serviceToken: v.string(), id: v.id("financialDocuments"), extraction: documentExtraction, transactionId: v.optional(v.string()), confirmCurrencyConversion: v.optional(v.boolean()) }, returns: v.null(),
-  handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || !["needs_review", "failed"].includes(doc.status)) throw new ConvexError("Only unrecorded documents can be reviewed"); const extraction = validateExtraction({ ...args.extraction, confidence: 1, reviewReasons: [] }); if (extraction.reviewReasons.length) throw new ConvexError(extraction.reviewReasons.join(". ")); await recordAndMatch(ctx, doc, extraction, args.transactionId, args.confirmCurrencyConversion); return null; }
+  handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["needs_review", "failed"].includes(doc.status)) throw new ConvexError("Only unrecorded documents can be reviewed"); const extraction = validateExtraction({ ...args.extraction, confidence: 1, reviewReasons: [] }); if (extraction.reviewReasons.length) throw new ConvexError(extraction.reviewReasons.join(". ")); await recordAndMatch(ctx, doc, extraction, args.transactionId, args.confirmCurrencyConversion); return null; }
 });
 export const rematch = mutation({
   args: { serviceToken: v.string(), id: v.optional(v.id("financialDocuments")) }, returns: v.number(),
-  handler: async (ctx, args) => { authorize(args.serviceToken); const rows = args.id ? [await ctx.db.get(args.id)] : await ctx.db.query("financialDocuments").withIndex("by_status_next_match", q => q.eq("status", "unmatched").lte("nextMatchAt", nowIso())).take(20); let count = 0; for (const doc of rows) { if (!doc?.extraction || !(doc.status === "unmatched" || args.id && doc.source === "archive" && doc.invoiceId && doc.status === "needs_review" && doc.extraction.reviewReasons.length === 0)) continue; await recordAndMatch(ctx, doc, doc.extraction); count++; } return count; }
+  handler: async (ctx, args) => { authorize(args.serviceToken); const rows = args.id ? [await ctx.db.get(args.id)] : await ctx.db.query("financialDocuments").withIndex("by_status_deleted_next_match", q => q.eq("status", "unmatched").eq("deletedAt", undefined).lte("nextMatchAt", nowIso())).take(20); let count = 0; for (const doc of rows) { if (!doc?.extraction || doc.deletedAt || !(doc.status === "unmatched" || args.id && doc.source === "archive" && doc.invoiceId && doc.status === "needs_review" && doc.extraction.reviewReasons.length === 0)) continue; await recordAndMatch(ctx, doc, doc.extraction); count++; } return count; }
 });
 
 // Backfill the archive from existing protected expense files, without copying their bytes.

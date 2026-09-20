@@ -110,6 +110,12 @@ export async function handleDocumentApi(request: Request, env: DocumentEnv): Pro
       const result = await ingestDocument(env, { bytes: await boundedBytes(request.body, documentMaximumBytes), fileName: decodeURIComponent(request.headers.get("X-File-Name") ?? "document"), contentType: request.headers.get("Content-Type")?.split(";")[0] ?? "", source: "upload", entity: entity === "dn" || entity === "lmd" ? entity : undefined });
       return Response.json(result, { status: 202 });
     }
+    if (["/api/documents/trash", "/api/documents/restore"].includes(route) && request.method === "POST") {
+      const body = await request.json() as { ids?: unknown };
+      if (!Array.isArray(body?.ids) || !body.ids.length || body.ids.length > 200 || body.ids.some(id => typeof id !== "string" || !id)) throw new Error("Select between 1 and 200 files per batch");
+      const count = await convex.mutation(route.endsWith("/trash") ? api.documents.trash : api.documents.restore, { ...auth(env), ids: body.ids as Id<"financialDocuments">[] });
+      return Response.json({ count });
+    }
     const match = /^\/api\/documents\/([^/]+)(?:\/(file|review|retry|match|candidates))?$/.exec(route);
     if (!match) return Response.json({ message: "Document endpoint not found" }, { status: 404 });
     const id = match[1] as Id<"financialDocuments">;
@@ -125,7 +131,7 @@ export async function handleDocumentApi(request: Request, env: DocumentEnv): Pro
     }
     else if (request.method === "GET" && match[2] === "candidates") return Response.json(await convex.query(api.documents.candidates, { ...auth(env), id }));
     else if (request.method === "POST" && match[2] === "candidates") return Response.json(await convex.query(api.documents.candidates, { ...auth(env), id, extraction: validateExtraction(await request.json()) }));
-    else if (request.method === "DELETE" && !match[2]) await convex.mutation(api.documents.discard, { ...auth(env), id });
+    else if (request.method === "DELETE" && !match[2]) await convex.mutation(api.documents.trash, { ...auth(env), ids: [id] });
     else if (request.method === "GET") {
       const stored = await convex.query(api.documents.get, { ...auth(env), id });
       if (!stored) return Response.json({ message: "Document not found" }, { status: 404 });

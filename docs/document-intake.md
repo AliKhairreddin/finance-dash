@@ -18,6 +18,14 @@ Originals are grouped under Digital Nudge or Love Me Do and their document month
 
 Merit originals are archived on download and in quarter-hour batches. Existing expense source files are indexed without copying their bytes. Invoice PDFs and expense receipts remain separate from generated missing-receipt declarations.
 
+## Duplicate recognition and Trash
+
+The default **Grouped documents** view combines corroborated copies and invoice/receipt pairs while preserving every original download. Identity uses supplier, document number, total, currency, nearby dates, company, extraction confidence, and specific filenames. Generic filenames such as `invoice.pdf` never establish identity alone. Conflicting document numbers or accounting links remain separate and are flagged for review. Recognized copies reuse the same expense, including when an earlier source file is in Trash, instead of recording the purchase twice. Exact byte duplicates are still caught at intake across all channels.
+
+Choose **All files** to select an individual original. Selecting a grouped row selects all its files for ZIP download or **Delete selected**. Deletion requires confirmation and moves the selected originals to **Trash**, where **Restore selected** returns them to the library. Trashing files preserves their IDs, storage, linked expenses, invoices, and bank transactions; it does not undo accounting entries. Trashed files are excluded from processing and rematching. Files currently processing must finish before deletion. Bulk mutations validate the entire batch before writing, with at most 200 files per batch.
+
+Grouping is calculated from existing metadata without a migration or removal of source files. Folder counts represent rows in the chosen view; the toolbar also reports the number of original files.
+
 ## Deployment and operations
 
 - Worker: `finance-dash`, with an `email` handler and the recipient-specific Cloudflare routing rule.

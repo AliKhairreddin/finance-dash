@@ -593,12 +593,13 @@ export default defineSchema({
   amexStatementImports: defineTable(amexStatementFields).index("by_content_hash", ["contentHash"]),
   amexStatementAccounts: defineTable({ id: v.string(), name: v.string(), source: v.literal("amex"), currency: v.string() }).index("by_account_id", ["id"]),
   financialDocuments: defineTable(financialDocumentFields)
+    .index("by_kind_currency_amount_date", ["kind", "extraction.currency", "extraction.amount", "extraction.issueDate"])
     .index("by_storage", ["storageId"])
     .index("by_content_hash", ["contentHash"])
     .index("by_intake_key", ["intakeKey"])
     .index("by_entity_month", ["entity", "month"])
     .index("by_month", ["month"])
-    .index("by_status_next_match", ["status", "nextMatchAt"])
+    .index("by_status_deleted_next_match", ["status", "deletedAt", "nextMatchAt"])
     .index("by_status", ["status"])
     .index("by_transaction", ["transactionId"])
     .index("by_invoice", ["invoiceId"]),

@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
-import { ChevronDown, Download, FilePlus2, FileText, Folder, Plus, Loader2, RefreshCw, Upload, X } from "lucide-react";
+import { ChevronDown, Download, FilePlus2, FileText, Folder, Plus, Loader2, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,7 +10,8 @@ import { InfoPopover } from "@/components/ui/finance-visuals";
 import { SortableTableHead, compareTableValues, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { useUrlState } from "@/lib/url-state";
 import { documentInbox, documentContentTypes, documentMaximumBytes, documentTransactionLink, type DocumentExtraction, type FinancialDocument } from "../../../shared/financialDocuments";
-import { documentLibraryView, filterLibraryDocuments, type DocumentCompany } from "../../../shared/documentLibrary";
+import { documentLibraryView, filterLibraryDocuments, selectedDocumentFiles, type DocumentCompany, type DocumentFileView } from "../../../shared/documentLibrary";
+import type { DocumentGroup } from "../../../shared/documentDuplicates";
 import { wiseEntityLabel } from "../../../shared/wiseEntities";
 
 const labels: Record<FinancialDocument["status"], string> = { queued: "Queued", processing: "Processing", needs_review: "Needs review", unmatched: "Awaiting match", matched: "Matched", failed: "Failed" };
@@ -128,6 +129,7 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
   const [entity, setEntity] = useUrlState<DocumentCompany>("documentCompany", "all", { allowedValues: ["all", "dn", "lmd", "unassigned"] });
   const [month, setMonth] = useUrlState("documentMonth", "all");
   const [kind, setKind] = useUrlState<FinancialDocument["kind"]>("documentKind", "expense", { allowedValues: ["expense", "invoice", "unknown"] });
+  const [fileView, setFileView] = useUrlState<DocumentFileView>("documentFiles", "grouped", { allowedValues: ["grouped", "all", "trash"] });
   const [status, setStatus] = useUrlState("documentStatus", "all");
   const [search, setSearch] = useUrlState("documentSearch", "");
   const [sort, setSort] = useUrlState<SortKey>("documentSort", "date", { allowedValues: ["file", "date", "kind", "amount", "source", "status", "match"] });
@@ -139,6 +141,8 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
   const [selection, setSelection] = useState<{ scope: string; ids: Set<string> }>({ scope: "", ids: new Set() });
   const [download, setDownload] = useState<{ completed: number; total: number } | null>(null);
   const [downloadError, setDownloadError] = useState("");
+  const [deleteRequest, setDeleteRequest] = useState<FinancialDocument[] | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false), [bulkError, setBulkError] = useState(""), [bulkMessage, setBulkMessage] = useState("");
   const downloading = useRef<AbortController | null>(null);
   const refreshing = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
@@ -164,13 +168,14 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
     return () => { window.clearInterval(timer); window.removeEventListener("finance:documents-changed", onChanged); refreshing.current?.abort(); };
   }, [refresh]);
   useEffect(() => () => downloading.current?.abort(), []);
-  const view = documentLibraryView(documents, kind, entity);
-  const value = (doc: FinancialDocument) => sort === "file" ? `${doc.extraction?.counterparty ?? ""} ${doc.entity ? wiseEntityLabel(doc.entity) : "Unassigned"} ${doc.fileName}` : sort === "date" ? doc.extraction?.issueDate : sort === "amount" ? doc.extraction?.amount : sort === "match" ? doc.transactionId : doc[sort];
+  const view = documentLibraryView(documents, kind, entity, fileView);
+  const value = (doc: DocumentGroup) => sort === "file" ? `${doc.extraction?.counterparty ?? ""} ${doc.entity ? wiseEntityLabel(doc.entity) : "Unassigned"} ${doc.files.map(file => file.fileName).join(" ")}` : sort === "date" ? doc.extraction?.issueDate : sort === "amount" ? doc.extraction?.amount : sort === "match" ? doc.transactionId : sort === "source" ? [...new Set(doc.files.map(file => file.source))].sort().join(", ") : doc[sort];
   const rows = filterLibraryDocuments(view.documents, month, status, search).sort((a, b) => compareTableValues(value(a), value(b), order) || a._id.localeCompare(b._id));
-  const scope = JSON.stringify([kind, entity, month, status, search]);
+  const scope = JSON.stringify([kind, entity, month, status, search, fileView]);
   const selectedIds = selection.scope === scope ? selection.ids : new Set<string>();
-  const selected = rows.filter(doc => selectedIds.has(doc._id));
-  const allSelected = rows.length > 0 && selected.length === rows.length;
+  const selected = selectedDocumentFiles(rows, selectedIds);
+  const allSelected = rows.length > 0 && rows.every(doc => selectedIds.has(doc._id));
+  const busy = bulkBusy || Boolean(download);
   useEffect(() => { setSelection({ scope, ids: new Set() }); setDownloadError(""); }, [scope]);
   const selectAll = () => setSelection({ scope, ids: allSelected ? new Set() : new Set(rows.map(doc => doc._id)) });
   const switchView = (next: typeof kind) => { setKind(next); setMonth("all"); };
@@ -190,6 +195,20 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
     } catch (err) { if (!controller.signal.aborted) setDownloadError(err instanceof Error ? err.message : "Download failed. Please retry."); }
     finally { downloading.current = null; setDownload(null); }
   };
+  const changeTrash = async (files: FinancialDocument[], action: "trash" | "restore") => {
+    if (bulkBusy || !files.length) return;
+    setBulkBusy(true); setBulkError(""); setBulkMessage("");
+    let completed = 0;
+    try {
+      for (let index = 0; index < files.length; index += 200) {
+        const result = await request<{ count: number }>(`${apiBase}/documents/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: files.slice(index, index + 200).map(file => file._id) }) });
+        completed += result.count;
+      }
+      setSelection({ scope, ids: new Set() }); setDeleteRequest(null);
+      setBulkMessage(`${completed} ${completed === 1 ? "file" : "files"} ${action === "trash" ? "moved to Trash" : "restored"}`);
+    } catch (err) { setBulkError(`${completed ? `${completed} files updated. ` : ""}${err instanceof Error ? err.message : "Could not update documents"}`); }
+    finally { setBulkBusy(false); await refresh(); }
+  };
   const onSort = (key: SortKey) => { if (key === sort) setOrder(order === "asc" ? "desc" : "asc"); else { setSort(key); setOrder("asc"); } };
   const head = (key: SortKey, label: string) => <SortableTableHead activeSortKey={sort} direction={order} onSort={onSort} sortKey={key}>{label}</SortableTableHead>;
   return <div className="documents-page">
@@ -202,6 +221,9 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
         </div>
         <NativeSelect aria-label="Document company" value={entity} onValueChange={value => { setEntity(value as DocumentCompany); setMonth("all"); }}>
           <NativeSelectOption value="all">All companies</NativeSelectOption><NativeSelectOption value="dn">Digital Nudge</NativeSelectOption><NativeSelectOption value="lmd">Love Me Do</NativeSelectOption><NativeSelectOption value="unassigned">Unassigned</NativeSelectOption>
+        </NativeSelect>
+        <NativeSelect aria-label="File view" value={fileView} onValueChange={value => { setFileView(value as DocumentFileView); setMonth("all"); setStatus("all"); setBulkError(""); setBulkMessage(""); }}>
+          <NativeSelectOption value="grouped">Grouped documents</NativeSelectOption><NativeSelectOption value="all">All files</NativeSelectOption><NativeSelectOption value="trash">Trash</NativeSelectOption>
         </NativeSelect>
         {(view.unclassified > 0 || kind === "unknown") && <Button variant="outline" className="document-unclassified" aria-pressed={kind === "unknown"} onClick={() => switchView("unknown")}>Unclassified <span>{view.unclassified}</span></Button>}
       </div>
@@ -216,26 +238,54 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
         <Input aria-label="Search documents" placeholder="Search documents" value={search} onChange={e => setSearch(e.target.value)} />
         <NativeSelect aria-label="Filter processing status" value={status} onValueChange={setStatus}><NativeSelectOption value="all">All statuses</NativeSelectOption>{Object.entries(labels).map(([key, label]) => <NativeSelectOption key={key} value={key}>{label}</NativeSelectOption>)}</NativeSelect>
         <div className="document-selection-actions">
-          <Button variant="outline" className="secondary-button" disabled={!rows.length || loading || Boolean(download)} onClick={selectAll}>{allSelected ? "Deselect all" : "Select all"}</Button>
-          <span className="document-selection-count" role="status">{selected.length ? `${selected.length} selected` : `${rows.length} files`}</span>
-          <Button variant="outline" className="secondary-button document-download" disabled={!selected.length || Boolean(download)} onClick={() => void downloadSelected()}>{download ? <Loader2 size={15} className="spin" /> : <Download size={15} />}{download ? `${download.completed} / ${download.total}` : "Download ZIP"}</Button>
+          <Button variant="outline" className="secondary-button" disabled={!rows.length || loading || busy} onClick={selectAll}>{allSelected ? "Deselect all" : "Select all"}</Button>
+          <span className="document-selection-count" role="status">{selected.length ? `${selected.length} ${selected.length === 1 ? "file" : "files"} selected` : fileView === "grouped" ? `${rows.length} ${rows.length === 1 ? "document" : "documents"} · ${rows.reduce((sum, row) => sum + row.files.length, 0)} files` : `${rows.length} files`}</span>
+          <Button variant="outline" className="secondary-button document-download" disabled={!selected.length || busy} onClick={() => void downloadSelected()}>{download ? <Loader2 size={15} className="spin" /> : <Download size={15} />}{download ? `${download.completed} / ${download.total}` : "Download ZIP"}</Button>
+          {selected.length > 0 && (fileView === "trash"
+            ? <Button variant="outline" disabled={busy} onClick={() => void changeTrash(selected, "restore")}><RotateCcw size={15} />Restore selected</Button>
+            : <Button variant="outline" disabled={busy} onClick={() => { setDeleteRequest([...selected]); setBulkError(""); }}><Trash2 size={15} />Delete selected</Button>)}
           {download && <Button variant="ghost" size="icon" aria-label="Cancel download" onClick={() => downloading.current?.abort()}><X size={15} /></Button>}
-          <InfoPopover label="Download selected documents"><p>Select all includes every file matching the current view, company, month, search, and status. The ZIP contains the original PDFs and images, organized by company and month. Changing filters clears the selection.</p></InfoPopover>
+          <InfoPopover label="Download selected documents"><p>A grouped row includes all its original files. Choose All files to select an individual copy. Select all includes every file matching the current view, company, month, search, and status. The ZIP contains the original PDFs and images, organized by company and month. Changing filters clears the selection.</p></InfoPopover>
         </div>
         <Button variant="ghost" size="icon" aria-label="Refresh documents" onClick={() => void refresh()}><RefreshCw size={16} /></Button>
         {download && <span className="screen-reader-only" role="status">Preparing ZIP: {download.completed} of {download.total} files</span>}
       </div>
+      {bulkMessage && <p className="document-bulk-message" role="status">{bulkMessage}</p>}
+      {bulkError && !deleteRequest && <p role="alert" className="inline-error">{bulkError}</p>}
       {(error || downloadError) && <p role="alert" className="inline-error">{downloadError || error}</p>}
-      <div className="table-wrap"><table className="data-table document-table"><thead><tr><th className="document-select-cell"><Checkbox aria-label="Select all documents in this view" checked={allSelected} indeterminate={selected.length > 0 && !allSelected} disabled={!rows.length || loading || Boolean(download)} onCheckedChange={selectAll} /></th>{head("file", "Document / company")}{head("date", "Date")}{head("kind", "Type")}{head("amount", "Amount")}{head("source", "Received via")}{head("status", "Status")}{head("match", "Bank match")}<th>Actions</th></tr></thead><tbody>
+      <div className="table-wrap"><table className="data-table document-table"><thead><tr><th className="document-select-cell"><Checkbox aria-label="Select all documents in this view" checked={allSelected} indeterminate={selected.length > 0 && !allSelected} disabled={!rows.length || loading || busy} onCheckedChange={selectAll} /></th>{head("file", "Document / company")}{head("date", "Date")}{head("kind", "Type")}{head("amount", "Amount")}{head("source", "Received via")}{head("status", "Status")}{head("match", "Bank match")}<th>Actions</th></tr></thead><tbody>
         {rows.map(doc => <tr key={doc._id} data-selected={selectedIds.has(doc._id) || undefined}>
-          <td className="document-select-cell"><Checkbox aria-label={`Select ${doc.fileName}`} checked={selectedIds.has(doc._id)} disabled={Boolean(download)} onCheckedChange={checked => setSelection(current => { const ids = new Set(current.scope === scope ? current.ids : []); if (checked) ids.add(doc._id); else ids.delete(doc._id); return { scope, ids }; })} /></td>
-          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><a href={`${apiBase}/documents/${doc._id}/file`}>{doc.fileName}</a></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{doc.source}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.error || doc.extraction?.reviewReasons.join(". ") || doc.matchReason}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
+          <td className="document-select-cell"><Checkbox aria-label={`Select ${doc.fileName}${doc.files.length > 1 ? ` and ${doc.files.length - 1} related ${doc.files.length === 2 ? "file" : "files"}` : ""}`} checked={selectedIds.has(doc._id)} disabled={busy} onCheckedChange={checked => setSelection(current => { const ids = new Set(current.scope === scope ? current.ids : []); if (checked) ids.add(doc._id); else ids.delete(doc._id); return { scope, ids }; })} /></td>
+          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><DocumentFiles document={doc} apiBase={apiBase} documents={documents} /></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{[...new Set(doc.files.map(file => file.source))].sort().join(", ")}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.error || doc.extraction?.reviewReasons.join(". ") || doc.matchReason}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{!doc.deletedAt && ["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{!doc.deletedAt && doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{!doc.deletedAt && doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
         {!rows.length && <tr><td colSpan={9}>{loading ? <span role="status"><Loader2 size={16} className="spin" /> Loading documents…</span> : "No documents in this view"}</td></tr>}
       </tbody></table></div>
     </section>
+    {deleteRequest && <Dialog open onOpenChange={open => { if (!open && !bulkBusy) setDeleteRequest(null); }}><DialogContent className="document-dialog" showCloseButton={false}>
+      <DialogTitle>Move {deleteRequest.length} {deleteRequest.length === 1 ? "file" : "files"} to Trash?</DialogTitle>
+      <p>Files can be restored from Trash. Linked expenses, invoices and bank transactions stay unchanged.</p>
+      <p className="document-delete-files">{deleteRequest.slice(0, 3).map(file => file.fileName).join(", ")}{deleteRequest.length > 3 ? ` and ${deleteRequest.length - 3} more` : ""}</p>
+      {bulkError && <p role="alert" className="inline-error">{bulkError}</p>}
+      <div className="row-actions"><Button variant="outline" disabled={bulkBusy} onClick={() => setDeleteRequest(null)}>Cancel</Button><Button variant="destructive" disabled={bulkBusy} onClick={() => void changeTrash(deleteRequest, "trash")}>{bulkBusy ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}Move to Trash</Button></div>
+    </DialogContent></Dialog>}
     {matchDocument && <MatchDocument document={matchDocument} apiBase={apiBase} onClose={() => setMatchDocument(null)} onSaved={() => void refresh()} />}
     {review && <ReviewDocument document={review} apiBase={apiBase} onClose={() => setReview(null)} onSaved={() => void refresh()} />}
   </div>;
+}
+
+
+function DocumentFiles({ document: doc, apiBase, documents }: { document: DocumentGroup; apiBase: string; documents: FinancialDocument[] }) {
+  const related = documents.filter(file => doc.possibleRelatedIds.includes(file._id));
+  const relations = Object.values(doc.relationships);
+  const label = doc.files.length > 1 ? relations.some(relation => relation.kind === "supporting") ? "Invoice + receipt" : "Duplicate copies"
+    : related.length ? relations.some(relation => relation.kind === "duplicate") ? "Duplicate copy" : relations.some(relation => relation.kind === "supporting") ? "Related receipt / invoice" : "Possible duplicate" : "";
+  return <>
+    {doc.files.map(file => <a className="document-original-link" key={file._id} href={`${apiBase}/documents/${file._id}/file`}>{file.fileName}</a>)}
+    {label && <span className="document-relationship"><small>{label}</small><InfoPopover label={`Related files for ${doc.fileName}`}>
+      <p>{doc.files.length > 1 ? "These originals describe the same purchase. Each file is preserved; selecting this row selects all of them." : "These files may describe the same purchase. They remain individually accessible."}</p>
+      {relations[0] && <p>{relations[0].reason}</p>}
+      {related.map(file => <p key={file._id}><a href={`${apiBase}/documents/${file._id}/file`}>{file.fileName}</a></p>)}
+    </InfoPopover></span>}
+  </>;
 }
 
 

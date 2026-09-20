@@ -20,3 +20,20 @@ test("document APIs forward edited candidate details and explicit FX confirmatio
   assert.equal((await send("match", { transactionId: "amex-1", confirmCurrencyConversion: true }))?.status, 200);
   assert.equal(calls[2].name, "documents:confirmMatch"); assert.equal(calls[2].args.confirmCurrencyConversion, true);
 });
+
+test("bulk deletion and restoration forward bounded file selections to soft-delete mutations", async t => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  t.mock.method(ConvexHttpClient.prototype, "mutation", async (fn: Parameters<typeof getFunctionName>[0], args: Record<string, unknown>) => { calls.push({ name: getFunctionName(fn), args }); return 2; });
+  for (const action of ["trash", "restore"]) {
+    const response = await handleDocumentApi(new Request(`https://finance.example/api/documents/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: ["one", "two"] }) }), env);
+    assert.equal(response?.status, 200); assert.deepEqual(await response?.json(), { count: 2 });
+    assert.equal(calls.at(-1)?.name, `documents:${action}`); assert.deepEqual(calls.at(-1)?.args.ids, ["one", "two"]);
+    for (const ids of [[], [1], Array(201).fill("one")]) {
+      const rejected = await handleDocumentApi(new Request(`https://finance.example/api/documents/${action}`, { method: "POST", body: JSON.stringify({ ids }) }), env);
+      assert.equal(rejected?.status, 400);
+    }
+  }
+  assert.equal(calls.length, 2, "invalid requests cannot mutate data");
+  const single = await handleDocumentApi(new Request("https://finance.example/api/documents/one", { method: "DELETE" }), env);
+  assert.equal(single?.status, 200); assert.equal(calls.at(-1)?.name, "documents:trash"); assert.deepEqual(calls.at(-1)?.args.ids, ["one"]);
+});
