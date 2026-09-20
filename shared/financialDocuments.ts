@@ -115,6 +115,26 @@ export function documentMatchCandidates(extraction: DocumentExtraction, transact
   });
 }
 
+export type DocumentReviewMatchKind = "exact" | "foreign_currency";
+
+/** Review suggestions never authorize an automatic match or infer company ownership. */
+export function documentReviewMatchKind(extraction: DocumentExtraction, transaction: Transaction): DocumentReviewMatchKind | null {
+  if (!extraction.amount || !extraction.currency || !extraction.issueDate || extraction.kind === "unknown") return null;
+  if (transaction.direction !== (extraction.kind === "invoice" ? "in" : "out") || !["posted", "settled"].includes(transaction.status)) return null;
+  const days = (Date.parse(transaction.date) - Date.parse(extraction.issueDate)) / 86400000;
+  if (!Number.isFinite(days) || days < -7 || days > 90) return null;
+  const entity = transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName);
+  if (extraction.entity && entity && entity !== extraction.entity) return null;
+  if (transaction.currency.toUpperCase() === extraction.currency) return Math.abs(transaction.amount - extraction.amount) <= 0.009 ? "exact" : null;
+  // Amex exports contain the billing amount only. Nearby merchant evidence can
+  // suggest a charge, but its currency conversion must be explicitly confirmed.
+  if (extraction.kind !== "expense" || transaction.source !== "amex" || days > 7 || transaction.amount <= 0) return null;
+  const generic = new Set(["technologies", "technology", "services", "software", "group", "international", "opco", "gmbh", "pty", "uab", "private"]);
+  const words = companyWords(extraction.counterparty).filter(word => word.length >= 4 && !generic.has(word));
+  const merchant = normalized([transaction.counterparty, transaction.rawName, transaction.merchantName].filter(Boolean).join(" ")).split(" ");
+  return words.some(word => merchant.includes(word)) ? "foreign_currency" : null;
+}
+
 export function documentTransactionLink(transactionId: string): string {
   return `?page=banks&documentTransaction=${encodeURIComponent(transactionId)}`;
 }

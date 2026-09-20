@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { ConvexHttpClient } from "convex/browser";
+import { getFunctionName } from "convex/server";
+import { handleDocumentApi } from "./documentIntake";
+const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", OPENROUTER_API_KEY: "test", PUBLIC_APP_URL: "https://finance.example", DOCUMENT_AI_MODEL: "test-model" };
+const extraction = { kind: "expense", entity: "dn", counterparty: "Cloudflare", documentNumber: "CF-1", issueDate: "2026-09-05", dueDate: null, amount: 59.08, currency: "USD", description: "Hosting", confidence: 1, reviewReasons: [] };
+test("document APIs forward edited candidate details and explicit FX confirmation", async t => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const record = async (fn: Parameters<typeof getFunctionName>[0], args: Record<string, unknown>) => { calls.push({ name: getFunctionName(fn), args }); return []; };
+  t.mock.method(ConvexHttpClient.prototype, "query", record);
+  t.mock.method(ConvexHttpClient.prototype, "mutation", record);
+  const send = (path: string, body: unknown) => handleDocumentApi(new Request(`https://finance.example/api/documents/doc-1/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), env);
+  assert.equal((await send("candidates", { ...extraction, entity: null }))?.status, 200);
+  assert.equal(calls[0].name, "documents:candidates");
+  assert.equal((calls[0].args.extraction as typeof extraction).entity, null);
+  assert.equal((await send("review", { ...extraction, transactionId: "amex-1", confirmCurrencyConversion: true }))?.status, 200);
+  assert.equal(calls[1].name, "documents:review"); assert.equal(calls[1].args.transactionId, "amex-1"); assert.equal(calls[1].args.confirmCurrencyConversion, true);
+  assert.deepEqual(calls[1].args.extraction, extraction);
+  assert.equal((await send("match", { transactionId: "amex-1", confirmCurrencyConversion: true }))?.status, 200);
+  assert.equal(calls[2].name, "documents:confirmMatch"); assert.equal(calls[2].args.confirmCurrencyConversion, true);
+});

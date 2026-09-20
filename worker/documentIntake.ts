@@ -114,13 +114,17 @@ export async function handleDocumentApi(request: Request, env: DocumentEnv): Pro
     if (!match) return Response.json({ message: "Document endpoint not found" }, { status: 404 });
     const id = match[1] as Id<"financialDocuments">;
     if (request.method === "POST" && match[2] === "retry") await convex.mutation(api.documents.retry, { ...auth(env), id });
-    else if (request.method === "POST" && match[2] === "review") await convex.mutation(api.documents.review, { ...auth(env), id, extraction: validateExtraction(await request.json()) });
+    else if (request.method === "POST" && match[2] === "review") {
+      const body = await request.json() as DocumentExtraction & { transactionId?: string; confirmCurrencyConversion?: boolean };
+      await convex.mutation(api.documents.review, { ...auth(env), id, extraction: validateExtraction(body), transactionId: body.transactionId, confirmCurrencyConversion: body.confirmCurrencyConversion });
+    }
     else if (request.method === "POST" && match[2] === "match") {
-      const body = request.headers.get("Content-Type")?.includes("application/json") ? await request.json() as { transactionId?: string } : {};
-      if (body.transactionId) await convex.mutation(api.documents.confirmMatch, { ...auth(env), id, transactionId: body.transactionId });
+      const body = request.headers.get("Content-Type")?.includes("application/json") ? await request.json() as { transactionId?: string; confirmCurrencyConversion?: boolean } : {};
+      if (body.transactionId) await convex.mutation(api.documents.confirmMatch, { ...auth(env), id, transactionId: body.transactionId, confirmCurrencyConversion: body.confirmCurrencyConversion });
       else await convex.mutation(api.documents.rematch, { ...auth(env), id });
     }
     else if (request.method === "GET" && match[2] === "candidates") return Response.json(await convex.query(api.documents.candidates, { ...auth(env), id }));
+    else if (request.method === "POST" && match[2] === "candidates") return Response.json(await convex.query(api.documents.candidates, { ...auth(env), id, extraction: validateExtraction(await request.json()) }));
     else if (request.method === "DELETE" && !match[2]) await convex.mutation(api.documents.discard, { ...auth(env), id });
     else if (request.method === "GET") {
       const stored = await convex.query(api.documents.get, { ...auth(env), id });

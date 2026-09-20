@@ -11847,9 +11847,84 @@ body {
 .document-toolbar > input { max-width: 300px; }
 .document-dialog { width: min(640px, 95vw); max-height: 90vh; overflow: auto; padding: 24px; }
 .document-dialog form, .document-dialog label { display: grid; gap: 8px; }
+.document-dialog .document-fx-confirmation { display: flex; align-items: flex-start; gap: 10px; }
 .document-dialog form { gap: 18px; margin-top: 18px; }
 .document-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .document-drop-zone { padding: 24px; border: 1px dashed #8093a8; border-radius: 12px; }
+.document-file-download {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--panel), var(--panel-soft));
+  color: var(--ink);
+  text-decoration: none;
+  box-shadow: 0 2px 4px rgb(9 9 11 / 3%);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+.document-file-download-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--control-text);
+}
+.document-file-download-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.document-file-download-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--active-bg);
+  color: var(--control-text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.document-file-download:hover {
+  border-color: var(--control-border-hover);
+  box-shadow: 0 4px 12px rgb(9 9 11 / 7%);
+  transform: translateY(-1px);
+}
+.document-file-download:hover .document-file-download-action,
+.document-file-download:focus-visible .document-file-download-action {
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+.document-file-download:focus-visible {
+  outline: 2px solid var(--control-text);
+  outline-offset: 3px;
+}
+.document-file-download:active { transform: translateY(0); }
+@media (max-width: 480px) {
+  .document-file-download { gap: 10px; }
+  .document-file-download-action { padding: 0; }
+  .document-file-download-action > span { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .document-file-download,
+  .document-file-download-action { transition: none; }
+  .document-file-download:hover { transform: none; }
+}
 .account-group-totals {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));

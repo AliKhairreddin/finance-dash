@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { documentMatchCandidates, validateExtraction, validateDocumentFile, type DocumentExtraction } from "./financialDocuments";
+import { documentReviewMatchKind, documentMatchCandidates, validateExtraction, validateDocumentFile, type DocumentExtraction } from "./financialDocuments";
 import { accountBalanceGroups } from "./accountBalanceGroups";
 import type { AccountBalance, Transaction } from "./types";
 const extraction: DocumentExtraction = { kind: "expense", entity: "dn", counterparty: "Acme Ltd", documentNumber: "ACM-2201", issueDate: "2026-08-14", dueDate: null, amount: 49.95, currency: "USD", description: "Software", confidence: 0.98, reviewReasons: [] };
@@ -40,4 +40,24 @@ test("account totals keep company and credit balances distinct and report missin
   assert.deepEqual(groups.find(g => g.id === "revolut")?.excludedCurrencies, ["CAD"]);
   assert.equal(groups.find(g => g.id === "slash")?.totalUsd, 100);
   assert.equal(groups.find(g => g.id === "slash-credit")?.totalUsd, 200);
+});
+
+
+test("Amex FX suggestions use merchant and nearby dates without auto-matching or guessing ownership", () => {
+  const receipt = { ...extraction, entity: null, counterparty: "RedTrack Technologies LTD", amount: 180.29 };
+  const charge = transaction({ source: "amex", wiseEntity: undefined, accountName: "Amex •1003", counterparty: "REDTRACK.IO LIMASSOL", rawName: "REDTRACK.IO LIMASSOL", amount: 158.38, currency: "EUR" });
+  assert.equal(documentReviewMatchKind(receipt, charge), "foreign_currency");
+  assert.equal(documentMatchCandidates({ ...receipt, entity: "lmd" }, [charge]).length, 0);
+  for (const changes of [{ source: "wise" }, { status: "pending" }, { status: "voided" }, { direction: "in" }, { amount: 0 }, { date: "2026-08-22" }, { date: "2026-08-06" }, { counterparty: "Other", rawName: "Other" }] as Partial<Transaction>[]) {
+    assert.equal(documentReviewMatchKind(receipt, { ...charge, ...changes }), null, JSON.stringify(changes));
+  }
+  assert.equal(documentReviewMatchKind({ ...receipt, entity: "dn" }, { ...charge, wiseEntity: "lmd" }), null);
+  assert.equal(documentReviewMatchKind({ ...receipt, kind: "invoice" }, { ...charge, direction: "in" }), null);
+  assert.equal(documentReviewMatchKind({ ...receipt, counterparty: "Software Services Ltd" }, charge), null);
+});
+
+test("company review can show same-currency candidates but rejects a mismatched total", () => {
+  assert.equal(documentReviewMatchKind({ ...extraction, entity: null }, transaction()), "exact");
+  assert.equal(documentReviewMatchKind(extraction, transaction({ amount: 50 })), null);
+  assert.equal(documentReviewMatchKind(extraction, transaction({ wiseEntity: "lmd" })), null);
 });

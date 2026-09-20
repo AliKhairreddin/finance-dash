@@ -34,7 +34,7 @@ function database(initial: Record<string, Row[]> = {}) {
 }
 const extraction: DocumentExtraction = { kind: "expense", entity: "dn", counterparty: "Acme", documentNumber: "ACME-101", amount: 20, currency: "USD", issueDate: "2026-08-15", dueDate: null, description: "Software", confidence: 0.99, reviewReasons: [] };
 const state = () => ({ _id: "state", key: "default", updatedAt: "2026-09-01T00:00:00Z", invoices: [], expenses: [], providers: [], paymentAllocations: [] });
-const tx = (id: string) => ({ _id: id, id, direction: "out", amount: 20, currency: "USD", date: "2026-08-15", status: "posted", source: "wise", connectionKey: "primary", wiseEntity: "dn", accountName: "Digital Nudge USD", counterparty: "Acme", rawName: "ACME", description: "ACME-101" });
+const tx = (id: string) => ({ _id: id, id, direction: "out", amount: 20, currency: "USD", date: "2026-08-15", status: "posted", source: "wise", connectionKey: "primary", identityVersion: 2, wiseEntity: "dn", accountName: "Digital Nudge USD", counterparty: "Acme", rawName: "ACME", description: "ACME-101" });
 const doc = () => ({ _id: "document", storageId: "blob", fileName: "receipt.pdf", contentType: "application/pdf", size: 100, source: "upload", sourceContext: "", month: "2026-09", kind: "unknown", status: "processing", attemptToken: "lease", attempts: 1, createdAt: "2026-09-06T00:00:00Z" });
 const setup = (transactions: Row[] = [tx("tx-1")]) => database({ dashboardState: [state()], financialDocuments: [doc()], bankTransactions: transactions, bankConnectionBindings: [{ source: "wise", connectionKey: "primary" }] });
 
@@ -90,4 +90,75 @@ test("invoice PDF downloads select the PDF when an earlier original is an image"
   const db = database({ financialDocuments: [{ ...doc(), contentType: "image/png", invoiceId: "invoice-1", fileName: "original.png" }, { ...doc(), _id: "pdf", storageId: "pdf-blob", invoiceId: "invoice-1", fileName: "invoice.pdf" }] });
   const result = await db.run(documents.forInvoice, { serviceToken: "test-service", invoiceId: "invoice-1" });
   assert.equal(result.id, "pdf"); assert.equal(result.contentType, "application/pdf");
+});
+
+function amexSetup() {
+  const charge = { ...tx("amex-1"), source: "amex", wiseEntity: undefined, accountName: "Amex •1003", cardLastFour: "1029", cardHolderName: "Test Cardholder", counterparty: "CLOUDFLARE SAN FRANCISCO", rawName: "CLOUDFLARE SAN FRANCISCO", description: "CLOUDFLARE SAN FRANCISCO", currency: "EUR", amount: 52.28 };
+  const db = setup([charge]);
+  db.tables.set("bankConnectionBindings", [{ source: "amex", connectionKey: "primary" }]);
+  const receipt = { ...extraction, counterparty: "Cloudflare, Inc.", amount: 59.08 };
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  return { db, receipt };
+}
+
+test("company review exposes Amex FX candidates and confirms company plus bank link in one save", async () => {
+  const { db, receipt } = amexSetup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...receipt, entity: null } });
+  assert.equal((await db.ctx.db.get("document")).status, "needs_review");
+  const candidates = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
+  assert.equal(candidates.length, 1); assert.equal(candidates[0].matchKind, "foreign_currency");
+  assert.equal(candidates[0].cardLastFour, "1029"); assert.equal(candidates[0].cardHolderName, "Test Cardholder");
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+  const changedCompany = await db.run(documents.candidates, { serviceToken: "test-service", id: "document", extraction: { ...receipt, counterparty: "Other" } });
+  assert.equal(changedCompany.length, 0, "Candidates use the edited document details");
+  await assert.rejects(db.run(documents.review, { serviceToken: "test-service", id: "document", extraction: { ...receipt, entity: null }, transactionId: "amex-1", confirmCurrencyConversion: true }), /Choose Digital Nudge/);
+  await assert.rejects(db.run(documents.review, { serviceToken: "test-service", id: "document", extraction: receipt, transactionId: "amex-1" }), /Confirm the bank charge/);
+  await db.run(documents.review, { serviceToken: "test-service", id: "document", extraction: receipt, transactionId: "amex-1", confirmCurrencyConversion: true });
+  const saved = await db.ctx.db.get("document"), ledger = await db.ctx.db.get("state");
+  assert.equal(saved.status, "matched"); assert.equal(saved.entity, "dn"); assert.equal(saved.transactionId, "amex-1");
+  assert.match(saved.matchReason, /59.08 USD document \/ 52.28 EUR bank charge/);
+  assert.equal(ledger.expenses.length, 1); assert.equal(ledger.expenses[0].grossAmount, 59.08); assert.equal(ledger.expenses[0].currency, "USD");
+  assert.equal(ledger.expenses[0].paymentStatus, "unpaid"); assert.deepEqual(ledger.paymentAllocations, []);
+  assert.equal((await db.ctx.db.get("amex-1")).amount, 52.28);
+});
+
+test("automatic processing and rematching never silently accept foreign-currency suggestions", async () => {
+  const { db, receipt } = amexSetup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
+  await db.run(documents.rematch, { serviceToken: "test-service", id: "document" });
+  assert.equal((await db.ctx.db.get("document")).status, "unmatched");
+  await assert.rejects(db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1" }), /Confirm the bank charge/);
+  await db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true });
+  assert.equal((await db.ctx.db.get("document")).status, "matched");
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 1);
+});
+
+test("Amex matches recheck active identities, claims, company and posted status at confirmation", async () => {
+  for (const changes of [{ connectionKey: "disconnected" }, { identityVersion: 1 }, { wiseEntity: "lmd" }, { status: "pending" }]) {
+    const { db, receipt } = amexSetup();
+    await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
+    await db.ctx.db.patch("amex-1", changes);
+    assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+    await assert.rejects(db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true }), /no longer fits/);
+  }
+  const { db, receipt } = amexSetup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "other-document", transactionId: "amex-1", expenseId: "other-expense", status: "matched" });
+  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+  await assert.rejects(db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true }), /already claimed/);
+});
+
+test("a receipt and invoice for the same expense share its confirmed Amex link", async () => {
+  const { db, receipt } = amexSetup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
+  await db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "second", storageId: "second-blob", fileName: "invoice.pdf" });
+  await db.run(documents.complete, { id: "second", token: "lease", extraction: { ...receipt, entity: null } });
+  const choices = await db.run(documents.candidates, { serviceToken: "test-service", id: "second", extraction: receipt });
+  assert.equal(choices.length, 1);
+  await db.run(documents.review, { serviceToken: "test-service", id: "second", extraction: receipt });
+  const second = await db.ctx.db.get("second"), first = await db.ctx.db.get("document"), ledger = await db.ctx.db.get("state");
+  assert.equal(second.transactionId, first.transactionId); assert.equal(second.expenseId, first.expenseId); assert.equal(second.status, "matched");
+  assert.equal(ledger.expenses.length, 1); assert.equal(ledger.expenses[0].documents.length, 2);
+  assert.equal(ledger.expenses[0].paymentStatus, "unpaid");
 });

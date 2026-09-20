@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
-import { ChevronDown, Download, FilePlus2, Folder, Plus, Loader2, RefreshCw, Upload, X } from "lucide-react";
+import { ChevronDown, Download, FilePlus2, FileText, Folder, Plus, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -96,10 +96,15 @@ function DocumentUploadDialog({ apiBase, onUploaded, defaultEntity, onClose, fin
 function ReviewDocument({ document, apiBase, onClose, onSaved }: { document: FinancialDocument; apiBase: string; onClose: () => void; onSaved: () => void }) {
   const [draft, setDraft] = useState<DocumentExtraction>(document.extraction ?? { kind: "unknown", entity: document.entity ?? null, counterparty: "", documentNumber: "", issueDate: null, dueDate: null, amount: null, currency: null, description: "", confidence: 1, reviewReasons: [] });
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const bank = useDocumentCandidates(document._id, apiBase, draft);
   return <Dialog open onOpenChange={value => { if (!value && !busy) onClose(); }}><DialogContent className="document-dialog" showCloseButton={false}>
     <div className="panel-header"><DialogTitle>Review document</DialogTitle><Button aria-label="Close document review" onClick={onClose}><X size={18} /></Button></div>
-    <a href={`${apiBase}/documents/${document._id}/file`}><Download size={14} /> {document.fileName}</a>
-    <form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) }); onSaved(); onClose(); window.dispatchEvent(new Event("finance:documents-changed")); } catch (err) { setError(err instanceof Error ? err.message : "Review failed"); } finally { setBusy(false); } }}>
+    <a className="document-file-download" href={`${apiBase}/documents/${document._id}/file`} download={document.fileName} aria-label={`Download ${document.fileName}`} title={document.fileName}>
+      <span className="document-file-download-icon" aria-hidden="true"><FileText size={20} /></span>
+      <span className="document-file-download-name">{document.fileName}</span>
+      <span className="document-file-download-action" aria-hidden="true"><span>Download</span><Download size={16} /></span>
+    </a>
+    <form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, transactionId: bank.selected?.id, confirmCurrencyConversion: bank.confirmed }) }); onSaved(); onClose(); window.dispatchEvent(new Event("finance:documents-changed")); } catch (err) { setError(err instanceof Error ? err.message : "Review failed"); } finally { setBusy(false); } }}>
       <div className="document-form-grid">
         <label>Company<NativeSelect aria-label="Company" value={draft.entity ?? ""} onValueChange={value => setDraft({ ...draft, entity: value as "dn" | "lmd" })}><NativeSelectOption value="">Choose company</NativeSelectOption><NativeSelectOption value="dn">Digital Nudge</NativeSelectOption><NativeSelectOption value="lmd">Love Me Do</NativeSelectOption></NativeSelect></label>
         <label>Document type<NativeSelect aria-label="Document type" disabled={Boolean(document.invoiceId || document.expenseId)} value={draft.kind} onValueChange={value => setDraft({ ...draft, kind: value as DocumentExtraction["kind"] })}><NativeSelectOption value="unknown">Choose type</NativeSelectOption><NativeSelectOption value="expense">Expense / supplier invoice</NativeSelectOption><NativeSelectOption value="invoice">Sales invoice</NativeSelectOption></NativeSelect></label>
@@ -111,8 +116,9 @@ function ReviewDocument({ document, apiBase, onClose, onSaved }: { document: Fin
         <label>Currency<Input required pattern="[A-Z]{3}" maxLength={3} value={draft.currency ?? ""} onChange={e => setDraft({ ...draft, currency: e.target.value.toUpperCase() })} /></label>
       </div>
       <label>Description<Input value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} /></label>
+      <DocumentBankPicker bank={bank} extraction={draft} disabled={busy} />
       {error && <p role="alert" className="inline-error">{error}</p>}
-      <Button className="primary-button" disabled={busy}>{busy && <Loader2 className="spin" size={15} />} Save and match</Button>
+      <Button type="submit" className="primary-button" disabled={busy || !draft.entity || !bank.canConfirm}>{busy && <Loader2 className="spin" size={15} />} {bank.selected ? "Save and confirm match" : "Save and match"}</Button>
     </form>
   </DialogContent></Dialog>;
 }
@@ -233,16 +239,50 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
 }
 
 
-type MatchCandidate = { id: string; date: string; counterparty: string; accountName: string; amount: number; currency: string };
+type MatchCandidate = { id: string; date: string; counterparty: string; accountName: string; amount: number; currency: string; cardLastFour?: string; cardHolderName?: string; matchKind: "exact" | "foreign_currency" };
+function useDocumentCandidates(id: string, apiBase: string, extraction?: DocumentExtraction) {
+  const [rows, setRows] = useState<MatchCandidate[]>([]), [selectedId, setSelectedId] = useState("");
+  const [loading, setLoading] = useState(true), [error, setError] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const body = JSON.stringify(extraction);
+  useEffect(() => {
+    const controller = new AbortController(); setLoading(true); setRows([]); setSelectedId(""); setConfirmed(false); setError("");
+    const timer = window.setTimeout(() => {
+      void request<MatchCandidate[]>(`${apiBase}/documents/${id}/candidates`, { signal: controller.signal, ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body } : {}) })
+        .then(result => { if (!controller.signal.aborted) setRows(result); })
+        .catch(err => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load bank transactions"); })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [apiBase, id, body]);
+  const selected = rows.find(row => row.id === selectedId);
+  return { rows, selected, loading, error, confirmed, setConfirmed,
+    select: (id: string) => { setSelectedId(id); setConfirmed(false); },
+    canConfirm: !selected || selected.matchKind !== "foreign_currency" || confirmed };
+}
+function DocumentBankPicker({ bank, extraction, disabled }: { bank: ReturnType<typeof useDocumentCandidates>; extraction?: DocumentExtraction; disabled: boolean }) {
+  const selected = bank.selected;
+  return <>
+    <label>Bank transaction<NativeSelect aria-label="Choose matching transaction" disabled={disabled || bank.loading} value={selected?.id ?? ""} onValueChange={bank.select}>
+      <NativeSelectOption value="">Choose transaction</NativeSelectOption>
+      {bank.rows.map(row => <NativeSelectOption key={row.id} value={row.id}>{row.date} · {row.counterparty} · {row.amount.toFixed(2)} {row.currency} · {row.accountName}{row.cardLastFour ? ` · card ${row.cardLastFour}` : ""}{row.cardHolderName ? ` · ${row.cardHolderName}` : ""}{row.matchKind === "foreign_currency" ? " · FX review" : ""}</NativeSelectOption>)}
+    </NativeSelect></label>
+    {bank.loading && <p role="status">Finding transactions…</p>}
+    {bank.error && <p className="inline-error" role="alert">{bank.error}</p>}
+    {!bank.loading && !bank.error && !bank.rows.length && <p>No available bank match found. Check the document details and imported statement dates.</p>}
+    {selected && <a href={documentTransactionLink(selected.id)} target="_blank" rel="noreferrer">View selected bank transaction</a>}
+    {selected?.matchKind === "foreign_currency" && <label className="document-fx-confirmation"><Checkbox disabled={disabled} checked={bank.confirmed} onCheckedChange={checked => bank.setConfirmed(Boolean(checked))} />
+      <span>I confirm the {selected.amount.toFixed(2)} {selected.currency} charge matches this {extraction?.amount?.toFixed(2)} {extraction?.currency} document.</span>
+    </label>}
+  </>;
+}
 function MatchDocument({ document, apiBase, onClose, onSaved }: { document: FinancialDocument; apiBase: string; onClose: () => void; onSaved: () => void }) {
-  const [rows, setRows] = useState<MatchCandidate[]>([]), [selected, setSelected] = useState("");
-  const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  useEffect(() => { const controller = new AbortController(); void request<MatchCandidate[]>(`${apiBase}/documents/${document._id}/candidates`, { signal: controller.signal }).then(setRows).catch(err => { if (!controller.signal.aborted) setError(String(err)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, [apiBase, document._id]);
+  const bank = useDocumentCandidates(document._id, apiBase);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <Dialog open onOpenChange={value => { if (!value && !busy) onClose(); }}><DialogContent className="document-dialog"><DialogTitle>Match {document.extraction?.documentNumber || document.fileName}</DialogTitle>
-    <label>Bank transaction<NativeSelect aria-label="Choose matching transaction" value={selected} onValueChange={setSelected}><NativeSelectOption value="">Choose transaction</NativeSelectOption>{rows.map(row => <NativeSelectOption key={row.id} value={row.id}>{row.date} · {row.counterparty} · {row.amount} {row.currency} · {row.accountName}</NativeSelectOption>)}</NativeSelect></label>
-    {loading && <p role="status">Finding transactions…</p>}{!loading && !rows.length && <p>No available transaction has the same total, currency, company, and date window yet.</p>}
-    {selected && <a href={documentTransactionLink(selected)}>View selected bank transaction</a>}
+    <p>{document.extraction?.counterparty} · {document.extraction?.amount?.toFixed(2)} {document.extraction?.currency} · {document.extraction?.issueDate}</p>
+    <DocumentBankPicker bank={bank} extraction={document.extraction} disabled={busy} />
     {error && <p className="inline-error" role="alert">{error}</p>}
-    <div className="row-actions"><Button className="primary-button" disabled={!selected || busy} onClick={async () => { setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/match`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transactionId: selected }) }); onSaved(); window.dispatchEvent(new Event("finance:documents-changed")); onClose(); } catch (err) { setError(String(err)); } finally { setBusy(false); } }}>Confirm match</Button><InfoPopover label="Confirming a match"><p>Links the original document to this transaction. Payment status stays unchanged.</p></InfoPopover></div>
+    <div className="row-actions"><Button className="primary-button" disabled={!bank.selected || busy || !bank.canConfirm} onClick={async () => { setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/match`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transactionId: bank.selected?.id, confirmCurrencyConversion: bank.confirmed }) }); onSaved(); window.dispatchEvent(new Event("finance:documents-changed")); onClose(); } catch (err) { setError(String(err)); } finally { setBusy(false); } }}>Confirm match</Button><InfoPopover label="Confirming a match"><p>Links the original document to this transaction. Payment status stays unchanged. Foreign-currency suggestions use merchant and nearby dates; verify the actual conversion before confirming.</p></InfoPopover></div>
   </DialogContent></Dialog>;
 }
