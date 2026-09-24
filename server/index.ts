@@ -152,20 +152,22 @@ function localMediaSpendDates(fromDate: string, toDate: string): string[] {
 async function readLocalMediaSpendRange(
   fromDate: string,
   toDate: string
-): Promise<Pick<MediaSpendApiResponse, "rows" | "summary" | "sync">> {
+): Promise<Pick<MediaSpendApiResponse, "rows" | "summary" | "sync" | "missingDates">> {
   const convex = localConvexClient();
   const serviceToken = localConvexServiceToken();
   const includeZeroSpend = fromDate === toDate;
   const syncPromise = convex.query(api.mediaSpend.getSyncState, { serviceToken });
   const dates = localMediaSpendDates(fromDate, toDate);
   const rows: MediaSpendRow[] = [];
+  const missingDates: string[] = [];
   let reportedDays = 0;
   for (let index = 0; index < dates.length; index += 6) {
     const results = await Promise.all(dates.slice(index, index + 6).map((date) =>
       convex.query(api.mediaSpend.listDate, { serviceToken, date, includeZeroSpend })
     ));
-    for (const result of results) {
+    for (const [offset, result] of results.entries()) {
       if (result.storedRowCount > 0) reportedDays += 1;
+      else missingDates.push(dates[index + offset]);
       rows.push(...result.rows);
       if (rows.length > mediaSpendMaximumResultRows) {
         throw new ClientRequestError(
@@ -179,6 +181,7 @@ async function readLocalMediaSpendRange(
   return {
     rows,
     summary,
+    missingDates,
     sync: (await syncPromise) ?? { status: "never" }
   };
 }
@@ -273,6 +276,7 @@ app.get("/api/media-spend", async (request, response, next) => {
       missingConfiguration: ["LemonMax sync is available from the deployed dashboard"],
       rows: result.rows,
       summary: result.summary,
+      missingDates: result.missingDates,
       sync: result.sync
     };
     response.json(payload);

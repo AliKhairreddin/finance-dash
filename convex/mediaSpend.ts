@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { mediaSpendContiguousCoverage } from "../shared/mediaSpend";
 
 const source = v.literal("lemonmax");
 const syncStatus = v.union(v.literal("running"), v.literal("healthy"), v.literal("failed"));
@@ -209,17 +210,7 @@ export const advanceCoverage = mutation({
       .unique();
     if (!storedSync || storedSync.attemptId !== args.attemptId) return false;
     await ctx.db.patch(storedSync._id, {
-      ...(args.direction === "backward"
-        ? {
-            coveredFrom: !storedSync.coveredFrom || args.date < storedSync.coveredFrom
-              ? args.date
-              : storedSync.coveredFrom
-          }
-        : {
-            coveredThrough: !storedSync.coveredThrough || args.date > storedSync.coveredThrough
-              ? args.date
-              : storedSync.coveredThrough
-          }),
+      ...mediaSpendContiguousCoverage(storedSync.coveredFrom, storedSync.coveredThrough, args.date),
       updatedAt: args.updatedAt
     });
     return true;
@@ -236,6 +227,9 @@ export const replaceDate = mutation({
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.date);
+    if (args.rows.length === 0) {
+      throw new ConvexError({ code: "EMPTY_MEDIA_SPEND_DATE" });
+    }
     if (args.rows.length > maximumRowsPerDate) {
       throw new ConvexError({ code: "MEDIA_SPEND_DAY_TOO_LARGE" });
     }
@@ -311,9 +305,7 @@ export const completeSync = mutation({
       lastAttemptAt: existing.lastAttemptAt,
       lastSuccessAt: args.completedAt,
       ...(existing.coveredFrom ? { coveredFrom: existing.coveredFrom } : {}),
-      coveredThrough: existing.coveredThrough && existing.coveredThrough > args.coveredThrough
-        ? existing.coveredThrough
-        : args.coveredThrough,
+      ...(existing.coveredThrough ? { coveredThrough: existing.coveredThrough } : {}),
       rowCount: args.rowCount,
       totalSpend: args.totalSpend,
       consecutiveFailures: 0,

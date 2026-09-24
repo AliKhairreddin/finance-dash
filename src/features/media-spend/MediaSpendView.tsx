@@ -50,6 +50,8 @@ import {
 } from "../../../shared/mediaFunding";
 import {
   groupMediaSpendByAccount,
+  mediaSpendDates,
+  mediaSpendYesterdayInIndia,
   validateMediaSpendDateRange,
   type MediaSpendAccountGroup,
   type MediaSpendApiResponse,
@@ -328,6 +330,7 @@ export function MediaSpendView({
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function loadData(signal?: AbortSignal): Promise<void> {
@@ -683,22 +686,29 @@ export function MediaSpendView({
     });
   }
 
-  async function syncYesterday(): Promise<void> {
-    const yesterday = shiftFinanceOperatingDate(financeOperatingDate(), -1);
+  async function syncSelectedPeriod(): Promise<void> {
+    const yesterday = mediaSpendYesterdayInIndia(Date.now());
+    const toDate = dateRange.toDate < yesterday ? dateRange.toDate : yesterday;
+    if (dateRange.fromDate > toDate) return;
+    const dates = mediaSpendDates(dateRange.fromDate, toDate);
     setIsSyncing(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/media-spend/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromDate: yesterday, toDate: yesterday })
-      });
-      if (!response.ok) throw new Error(await apiErrorMessage(response, "Media spend sync failed"));
+      for (const [index, date] of dates.entries()) {
+        setSyncProgress(`${index + 1}/${dates.length}`);
+        const response = await fetch(`${apiBase}/media-spend/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fromDate: date, toDate: date })
+        });
+        if (!response.ok) throw new Error(await apiErrorMessage(response, "Media spend sync failed"));
+      }
       await loadData();
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Media spend sync failed");
     } finally {
       setIsSyncing(false);
+      setSyncProgress("");
     }
   }
 
@@ -708,6 +718,7 @@ export function MediaSpendView({
     && sync.coveredThrough
     && dateRange.fromDate >= sync.coveredFrom
     && dateRange.toDate <= sync.coveredThrough
+    && data?.missingDates.length === 0
   );
   const statusTone = !data?.configured || sync?.status === "failed"
     ? "danger"
@@ -717,7 +728,7 @@ export function MediaSpendView({
   const statusLabel = !data?.configured
     ? "Not configured"
     : sync?.status === "healthy"
-      ? selectedPeriodCovered ? "Current" : "Not covered"
+      ? selectedPeriodCovered ? "Current" : "Incomplete period"
       : sync?.status === "failed"
         ? "Sync failed"
         : sync?.status === "running"
@@ -768,12 +779,12 @@ export function MediaSpendView({
           />
           <Button
             className="secondary-button"
-            disabled={isLoading || isSyncing || !data?.configured}
-            onClick={() => void syncYesterday()}
+            disabled={isLoading || isSyncing || !data?.configured || dateRange.fromDate > mediaSpendYesterdayInIndia(Date.now())}
+            onClick={() => void syncSelectedPeriod()}
             type="button"
           >
             {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            {isSyncing ? "Syncing" : "Sync yesterday"}
+            {isSyncing ? `Syncing ${syncProgress}` : "Sync period"}
           </Button>
         </div>
       </header>
@@ -808,6 +819,11 @@ export function MediaSpendView({
         <div className="media-spend-toolbar">
           <div className="media-spend-source-state">
             <span className={`status-pill ${statusTone}`}><Database size={12} />{statusLabel}</span>
+            {Boolean(data?.missingDates.length) && (
+              <InfoPopover label="missing media spend days">
+                <span>No account data stored for {data!.missingDates.map(dateLabel).join(", ")}. Sync the period to retry available days.</span>
+              </InfoPopover>
+            )}
             <span>
               {sync?.lastSuccessAt
                 ? `Last synced ${dateTimeLabel(sync.lastSuccessAt)}${sync.coveredFrom && sync.coveredThrough

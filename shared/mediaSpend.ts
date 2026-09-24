@@ -66,14 +66,9 @@ export interface MediaSpendApiResponse {
   missingConfiguration: string[];
   rows: MediaSpendRow[];
   summary: MediaSpendSummary;
+  missingDates: string[];
   sync: MediaSpendSyncState;
 }
-
-type LemonMaxSpendPayload = {
-  success: true;
-  message: string;
-  data: unknown[];
-};
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -163,9 +158,18 @@ export function parseLemonMaxSpendSummaryRange(
     throw new Error("LemonMax returned an invalid account spend summary");
   }
 
-  const payload = value as LemonMaxSpendPayload;
+  if (value.from_date !== expectedFromDate || value.to_date !== expectedToDate) {
+    throw new Error("LemonMax response does not match the requested date range");
+  }
+  if (!Number.isSafeInteger(value.total_rows) || value.total_rows !== value.data.length) {
+    throw new Error("LemonMax returned an incomplete row count");
+  }
+  if (!Number.isSafeInteger(value.total_accounts) || Number(value.total_accounts) < 0
+    || typeof value.total_spend !== "number" || !Number.isFinite(value.total_spend)) {
+    throw new Error("LemonMax returned invalid account or spend totals");
+  }
   const keys = new Set<string>();
-  return payload.data.map((item, index) => {
+  const rows = value.data.map((item, index) => {
     const rowNumber = index + 1;
     if (!isRecord(item)) throw new Error(`LemonMax row ${rowNumber} is invalid`);
 
@@ -204,6 +208,54 @@ export function parseLemonMaxSpendSummaryRange(
     keys.add(parsed.key);
     return parsed;
   });
+  if (new Set(rows.map((row) => row.accountId)).size !== value.total_accounts) {
+    throw new Error("LemonMax returned an incomplete account count");
+  }
+  if (Math.abs(rows.reduce((total, row) => total + row.spend, 0) - value.total_spend) > 0.005) {
+    throw new Error("LemonMax account rows do not reconcile to the reported spend total");
+  }
+  return rows;
+}
+
+export function mediaSpendDates(fromDate: string, toDate: string): string[] {
+  if (!validIsoDate(fromDate) || !validIsoDate(toDate) || fromDate > toDate) {
+    throw new Error("Media spend date range is invalid");
+  }
+  const dates: string[] = [];
+  for (let time = Date.parse(`${fromDate}T00:00:00Z`); time <= Date.parse(`${toDate}T00:00:00Z`); time += 86_400_000) {
+    dates.push(new Date(time).toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+export function mediaSpendRefreshRange(startDate: string, yesterday: string, coveredThrough?: string): {
+  fromDate: string; toDate: string;
+} {
+  if (!validIsoDate(startDate) || !validIsoDate(yesterday) || startDate > yesterday
+    || (coveredThrough !== undefined && !validIsoDate(coveredThrough))) {
+    throw new Error("Media spend refresh dates are invalid");
+  }
+  const shift = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  const recentStart = shift(yesterday, -13);
+  const nextMissing = coveredThrough ? shift(coveredThrough, 1) : startDate;
+  const refreshStart = nextMissing < recentStart ? nextMissing : recentStart;
+  const fromDate = startDate > refreshStart ? startDate : refreshStart;
+  // Catch up a long outage in bounded contiguous batches, without skipping to yesterday.
+  const batchEnd = shift(fromDate, mediaSpendMaximumRangeDays - 1);
+  return { fromDate, toDate: batchEnd < yesterday ? batchEnd : yesterday };
+}
+
+export function mediaSpendContiguousCoverage(
+  coveredFrom: string | undefined,
+  coveredThrough: string | undefined,
+  date: string
+): { coveredFrom: string; coveredThrough: string } {
+  if (!coveredFrom || !coveredThrough) return { coveredFrom: date, coveredThrough: date };
+  const time = Date.parse(`${date}T00:00:00Z`);
+  return {
+    coveredFrom: date < coveredFrom && time + 86_400_000 === Date.parse(`${coveredFrom}T00:00:00Z`) ? date : coveredFrom,
+    coveredThrough: date > coveredThrough && time - 86_400_000 === Date.parse(`${coveredThrough}T00:00:00Z`) ? date : coveredThrough
+  };
 }
 
 export function mediaSpendYesterdayInIndia(now: Date | number): string {

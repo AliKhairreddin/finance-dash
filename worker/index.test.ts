@@ -1042,3 +1042,49 @@ test("hourly scheduled handler retries missed income automation after the Monday
     console.error = originalConsoleError;
   }
 });
+
+test("media spend sync rejects empty and truncated API data before replacing stored spend", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const truncated of [false, true]) {
+      const mutations: string[] = [];
+      globalThis.fetch = async (input, init) => {
+        if (new URL(String(input)).hostname === "api.lemonmaxx.com") {
+          return Response.json({ success: true, message: "OK", from_date: "2026-09-19", to_date: "2026-09-19",
+            total_rows: truncated ? 2309 : 0, total_accounts: truncated ? 2309 : 0, total_spend: 0, data: [] });
+        }
+        const body = JSON.parse(String(init?.body));
+        mutations.push(body.path);
+        return Response.json({ status: "success", value: body.path === "mediaSpend:startSync" ? null : true });
+      };
+      const response = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromDate: "2026-09-19", toDate: "2026-09-19" })
+      }), authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service",
+        LEMONMAX_AUTH_TOKEN: "test-auth", LEMONMAX_BEARER_TOKEN: "test-bearer",
+        LEMONMAX_SPEND_CURRENCY: "USD", LEMONMAX_SYNC_START_DATE: "2026-08-01" }));
+      assert.equal(response.status, 502);
+      assert.deepEqual(mutations, ["mediaSpend:startSync", "mediaSpend:failSync"]);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("media spend range reads expose interior missing days even when global coverage is healthy", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const value = body.path === "mediaSpend:getSyncState"
+      ? { status: "healthy", coveredFrom: "2026-08-01", coveredThrough: "2026-09-23" }
+      : { storedRowCount: body.args[0].date === "2026-09-19" ? 0 : 2300, rows: [] };
+    return Response.json({ status: "success", value });
+  };
+  try {
+    const response = await worker.fetch(await authenticatedRequest(
+      "https://finance.example/api/media-spend?fromDate=2026-09-18&toDate=2026-09-20"
+    ), authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service", LEMONMAX_SPEND_CURRENCY: "USD" }));
+    assert.equal(response.status, 200);
+    const data = await response.json() as { missingDates: string[]; summary: { days: number } };
+    assert.deepEqual(data.missingDates, ["2026-09-19"]);
+    assert.equal(data.summary.days, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});

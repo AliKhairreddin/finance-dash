@@ -201,6 +201,8 @@ import {
 import {
   mediaSpendMaximumRangeDays,
   mediaSpendMaximumResultRows,
+  mediaSpendDates,
+  mediaSpendRefreshRange,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummaryRange,
   summarizeMediaSpend,
@@ -875,12 +877,6 @@ function mediaSpendRange(fromDate: string | undefined, toDate: string | undefine
   return { fromDate, toDate };
 }
 
-function mediaSpendDates(fromDate: string, toDate: string): string[] {
-  const dates: string[] = [];
-  for (let date = fromDate; date <= toDate; date = isoDateShift(date, 1)) dates.push(date);
-  return dates;
-}
-
 async function fetchLemonMaxSpend(
   env: Env,
   fromDate: string,
@@ -919,13 +915,15 @@ async function readMediaSpend(
   const syncPromise = convex.query(api.mediaSpend.getSyncState, { serviceToken });
   const dates = mediaSpendDates(fromDate, toDate);
   const rows: MediaSpendRow[] = [];
+  const missingDates: string[] = [];
   let reportedDays = 0;
   for (let index = 0; index < dates.length; index += 6) {
     const results = await Promise.all(dates.slice(index, index + 6).map((date) =>
       convex.query(api.mediaSpend.listDate, { serviceToken, date, includeZeroSpend })
     ));
-    for (const result of results) {
+    for (const [offset, result] of results.entries()) {
       if (result.storedRowCount > 0) reportedDays += 1;
+      else missingDates.push(dates[index + offset]);
       rows.push(...result.rows);
       if (rows.length > mediaSpendMaximumResultRows) {
         throw new ApiError(
@@ -947,6 +945,7 @@ async function readMediaSpend(
     missingConfiguration,
     rows,
     summary,
+    missingDates,
     sync: (await syncPromise) ?? { status: "never" }
   };
 }
@@ -977,8 +976,8 @@ async function syncMediaSpend(
     if (dateOrder === "descending") dates.reverse();
     for (const date of dates) {
       const rows = await fetchLemonMaxSpend(env, date, date, startedAt, credentials);
-      if (dateOrder === "descending" && rows.length === 0) {
-        throw new Error(`LemonMax returned no account rows for historical date ${date}`);
+      if (rows.length === 0) {
+        throw new Error(`LemonMax returned no account rows for ${date}; stored data was preserved`);
       }
       await convex.mutation(api.mediaSpend.replaceDate, {
         serviceToken,
@@ -7096,7 +7095,7 @@ async function handleApi(
       const body = (await request.json().catch(() => null)) as { fromDate?: string; toDate?: string } | null;
       const range = mediaSpendRange(body?.fromDate, body?.toDate);
       await syncMediaSpend(env, range.fromDate, range.toDate);
-      return json(await readMediaSpend(env, range.fromDate, range.toDate));
+      return json({ ok: true });
     }
 
     if (url.pathname === "/api/media-funding" && request.method === "GET") {
@@ -8964,7 +8963,11 @@ export default {
     if (controller.cron === "30 8 * * *") {
       const yesterday = mediaSpendYesterdayInIndia(controller.scheduledTime);
       try {
-        await syncMediaSpend(env, yesterday, yesterday);
+        const state = await getConvexClient(env).query(api.mediaSpend.getSyncState, {
+          serviceToken: getConvexServiceToken(env)
+        });
+        const range = mediaSpendRefreshRange(lemonMaxSyncStartDate(env), yesterday, state?.coveredThrough);
+        await syncMediaSpend(env, range.fromDate, range.toDate);
       } catch (error) {
         console.error(JSON.stringify({
           event: "media_spend_sync_failed",
