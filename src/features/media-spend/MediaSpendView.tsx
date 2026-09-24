@@ -1131,7 +1131,7 @@ export function MediaSpendView({
       {assignmentDialogOpen && funding && (
         <MediaFundingAssignmentDialog
           apiBase={apiBase}
-          effectiveFrom={dateRange.toDate}
+          effectiveFrom={dateRange.fromDate}
           providers={funding.providers}
           targets={selectedAssignmentTargets}
           onClose={() => setAssignmentDialogOpen(false)}
