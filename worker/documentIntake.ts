@@ -164,10 +164,13 @@ export async function receiveDocumentEmail(message: ForwardableEmailMessage, env
   const email = await PostalMime.parse(raw);
   const context = `From: ${email.from?.address ?? message.from}\nSubject: ${email.subject ?? ""}\n${email.text ?? email.html?.replace(/<[^>]*>/g, " ") ?? ""}`.slice(0, 12000);
   const attachments = email.attachments.map(file => ({ ...file, mimeType: documentContentType(new Uint8Array(file.content as ArrayBuffer)) })).filter(file => file.mimeType !== null);
-  if (attachments.length > 15) { message.setReject("Send no more than 15 financial documents per email"); return; }
   // Save every attachment before acknowledging the email. Extraction is durably scheduled in Convex.
   if (attachments.length) {
-    for (const file of attachments) await ingestDocument(env, { bytes: new Uint8Array(file.content as ArrayBuffer), fileName: file.filename || "email-document", contentType: file.mimeType!, source: "email", sourceContext: context, sender: message.from });
+    for (let offset = 0; offset < attachments.length; offset += 3) {
+      const results = await Promise.allSettled(attachments.slice(offset, offset + 3).map(file => ingestDocument(env, { bytes: new Uint8Array(file.content as ArrayBuffer), fileName: file.filename || "email-document", contentType: file.mimeType!, source: "email", sourceContext: context, sender: message.from })));
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed) throw failed.reason;
+    }
   } else if (email.text?.trim() || email.html?.trim()) {
     await ingestDocument(env, { bytes: await emailBodyPdf(email.subject ?? "Email receipt", context), intakeKey: `email:${[...new Uint8Array(await crypto.subtle.digest("SHA-256", raw))].map(b => b.toString(16).padStart(2, "0")).join("")}`, fileName: `${(email.subject ?? "email-receipt").slice(0, 100)}.pdf`, contentType: "application/pdf", source: "email", sourceContext: context, sender: message.from });
   } else message.setReject("No readable receipt, invoice, or email content was found");

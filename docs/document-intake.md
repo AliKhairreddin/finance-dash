@@ -2,7 +2,7 @@
 
 Forward PDF, PNG, JPEG, or WebP receipts and sales invoices to **receipts@finance.thatcanadian.dev**. Sender restrictions are empty: any address can forward documents. The finance subdomain has its own Cloudflare MX records; the apex domain retains its iCloud mail service.
 
-The same intake is available through **Upload documents** on Documents, Expenses, and Invoices, and through private Telegram attachments from the existing mapped Ali and Ali M accounts. Files are limited to 10 MB each; email is limited to 25 MB and 15 supported attachments. Email-only receipts are saved as a clearly labeled PDF copy of their email text. Sending an original attachment preserves the original bytes.
+The same intake is available through **Upload documents** on Documents, Expenses, and Invoices, and through private Telegram attachments from the existing mapped Ali and Ali M accounts. Files are limited to 10 MB each and email is limited to 25 MB. All supported attachments in a message are saved before the email is accepted. Email-only receipts are saved as a clearly labeled PDF copy of their email text. Sending an original attachment preserves the original bytes.
 
 ## Processing and matching
 
