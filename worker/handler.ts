@@ -1,3 +1,4 @@
+import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "./amexStatements";
 import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
 import { pendingInvoices } from "../shared/pendingInvoices";
@@ -7142,6 +7143,20 @@ async function handleApi(
       return json({ ok: true });
     }
 
+    if (url.pathname === "/api/media-funding/payment-methods" && request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (!isRecord(body)) throw new ApiError(400, "Payment method details are required");
+      const payload = body as unknown as SetMediaPaymentMethodsPayload;
+      try {
+        const result = await getConvexClient(env).mutation(api.mediaFunding.setPaymentMethods, {
+          serviceToken: getConvexServiceToken(env), targets: payload.targets, method: payload.method,
+          reference: payload.reference, effectiveFrom: payload.effectiveFrom, updatedAt: new Date().toISOString()
+        });
+        await rebuildMediaFundingRange(env, result);
+        return json(result);
+      } catch (error) { return mediaFundingStorageError(error); }
+    }
+
     if (url.pathname === "/api/media-funding/assignments" && request.method === "POST") {
       const body = await request.json().catch(() => null);
       if (!isRecord(body)) throw new ApiError(400, "Funding assignment details are required");
@@ -8195,7 +8210,7 @@ async function telegramReadCommand(
   if (command === "provider_funds") {
     const funding = await readMediaFunding(env);
     return telegramList("💳 Provider funds", funding.providers.map((provider) =>
-      `${provider.name}: ${telegramMoney(provider.estimatedBalance, funding.currency)} estimated · ${provider.assignmentCount} assignments`
+      `${provider.name}: ${provider.estimatedBalance === null ? "Awaiting reconciliation" : `${telegramMoney(provider.estimatedBalance, funding.currency)} estimated`} · ${provider.assignmentCount} assignments`
     ), "No funding providers configured.");
   }
   if (command === "management") {

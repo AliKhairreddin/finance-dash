@@ -1,3 +1,4 @@
+import type { MediaAccountPaymentMethod, MediaClassifiedSpend } from "./mediaPaymentMethods";
 import type { MediaSpendRow } from "./mediaSpend";
 
 export const mediaFundingCurrency = "USD" as const;
@@ -19,7 +20,10 @@ export interface MediaFundingProvider {
   netFunding: number;
   adjustments: number;
   spend: number;
-  estimatedBalance: number;
+  estimatedBalance: number | null;
+  bankFundingPaused?: boolean;
+  classifiedSpend: MediaClassifiedSpend;
+  needsReviewSpend: number;
   assignmentCount: number;
   bankFundingCount: number;
   excludedFundingCount: number;
@@ -67,6 +71,7 @@ export interface MediaFundingAssignment {
   accountName?: string;
   effectiveFrom: string;
   effectiveTo?: string;
+  autoPattern?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -77,7 +82,7 @@ export interface MediaFundingSummary {
   fees: number;
   netFunding: number;
   spend: number;
-  estimatedBalance: number;
+  estimatedBalance: number | null;
 }
 
 export interface MediaFundingApiResponse {
@@ -88,6 +93,7 @@ export interface MediaFundingApiResponse {
   bankFunding: MediaFundingBankFunding[];
   entries: MediaFundingEntry[];
   assignments: MediaFundingAssignment[];
+  paymentMethods: MediaAccountPaymentMethod[];
   summary: MediaFundingSummary;
 }
 

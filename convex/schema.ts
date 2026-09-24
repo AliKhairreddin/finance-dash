@@ -975,6 +975,7 @@ export default defineSchema({
   }).index("by_key", ["key"]),
   mediaFundingProviders: defineTable({
     companyProviderId: v.string(),
+    bankFundingPaused: v.optional(v.boolean()),
     defaultFeePercent: v.number(),
     currency: v.string(),
     openingBalance: v.number(),
@@ -1005,6 +1006,7 @@ export default defineSchema({
     accountName: v.optional(v.string()),
     effectiveFrom: v.string(),
     effectiveTo: v.optional(v.string()),
+    autoPattern: v.optional(v.string()),
     createdAt: v.string(),
     updatedAt: v.string()
   })
@@ -1012,12 +1014,31 @@ export default defineSchema({
     .index("by_business_manager_and_effective_from", ["businessManagerKey", "effectiveFrom"])
     .index("by_provider_and_effective_from", ["providerId", "effectiveFrom"])
     .index("by_effective_from", ["effectiveFrom"]),
+  mediaAccountPaymentMethods: defineTable({
+    providerId: v.optional(v.id("mediaFundingProviders")),
+    platform: v.string(),
+    accountId: v.string(),
+    method: v.union(v.literal("needs_review"), v.literal("provider_funded"), v.literal("own_card"), v.literal("meta_credit_line")),
+    reference: v.optional(v.string()),
+    effectiveFrom: v.string(),
+    effectiveTo: v.optional(v.string()),
+    updatedAt: v.string()
+  }).index("by_account", ["platform", "accountId"])
+    .index("by_effective_from", ["effectiveFrom"]),
+  mediaFundingAutomationExclusions: defineTable({
+    targetKey: v.string(),
+    effectiveFrom: v.string(),
+    effectiveTo: v.optional(v.string()),
+    createdAt: v.string()
+  }).index("by_target", ["targetKey"])
+    .index("by_effective_from", ["effectiveFrom"]),
   mediaFundingSpendDaily: defineTable({
     key: v.string(),
     providerId: v.id("mediaFundingProviders"),
     date: v.string(),
     currency: v.string(),
     spend: v.number(),
+    classifiedSpend: v.optional(v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() })),
     accountCount: v.number(),
     businessManagerCount: v.number(),
     updatedAt: v.string()
@@ -1030,6 +1051,7 @@ export default defineSchema({
     currency: v.string(),
     adjustments: v.number(),
     spend: v.number(),
+    classifiedSpend: v.optional(v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() })),
     updatedAt: v.string()
   }).index("by_provider", ["providerId"])
 });

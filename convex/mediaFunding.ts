@@ -10,10 +10,17 @@ import {
   mediaFundingBusinessManagerKey,
   mediaFundingCurrency,
   mediaFundingTargetKey,
-  roundMediaFundingMoney
+  roundMediaFundingMoney,
+  resolveMediaFundingAssignment
 } from "../shared/mediaFunding";
 import { financeOperatingDate } from "../shared/operatingDate";
+import { inferMediaFundingAssignments } from "../shared/mediaFundingAutomation";
 
+import { emptyMediaClassifiedSpend, resolveMediaPaymentMethod, type MediaClassifiedSpend } from "../shared/mediaPaymentMethods";
+
+const paymentMethod = v.union(v.literal("needs_review"), v.literal("provider_funded"), v.literal("own_card"), v.literal("meta_credit_line"));
+const classifiedSpendValidator = v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() });
+const paymentMethodResult = v.object({ providerId: v.optional(v.id("mediaFundingProviders")), id: v.id("mediaAccountPaymentMethods"), platform: v.string(), accountId: v.string(), method: paymentMethod, reference: v.optional(v.string()), effectiveFrom: v.string(), effectiveTo: v.optional(v.string()) });
 const entryType = v.literal("adjustment");
 const assignmentScope = v.union(v.literal("business_manager"), v.literal("ad_account"));
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -39,7 +46,10 @@ const providerResult = v.object({
   netFunding: v.number(),
   adjustments: v.number(),
   spend: v.number(),
-  estimatedBalance: v.number(),
+  estimatedBalance: v.union(v.number(), v.null()),
+  bankFundingPaused: v.boolean(),
+  classifiedSpend: classifiedSpendValidator,
+  needsReviewSpend: v.number(),
   assignmentCount: v.number(),
   bankFundingCount: v.number(),
   excludedFundingCount: v.number(),
@@ -87,6 +97,7 @@ const assignmentResult = v.object({
   accountName: v.optional(v.string()),
   effectiveFrom: v.string(),
   effectiveTo: v.optional(v.string()),
+  autoPattern: v.optional(v.string()),
   createdAt: v.string(),
   updatedAt: v.string()
 });
@@ -176,6 +187,7 @@ function zeroTotals(providerId: Id<"mediaFundingProviders">, updatedAt: string) 
     currency: mediaFundingCurrency,
     adjustments: 0,
     spend: 0,
+    classifiedSpend: emptyMediaClassifiedSpend(),
     updatedAt
   };
 }
@@ -270,6 +282,9 @@ async function recalculateProviderTotals(
   for (const entry of entries) {
     next.adjustments += entry.netAmount;
   }
+  for (const day of days) {
+    for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) next.classifiedSpend[method] += day.classifiedSpend?.[method] ?? 0;
+  }
   next.spend = days.reduce((total, day) => total + day.spend, 0);
   next.adjustments = roundMediaFundingMoney(next.adjustments);
   next.spend = roundMediaFundingMoney(next.spend);
@@ -288,13 +303,14 @@ export const listOverview = query({
     bankFunding: v.array(bankFundingResult),
     entries: v.array(entryResult),
     assignments: v.array(assignmentResult),
+    paymentMethods: v.array(paymentMethodResult),
     summary: v.object({
       providers: v.number(),
       grossFunding: v.number(),
       fees: v.number(),
       netFunding: v.number(),
       spend: v.number(),
-      estimatedBalance: v.number()
+      estimatedBalance: v.union(v.number(), v.null())
     })
   }),
   handler: async (ctx, args) => {
@@ -341,6 +357,7 @@ export const listOverview = query({
     const companiesById = new Map(companies.map((company) => [company.id, company]));
     const providerByCompanyId = new Map(providers.map((provider) => [provider.companyProviderId, provider]));
     const activeDate = sync?.coveredThrough ?? new Date().toISOString().slice(0, 10);
+    const paymentMethods = await requireBoundedRows(ctx.db.query("mediaAccountPaymentMethods").take(maximumAssignments + 1), maximumAssignments, "There are too many account payment methods");
     const activeAssignmentCounts = new Map<string, number>();
     for (const assignment of assignments) {
       if (assignment.effectiveFrom <= activeDate && (!assignment.effectiveTo || assignment.effectiveTo >= activeDate)) {
@@ -359,7 +376,7 @@ export const listOverview = query({
     for (const transaction of fundingTransactions) {
       if (!transaction.matchedProviderId || transaction.amount <= 0) continue;
       const provider = providerByCompanyId.get(transaction.matchedProviderId);
-      if (!provider) continue;
+      if (!provider || provider.bankFundingPaused) continue;
       const key = String(provider._id);
       const totals = bankTotals.get(key) ?? { count: 0, excluded: 0, fees: 0, gross: 0, net: 0 };
       const credit = calculateMediaFundingBankTransactionCredit(transaction, provider);
@@ -400,6 +417,8 @@ export const listOverview = query({
       const grossFunding = roundMediaFundingMoney(funding.gross);
       const fees = roundMediaFundingMoney(funding.fees);
       const netFunding = roundMediaFundingMoney(funding.net);
+      const classifiedSpend = totals.classifiedSpend ?? emptyMediaClassifiedSpend();
+      const needsReviewSpend = roundMediaFundingMoney(totals.spend - classifiedSpend.provider_funded - classifiedSpend.own_card - classifiedSpend.meta_credit_line);
       return {
         id: provider._id,
         companyProviderId: provider.companyProviderId,
@@ -413,11 +432,14 @@ export const listOverview = query({
         netFunding,
         adjustments: totals.adjustments,
         spend: totals.spend,
-        estimatedBalance: calculateMediaFundingBalance({
+        bankFundingPaused: provider.bankFundingPaused === true,
+        classifiedSpend,
+        needsReviewSpend,
+        estimatedBalance: provider.bankFundingPaused || Math.abs(needsReviewSpend) > 0.005 ? null : calculateMediaFundingBalance({
           openingBalance: provider.openingBalance,
           netFunding,
           adjustments: totals.adjustments,
-          spend: totals.spend
+          spend: classifiedSpend.provider_funded
         }),
         assignmentCount: activeAssignmentCounts.get(String(provider._id)) ?? 0,
         bankFundingCount: funding.count,
@@ -442,6 +464,7 @@ export const listOverview = query({
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt
       })),
+      paymentMethods: paymentMethods.map(({ _id, providerId, platform, accountId, method, reference, effectiveFrom, effectiveTo }) => ({ id: _id, ...(providerId ? { providerId } : {}), platform, accountId, method, ...(reference ? { reference } : {}), effectiveFrom, ...(effectiveTo ? { effectiveTo } : {}) })),
       assignments: assignments.map((assignment) => ({
         id: assignment._id,
         providerId: assignment.providerId,
@@ -455,6 +478,7 @@ export const listOverview = query({
         ...(assignment.accountName ? { accountName: assignment.accountName } : {}),
         effectiveFrom: assignment.effectiveFrom,
         ...(assignment.effectiveTo ? { effectiveTo: assignment.effectiveTo } : {}),
+        ...(assignment.autoPattern ? { autoPattern: assignment.autoPattern } : {}),
         createdAt: assignment.createdAt,
         updatedAt: assignment.updatedAt
       })),
@@ -464,7 +488,7 @@ export const listOverview = query({
         fees: roundMediaFundingMoney(publicProviders.reduce((total, provider) => total + provider.fees, 0)),
         netFunding: roundMediaFundingMoney(publicProviders.reduce((total, provider) => total + provider.netFunding, 0)),
         spend: roundMediaFundingMoney(publicProviders.reduce((total, provider) => total + provider.spend, 0)),
-        estimatedBalance: roundMediaFundingMoney(publicProviders.reduce((total, provider) => total + provider.estimatedBalance, 0))
+        estimatedBalance: publicProviders.some((provider) => provider.estimatedBalance === null) ? null : roundMediaFundingMoney(publicProviders.reduce((total, provider) => total + (provider.estimatedBalance ?? 0), 0))
       }
     };
   }
@@ -540,6 +564,7 @@ export const updateProvider = mutation({
     }
     const next = {
       companyProviderId: company.id,
+      ...(provider.bankFundingPaused !== undefined ? { bankFundingPaused: provider.bankFundingPaused } : {}),
       defaultFeePercent: args.defaultFeePercent,
       currency: mediaFundingCurrency,
       openingBalance: roundMediaFundingMoney(args.openingBalance),
@@ -549,6 +574,17 @@ export const updateProvider = mutation({
     };
     await ctx.db.replace(provider._id, next);
     await recalculateProviderTotals(ctx, { _id: provider._id, openingBalanceDate: next.openingBalanceDate }, args.updatedAt);
+    return null;
+  }
+});
+
+export const setBankFundingPaused = mutation({
+  args: { serviceToken: v.string(), providerId: v.id("mediaFundingProviders"), paused: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await requireProvider(ctx, args.providerId);
+    await ctx.db.patch(args.providerId, { bankFundingPaused: args.paused, updatedAt: new Date().toISOString() });
     return null;
   }
 });
@@ -719,6 +755,16 @@ export const assignTargets = mutation({
       const targetKey = mediaFundingTargetKey(target);
       if (targetKeys.has(targetKey)) throw fundingError("INVALID_MEDIA_FUNDING", "Funding targets contain a duplicate");
       targetKeys.add(targetKey);
+      const exclusions = await requireBoundedRows(
+        await ctx.db.query("mediaFundingAutomationExclusions").withIndex("by_target", (q) => q.eq("targetKey", targetKey)).take(maximumAssignmentsPerTarget + 1),
+        maximumAssignmentsPerTarget, "This target has too many automatic-assignment exclusions"
+      );
+      for (const exclusion of exclusions) {
+        if (!exclusion.effectiveTo || exclusion.effectiveTo >= args.effectiveFrom) {
+          if (exclusion.effectiveFrom >= args.effectiveFrom) await ctx.db.delete(exclusion._id);
+          else await ctx.db.patch(exclusion._id, { effectiveTo: shiftIsoDate(args.effectiveFrom, -1) });
+        }
+      }
       const businessManagerKey = mediaFundingBusinessManagerKey(platform, businessManagerId);
 
       if (target.scope === "ad_account") {
@@ -802,6 +848,12 @@ export const deleteAssignment = mutation({
     requireServiceToken(args.serviceToken);
     const assignment = await ctx.db.get(args.assignmentId);
     if (!assignment) throw fundingError("MEDIA_FUNDING_NOT_FOUND", "Funding assignment was not found");
+    await ctx.db.insert("mediaFundingAutomationExclusions", {
+      targetKey: assignment.targetKey,
+      effectiveFrom: assignment.effectiveFrom,
+      ...(assignment.effectiveTo ? { effectiveTo: assignment.effectiveTo } : {}),
+      createdAt: new Date().toISOString()
+    });
     await ctx.db.delete(assignment._id);
     return rebuildRange(ctx, assignment.effectiveFrom);
   }
@@ -813,7 +865,7 @@ export const rebuildDate = mutation({
     date: v.string(),
     updatedAt: v.string()
   },
-  returns: v.object({ providers: v.number(), spend: v.number() }),
+  returns: v.object({ providers: v.number(), spend: v.number(), automaticallyAssigned: v.number() }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.date, "Rebuild date");
@@ -828,12 +880,42 @@ export const rebuildDate = mutation({
     const assignments = await requireBoundedRows(
       await ctx.db
         .query("mediaFundingAssignments")
-        .withIndex("by_effective_from", (q) => q.lte("effectiveFrom", args.date))
+        .withIndex("by_effective_from")
         .take(maximumAssignments + 1),
       maximumAssignments,
       "There are too many media funding assignments to allocate"
     );
-    const activeAssignments = assignments.filter((assignment) => !assignment.effectiveTo || assignment.effectiveTo >= args.date);
+    const exclusions = await requireBoundedRows(
+      await ctx.db.query("mediaFundingAutomationExclusions").withIndex("by_effective_from", (q) => q.lte("effectiveFrom", args.date)).take(maximumAssignments + 1),
+      maximumAssignments, "There are too many automatic-assignment exclusions"
+    );
+    const inferred = inferMediaFundingAssignments(spendRows, assignments.map((assignment) => ({ ...assignment, id: assignment._id })), args.date, exclusions);
+    if (assignments.length + inferred.filter((item) => !item.extendAssignmentId).length > maximumAssignments) {
+      throw fundingError("MEDIA_FUNDING_LIMIT", "There are too many media funding assignments to allocate");
+    }
+    for (const item of inferred) {
+      if (item.extendAssignmentId) {
+        const existing = assignments.find((assignment) => assignment._id === item.extendAssignmentId)!;
+        await ctx.db.patch(existing._id, { effectiveFrom: args.date, updatedAt: args.updatedAt });
+        existing.effectiveFrom = args.date;
+        continue;
+      }
+      const assignment = {
+        ...item.target,
+        providerId: item.providerId as Id<"mediaFundingProviders">,
+        targetKey: mediaFundingTargetKey(item.target),
+        businessManagerKey: mediaFundingBusinessManagerKey(item.target.platform, item.target.businessManagerId),
+        effectiveFrom: item.effectiveFrom,
+        ...(item.effectiveTo ? { effectiveTo: item.effectiveTo } : {}),
+        autoPattern: item.pattern,
+        createdAt: args.updatedAt,
+        updatedAt: args.updatedAt
+      };
+      const id = await ctx.db.insert("mediaFundingAssignments", assignment);
+      assignments.push({ ...assignment, _id: id, _creationTime: Date.parse(args.updatedAt) });
+    }
+    const paymentMethods = (await requireBoundedRows(ctx.db.query("mediaAccountPaymentMethods").withIndex("by_effective_from", (q) => q.lte("effectiveFrom", args.date)).take(maximumAssignments + 1), maximumAssignments, "There are too many account payment methods")).map((item) => ({ ...item, id: item._id }));
+    const activeAssignments = assignments.filter((assignment) => assignment.effectiveFrom <= args.date && (!assignment.effectiveTo || assignment.effectiveTo >= args.date));
     const accountAssignments = new Map<string, Doc<"mediaFundingAssignments">>();
     const businessManagerAssignments = new Map<string, Doc<"mediaFundingAssignments">>();
     for (const assignment of activeAssignments) {
@@ -848,6 +930,7 @@ export const rebuildDate = mutation({
       providerId: Id<"mediaFundingProviders">;
       currency: string;
       spend: number;
+      classifiedSpend: MediaClassifiedSpend;
       accountIds: Set<string>;
       businessManagerIds: Set<string>;
     };
@@ -874,10 +957,14 @@ export const rebuildDate = mutation({
         providerId: provider._id,
         currency: row.currency,
         spend: 0,
+        classifiedSpend: emptyMediaClassifiedSpend(),
         accountIds: new Set<string>(),
         businessManagerIds: new Set<string>()
       };
       allocation.spend += row.spend;
+      const payment = resolveMediaPaymentMethod(paymentMethods, row);
+      const method = payment?.method;
+      if (method && method !== "needs_review" && (method !== "provider_funded" || payment?.providerId === assignment.providerId)) allocation.classifiedSpend[method] += row.spend;
       allocation.accountIds.add(`${row.platform}:${row.accountId}`);
       allocation.businessManagerIds.add(`${row.platform}:${row.businessManagerId}`);
       allocations.set(key, allocation);
@@ -899,11 +986,20 @@ export const rebuildDate = mutation({
         date: args.date,
         currency: allocation.currency,
         spend: roundMediaFundingMoney(allocation.spend),
+        classifiedSpend: Object.fromEntries(Object.entries(allocation.classifiedSpend).map(([method, spend]) => [method, roundMediaFundingMoney(spend)])) as unknown as MediaClassifiedSpend,
         accountCount: allocation.accountIds.size,
         businessManagerCount: allocation.businessManagerIds.size,
         updatedAt: args.updatedAt
       }] as const;
     }));
+    const classificationDeltas = new Map<string, MediaClassifiedSpend>();
+    for (const [sign, rows] of [[-1, existingRows], [1, [...nextRows.values()]]] as const) {
+      for (const row of rows) {
+        const delta = classificationDeltas.get(String(row.providerId)) ?? emptyMediaClassifiedSpend();
+        for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) delta[method] += sign * (row.classifiedSpend?.[method] ?? 0);
+        classificationDeltas.set(String(row.providerId), delta);
+      }
+    }
     const spendDeltas = new Map<string, { providerId: Id<"mediaFundingProviders">; delta: number }>();
     for (const existing of existingRows) {
       spendDeltas.set(String(existing.providerId), {
@@ -924,19 +1020,64 @@ export const rebuildDate = mutation({
       if (!existingKeys.has(next.key)) await ctx.db.insert("mediaFundingSpendDaily", next);
     }
     for (const { providerId, delta } of spendDeltas.values()) {
-      if (Math.abs(delta) < 0.000001) continue;
+      const classificationDelta = classificationDeltas.get(String(providerId)) ?? emptyMediaClassifiedSpend();
+      if (Math.abs(delta) < 0.000001 && Object.values(classificationDelta).every((value) => Math.abs(value) < 0.000001)) continue;
       const provider = await requireProvider(ctx, providerId);
       if (args.date <= provider.openingBalanceDate) continue;
       const totals = await totalsForProvider(ctx, providerId);
       if (!totals) throw fundingError("MEDIA_FUNDING_STATE", "Funding provider totals are missing");
+      const classifiedSpend = { ...(totals.classifiedSpend ?? emptyMediaClassifiedSpend()) };
+      for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) classifiedSpend[method] = roundMediaFundingMoney(classifiedSpend[method] + classificationDelta[method]);
       await ctx.db.patch(totals._id, {
         spend: roundMediaFundingMoney(totals.spend + delta),
+        classifiedSpend,
         updatedAt: args.updatedAt
       });
     }
     return {
       providers: nextRows.size,
+      automaticallyAssigned: inferred.length,
       spend: roundMediaFundingMoney([...nextRows.values()].reduce((total, row) => total + row.spend, 0))
     };
+  }
+});
+
+export const setPaymentMethods = mutation({
+  args: { serviceToken: v.string(), targets: v.array(v.object({ platform: v.string(), accountId: v.string() })), method: paymentMethod, reference: v.optional(v.string()), effectiveFrom: v.string(), updatedAt: v.string() },
+  returns: mutationResult,
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    requireIsoDate(args.effectiveFrom, "Payment method effective date");
+    if (!args.targets.length || args.targets.length > 200) throw fundingError("INVALID_MEDIA_FUNDING", "Select between 1 and 200 ad accounts");
+    const reference = cleanLabel(args.reference);
+    const assignments = args.method === "provider_funded" ? (await requireBoundedRows(ctx.db.query("mediaFundingAssignments").take(maximumAssignments + 1), maximumAssignments, "Too many provider assignments")).map((a) => ({ ...a, id: a._id })) : [];
+    const seen = new Set<string>();
+    for (const raw of args.targets) {
+      const platform = requireExternalId(raw.platform, "Platform"), accountId = requireExternalId(raw.accountId, "Ad account ID");
+      if (args.method === "meta_credit_line" && platform !== "Facebook") throw fundingError("INVALID_MEDIA_FUNDING", "Meta credit line is only available for Facebook accounts");
+      const key = mediaFundingAccountKey(platform, accountId);
+      if (seen.has(key)) throw fundingError("INVALID_MEDIA_FUNDING", "Duplicate account");
+      seen.add(key);
+      let providerId: Id<"mediaFundingProviders"> | undefined;
+      if (args.method === "provider_funded") {
+        const direct = assignments.filter((a) => a.scope === "ad_account" && a.platform === platform && a.accountId === accountId && a.effectiveFrom <= args.effectiveFrom && (!a.effectiveTo || a.effectiveTo >= args.effectiveFrom)).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
+        if (direct) providerId = direct.providerId;
+        else {
+          const rows = await requireBoundedRows(ctx.db.query("mediaSpendDaily").withIndex("by_account_and_date", (q) => q.eq("accountId", accountId)).take(maximumSpendRowsPerDate + 1), maximumSpendRowsPerDate, "Too much account history to resolve its provider");
+          const account = rows.filter((row) => row.platform === platform).sort((a, b) => b.date.localeCompare(a.date))[0];
+          providerId = (account ? resolveMediaFundingAssignment(assignments, { ...account, date: args.effectiveFrom }) : undefined)?.providerId as Id<"mediaFundingProviders"> | undefined;
+        }
+        if (!providerId) throw fundingError("INVALID_MEDIA_FUNDING", "Assign an account provider before confirming provider funding");
+      }
+      const existing = await requireBoundedRows(ctx.db.query("mediaAccountPaymentMethods").withIndex("by_account", (q) => q.eq("platform", platform).eq("accountId", accountId)).take(maximumAssignmentsPerTarget + 1), maximumAssignmentsPerTarget, "Too much payment method history");
+      for (const item of existing) {
+        if (item.effectiveTo && item.effectiveTo < args.effectiveFrom) continue;
+        if (item.effectiveFrom >= args.effectiveFrom) await ctx.db.delete(item._id);
+        else await ctx.db.patch(item._id, { effectiveTo: shiftIsoDate(args.effectiveFrom, -1), updatedAt: args.updatedAt });
+      }
+      await ctx.db.insert("mediaAccountPaymentMethods", { ...(providerId ? { providerId } : {}), platform, accountId, method: args.method, ...(reference ? { reference } : {}), effectiveFrom: args.effectiveFrom, updatedAt: args.updatedAt });
+    }
+    await requireBoundedRows(ctx.db.query("mediaAccountPaymentMethods").take(maximumAssignments + 1), maximumAssignments, "There are too many account payment methods");
+    return rebuildRange(ctx, args.effectiveFrom);
   }
 });

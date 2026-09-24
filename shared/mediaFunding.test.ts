@@ -44,6 +44,8 @@ function provider(id: string, name: string): MediaFundingProvider {
     netFunding: 0,
     adjustments: 0,
     spend: 0,
+    classifiedSpend: { provider_funded: 0, own_card: 0, meta_credit_line: 0 },
+    needsReviewSpend: 0,
     estimatedBalance: 0,
     assignmentCount: 0,
     bankFundingCount: 0,

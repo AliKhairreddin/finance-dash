@@ -286,3 +286,11 @@ The September 19, 2026 cutover transferred 249,274 application records and 206 s
 - [American Express APIs](https://developer.americanexpress.com/)
 - [Merit API](https://api.merit.ee/connecting-robots/reference-manual/authentication/)
 - [TUNE Affiliate API](https://developers.tune.com/affiliate)
+
+### Media account providers and payment methods
+
+Account-provider assignments identify the supplier/account family; they do not establish how ads are paid. Media spend has independent, dated account payment methods: needs review, provider funded, our card, or Meta credit line. Existing accounts start with funding needing review. Only explicitly confirmed provider-funded spend reduces a provider's estimated balance. Card and credit-line spend stay separate; bank repayments are not additional media spend. A provider balance is unavailable while assigned spend has an unresolved payment method, or bank matching is paused.
+
+Daily media reconciliation learns complete account-name patterns from at least two distinct manually assigned accounts. It assigns only unambiguous matches, preserves manual boundaries, records the inferred pattern, and never learns from its own assignments. Removing an assignment suppresses automatic reassignment for that interval. Naming does not classify payment methods or reconcile bank payments. Meta bank matching can be paused with the service-authenticated `mediaFunding:setBankFundingPaused` mutation while account-level/card/credit-line evidence is collected; raw bank records remain unchanged.
+
+Provider, BM and payment-method filters apply across media-spend views. CSV exports contain all sorted, filtered table rows, including rows beyond the visible page.

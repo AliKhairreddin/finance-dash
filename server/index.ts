@@ -1,3 +1,4 @@
+import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "../worker/amexStatements";
 import cors from "cors";
 import { handleDocumentApi } from "../worker/documentIntake";
@@ -365,6 +366,18 @@ app.delete("/api/media-funding/entries/:entryId", async (request, response, next
   } catch (error) {
     next(error);
   }
+});
+
+app.post("/api/media-funding/payment-methods", async (request, response, next) => {
+  try {
+    const payload = request.body as SetMediaPaymentMethodsPayload;
+    const result = await localConvexClient().mutation(api.mediaFunding.setPaymentMethods, {
+      serviceToken: localConvexServiceToken(), targets: payload.targets, method: payload.method,
+      reference: payload.reference, effectiveFrom: payload.effectiveFrom, updatedAt: new Date().toISOString()
+    });
+    await rebuildLocalMediaFunding(result);
+    response.json(result);
+  } catch (error) { next(error); }
 });
 
 app.post("/api/media-funding/assignments", async (request, response, next) => {

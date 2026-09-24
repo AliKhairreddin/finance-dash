@@ -50,7 +50,8 @@ const providerSortKeys: readonly ProviderSortKey[] = ["assignments", "balance", 
 const activitySortKeys: readonly ActivitySortKey[] = ["date", "fee", "net", "note", "payment", "type"];
 const assignmentSortKeys: readonly AssignmentSortKey[] = ["from", "scope", "target", "to"];
 
-function money(value: number, currency = "USD"): string {
+function money(value: number | null, currency = "USD"): string {
+  if (value === null) return "Awaiting reconciliation";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -73,9 +74,9 @@ function providerAccent(providerId: string): number {
   return hash % 6;
 }
 
-function providerSortValue(provider: MediaFundingProvider, key: ProviderSortKey): number | string {
+function providerSortValue(provider: MediaFundingProvider, key: ProviderSortKey): number | string | undefined {
   if (key === "assignments") return provider.assignmentCount;
-  if (key === "balance") return provider.estimatedBalance;
+  if (key === "balance") return provider.estimatedBalance ?? undefined;
   if (key === "fee") return provider.defaultFeePercent;
   if (key === "funded") return provider.netFunding;
   if (key === "opening") return provider.openingBalance;
@@ -247,7 +248,7 @@ export function MediaFundingView({
             <h2>Provider balances</h2>
             <InfoPopover label="provider balances">
               <span>Posted or settled outgoing bank transactions categorized as Ad account funding and matched to the linked supplier become funding credits automatically.</span>
-              <span>Available balance equals opening balance plus fee-adjusted bank funding and adjustments, minus LemonMax spend assigned to the provider.</span>
+              <span>Available balance equals opening balance plus fee-adjusted bank funding and adjustments, minus confirmed provider-funded spend. Account ownership and payment method are separate. Balances remain unavailable while funding needs review.</span>
               <span>This derived balance does not create or duplicate cash transactions in official bank or analytics totals.</span>
             </InfoPopover>
           </div>
@@ -284,7 +285,7 @@ export function MediaFundingView({
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="fee">Fee</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="opening">Opening</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="funded">Net funded</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Spend</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Account spend</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="balance">Balance</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="assignments">Assignments</SortableTableHead>
               </tr></thead>
@@ -295,7 +296,7 @@ export function MediaFundingView({
                   <td className="amount">{money(provider.openingBalance, provider.currency)}</td>
                   <td className="amount">{money(provider.netFunding, provider.currency)}</td>
                   <td className="amount">{money(provider.spend, provider.currency)}</td>
-                  <td className={`amount media-funding-balance ${provider.estimatedBalance < 0 ? "negative" : ""}`}>{money(provider.estimatedBalance, provider.currency)}</td>
+                  <td className={`amount media-funding-balance ${(provider.estimatedBalance ?? 0) < 0 ? "negative" : ""}`}>{money(provider.estimatedBalance, provider.currency)}</td>
                   <td className="amount">{provider.assignmentCount.toLocaleString()}</td>
                 </tr>
               ))}</tbody>
@@ -307,7 +308,7 @@ export function MediaFundingView({
       {selectedProvider && (
         <section className="panel media-funding-detail">
           <div className="media-funding-detail-header">
-            <div><FundingProviderBadge provider={selectedProvider} /><span>Live bank funding and assigned LemonMax spend</span></div>
+            <div><FundingProviderBadge provider={selectedProvider} /><span>Account provider and funding reconciliation</span></div>
             <div className="media-funding-detail-actions">
               <Button aria-label={`Delete ${selectedProvider.name}`} className="icon-button danger" onClick={() => void removeProvider(selectedProvider)} type="button"><Trash2 size={14} /></Button>
               <Button className="secondary-button" onClick={() => setProviderDialog(selectedProvider)} type="button"><Pencil size={14} /> Edit</Button>
@@ -315,6 +316,12 @@ export function MediaFundingView({
               <Button className="primary-button" onClick={() => onOpenBankFunding(selectedProvider.name, shiftFinanceOperatingDate(selectedProvider.openingBalanceDate, 1))} type="button"><ReceiptText size={14} /> Review bank funding</Button>
             </div>
           </div>
+          {selectedProvider.bankFundingPaused && (
+            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>Bank-payment matching is paused pending account-level reconciliation. Payments are excluded and the balance is unavailable.</span></div>
+          )}
+          {Math.abs(selectedProvider.needsReviewSpend) > 0.005 && (
+            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>{money(selectedProvider.needsReviewSpend, selectedProvider.currency)} of account spend needs a payment method. <Button className="text-button" onClick={onOpenMediaSpend} type="button">Review accounts</Button></span></div>
+          )}
           {selectedProvider.excludedFundingCount > 0 && (
             <div className="income-callout warning media-spend-alert" role="alert"><CircleAlert size={17} /><span>{selectedProvider.excludedFundingCount.toLocaleString()} matched funding transaction(s) use a non-USD currency and are excluded until converted or corrected.</span></div>
           )}
@@ -322,7 +329,14 @@ export function MediaFundingView({
             <div><span>Gross bank paid</span><strong>{money(selectedProvider.grossFunding, selectedProvider.currency)}</strong></div>
             <div><span>Fees deducted</span><strong>{money(selectedProvider.fees, selectedProvider.currency)}</strong></div>
             <div><span>Adjustments</span><strong>{money(selectedProvider.adjustments, selectedProvider.currency)}</strong></div>
-            <div><span>Available</span><strong className={selectedProvider.estimatedBalance < 0 ? "negative" : ""}>{money(selectedProvider.estimatedBalance, selectedProvider.currency)}</strong></div>
+            <div><span>Available</span><strong className={(selectedProvider.estimatedBalance ?? 0) < 0 ? "negative" : ""}>{money(selectedProvider.estimatedBalance, selectedProvider.currency)}</strong></div>
+          </div>
+
+          <div className="media-funding-detail-metrics">
+            <div><span>Provider funded</span><strong>{money(selectedProvider.classifiedSpend.provider_funded, selectedProvider.currency)}</strong></div>
+            <div><span>Our card</span><strong>{money(selectedProvider.classifiedSpend.own_card, selectedProvider.currency)}</strong></div>
+            <div><span>Meta credit line</span><strong>{money(selectedProvider.classifiedSpend.meta_credit_line, selectedProvider.currency)}</strong></div>
+            <div><span>Needs review</span><strong>{money(selectedProvider.needsReviewSpend, selectedProvider.currency)}</strong></div>
           </div>
 
           <div className="media-funding-detail-section">
@@ -382,7 +396,7 @@ export function MediaFundingView({
                   <tbody>{selectedAssignments.map((assignment) => (
                     <tr key={assignment.id}>
                       <td><span className="source-pill">{assignment.scope === "business_manager" ? "BM" : "Ad account"}</span></td>
-                      <td><strong>{assignment.accountName ?? assignment.businessManagerName ?? "Unnamed"}</strong><small>{assignment.accountId ?? assignment.businessManagerId}</small></td>
+                      <td><strong>{assignment.accountName ?? assignment.businessManagerName ?? "Unnamed"}</strong>{assignment.autoPattern && <InfoPopover label={`automatic assignment for ${assignment.accountName ?? assignment.accountId}`}><span>Automatically matched from existing manual assignments with the same account-name pattern: {assignment.autoPattern}. Removing this assignment prevents automatic reassignment for these dates.</span></InfoPopover>}<small>{assignment.accountId ?? assignment.businessManagerId}</small></td>
                       <td>{dateLabel(assignment.effectiveFrom)}</td>
                       <td>{assignment.effectiveTo ? dateLabel(assignment.effectiveTo) : "Current"}</td>
                       <td><Button aria-label="Remove funding assignment" className="icon-button danger" onClick={() => void removeAssignment(assignment)} type="button"><Trash2 size={14} /></Button></td>

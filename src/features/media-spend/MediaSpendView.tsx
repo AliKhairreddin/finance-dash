@@ -1,3 +1,4 @@
+import { mediaPaymentMethods, mediaPaymentMethodLabels, resolveMediaPaymentMethod, type MediaPaymentMethod } from "../../../shared/mediaPaymentMethods";
 import {
   BadgeDollarSign,
   BriefcaseBusiness,
@@ -5,6 +6,7 @@ import {
   ChevronRight,
   CircleAlert,
   Database,
+  Download,
   HandCoins,
   Link2,
   Layers3,
@@ -27,7 +29,7 @@ import {
   calendarDateRangeLabel,
   type CalendarDateRange
 } from "@/components/ui/calendar-period-picker";
-import { ActiveFilterBar, ToolbarSearchField } from "@/components/ui/filter-toolbar";
+import { ActiveFilterBar, FilterFieldGroup, FilterPopover, ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import {
   compareTableValues,
@@ -59,8 +61,8 @@ import {
 } from "../../../shared/mediaSpend";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
-type AccountSpendSortKey = "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
-type DailySpendSortKey = "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
+type AccountSpendSortKey = "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
+type DailySpendSortKey = "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
 type BusinessManagerSortKey = "accounts" | "businessManager" | "platform" | "provider" | "spend" | "workspace";
 type ProviderSpendSortKey = "accounts" | "businessManagers" | "days" | "platforms" | "provider" | "spend" | "workspaces";
 type MediaSpendViewMode = "accounts" | "businessManagers" | "providers";
@@ -80,6 +82,7 @@ type BusinessManagerSpendGroup = {
 };
 
 const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
+  "paymentMethod",
   "account",
   "businessManager",
   "days",
@@ -89,6 +92,7 @@ const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
   "workspace"
 ];
 const dailySpendSortKeys: readonly DailySpendSortKey[] = [
+  "paymentMethod",
   "businessManager",
   "date",
   "platform",
@@ -326,6 +330,8 @@ export function MediaSpendView({
   const [funding, setFunding] = useState<MediaFundingApiResponse | null>(null);
   const [search, setSearch] = useState("");
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [paymentFilter, setPaymentFilter] = useUrlState<MediaPaymentMethod | "">("mediaPayment", "", { allowedValues: ["", ...mediaPaymentMethods] });
   const [assignmentDialogOpen, setAssignmentDialogOpen] = useState(false);
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -378,12 +384,6 @@ export function MediaSpendView({
     : (data?.rows ?? []).filter((row) => row.spend !== 0), [data?.rows, includeZeroSpend]);
   const allAccountGroups = useMemo(() => groupMediaSpendByAccount(data?.rows ?? []), [data?.rows]);
   const allBusinessManagerGroups = useMemo(() => groupBusinessManagers(data?.rows ?? []), [data?.rows]);
-  const businessManagerGroups = useMemo(() => groupBusinessManagers(spendRows), [spendRows]);
-  const providerSpendGroups = useMemo(() => groupMediaSpendByFundingProvider(
-    spendRows,
-    funding?.assignments ?? [],
-    funding?.providers ?? []
-  ), [funding?.assignments, funding?.providers, spendRows]);
   const selectedBusinessManager = useMemo(
     () => allBusinessManagerGroups.find((group) => group.key === selectedBusinessManagerKey),
     [allBusinessManagerGroups, selectedBusinessManagerKey]
@@ -406,12 +406,8 @@ export function MediaSpendView({
     assignment: ReturnType<typeof resolveMediaFundingAssignment>;
     provider?: MediaFundingProvider;
   } {
-    const assignment = resolveMediaFundingAssignment(funding?.assignments ?? [], {
-      accountId: group.accountId,
-      businessManagerId: group.businessManagerId,
-      date: dateRange.toDate,
-      platform: group.platform
-    });
+    const latestRow = group.rows.reduce((latest, row) => row.date > latest.date ? row : latest);
+    const assignment = resolveMediaFundingAssignment(funding?.assignments ?? [], latestRow);
     return { assignment, provider: assignment ? providersById.get(assignment.providerId) : undefined };
   }
 
@@ -437,15 +433,33 @@ export function MediaSpendView({
     return { childAssignments: children.length };
   }
 
+  function paymentMethodForRow(row: MediaSpendRow): MediaPaymentMethod {
+    const payment = resolveMediaPaymentMethod(funding?.paymentMethods ?? [], row);
+    return payment?.method === "provider_funded" && payment.providerId !== rowFunding(row).provider?.id ? "needs_review" : payment?.method ?? "needs_review";
+  }
+  function paymentLabel(rows: readonly MediaSpendRow[]): string {
+    const methods = new Set(rows.map((row) => mediaPaymentMethodLabels[paymentMethodForRow(row)]));
+    return methods.size === 1 ? [...methods][0] : "Mixed methods";
+  }
+  function paymentCell(rows: readonly MediaSpendRow[]) {
+    const records = new Map(rows.map((row) => { const item = resolveMediaPaymentMethod(funding?.paymentMethods ?? [], row); return [item?.id, item]; }));
+    const details = [...records.values()].filter((item) => item !== undefined);
+    return <span className="media-funding-provider-cell">{paymentLabel(rows)}{details.length > 0 && <InfoPopover label="Payment method history">{details.map((item) => <p key={item.id}>{mediaPaymentMethodLabels[item.method]} · {dateLabel(item.effectiveFrom)}–{item.effectiveTo ? dateLabel(item.effectiveTo) : "Current"}{item.reference ? ` · ${item.reference}` : ""}</p>)}</InfoPopover>}</span>;
+  }
   const scopedSpendRows = useMemo(() => spendRows.filter((row) => {
-    if (selectedAccountKey) {
-      return mediaFundingAccountKey(row.platform, row.accountId) === selectedAccountKey;
-    }
     return (
-      (!selectedBusinessManagerKey || businessManagerKey(row) === selectedBusinessManagerKey)
+      (!selectedAccountKey || mediaFundingAccountKey(row.platform, row.accountId) === selectedAccountKey)
+      && (!selectedBusinessManagerKey || businessManagerKey(row) === selectedBusinessManagerKey)
+      && (!paymentFilter || paymentMethodForRow(row) === paymentFilter)
       && (!selectedProviderId || (rowFunding(row).provider?.id ?? "unassigned") === selectedProviderId)
     );
-  }), [funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedProviderId, spendRows]);
+  }), [funding?.paymentMethods, paymentFilter, funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedProviderId, spendRows]);
+  const businessManagerGroups = useMemo(() => groupBusinessManagers(scopedSpendRows), [scopedSpendRows]);
+  const providerSpendGroups = useMemo(() => groupMediaSpendByFundingProvider(
+    scopedSpendRows,
+    funding?.assignments ?? [],
+    funding?.providers ?? []
+  ), [funding?.assignments, funding?.providers, scopedSpendRows]);
   const visibleAccountGroups = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const groups = groupMediaSpendByAccount(scopedSpendRows);
@@ -457,17 +471,17 @@ export function MediaSpendView({
       : groups;
     return filtered.sort((left, right) =>
       compareTableValues(
-        accountSortKey === "provider"
+        accountSortKey === "paymentMethod" ? paymentLabel(left.rows) : accountSortKey === "provider"
           ? accountFunding(left).provider?.name
           : accountSpendSortValue(left, accountSortKey),
-        accountSortKey === "provider"
+        accountSortKey === "paymentMethod" ? paymentLabel(right.rows) : accountSortKey === "provider"
           ? accountFunding(right).provider?.name
           : accountSpendSortValue(right, accountSortKey),
         accountSortDirection
       )
       || left.key.localeCompare(right.key)
     );
-  }, [accountSortDirection, accountSortKey, dateRange.toDate, funding?.assignments, providersById, scopedSpendRows, search]);
+  }, [accountSortDirection, accountSortKey, funding?.paymentMethods, dateRange.toDate, funding?.assignments, providersById, scopedSpendRows, search]);
   const visibleDailyRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const filtered = normalizedSearch
@@ -484,12 +498,12 @@ export function MediaSpendView({
       : [...scopedSpendRows];
     return filtered.sort((left, right) =>
       compareTableValues(
-        dailySortKey === "provider" ? rowFunding(left).provider?.name : dailySpendSortValue(left, dailySortKey),
-        dailySortKey === "provider" ? rowFunding(right).provider?.name : dailySpendSortValue(right, dailySortKey),
+        dailySortKey === "paymentMethod" ? paymentLabel([left]) : dailySortKey === "provider" ? rowFunding(left).provider?.name : dailySpendSortValue(left, dailySortKey),
+        dailySortKey === "paymentMethod" ? paymentLabel([right]) : dailySortKey === "provider" ? rowFunding(right).provider?.name : dailySpendSortValue(right, dailySortKey),
         dailySortDirection
       ) || left.key.localeCompare(right.key)
     );
-  }, [dailySortDirection, dailySortKey, funding?.assignments, providersById, scopedSpendRows, search]);
+  }, [dailySortDirection, dailySortKey, funding?.paymentMethods, funding?.assignments, providersById, scopedSpendRows, search]);
   const visibleBusinessManagers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const filtered = normalizedSearch
@@ -534,7 +548,7 @@ export function MediaSpendView({
   const pageDailyRows = visibleDailyRows.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
   const pageBusinessManagers = visibleBusinessManagers.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
   const pageProviders = visibleProviders.slice(page * mediaSpendPageSize, (page + 1) * mediaSpendPageSize);
-  const selectableAccountGroups = pageAccountGroups.filter((group) => accountFunding(group).assignment?.scope !== "business_manager");
+  const selectableAccountGroups = pageAccountGroups;
   const selectableBusinessManagers = pageBusinessManagers.filter((group) => businessManagerFunding(group).childAssignments === 0);
   const pageSelectableKeys = viewMode === "accounts" && !showingAccountDetail
     ? selectableAccountGroups.map((group) => `ad_account:${mediaFundingAccountKey(group.platform, group.accountId)}`)
@@ -573,6 +587,7 @@ export function MediaSpendView({
     setPage(0);
   }, [
     accountSortDirection,
+    paymentFilter,
     accountSortKey,
     businessManagerSortDirection,
     businessManagerSortKey,
@@ -637,16 +652,11 @@ export function MediaSpendView({
   function changeViewMode(nextViewMode: MediaSpendViewMode): void {
     setViewMode(nextViewMode);
     setSelectedAccountKey("");
-    if (nextViewMode !== "accounts") {
-      setSelectedBusinessManagerKey("");
-      setSelectedProviderId("");
-    }
   }
 
   function openBusinessManager(group: BusinessManagerSpendGroup): void {
     setSearch("");
     setSelectedAccountKey("");
-    setSelectedProviderId("");
     setSelectedBusinessManagerKey(group.key);
     setViewMode("accounts");
   }
@@ -654,15 +664,12 @@ export function MediaSpendView({
   function openProvider(group: MediaFundingProviderSpendGroup): void {
     setSearch("");
     setSelectedAccountKey("");
-    setSelectedBusinessManagerKey("");
     setSelectedProviderId(group.key);
     setViewMode("accounts");
   }
 
   function openAccount(group: MediaSpendAccountGroup): void {
     setSearch("");
-    setSelectedBusinessManagerKey("");
-    setSelectedProviderId("");
     setSelectedAccountKey(group.key);
   }
 
@@ -684,6 +691,40 @@ export function MediaSpendView({
       }
       return next;
     });
+  }
+
+  function exportTable(): void {
+    let headers: string[];
+    let rows: (string | number | undefined)[][];
+    if (viewMode === "providers") {
+      headers = ["Provider", "Platforms", "Workspaces", "BMs", "Ad accounts", "Reported days", "Spend", "Currency"];
+      rows = visibleProviders.map((group) => [group.provider?.name ?? "Unassigned provider", group.platforms.join(", "), group.workspaces.join(", "), group.businessManagerCount, group.accountCount, group.dayCount, group.spend.toFixed(2), group.currency]);
+    } else if (viewMode === "businessManagers") {
+      headers = ["Business manager", "BM ID", "Platform", "Workspaces", "Ad accounts", "Account provider", "Spend", "Currency"];
+      rows = visibleBusinessManagers.map((group) => {
+        const state = businessManagerFunding(group);
+        return [group.businessManagerName, group.businessManagerId, group.platform, group.workspaces.join(", "), group.accountCount, state.provider?.name ?? (state.childAssignments ? `${state.childAssignments} account assignments` : "Unassigned"), group.spend.toFixed(2), group.currency];
+      });
+    } else if (showingAccountDetail) {
+      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Payment method", "Spend", "Currency"];
+      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, rowFunding(row).provider?.name ?? "Unassigned", paymentLabel([row]), row.spend.toFixed(2), row.currency]);
+    } else {
+      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Payment method", "Reported days", "Spend", "Currency"];
+      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, accountFunding(group).provider?.name ?? "Unassigned", paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
+    }
+    const csv = [headers, ...rows].map((row) => row.map((value) => {
+      const text = String(value ?? "");
+      const safe = /^[=+\-@]/.test(text.trimStart()) ? `'${text}` : text;
+      return `"${safe.replaceAll('"', '""')}"`;
+    }).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `media-spend-${showingAccountDetail ? "daily" : viewMode}-${dateRange.fromDate}-to-${dateRange.toDate}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function syncSelectedPeriod(): Promise<void> {
@@ -890,12 +931,36 @@ export function MediaSpendView({
                   : "Search provider, account, BM"}
               value={search}
             />
+            <FilterPopover activeCount={Number(Boolean(selectedProviderId)) + Number(Boolean(selectedBusinessManagerKey)) + Number(Boolean(paymentFilter))} title="Filter media spend">
+              <FilterFieldGroup title="Accounts">
+                <label>Provider
+                  <NativeSelect aria-label="Filter media spend by provider" searchable value={selectedProviderId} onValueChange={setSelectedProviderId}>
+                    <NativeSelectOption value="">All providers</NativeSelectOption>
+                    <NativeSelectOption value="unassigned">Unassigned provider</NativeSelectOption>
+                    {[...(funding?.providers ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+                <label>Business manager
+                  <NativeSelect aria-label="Filter media spend by business manager" searchable value={selectedBusinessManagerKey} onValueChange={setSelectedBusinessManagerKey}>
+                    <NativeSelectOption value="">All business managers</NativeSelectOption>
+                    {[...allBusinessManagerGroups].sort((a, b) => (a.businessManagerName ?? a.businessManagerId).localeCompare(b.businessManagerName ?? b.businessManagerId)).map((group) => <NativeSelectOption key={group.key} value={group.key}>{group.businessManagerName ?? group.businessManagerId} · {group.businessManagerId}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+                <label>Payment method
+                  <NativeSelect aria-label="Filter media spend by payment method" value={paymentFilter} onValueChange={(value) => setPaymentFilter(value as MediaPaymentMethod | "")}>
+                    <NativeSelectOption value="">All payment methods</NativeSelectOption>
+                    {mediaPaymentMethods.map((method) => <NativeSelectOption key={method} value={method}>{mediaPaymentMethodLabels[method]}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+              </FilterFieldGroup>
+            </FilterPopover>
+            <Button className="icon-button" aria-label="Export media spend CSV" title={`Export all ${visibleRowCount} filtered rows`} disabled={isLoading || visibleRowCount === 0} onClick={exportTable} type="button"><Download size={15} /></Button>
           </div>
         </div>
 
         <ActiveFilterBar
-          filters={viewMode === "accounts" ? [
-            ...(selectedAccountKey ? [{
+          filters={[
+            ...(paymentFilter ? [{ key: "paymentMethod", label: `Payment: ${mediaPaymentMethodLabels[paymentFilter]}`, onRemove: () => setPaymentFilter("") }] : []),            ...(selectedAccountKey ? [{
               key: "account",
               label: `Ad account: ${selectedAccount?.accountName ?? selectedAccount?.accountId ?? "Selected"}`,
               onRemove: () => setSelectedAccountKey("")
@@ -910,8 +975,9 @@ export function MediaSpendView({
               label: `Provider: ${selectedProvider?.name ?? (selectedProviderId === "unassigned" ? "Unassigned provider" : "Selected")}`,
               onRemove: () => setSelectedProviderId("")
             }] : [])
-          ] : []}
+          ]}
           onClearAll={() => {
+            setPaymentFilter("");
             setSelectedAccountKey("");
             setSelectedBusinessManagerKey("");
             setSelectedProviderId("");
@@ -929,9 +995,10 @@ export function MediaSpendView({
           <div className="media-funding-selection-bar">
             <span><strong>{selectedAssignmentTargets.length.toLocaleString()}</strong> {viewMode === "accounts" ? "ad accounts" : "business managers"} selected</span>
             <div>
+              {viewMode === "accounts" && <Button className="secondary-button" onClick={() => setPaymentDialogOpen(true)} type="button">Set payment method</Button>}
               <Button className="secondary-button" onClick={() => setSelectedTargets(new Set())} type="button">Clear</Button>
               {(funding?.providers.length ?? 0) > 0 ? (
-                <Button className="primary-button" onClick={() => setAssignmentDialogOpen(true)} type="button"><Link2 size={15} /> Assign provider</Button>
+                <Button className="primary-button" disabled={selectedAssignmentTargets.some((target) => target.scope === "ad_account" && funding?.assignments.some((a) => a.scope === "business_manager" && a.platform === target.platform && a.businessManagerId === target.businessManagerId && mediaFundingAssignmentIsActive(a, dateRange.toDate)))} onClick={() => setAssignmentDialogOpen(true)} type="button"><Link2 size={15} /> Assign provider</Button>
               ) : (
                 <Button className="primary-button" onClick={onOpenProviderBalances} type="button"><Link2 size={15} /> Add a provider first</Button>
               )}
@@ -967,7 +1034,8 @@ export function MediaSpendView({
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="platform">Platform</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="businessManager">Business manager</SortableTableHead>
-                  <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="provider">Funding provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="provider">Account provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="paymentMethod">Payment method</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} className="amount" direction={dailySortDirection} onSort={requestDailySort} sortKey="spend">Daily spend</SortableTableHead>
                 </tr>
               </thead>
@@ -982,6 +1050,7 @@ export function MediaSpendView({
                       <td>{row.workspace}</td>
                       <td><strong>{row.businessManagerName ?? "—"}</strong><small>{row.businessManagerId}</small></td>
                       <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
+                      <td>{paymentCell([row])}</td>
                       <td className="amount media-spend-amount">{money(row.spend, row.currency)}</td>
                     </tr>
                   );
@@ -999,7 +1068,8 @@ export function MediaSpendView({
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="workspace">Workspaces</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="account">Ad account</SortableTableHead>
-                  <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="provider">Funding provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="provider">Account provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="paymentMethod">Payment method</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} className="amount" direction={accountSortDirection} onSort={requestAccountSort} sortKey="days">Reported days</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} className="amount" direction={accountSortDirection} onSort={requestAccountSort} sortKey="spend">Spend</SortableTableHead>
                 </tr>
@@ -1016,7 +1086,7 @@ export function MediaSpendView({
                     onClick={() => openAccount(group)}
                     title="View daily spend"
                   >
-                    <td className="media-funding-select-cell" onClick={(event) => event.stopPropagation()} title={inherited ? "Assigned through the business manager" : undefined}><Checkbox aria-label={`Select ${group.accountName ?? group.accountId}`} checked={selectedTargets.has(targetKey)} disabled={inherited} onCheckedChange={(checked) => toggleTarget(targetKey, checked === true)} /></td>
+                    <td className="media-funding-select-cell" onClick={(event) => event.stopPropagation()} title={inherited ? "Assigned through the business manager" : undefined}><Checkbox aria-label={`Select ${group.accountName ?? group.accountId}`} checked={selectedTargets.has(targetKey)} onCheckedChange={(checked) => toggleTarget(targetKey, checked === true)} /></td>
                     <td><span className="source-pill media-spend-platform">{group.platform}</span></td>
                     <td>{group.workspaces.join(", ")}</td>
                     <td><strong>{group.businessManagerName ?? "—"}</strong><small>{group.businessManagerId}</small></td>
@@ -1027,6 +1097,7 @@ export function MediaSpendView({
                       </button>
                     </td>
                     <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
+                    <td>{paymentCell(group.rows)}</td>
                     <td className="amount">{group.dayCount.toLocaleString()}</td>
                     <td className="amount media-spend-amount">{money(group.spend, group.currency)}</td>
                   </tr>
@@ -1045,7 +1116,7 @@ export function MediaSpendView({
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="platform">Platform</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="accounts">Ad accounts</SortableTableHead>
-                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="provider">Funding provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="provider">Account provider</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} className="amount" direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="spend">Spend</SortableTableHead>
                 </tr>
               </thead>
@@ -1128,6 +1199,7 @@ export function MediaSpendView({
           </div>
         </footer>
       </section>
+      {paymentDialogOpen && <MediaPaymentMethodDialog apiBase={apiBase} effectiveFrom={dateRange.fromDate} targets={selectedAssignmentTargets.filter((target) => target.scope === "ad_account")} onClose={() => setPaymentDialogOpen(false)} onSaved={async () => { setPaymentDialogOpen(false); setSelectedTargets(new Set()); await loadData(); }} />}
       {assignmentDialogOpen && funding && (
         <MediaFundingAssignmentDialog
           apiBase={apiBase}
@@ -1194,7 +1266,7 @@ function MediaFundingAssignmentDialog({
     <div className="modal-backdrop" role="presentation">
       <form className="modal media-funding-modal" role="dialog" aria-modal="true" aria-labelledby="media-funding-assignment-title" onSubmit={(event) => void submit(event)}>
         <div className="modal-header">
-          <div><p className="eyebrow">Media spend</p><h2 id="media-funding-assignment-title">Assign funding provider</h2></div>
+          <div><p className="eyebrow">Media spend</p><h2 id="media-funding-assignment-title">Assign account provider</h2></div>
           <Button aria-label="Close" className="icon-button" onClick={onClose} type="button"><X size={18} /></Button>
         </div>
         {error && <div className="inline-error">{error}</div>}
@@ -1203,7 +1275,7 @@ function MediaFundingAssignmentDialog({
           <div className="empty-state compact"><strong>Add a funding provider before assigning inventory</strong><Button className="primary-button" onClick={onOpenProviderBalances} type="button">Open provider balances</Button></div>
         ) : (
           <>
-            <label>Funding provider<NativeSelect searchable value={providerId} onValueChange={setProviderId}>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
+            <label>Account provider<NativeSelect searchable value={providerId} onValueChange={setProviderId}>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
             <label>Effective from<Input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>
             <p className="field-help">Changing an existing assignment closes the old provider on the previous day. BM assignments block account-level assignments inside that BM.</p>
           </>
@@ -1213,4 +1285,29 @@ function MediaFundingAssignmentDialog({
     </div>,
     document.body
   );
+}
+
+function MediaPaymentMethodDialog({ apiBase, effectiveFrom: initialDate, targets, onClose, onSaved }: { apiBase: string; effectiveFrom: string; targets: MediaFundingAssignmentTarget[]; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [method, setMethod] = useState<MediaPaymentMethod>("needs_review");
+  const [effectiveFrom, setEffectiveFrom] = useState(initialDate);
+  const [reference, setReference] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setSubmitting(true); setError(null);
+    try {
+      const response = await fetch(`${apiBase}/media-funding/payment-methods`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets: targets.map(({ platform, accountId }) => ({ platform, accountId })), method, effectiveFrom, reference: reference.trim() || undefined }) });
+      if (!response.ok) throw new Error(await apiErrorMessage(response, "Payment method could not be saved"));
+      await onSaved();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Payment method could not be saved"); setSubmitting(false); }
+  }
+  return createPortal(<div className="modal-backdrop" role="presentation"><form className="modal media-funding-modal" role="dialog" aria-modal="true" aria-labelledby="media-payment-title" onSubmit={(event) => void submit(event)}>
+    <div className="modal-header"><h2 id="media-payment-title">Set payment method</h2><Button aria-label="Close" className="icon-button" onClick={onClose} type="button"><X size={18} /></Button></div>
+    {error && <div className="inline-error">{error}</div>}
+    <div className="media-funding-assignment-summary"><strong>{targets.length}</strong><span>ad accounts selected</span></div>
+    <label>Payment method<NativeSelect value={method} onValueChange={(value) => setMethod(value as MediaPaymentMethod)}>{mediaPaymentMethods.map((value) => <NativeSelectOption key={value} value={value}>{mediaPaymentMethodLabels[value]}</NativeSelectOption>)}</NativeSelect></label>
+    <label>Effective from<Input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} required /></label>
+    <label>Card last four or credit-line reference (optional)<Input value={reference} maxLength={500} onChange={(event) => setReference(event.target.value)} /></label>
+    <div className="modal-actions"><Button className="secondary-button" onClick={onClose} type="button" disabled={submitting}>Cancel</Button><Button className="primary-button" type="submit" disabled={submitting || !targets.length || !effectiveFrom}>{submitting ? <Loader2 className="spin" size={15} /> : null} Save payment method</Button></div>
+  </form></div>, document.body);
 }
