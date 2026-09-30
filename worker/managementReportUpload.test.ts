@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
 import { getFunctionName } from "convex/server";
 import { importWorkbook } from "../convex/managementReportUpload";
 import { handleManagementReportUpload } from "./managementReportUpload";
@@ -101,4 +102,8 @@ test("Worker stages the workbook and forwards imports to Convex without exposing
   assert.equal((await handleManagementReportUpload(uploadRequest(new Uint8Array([1]), "report.pdf"), env)).status, 400);
   assert.equal((await handleManagementReportUpload(uploadRequest(), { ...env, MANAGEMENT_REPORT_IMPORT_TOKEN: "" })).status, 503);
   assert.equal(calls.length, 2, "unsupported uploads and missing credentials cannot reach storage");
+  t.mock.method(ConvexHttpClient.prototype, "action", async () => { throw new ConvexError("VB - Consolidated is required for the management report."); });
+  const invalid = await handleManagementReportUpload(uploadRequest(), env);
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { message: "VB - Consolidated is required for the management report." });
 });

@@ -1,4 +1,5 @@
-import readXlsxFile from "read-excel-file/universal";
+import { Buffer } from "node:buffer";
+import readXlsxFile from "read-excel-file/node";
 import {
   buildManagementReport, managementReportParserVersion, managementReportSheetKeys,
   type ManagementReportSheetKey
@@ -167,7 +168,7 @@ export async function readManagementWorkbook(bytes: Uint8Array<ArrayBuffer>, fil
   if (!bytes.length) throw new Error("The workbook is empty.");
   if (bytes.byteLength > managementWorkbookMaximumBytes) throw new Error("The workbook exceeds the 10 MB upload limit.");
   let sheets: ManagementWorkbookSheet[];
-  try { sheets = await readXlsxFile(bytes.buffer); }
+  try { sheets = await readXlsxFile(Buffer.from(bytes)); }
   catch { throw new Error("The file could not be read as an Excel .xlsx workbook."); }
   return prepareManagementWorkbook(sheets, fileName);
 }

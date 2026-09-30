@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { boundedBytes } from "./documentIntake";
@@ -24,6 +25,9 @@ export async function handleManagementReportUpload(
     const result = await convex.action(api.managementReportUpload.importWorkbook, { importToken, storageId, fileName });
     return Response.json(result, { status: result.alreadyComplete ? 200 : 201 });
   } catch (error) {
-    return Response.json({ message: error instanceof Error ? error.message : "Management report upload failed" }, { status: 400 });
+    const message = error instanceof ConvexError && typeof error.data === "string"
+      ? error.data
+      : error instanceof Error ? error.message : "Management report upload failed";
+    return Response.json({ message }, { status: 400 });
   }
 }
