@@ -105,6 +105,109 @@ export interface SlashRejectedCardTransaction extends SlashTransaction {
   declineReason?: string;
 }
 
+export interface SlashCardAlertTransaction extends SlashTransaction {
+  cardId: string;
+  detailedStatus: string;
+  authorizedAt: string;
+  declineReason?: string;
+  originalCurrency?: { code: string; amountCents: number };
+}
+
+export async function fetchSlashCardAlertTransaction({ baseUrl, apiKey, legalEntityId, transactionId, fetcher = fetch }: SlashTransactionOptions): Promise<SlashCardAlertTransaction | null> {
+  const transaction = await fetchSlashResource(fetcher, new URL(`/transaction/${encodeURIComponent(transactionId)}`, baseUrl),
+    slashHeaders(apiKey, legalEntityId), "transaction", (value) => {
+      const payload = requiredRecord(value, "transaction");
+      if (!payload.cardId) return null;
+      const tx = parseSlashTransaction(payload);
+      const detailedStatus = requiredString(payload.detailedStatus, "transaction.detailedStatus", 100);
+      if (!["declined", "pending", "settled"].includes(detailedStatus) || tx.amountCents > 0) return null;
+      const original = payload.originalCurrency ? requiredRecord(payload.originalCurrency, "transaction.originalCurrency") : undefined;
+      return {
+        ...tx, cardId: requiredString(payload.cardId, "transaction.cardId", maximumSlashProviderIdLength), detailedStatus,
+        authorizedAt: requiredIsoTimestamp(payload.authorizedAt, "transaction.authorizedAt"),
+        ...(payload.declineReason ? { declineReason: requiredString(payload.declineReason, "transaction.declineReason") } : {}),
+        ...(original ? { originalCurrency: { code: requiredString(original.code, "transaction.originalCurrency.code", 10),
+          amountCents: requiredCents(original.amountCents, "transaction.originalCurrency.amountCents") } } : {})
+      };
+    });
+  if (transaction && transaction.id !== transactionId) throw new Error("Slash returned a different transaction for the webhook");
+  return transaction;
+}
+
+export async function fetchSlashCardAlertLabels({ baseUrl, apiKey, legalEntityId, transaction, fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; transaction: SlashCardAlertTransaction; fetcher?: typeof fetch;
+}): Promise<{ card: SlashCard; account?: SlashVirtualAccountBalance }> {
+  const headers = slashHeaders(apiKey, legalEntityId);
+  const [cards, account] = await Promise.all([
+    createSlashCardResolver(fetcher, baseUrl, headers)([transaction.cardId]),
+    transaction.virtualAccountId ? fetchSlashResource(fetcher,
+      new URL(`/virtual-account/${encodeURIComponent(transaction.virtualAccountId)}`, baseUrl), headers, "virtual account", parseSlashVirtualAccount) : undefined
+  ]);
+  // Virtual accounts belong to the parent account; transactions reference its underlying cash/credit account.
+  if (account && account.id !== transaction.virtualAccountId) {
+    throw new Error("Slash returned a different virtual account for the card alert");
+  }
+  return { card: cards.get(transaction.cardId)!, ...(account ? { account } : {}) };
+}
+
+export interface SlashWebhook { id: string; url: string; status: string; enabledEvents?: string[] }
+export const slashCardWebhookEvents = ["aggregated_transaction.create", "aggregated_transaction.update"] as const;
+
+function parseSlashWebhook(value: unknown): SlashWebhook {
+  const payload = requiredRecord(value, "webhook");
+  return { id: requiredString(payload.id, "webhook.id", maximumSlashProviderIdLength),
+    url: requiredString(payload.url, "webhook.url"), status: requiredString(payload.status, "webhook.status", 100),
+    ...(payload.enabledEvents === undefined || payload.enabledEvents === null ? {} : {
+      enabledEvents: Array.isArray(payload.enabledEvents)
+        ? payload.enabledEvents.map((event) => requiredString(event, "webhook.enabledEvents", 100))
+        : (() => { throw new Error("Invalid Slash webhook event selection"); })()
+    }) };
+}
+
+export async function fetchSlashWebhook({ baseUrl, apiKey, legalEntityId, webhookId, fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; webhookId: string; fetcher?: typeof fetch;
+}): Promise<SlashWebhook> {
+  const webhook = await fetchSlashResource(fetcher, new URL(`/webhook/${encodeURIComponent(webhookId)}`, baseUrl),
+    slashHeaders(apiKey, legalEntityId), "webhook", parseSlashWebhook);
+  if (webhook.id !== webhookId) throw new Error("Slash returned a different webhook");
+  return webhook;
+}
+
+export async function configureSlashCardWebhook({ baseUrl, apiKey, legalEntityId, webhookUrl, fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; webhookUrl: string; fetcher?: typeof fetch;
+}): Promise<SlashWebhook> {
+  const headers = slashHeaders(apiKey, legalEntityId);
+  const url = new URL("/webhook", baseUrl);
+  url.searchParams.set("filter:legalEntityId", legalEntityId);
+  const webhooks = await fetchAllSlashPages(fetcher, url, headers, parseSlashWebhook, 1000, 10);
+  const matches = webhooks.filter((webhook) => webhook.url === webhookUrl);
+  if (matches.length > 1) throw new Error("Multiple Slash card alert webhooks use this URL");
+  let webhook = matches[0];
+  const write = async (path: string, method: "POST" | "PATCH", body: unknown) => {
+    const response = await fetchBankProvider(fetcher, new URL(path, baseUrl), {
+      method, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }, { provider: "Slash", maxAttempts: 1 });
+    const text = await readBoundedResponseText(response, "Slash");
+    if (!response.ok) throw new Error(`Slash webhook configuration failed (${response.status}): ${text.slice(0, 300)}`);
+    return parseSlashWebhook(JSON.parse(text));
+  };
+  if (!webhook) webhook = await write("/webhook", "POST", {
+    legalEntityId, url: webhookUrl, name: "Finance Dash instant card alerts"
+  });
+  if (webhook.status !== "active" || !webhook.enabledEvents
+    || webhook.enabledEvents.length !== slashCardWebhookEvents.length
+    || !slashCardWebhookEvents.every((event) => webhook.enabledEvents?.includes(event))) {
+    webhook = await write(`/webhook/${encodeURIComponent(webhook.id)}`, "PATCH", {
+      status: "active", enabledEvents: slashCardWebhookEvents
+    });
+  }
+  if (webhook.url !== webhookUrl || webhook.status !== "active"
+    || !slashCardWebhookEvents.every((event) => webhook.enabledEvents?.includes(event))) {
+    throw new Error("Slash card alert webhook configuration could not be verified");
+  }
+  return webhook;
+}
+
 /** Actual card declines, excluding cancellations, reversals and generic failures. */
 export async function fetchSlashRejectedCardActivity({ baseUrl, apiKey, legalEntityId, fromTime, toTime, fetcher = fetch }: {
   baseUrl: string; apiKey: string; legalEntityId: string; fromTime: number; toTime: number; fetcher?: typeof fetch;

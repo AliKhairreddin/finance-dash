@@ -25,6 +25,8 @@ test("durable job freezes reports once, deduplicates starts, and retries only re
   const stored = new Map<string, unknown>();
   let alarm: number | Date | null = null;
   const storage = { get: async <T>(key: string) => structuredClone(stored.get(key)) as T | undefined,
+    list: async <T>(options?: { prefix?: string; limit?: number }) => new Map([...stored].filter(([key]) => key.startsWith(options?.prefix ?? "")).slice(0, options?.limit).map(([key, value]) => [key, structuredClone(value) as T])),
+    transaction: async <T>(run: (state: DurableObjectTransaction) => Promise<T>): Promise<T> => run(storage),
     put: async <T>(key: string, value: T) => { stored.set(key, structuredClone(value)); }, delete: async (key: string) => stored.delete(key),
     setAlarm: async (value: number | Date) => { alarm = value; }, deleteAlarm: async () => { alarm = null; } };
   let renders = 0;

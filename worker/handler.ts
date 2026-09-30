@@ -9,6 +9,7 @@ import { buildTelegramSlashReport } from "./telegramSlashReport";
 import { buildTelegramSlashCashbackReport } from "./telegramSlashCashbackReport";
 import { slashPreviousDayReportPeriod } from "./telegramSlashDailyPeriod";
 import { buildTelegramSlashRejectedCardsReport } from "./telegramSlashRejectedCardsReport";
+import { handleSlashCardWebhook } from "./slashCardWebhook";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
@@ -8757,6 +8758,19 @@ export default {
     env: Env,
     executionContext?: ExecutionContext
   ): Promise<Response> {
+    if (new URL(request.url).pathname === "/api/slash/card-events") return handleSlashCardWebhook(request, env);
+    if (new URL(request.url).pathname === "/api/internal/slash/card-alerts") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      if (request.method !== "POST" && request.method !== "GET") return json({ message: "Method not allowed" }, { status: 405 });
+      try {
+        const state = env.SLASH_CARD_ALERTS.getByName("webhook-registration");
+        return json(request.method === "POST" ? await state.configureWebhook() : await state.webhookStatus());
+      }
+      catch (error) {
+        console.error(JSON.stringify({ event: "slash_card_webhook_configuration_failed", error: error instanceof Error ? error.message : "Configuration failed" }));
+        return json({ message: error instanceof Error ? error.message : "Slash card webhook configuration failed" }, { status: 502 });
+      }
+    }
     if (new URL(request.url).pathname === "/api/telegram/webhook") {
       if (request.method !== "POST" || !await secureHeaderMatches(request.headers.get("X-Telegram-Bot-Api-Secret-Token"), await telegramWebhookSecret(env))) return json({ message: "Unauthorized" }, { status: 401 });
       if (Number(request.headers.get("Content-Length")) > 1024 * 1024) return json({ message: "Update too large" }, { status: 413 });

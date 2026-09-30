@@ -59,7 +59,10 @@ function main(): void {
   if (mode === "all" || mode === "cloudflare") run("npm", ["run", "build"], env);
   if (mode === "all" || mode === "convex") run("npx", ["convex", "deploy", "--env-file", ".env.production"], env);
   if (mode !== "convex") verify(env);
-  if (mode === "all" || mode === "cloudflare") run("npx", ["wrangler", "deploy"], env);
+  if (mode === "all" || mode === "cloudflare") {
+    run("npx", ["wrangler", "deploy"], env);
+    run("npm", ["run", "slash:configure:card-alerts"], env);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();

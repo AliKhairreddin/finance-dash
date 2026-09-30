@@ -31,12 +31,16 @@ interface BrowserRun {
 	): Promise<Response>;
 }
 
-interface DurableObjectStorage {
+interface DurableObjectTransaction {
 	get<T>(key: string): Promise<T | undefined>;
+	list<T>(options?: { prefix?: string; limit?: number; startAfter?: string }): Promise<Map<string, T>>;
 	put<T>(key: string, value: T): Promise<void>;
 	delete(key: string): Promise<boolean>;
 	setAlarm(scheduledTime: number | Date): Promise<void>;
 	deleteAlarm(): Promise<void>;
+}
+interface DurableObjectStorage extends DurableObjectTransaction {
+	transaction<T>(closure: (storage: DurableObjectTransaction) => Promise<T>): Promise<T>;
 }
 
 interface DurableObjectState {
@@ -79,6 +83,7 @@ interface ExportedHandler<Env> {
 	scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
 }
 interface __BaseEnv_WorkerEnv {
+  SLASH_CARD_ALERTS: DurableObjectNamespace<import("./worker/index").SlashCardAlerts>;
   PARTNER_UPDATES: DurableObjectNamespace<import("./worker/index").PartnerUpdates>;
   DOCUMENT_AI_MODEL: string;
   TELEGRAM_INBOX: DurableObjectNamespace<import("./worker/index").TelegramInbox>;
@@ -162,7 +167,7 @@ interface __BaseEnv_WorkerEnv {
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./worker/index");
-		durableNamespaces: "PartnerUpdates" | "TelegramInbox" | "TelegramOtpState";
+		durableNamespaces: "PartnerUpdates" | "TelegramInbox" | "TelegramOtpState" | "SlashCardAlerts";
 	}
 	interface Env extends __BaseEnv_WorkerEnv {}
 }
