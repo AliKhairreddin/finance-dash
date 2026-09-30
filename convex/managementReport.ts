@@ -64,6 +64,15 @@ function requireImportToken(importToken: string): void {
   if (!expected || importToken !== expected) throw new ConvexError({ code: "UNAUTHORIZED_IMPORT" });
 }
 
+export const generateImportUploadUrl = mutation({
+  args: { importToken: v.string() },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    requireImportToken(args.importToken);
+    return ctx.storage.generateUploadUrl();
+  }
+});
+
 function leaseExpiry(): string {
   return new Date(Date.now() + importLeaseMs).toISOString();
 }

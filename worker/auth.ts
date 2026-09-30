@@ -32,6 +32,7 @@ type AuthEnv = Pick<
   | "TELEGRAM_PASSWORDLESS_USERS_JSON"
 > & {
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
+  DASHBOARD_FINANCE_OPERATOR_USERS?: string;
 };
 
 interface TelegramAuthConfig {
@@ -833,7 +834,9 @@ export async function getDashboardSession(
   if (!user) return null;
   return {
     username: user.username,
-    role: config.transactionReviewerUsernames.has(normalizedUsername)
+    role: env.DASHBOARD_FINANCE_OPERATOR_USERS?.split(",").some((username) => normalizeFinanceUsername(username) === normalizedUsername)
+      ? "finance-operator"
+      : config.transactionReviewerUsernames.has(normalizedUsername)
       ? "transaction-reviewer"
       : "administrator"
   };

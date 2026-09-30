@@ -17,10 +17,11 @@ import {
   Search,
   ShieldCheck,
   TriangleAlert,
+  Upload,
   X
 } from "lucide-react";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +46,45 @@ interface ManagementReportViewProps {
 
 interface ManagementReportApiResponse {
   dashboard: ManagementReportDashboard | null;
+}
+
+function ManagementReportUpload({ apiBase, onImported }: { apiBase: string; onImported: () => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  async function upload(file: File) {
+    setError("");
+    if (!file.name.toLowerCase().endsWith(".xlsx") || file.size > 10 * 1024 * 1024 || !file.size) {
+      setError("Choose a nonempty .xlsx workbook up to 10 MB.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const response = await fetch(`${apiBase}/management-report/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "X-File-Name": encodeURIComponent(file.name) },
+        body: file
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { message?: string } | null;
+        throw new Error(body?.message || "Management report upload failed");
+      }
+      onImported();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Management report upload failed");
+    } finally { setUploading(false); }
+  }
+  return <div className="management-report-upload">
+    <input ref={input} type="file" accept=".xlsx" hidden aria-label="Management report workbook" onChange={event => {
+      const file = event.target.files?.[0]; event.target.value = "";
+      if (file) void upload(file);
+    }} />
+    <Button type="button" variant="outline" disabled={uploading} onClick={() => input.current?.click()} title="Upload a management report .xlsx workbook (up to 10 MB)">
+      {uploading ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <Upload size={15} aria-hidden="true" />}
+      {uploading ? "Importing workbook…" : "Upload report"}
+    </Button>
+    {error && <p className="inline-error" role="alert">{error}</p>}
+  </div>;
 }
 
 type PerformanceDimension = "team" | "offer" | "platform";
@@ -982,6 +1022,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [requestVersion, setRequestVersion] = useState(0);
+  const uploadControl = <ManagementReportUpload apiBase={apiBase} onImported={() => setRequestVersion(version => version + 1)} />;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1028,7 +1069,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
   if (error) {
     return (
       <section className="management-report-state error" role="alert">
-        <div className="management-report-state-content"><span className="management-report-state-icon"><AlertCircle size={22} aria-hidden="true" /></span><h2>Management report unavailable</h2><p>{error}</p><Button type="button" variant="outline" onClick={() => setRequestVersion((version) => version + 1)}><RefreshCw size={15} aria-hidden="true" /> Try again</Button></div>
+        <div className="management-report-state-content"><span className="management-report-state-icon"><AlertCircle size={22} aria-hidden="true" /></span><h2>Management report unavailable</h2><p>{error}</p><Button type="button" variant="outline" onClick={() => setRequestVersion((version) => version + 1)}><RefreshCw size={15} aria-hidden="true" /> Try again</Button>{uploadControl}</div>
       </section>
     );
   }
@@ -1036,7 +1077,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
   if (!dashboard) {
     return (
       <section className="management-report-state">
-        <div className="management-report-state-content"><span className="management-report-state-icon"><FileSpreadsheet size={22} aria-hidden="true" /></span><h2>No management report imported</h2><p>Upload the management workbook through the import process to create the first reporting snapshot.</p></div>
+        <div className="management-report-state-content"><span className="management-report-state-icon"><FileSpreadsheet size={22} aria-hidden="true" /></span><h2>No management report imported</h2>{uploadControl}</div>
       </section>
     );
   }
@@ -1050,6 +1091,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
           <h2>Management report</h2>
         </div>
         <div className={`management-report-page-controls ${section === "summary" ? "with-period" : ""}`}>
+          {uploadControl}
           <label className="management-report-field management-report-view-field">View
             <NativeSelect value={section} onValueChange={(value) => setSection(value as ManagementReportSection)}>
               <NativeSelectOption value="summary">Summary</NativeSelectOption>

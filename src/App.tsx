@@ -220,6 +220,7 @@ import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
+import { dashboardPageAllowed } from "../shared/dashboardAccess";
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
 import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
@@ -668,10 +669,14 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null);
   const [session, setSession] = useState<DashboardSession | null>(null);
   const [transactionReview, setTransactionReview] = useState<TransactionReviewBootstrap | null>(null);
-  const [activeTab, setActiveTab] = useUrlState<ActiveTab>("page", "overview", {
+  const [requestedTab, setActiveTab] = useUrlState<ActiveTab>("page", "overview", {
     allowedValues: activeTabs,
     history: "push"
   });
+  const activeTab = session && !dashboardPageAllowed(session.role, requestedTab) ? "banks" : requestedTab;
+  useEffect(() => {
+    if (session && !dashboardPageAllowed(session.role, requestedTab)) setActiveTab("banks");
+  }, [session, requestedTab, setActiveTab]);
   const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
   });
@@ -1016,7 +1021,7 @@ function App() {
   }, [analyticsDataRevision, dashboard?.asOf, ensureAnalyticsSnapshot]);
 
   useEffect(() => {
-    if (session?.role !== "administrator" || !["expenses", "invoices", "documents", "cash-flow-invoices"].includes(activeTab)) return;
+    if (!session || session.role === "transaction-reviewer" || !["expenses", "invoices", "documents", "cash-flow-invoices"].includes(activeTab)) return;
     let pending = false;
     const refresh = async () => {
       if (pending || document.visibilityState !== "visible") return;
@@ -2133,7 +2138,7 @@ function App() {
     );
   }
 
-  if (!dashboard) {
+  if (!dashboard || !session) {
     return (
       <main className="loading-screen" role="alert" aria-live="assertive">
         <div className="floating-theme-toggle">
@@ -2183,6 +2188,7 @@ function App() {
     <main className="app-shell">
       <Sidebar
         activeTab={activeTab}
+        role={session.role}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
@@ -2939,6 +2945,7 @@ function SidebarActions({
 
 function Sidebar({
   activeTab,
+  role,
   incomeAutomationUnreadCount,
   themeMode,
   onToggleTheme,
@@ -2946,6 +2953,7 @@ function Sidebar({
   isSyncing
 }: {
   activeTab: ActiveTab;
+  role: DashboardSession["role"];
   incomeAutomationUnreadCount: number;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
@@ -3015,6 +3023,7 @@ function Sidebar({
   }
 
   function navigationLink(item: SidebarItem, nested = false, mobile = false) {
+    if (!dashboardPageAllowed(role, item.id)) return null;
     const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : 0;
     return (
       <UrlStateLink
@@ -3064,14 +3073,14 @@ function Sidebar({
               {primaryItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label">Accounting</div>
               {accountingItems.map((item) => navigationLink(item, false, true))}
-              <div className="mobile-nav-group-label">Cash Flow</div>
+              {role === "administrator" && <div className="mobile-nav-group-label">Cash Flow</div>}
               {cashFlowItems.map((item) => navigationLink(item, false, true))}
               <div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
               </div>
               {operationsItems.map((item) => navigationLink(item, false, true))}
-              <div className="mobile-nav-group-label">Workspace</div>
+              {role === "administrator" && <div className="mobile-nav-group-label">Workspace</div>}
               {workspaceItems.map((item) => navigationLink(item, false, true))}
             </div>
           )}
@@ -3100,10 +3109,10 @@ function Sidebar({
         <div className="sidebar-income-group">
           {accountingItems.map((item) => navigationLink(item, true))}
         </div>
-        <div className="sidebar-section-label">Cash Flow</div>
+        {role === "administrator" && <><div className="sidebar-section-label">Cash Flow</div>
         <div className="sidebar-income-group">
           {cashFlowItems.map((item) => navigationLink(item, true))}
-        </div>
+        </div></>}
         <div className="sidebar-section-label has-badge">
           <span>Operations</span>
           <span className="sidebar-beta-badge">Beta</span>
@@ -3111,10 +3120,10 @@ function Sidebar({
         <div className="sidebar-income-group">
           {operationsItems.map((item) => navigationLink(item, true))}
         </div>
-        <div className="sidebar-section-label">Workspace</div>
+        {role === "administrator" && <><div className="sidebar-section-label">Workspace</div>
         <div className="sidebar-income-group">
           {workspaceItems.map((item) => navigationLink(item, true))}
-        </div>
+        </div></>}
       </nav>
       <div className="sidebar-footer">
         {activeTab === "management" && <p>Live operations · report imported separately</p>}

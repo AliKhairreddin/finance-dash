@@ -44,7 +44,7 @@ export type CurrencyTotals = Record<string, number>;
 
 export type SlashAccountSubtype = "cash" | "credit";
 
-export type DashboardAccessRole = "administrator" | "transaction-reviewer";
+export type DashboardAccessRole = "administrator" | "finance-operator" | "transaction-reviewer";
 
 export interface DashboardSession {
   username: string;

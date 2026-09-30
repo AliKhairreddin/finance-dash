@@ -159,6 +159,25 @@ test("transaction reviewer API access is limited to review reads and manual over
   }
 });
 
+test("Meet's existing authenticated login gains finance operator access without promoting other reviewers", async () => {
+  const token = await createAuthSessionToken(testSessionSecret, "finance.example", "meet");
+  const env = {
+    ...(telegramEnv() as unknown as Record<string, unknown>),
+    TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "7070707070", Reviewer: "8080808080" }),
+    DASHBOARD_FINANCE_OPERATOR_USERS: "  MEET "
+  } as never;
+  for (const [subject, role] of [["meet", "finance-operator"], ["reviewer", "transaction-reviewer"], ["ali", "administrator"]]) {
+    const sessionToken = subject === "meet" ? token : await createAuthSessionToken(testSessionSecret, "finance.example", subject);
+    const request = new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${sessionToken}` } });
+    assert.equal((await getDashboardSession(request, env))?.role, role);
+    assert.equal(await enforceSiteAuthentication(request, env), null);
+  }
+  const unknownToken = await createAuthSessionToken(testSessionSecret, "finance.example", "unknown");
+  assert.equal(await getDashboardSession(new Request("https://finance.example/api/session", {
+    headers: { Cookie: `__Host-finance_session=${unknownToken}` }
+  }), { ...env as object, DASHBOARD_FINANCE_OPERATOR_USERS: "Unknown" } as never), null);
+});
+
 test("authentication fails closed when Telegram secrets are missing or malformed", async () => {
   const pageResponse = await enforceSiteAuthentication(new Request("https://finance.example/"), {} as never);
   assert.equal(pageResponse?.status, 503);

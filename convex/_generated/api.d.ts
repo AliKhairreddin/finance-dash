@@ -20,6 +20,7 @@ import type * as documentProcessing from "../documentProcessing.js";
 import type * as documentSchema from "../documentSchema.js";
 import type * as documents from "../documents.js";
 import type * as managementReport from "../managementReport.js";
+import type * as managementReportUpload from "../managementReportUpload.js";
 import type * as mediaFunding from "../mediaFunding.js";
 import type * as mediaSpend from "../mediaSpend.js";
 
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   documentSchema: typeof documentSchema;
   documents: typeof documents;
   managementReport: typeof managementReport;
+  managementReportUpload: typeof managementReportUpload;
   mediaFunding: typeof mediaFunding;
   mediaSpend: typeof mediaSpend;
 }>;

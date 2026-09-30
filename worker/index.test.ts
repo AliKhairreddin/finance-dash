@@ -119,6 +119,28 @@ function authenticatedEnv(values: Record<string, unknown>): WorkerEnv {
   return { ...workerTestAuth, ...values } as never;
 }
 
+test("Meet's expanded session reaches the four page APIs and rejects administration", async () => {
+  const env = authenticatedEnv({
+    ASSETS: { fetch: async () => new Response("asset") },
+    TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "7070707070" }),
+    DASHBOARD_FINANCE_OPERATOR_USERS: "Meet"
+  });
+  const sessionResponse = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "meet"), env);
+  assert.deepEqual(await sessionResponse.json(), { username: "Meet", role: "finance-operator" });
+  for (const path of ["/api/dashboard", "/api/transactions", "/api/documents", "/api/analytics", "/api/management-report"]) {
+    const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "meet"), env);
+    assert.notEqual(response.status, 403, path);
+    assert.notEqual(response.status, 401, path);
+  }
+  const upload = await worker.fetch(await authenticatedRequest("https://finance.example/api/management-report/upload", { method: "POST", body: "invalid workbook" }, "meet"), env);
+  assert.equal(upload.status, 503);
+  assert.deepEqual(await upload.json(), { message: "Management report imports are not configured" });
+  for (const path of ["/api/settings/ai", "/api/telegram/configure", "/api/admin/wise/reset", "/api/partner-updates"]) {
+    const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST" }, "meet"), env);
+    assert.equal(response.status, 403, path);
+  }
+});
+
 test("public app metadata reaches static assets without a session", async () => {
   const assetRequests: string[] = [];
   const env = authenticatedEnv({

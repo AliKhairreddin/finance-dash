@@ -119,7 +119,8 @@ import {
   readLocalExpenseDocument,
   saveLocalExpenseDocument
 } from "./expenseDocuments";
-import { loadManagementReportDashboard } from "./managementReportStore";
+import { loadManagementReportDashboard, saveManagementReportDashboard } from "./managementReportStore";
+import { readManagementWorkbook } from "../shared/managementReportWorkbook";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
@@ -198,6 +199,15 @@ async function rebuildLocalMediaFunding(range: MediaFundingMutationResult): Prom
 }
 
 app.use(cors());
+app.post("/api/management-report/upload", express.raw({ type: () => true, limit: "10mb" }), async (request, response, next) => {
+  try {
+    if (!Buffer.isBuffer(request.body)) throw new Error("Workbook body is required");
+    const fileName = decodeURIComponent(typeof request.headers["x-file-name"] === "string" ? request.headers["x-file-name"] : "");
+    const prepared = await readManagementWorkbook(new Uint8Array(request.body), fileName);
+    await saveManagementReportDashboard({ dashboard: prepared.dashboard });
+    response.status(201).json({ importId: prepared.importId, alreadyComplete: false });
+  } catch (error) { next(error); }
+});
 app.use("/api/amex/statements", express.raw({ type: () => true, limit: "10mb" }), async (request, response, next) => {
   try {
     const headers = new Headers(); for (const [key, value] of Object.entries(request.headers)) if (typeof value === "string") headers.set(key, value);

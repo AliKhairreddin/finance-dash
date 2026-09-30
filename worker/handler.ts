@@ -238,6 +238,8 @@ import {
   createBankAnalyticsJobIdentity
 } from "../shared/analyticsJob";
 import { transactionReviewBootstrap } from "../shared/transactionReview";
+import { financeOperatorCanAccess } from "../shared/dashboardAccess";
+import { handleManagementReportUpload } from "./managementReportUpload";
 import { buildTransactionCsv, transactionCsvFileName } from "../shared/transactionCsv";
 import {
   createAuthSessionToken,
@@ -7377,6 +7379,9 @@ async function handleApi(
     if (url.pathname === "/api/management-report" && request.method === "GET") {
       return json(await getManagementReportDashboard(env));
     }
+    if (url.pathname === "/api/management-report/upload" && request.method === "POST") {
+      return handleManagementReportUpload(request, env);
+    }
 
     if (url.pathname === "/api/expense-documents/upload" && request.method === "POST") {
       const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
@@ -8814,6 +8819,9 @@ export default {
       }
       if (session.role === "transaction-reviewer" && !transactionReviewerCanAccess(request)) {
         return json({ message: "This account can access bank transaction review only" }, { status: 403 });
+      }
+      if (session.role === "finance-operator" && !financeOperatorCanAccess(request)) {
+        return json({ message: "This account can access Banks, Documents, Analytics, and Management only" }, { status: 403 });
       }
       if (url.pathname === "/api/session" && request.method === "GET") {
         return json(session);
