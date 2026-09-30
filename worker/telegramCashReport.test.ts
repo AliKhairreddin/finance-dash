@@ -244,6 +244,7 @@ test("daily Slash delivery reaches only its three recipients at 13:00 Beirut, in
    TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
    TELEGRAM_SLASH_REPORT_RECIPIENTS: "Amin,Ali,Ali M",
    TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS: "Ali,Ali M",
+   TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS: "Ali,Ali M",
    TELEGRAM_OTP_STATE: { getByName(name: string) { names.push(name); return {
      async isCashReportDelivered() { return false; },
      async deliverCashReport(_date: string, username: string, _message: string, kind: CashReportKind) {

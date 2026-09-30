@@ -140,13 +140,14 @@ export function splitCashReport(message: string): string[] {
   return parts.length > 1 ? parts.map((text, index) => `🏦 ${index + 1}/${parts.length}\n${text}`) : parts;
 }
 
-export type CashReportKind = "weekly-cash" | "daily-slash" | "daily-slash-cashback";
-type CashReportRecipientEnv = Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_CASH_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS">;
+export type CashReportKind = "weekly-cash" | "daily-slash" | "daily-slash-cashback" | "daily-slash-rejected-cards";
+type CashReportRecipientEnv = Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_CASH_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS" | "TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS">;
 
 const reportSettings = {
   "weekly-cash": { recipients: "TELEGRAM_CASH_REPORT_RECIPIENTS", statePrefix: "telegram-cash-report", dateIfDue: cashReportDateIfDue },
   "daily-slash": { recipients: "TELEGRAM_SLASH_REPORT_RECIPIENTS", statePrefix: "telegram-slash-report", dateIfDue: slashReportDateIfDue },
-  "daily-slash-cashback": { recipients: "TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS", statePrefix: "telegram-slash-cashback-report", dateIfDue: slashReportDateIfDue }
+  "daily-slash-cashback": { recipients: "TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS", statePrefix: "telegram-slash-cashback-report", dateIfDue: slashReportDateIfDue },
+  "daily-slash-rejected-cards": { recipients: "TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS", statePrefix: "telegram-slash-rejected-cards-report", dateIfDue: slashReportDateIfDue }
 } as const;
 
 function cashReportSettings(kind: CashReportKind) {

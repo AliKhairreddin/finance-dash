@@ -1,34 +1,7 @@
 import type { SlashCard, SlashTransaction, SlashVirtualAccountBalance } from "../shared/slashApi";
+import { slashPreviousDayReportPeriod } from "./telegramSlashDailyPeriod";
 
 export const slashCashbackTargetRate = 0.023;
-const dayMs = 86_400_000;
-const dateFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Beirut", year: "numeric", month: "2-digit", day: "2-digit"
-});
-
-function localDate(timestamp: number): string {
-  return dateFormatter.format(timestamp);
-}
-
-function dayStart(date: string): number {
-  const utcMidnight = Date.parse(`${date}T00:00:00Z`);
-  let low = utcMidnight - dayMs;
-  let high = utcMidnight + dayMs;
-  // Find the first instant of the local date, including skipped/repeated midnight at DST.
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (localDate(middle) < date) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
-
-export function slashCashbackReportPeriod(asOf: number): { date: string; fromTime: number; toTime: number } {
-  if (!Number.isFinite(asOf)) throw new Error("Invalid Slash cashback report date");
-  const today = localDate(asOf);
-  const date = new Date(Date.parse(`${today}T12:00:00Z`) - dayMs).toISOString().slice(0, 10);
-  return { date, fromTime: dayStart(date), toTime: dayStart(today) };
-}
 
 interface CardCashback {
   card: SlashCard;
@@ -54,7 +27,7 @@ export function buildTelegramSlashCashbackReport(input: {
   accounts: readonly SlashVirtualAccountBalance[];
   asOf: number;
 }): string {
-  const period = slashCashbackReportPeriod(input.asOf);
+  const period = slashPreviousDayReportPeriod(input.asOf);
   const cards = new Map(input.cards.map((card) => [card.id, card]));
   const accounts = new Map(input.accounts.map((account) => [account.id, account]));
   const groups = new Map<string, CardCashback>();

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchSlashCashbackActivity, type SlashCard, type SlashTransaction, type SlashVirtualAccountBalance } from "../shared/slashApi";
-import { buildTelegramSlashCashbackReport, slashCashbackReportPeriod } from "./telegramSlashCashbackReport";
+import { buildTelegramSlashCashbackReport } from "./telegramSlashCashbackReport";
+import { slashPreviousDayReportPeriod } from "./telegramSlashDailyPeriod";
 import { cashReportDelivered, cashReportDeliveryStateKey, cashReportRecipient, deliverCashReportParts,
   sendTelegramCashReportIfDue, splitCashReport, type CashReportDeliveryState, type CashReportKind } from "./telegramCashReport";
 import worker, { getTelegramSlashCashbackReport, handleTelegramCommand } from "./handler";
@@ -19,7 +20,8 @@ const env = {
   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", Ben: "444" }),
   TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M", TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin,Ben",
   TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M", TELEGRAM_SLASH_REPORT_RECIPIENTS: "Amin,Ali,Ali M",
-  TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS: "Ali,Ali M"
+  TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS: "Ali,Ali M",
+  TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS: "Ali,Ali M"
 };
 const report = (transactions: SlashTransaction[], cards: SlashCard[] = [card]) =>
   buildTelegramSlashCashbackReport({ transactions, cards, accounts: [account], asOf });
@@ -31,8 +33,8 @@ test("cashback uses the previous Beirut calendar day, including midnight DST and
     ["2026-03-30T10:00:00Z", "2026-03-29", "2026-03-28T22:00:00Z", "2026-03-29T21:00:00Z"],
     ["2026-10-25T11:00:00Z", "2026-10-24", "2026-10-23T21:00:00Z", "2026-10-24T22:00:00Z"]
   ]) {
-    assert.deepEqual(slashCashbackReportPeriod(Date.parse(at)), { date, fromTime: Date.parse(start), toTime: Date.parse(end) });
-    assert.deepEqual(slashCashbackReportPeriod(Date.parse(at) + 60_000), slashCashbackReportPeriod(Date.parse(at)));
+    assert.deepEqual(slashPreviousDayReportPeriod(Date.parse(at)), { date, fromTime: Date.parse(start), toTime: Date.parse(end) });
+    assert.deepEqual(slashPreviousDayReportPeriod(Date.parse(at) + 60_000), slashPreviousDayReportPeriod(Date.parse(at)));
   }
 });
 
@@ -124,7 +126,7 @@ function sourceFetcher(requests: string[]): typeof fetch {
     assert.equal(headers.get("x-legal-entity"), "test-entity");
     assert.ok(!init?.method || init.method === "GET");
     if (url.pathname === "/transaction") {
-      const period = slashCashbackReportPeriod(asOf);
+      const period = slashPreviousDayReportPeriod(asOf);
       assert.equal(url.searchParams.get("filter:from_date"), String(period.fromTime));
       assert.equal(url.searchParams.get("filter:to_date"), String(period.toTime - 1));
       assert.equal(url.searchParams.get("filter:status"), "posted");
@@ -158,7 +160,7 @@ test("live report follows all transaction pages, de-duplicates, resolves card na
 });
 
 test("empty API pages are valid but repeated cursors and mismatched card identities stop the report", async () => {
-  const options = { baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID, ...slashCashbackReportPeriod(asOf) };
+  const options = { baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID, ...slashPreviousDayReportPeriod(asOf) };
   const empty = await fetchSlashCashbackActivity({ ...options, fetcher: async () => Response.json({ items: [], metadata: {} }) });
   assert.deepEqual(empty, { transactions: [], cards: [], accounts: [] });
   await assert.rejects(fetchSlashCashbackActivity({ ...options, fetcher: async () => Response.json({ items: [purchase], metadata: { nextCursor: "again" } }) }), /repeated pagination/);
@@ -241,7 +243,7 @@ test("minute cron dispatches the cashback report and repeats neither recipient o
   const deliveryEnv = { ...env, TELEGRAM_OTP_STATE: {
     getByName(name: string) {
       const stub = harness.binding.getByName(name);
-      return name.startsWith("telegram-slash-report:") ? { ...stub, async isCashReportDelivered() { return true; } } : stub;
+      return (name.startsWith("telegram-slash-report:") || name.startsWith("telegram-slash-rejected-cards-report:")) ? { ...stub, async isCashReportDelivered() { return true; } } : stub;
     }
   }, SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary", SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD: "10000", SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Ali,Ali M" };
   globalThis.fetch = sourceFetcher(requests);

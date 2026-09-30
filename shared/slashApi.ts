@@ -99,6 +99,50 @@ export interface SlashVirtualAccountBalance extends SlashVirtualAccount {
   currency: "USD";
 }
 
+export interface SlashRejectedCardTransaction extends SlashTransaction {
+  cardId: string;
+  detailedStatus: "declined";
+  declineReason?: string;
+}
+
+/** Actual card declines, excluding cancellations, reversals and generic failures. */
+export async function fetchSlashRejectedCardActivity({ baseUrl, apiKey, legalEntityId, fromTime, toTime, fetcher = fetch }: {
+  baseUrl: string; apiKey: string; legalEntityId: string; fromTime: number; toTime: number; fetcher?: typeof fetch;
+}): Promise<{ transactions: SlashRejectedCardTransaction[]; cards: SlashCard[]; accounts: SlashVirtualAccountBalance[] }> {
+  if (!Number.isSafeInteger(fromTime) || !Number.isSafeInteger(toTime) || fromTime >= toTime) {
+    throw new Error("Invalid Slash rejected cards report window");
+  }
+  const headers = slashHeaders(apiKey, legalEntityId);
+  const url = new URL("/transaction", baseUrl);
+  url.searchParams.set("filter:from_date", String(fromTime));
+  url.searchParams.set("filter:to_date", String(toTime - 1));
+  url.searchParams.set("filter:detailed_status", "declined");
+  url.searchParams.set("filter:category", "card");
+  const rows = await fetchAllSlashPages(fetcher, url, headers, (value): SlashRejectedCardTransaction | null => {
+    const payload = requiredRecord(value, "transaction");
+    const detailedStatus = requiredString(payload.detailedStatus, "transaction.detailedStatus");
+    if (detailedStatus !== "declined") return null;
+    return {
+      ...parseSlashTransaction(payload),
+      cardId: requiredString(payload.cardId, "transaction.cardId", maximumSlashProviderIdLength),
+      detailedStatus,
+      ...(payload.declineReason === undefined || payload.declineReason === null ? {} : {
+        declineReason: requiredString(payload.declineReason, "transaction.declineReason")
+      })
+    };
+  }, 50_000, maxSlashPages);
+  const transactions = [...new Map(rows.filter((row): row is SlashRejectedCardTransaction =>
+    row !== null && row.amountCents <= 0
+    && Date.parse(row.date) >= fromTime && Date.parse(row.date) < toTime
+  ).map((row) => [JSON.stringify([row.accountId, row.id]), row])).values()];
+  if (transactions.length === 0) return { transactions, cards: [], accounts: [] };
+  const [cards, accounts] = await Promise.all([
+    createSlashCardResolver(fetcher, baseUrl, headers)(transactions.map((row) => row.cardId)),
+    fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers)
+  ]);
+  return { transactions, cards: [...cards.values()], accounts };
+}
+
 /** Read the precise rolling window from Slash; ledger dates are day-only. */
 export async function fetchSlashDailyCardActivity({ baseUrl, apiKey, legalEntityId, now = Date.now(), fetcher = fetch }: {
   baseUrl: string; apiKey: string; legalEntityId: string; now?: number; fetcher?: typeof fetch;

@@ -241,6 +241,12 @@ At 13:00 `Asia/Beirut`, Ali and Ali M receive a protected Telegram report of the
 
 The target is **2.3%**. Each card with a purchase below that rate or cashback amount is listed with its name, last four digits, virtual account, spend, reported cashback, expected cashback, and shortfall. Cent rounding on individual purchases is allowed. Higher rewards on other purchases do not hide a shortfall. Missing `cashbackInfo` is labeled unconfirmed and excluded from the reported shortfall, rather than treated as zero. Pending/failed charges, refunds, repayments, and transfers are excluded. Days with no purchases or no exceptions receive an explicit summary. API or incomplete-card errors stop delivery and retry on the next minute tick; they never produce an all-clear message.
 
+### Daily Slash rejected cards
+
+At 13:00 `Asia/Beirut`, Ali and Ali M receive a Telegram report of the previous Beirut calendar day's rejected Slash card payments. `TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS` controls delivery and access to `/rejected_cards`, which runs the same report on demand. The report reads all pages directly from Slash, using `filter:detailed_status=declined` and `filter:category=card`; generic failures, cancellations, reversals, refunds and transfers are excluded. Slash's transaction `date` is the creation time for failed transactions. Zero-dollar card verification declines are included.
+
+Affected cards show their name, last four digits, virtual account, rejected payment count and attempted USD amount, followed by each merchant, Beirut time and Slash's decline reason. Missing reasons are explicitly marked. Attempted amounts are labeled as not charged. Days without declines receive an explicit summary. Delivery progress and multipart retries are isolated from cashback, funding and weekly cash reports. API, pagination or incomplete-card/account errors stop delivery and retry on the next minute tick without sending an all-clear message.
+
 ## Integration Status
 
 | Integration | Current role |
