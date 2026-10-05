@@ -67,7 +67,11 @@ export interface TelegramCommandDocumentReply {
   text?: string;
 }
 
-export type TelegramCommandReply = string | TelegramCommandDocumentReply | { messages: string[] };
+export type TelegramCommandReply = string | TelegramCommandDocumentReply | { messages: string[]; copyable?: true };
+
+function isCopyableReply(reply: TelegramCommandReply): boolean {
+  return typeof reply !== "string" && "messages" in reply && reply.copyable === true;
+}
 
 export type TelegramCommandHandler = (
   env: WorkerEnv,
@@ -574,7 +578,7 @@ export async function pollTelegramUpdates(
         : configuredUser && !role && text.startsWith("/")
           ? "You do not have Telegram command access for Finance Dash."
           : onboardingReply(update.message, users);
-      const protectContent = Boolean(configuredUser && role);
+      const protectContent = Boolean(configuredUser && role) && !isCopyableReply(reply);
       if (typeof reply === "string") {
         await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, reply, protectContent);
       } else if ("messages" in reply) {
@@ -656,5 +660,5 @@ export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdat
     await telegramApi(env, "sendChatAction", { chat_id: message.chatId, action: "typing" }).catch(() => undefined);
     reply = await dependencies.handleCommand(env, account.user, account.role, text.startsWith("/") ? text : `/ask ${text}`);
   } else reply = "Send a question, or attach a receipt or invoice as a PDF or image.";
-  return { chatId: message.chatId, protectContent: Boolean(account), reply };
+  return { chatId: message.chatId, protectContent: Boolean(account) && !isCopyableReply(reply), reply };
 }

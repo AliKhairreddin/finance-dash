@@ -33,15 +33,21 @@ const rates: FxRate[] = [
   { asset: "BTC", rateUsd: 80_000, asOf: now, provider: "coinbase", stale: false }
 ];
 
-test("cash report counts every open Slash virtual account once and values exact Revolut Bitcoin", () => {
+test("cash report groups companies and banks in the requested order, excludes crypto and counts open Slash accounts once", () => {
   const report = buildTelegramCashReport({
     asOf: now, rates,
     accounts: [
       account(),
       account({ id: "wise-eur1", currency: "EUR", balance: 50 }),
       account({ id: "wise-eur2", currency: "EUR", balance: 25 }),
+      account({ id: "wise-lmd", wiseEntity: "lmd", balance: 300 }),
+      account({ id: "revolut-main", name: "Main", source: "revolut", balance: 400 }),
+      account({ id: "revolut-wgnr", name: "WGNR", source: "revolut", balance: 50 }),
+      account({ id: "revolut-eur", source: "revolut", currency: "EUR", balance: 10 }),
       account({ id: "zero", currency: "GBP", balance: 0 }),
       account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 0.12345678 }),
+      account({ id: "eth", source: "revolut", currency: "ETH", balance: 100 }),
+      account({ id: "usdt", source: "revolut", currency: "USDT", balance: 1000 }),
       account({ id: "parent-cash", name: "Parent Cash", source: "slash", slashAccountSubtype: "cash", balance: 1200 }),
       account({ id: "parent-credit", name: "Parent Credit", source: "slash", slashAccountSubtype: "credit", balance: 500 }),
       account({ id: "amex", name: "Amex", source: "amex", balance: 900 }),
@@ -51,25 +57,43 @@ test("cash report counts every open Slash virtual account once and values exact 
       slash({ id: "reserve", name: "Reservation Account", balance: 0 }),
       slash({ id: "closed", name: "Closed", balance: 99_999, closedAt: now })]
   });
-  assert.match(report, /Total ≈ USD 11,266\.54/u);
-  assert.match(report, /BTC 0\.12345678 ≈ USD 9,876\.54/u);
-  assert.match(report, /Wise · Digital Nudge\n• EUR 75\.00\n• USD 100\.00/u);
-  assert.match(report, /Slash · Reservation Account\n• USD 0\.00/u);
-  assert.match(report, /USD 1,300\.00/u);
+  assert.match(report, /Total ≈ USD 2,152\.00/u);
+  assert.match(report, /Wise LMD\n• USD 300\.00\n\nWise DN\n• EUR 75\.00\n• USD 100\.00\n\nRevolut\n• EUR 10\.00\n• USD 450\.00\n\nSlash\n• USD 1,200\.00/u);
+  assert.match(report, /Totals by currency\n• EUR 85\.00\n• USD 2,050\.00/u);
   assert.match(report, /7:00|07:00/u);
-  assert.doesNotMatch(report, /Parent Cash|Parent Credit|Amex|Seed|Closed|stale/u);
+  assert.doesNotMatch(report, /Parent Cash|Parent Credit|Amex|Seed|Closed|stale|Bitcoin|BTC|ETH|USDT|GBP|Main|WGNR|Wagner|Reservation/u);
 });
 
 test("missing or stale quotes suppress the complete USD total and stale bank checks stay visible", () => {
   const report = buildTelegramCashReport({
-    accounts: [account({ source: "revolut", name: "Bitcoin", currency: "BTC", balance: 9.69354104, syncedAt: "2026-09-05T01:00:00Z" })],
+    accounts: [account({ source: "revolut", name: "Main", currency: "EUR", balance: 250, syncedAt: "2026-09-05T01:00:00Z" })],
     slashAccounts: [slash()], rates: rates.map((rate) => ({ ...rate, stale: true })), asOf: now
   });
-  assert.match(report, /BTC 9\.69354104 · USD value unavailable/u);
+  assert.match(report, /Revolut\n• EUR 250\.00/u);
   assert.match(report, /USD total unavailable/u);
   assert.match(report, /⚠️ stale/u);
-  assert.match(report, /No current USD quote: BTC/u);
+  assert.match(report, /No current USD quote: EUR/u);
   assert.doesNotMatch(report, /Total ≈/u);
+});
+
+test("excluded crypto cannot require a quote or mark cash stale, and zero bank groups stay visible", () => {
+  const report = buildTelegramCashReport({
+    accounts: [account({ wiseEntity: "lmd", balance: 0 }), account({ balance: 0 }),
+      account({ source: "revolut", balance: 0 }),
+      account({ source: "revolut", currency: "btc", balance: 10, syncedAt: "invalid" })],
+    slashAccounts: [slash({ balance: 0 })], rates: [], asOf: now
+  });
+  assert.match(report, /Total ≈ USD 0\.00/u);
+  for (const group of ["Wise LMD", "Wise DN", "Revolut", "Slash"]) {
+    assert.ok(report.includes(`${group}\n• USD 0.00`));
+  }
+  assert.doesNotMatch(report, /BTC|Bitcoin|stale|unavailable|FX:/u);
+});
+
+test("Wise cash without an identified company cannot silently be assigned to another company", () => {
+  assert.throws(() => buildTelegramCashReport({
+    accounts: [account({ wiseEntity: undefined })], slashAccounts: [], rates: [], asOf: now
+  }), /Wise balance company is unavailable/u);
 });
 
 test("duplicate Slash virtual accounts cannot inflate a cash report", () => {
@@ -191,7 +215,7 @@ test("an unmapped recipient does not prevent delivery to the other authorized re
   assert.equal(sent, 1);
 });
 
-test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes without dashboard mutations", async () => {
+test("/cash returns a copyable report using all live Slash pages and only fiat quotes without mutations", async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
   const env = {
@@ -208,7 +232,9 @@ test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes 
     if (url.pathname === "/api/query") {
       const body = JSON.parse(String(init?.body));
       assert.equal(body.path, "banking:getCashReportAccounts");
-      return Response.json({ status: "success", value: [account(), account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 2 })] });
+      return Response.json({ status: "success", value: [account(),
+        account({ id: "eur", source: "revolut", currency: "EUR", balance: 100 }),
+        account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 2 })] });
     }
     if (url.pathname === "/virtual-account") {
       const headers = new Headers(init?.headers);
@@ -219,15 +245,19 @@ test("/cash reads saved balances, all live Slash pages and fresh Bitcoin quotes 
         balance: { amountCents: second ? 20000 : 100000 }
       }], metadata: second ? { count: 1 } : { count: 1, nextCursor: "page2" } });
     }
-    if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "80000", currency: "USD", base: "BTC" } });
+    if (url.pathname === "/v2/prices/EUR-USD/spot") return Response.json({ data: { amount: "1.2", currency: "USD", base: "EUR" } });
     throw new Error(`Unexpected request: ${url.pathname}`);
   };
   try {
     const reply = await handleTelegramCommand(env as never, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/cash");
-    assert.equal(typeof reply, "string");
-    assert.match(String(reply), /Total ≈ USD 161,300\.00/u);
-    assert.match(String(reply), /BTC 2\.00000000 ≈ USD 160,000\.00/u);
-    assert.match(String(reply), /Slash · Wagner/u);
+    assert.ok(typeof reply !== "string" && "messages" in reply);
+    assert.equal(reply.copyable, true);
+    assert.equal(reply.messages.length, 1);
+    assert.match(reply.messages[0], /Total ≈ USD 1,420\.00/u);
+    assert.match(reply.messages[0], /Slash\n• USD 1,200\.00/u);
+    assert.doesNotMatch(reply.messages[0], /BTC|Bitcoin|Wagner/u);
+    assert.ok(requests.includes("/v2/prices/EUR-USD/spot"));
+    assert.ok(!requests.some((path) => path.includes("BTC")));
     assert.equal(requests.filter((path) => path === "/virtual-account").length, 2);
     assert.equal(requests.includes("/api/mutation"), false);
     globalThis.fetch = async () => { throw new Error("Source unavailable"); };

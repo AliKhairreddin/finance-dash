@@ -272,7 +272,7 @@ import {
   slashVirtualAccountBalanceObservations,
   type TelegramAlertSettings
 } from "./telegramAlerts";
-import { buildTelegramCashReport, cashReportRecipient, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
+import { buildTelegramCashReport, cashReportRecipient, isCashReportAccount, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -4061,8 +4061,10 @@ export async function getTelegramCashReport(env: Env): Promise<string> {
       throw new ApiError(503, `${source} bank balances are unavailable; cash report cannot be totaled`);
     }
   }
-  const assets = accounts.filter((account) => account.balance !== 0 && account.status === "live")
-    .map((account) => account.currency);
+  const assets = [
+    ...accounts.filter(isCashReportAccount),
+    ...slashAccounts.filter((account) => !account.closedAt)
+  ].filter((account) => account.balance !== 0).map((account) => account.currency);
   let rates: FxRate[];
   try {
     rates = await fetchCoinbaseUsdRates(env, assets);
@@ -8053,7 +8055,7 @@ async function telegramReadCommand(
   }
   if (command === "cash") {
     const messages = splitCashReport(await getTelegramCashReport(env));
-    return messages.length === 1 ? messages[0] : { messages };
+    return { messages, copyable: true };
   }
   if (command === "menu") return telegramMenu(role);
   if (command === "help") {

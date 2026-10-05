@@ -7,6 +7,8 @@ import {
   formatTelegramTimestamp,
   parseTelegramAuthUsers,
   pollTelegramUpdates,
+  prepareTelegramReply,
+  telegramUpdate as parseTelegramUpdate,
   sendTelegramMessage
 } from "./telegram";
 import { financeTelegramCommands, readOnlyFinanceTelegramCommands } from "./telegramCommandCatalog";
@@ -41,18 +43,32 @@ function telegramUpdate(
   };
 }
 
-test("multipart cash replies send every part to the authorized private chat with content protection", async () => {
+test("multipart cash replies let the authorized recipient copy every part", async () => {
   const sent: Array<{ chatId: string; message: string; protected: boolean | undefined }> = [];
   const result = await pollTelegramUpdates(baseEnv, 1, {
     async getUpdates() { return [telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")]; },
-    async handleCommand() { return { messages: ["First cash report part", "Remaining balances"] }; },
+    async handleCommand() { return { messages: ["First cash report part", "Remaining balances"], copyable: true }; },
     async sendMessage(_env, chatId, message, protectContent) { sent.push({ chatId, message, protected: protectContent }); }
   });
   assert.equal(result.nextOffset, 2);
   assert.deepEqual(sent, [
-    { chatId: "5518715264", message: "First cash report part", protected: true },
-    { chatId: "5518715264", message: "Remaining balances", protected: true }
+    { chatId: "5518715264", message: "First cash report part", protected: false },
+    { chatId: "5518715264", message: "Remaining balances", protected: false }
   ]);
+});
+
+test("webhook cash replies retain copy permission while other replies stay protected", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ ok: true, result: true });
+  try {
+    for (const copyable of [true, false]) {
+      const prepared = await prepareTelegramReply(baseEnv, parseTelegramUpdate(telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")), {
+        async handleCommand() { return copyable ? { messages: ["Cash report"], copyable: true } : { messages: ["Other report"] }; },
+        async handleAttachment() { throw new Error("Unexpected attachment"); }
+      });
+      assert.equal(prepared?.protectContent, !copyable);
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Telegram user mappings normalize login names, including internal spaces", () => {
@@ -204,6 +220,8 @@ test("Telegram messages disable link previews and reject invalid message lengths
     await sendTelegramMessage(baseEnv, "5518715264", "🔗 Finance Dash\n\nhttps://finance.example", true);
     assert.deepEqual(payloads[0]?.link_preview_options, { is_disabled: true });
     assert.equal(payloads[0]?.protect_content, true);
+    await sendTelegramMessage(baseEnv, "5518715264", "Cash report", false);
+    assert.equal(payloads[1]?.protect_content, undefined);
     await assert.rejects(
       () => sendTelegramMessage(baseEnv, "5518715264", "x".repeat(4_097)),
       /message was invalid/

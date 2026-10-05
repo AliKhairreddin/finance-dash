@@ -73,7 +73,7 @@ async function configurationFingerprints(
     crypto.subtle.digest(
       "SHA-256",
       textEncoder.encode([
-        "finance-telegram-webhook.v6-rejected-cards",
+        "finance-telegram-webhook.v7-cash-groups",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
         env.TELEGRAM_COMMAND_ADMIN_USERS,
@@ -272,7 +272,7 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
     return this.serialize(async () => {
       const recipient = cashReportRecipient(this.env, username, kind);
       return deliverCashReportParts(this.ctx.storage, date, message, (part) =>
-        sendTelegramMessage(this.env, recipient.chatId, part, true)
+        sendTelegramMessage(this.env, recipient.chatId, part, kind !== "weekly-cash")
       );
     });
   }

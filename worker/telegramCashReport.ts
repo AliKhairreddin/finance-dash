@@ -8,8 +8,14 @@ export const cashReportTimezone = "Asia/Beirut";
 export const cashReportDeliveryStateKey = "cash-report-delivery";
 const maximumMessageLength = 3_800;
 const staleBalanceMs = 15 * 60_000;
+const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 
 export type CashReportAccount = AccountBalance & { syncedAt: string };
+
+export function isCashReportAccount(account: CashReportAccount): boolean {
+  return (account.source === "wise" || account.source === "revolut")
+    && account.status === "live" && cashCurrencies.has(account.currency.toUpperCase());
+}
 
 export function cashReportDateIfDue(timestamp: number): string | null {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -31,14 +37,9 @@ function timestampLabel(timestamp: string): string {
 
 function amountLabel(value: number, currency: string): string {
   return `${currency} ${value.toLocaleString("en-US", {
-    minimumFractionDigits: currency === "BTC" ? 8 : 2,
-    maximumFractionDigits: currency === "BTC" ? 8 : 2
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   })}`;
-}
-
-function compactName(name: string): string {
-  const clean = name.trim().replace(/\s+/gu, " ");
-  return clean.length > 100 ? `${clean.slice(0, 99)}…` : clean;
 }
 
 export function buildTelegramCashReport(input: {
@@ -48,9 +49,7 @@ export function buildTelegramCashReport(input: {
   asOf: string;
 }): string {
   // Slash virtual accounts partition its funds. Never add its parent cash/credit rows again.
-  const bankAccounts = input.accounts.filter((account) =>
-    (account.source === "wise" || account.source === "revolut") && account.status === "live"
-  );
+  const bankAccounts = input.accounts.filter(isCashReportAccount);
   const slashAccounts = input.slashAccounts.filter((account) => !account.closedAt);
   if (new Set(slashAccounts.map((account) => account.id)).size !== slashAccounts.length) {
     throw new Error("Slash returned duplicate virtual accounts; cash report could not be totaled");
@@ -59,9 +58,8 @@ export function buildTelegramCashReport(input: {
     !rate.stale && Number.isFinite(rate.rateUsd) && rate.rateUsd > 0
   ).map((rate) => [rate.asset.toUpperCase(), rate]));
   const totals = new Map<string, number>();
-  const groups = new Map<string, Map<string, number>>();
+  const groups = new Map(["Wise LMD", "Wise DN", "Revolut", "Slash"].map((name) => [name, new Map<string, number>()]));
   const syncTimes = new Map<string, string>();
-  let omittedZeroAccounts = 0;
   const add = (group: string, currency: string, balance: number) => {
     if (!Number.isFinite(balance)) throw new Error("Invalid bank balance");
     const asset = currency.toUpperCase();
@@ -75,37 +73,38 @@ export function buildTelegramCashReport(input: {
     if (!Number.isFinite(Date.parse(account.syncedAt))) throw new Error(`${bank} balance timestamp is unavailable`);
     const previous = syncTimes.get(bank);
     if (!previous || account.syncedAt < previous) syncTimes.set(bank, account.syncedAt);
-    if (account.balance === 0) { omittedZeroAccounts += 1; continue; }
-    const name = account.source === "wise"
-      ? account.wiseEntity === "dn" ? "Digital Nudge" : account.wiseEntity === "lmd" ? "LOVEMEDO" : account.name
-      : account.name;
-    add(`${bank} · ${compactName(name)}`, account.currency, account.balance);
+    if (account.source === "wise" && account.wiseEntity !== "dn" && account.wiseEntity !== "lmd") {
+      throw new Error("Wise balance company is unavailable; cash report could not be grouped");
+    }
+    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : "Revolut";
+    add(group, account.currency, account.balance);
   }
-  for (const account of slashAccounts) add(`Slash · ${compactName(account.name)}`, account.currency, account.balance);
+  for (const account of slashAccounts) add("Slash", account.currency, account.balance);
   const missing = [...totals].filter(([asset, balance]) => balance !== 0 && asset !== "USD" && !rates.has(asset))
     .map(([asset]) => asset).sort();
   const totalUsd = [...totals].reduce((total, [asset, balance]) =>
     total + balance * (asset === "USD" ? 1 : rates.get(asset)?.rateUsd ?? 0), 0
   );
   const lines = [
-    "🏦 Bank balances + Bitcoin",
+    "🏦 Bank balances",
     `${timestampLabel(input.asOf)} · Beirut`,
     "",
     missing.length === 0 ? `Total ≈ ${amountLabel(totalUsd, "USD")}` : "USD total unavailable — missing exchange rates",
     ""
   ];
-  for (const [group, balances] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [group, balances] of groups) {
+    if (balances.size === 0) continue;
     lines.push(group);
+    const hasBalance = [...balances.values()].some((balance) => balance !== 0);
     for (const [asset, balance] of [...balances].sort(([a], [b]) => a.localeCompare(b))) {
-      const quote = rates.get(asset);
-      lines.push(`• ${amountLabel(balance, asset)}${asset === "BTC"
-        ? quote ? ` ≈ ${amountLabel(balance * quote.rateUsd, "USD")}` : " · USD value unavailable"
-        : ""}`);
+      if (balance === 0 && hasBalance) continue;
+      lines.push(`• ${amountLabel(balance, asset)}`);
     }
     lines.push("");
   }
   lines.push("Totals by currency");
   for (const [asset, balance] of [...totals].sort(([a], [b]) => a.localeCompare(b))) {
+    if (balance === 0) continue;
     lines.push(`• ${amountLabel(balance, asset)}`);
   }
   lines.push("", "Balances checked (Beirut)");
@@ -119,9 +118,8 @@ export function buildTelegramCashReport(input: {
     .flatMap(([asset]) => rates.has(asset) ? [rates.get(asset)!] : []);
   if (usedQuotes.length > 0) {
     const oldestQuote = usedQuotes.map((rate) => rate.asOf).sort()[0];
-    lines.push(`FX/BTC: ${timestampLabel(oldestQuote)} · Coinbase`);
+    lines.push(`FX: ${timestampLabel(oldestQuote)} · Coinbase`);
   }
-  if (omittedZeroAccounts > 0) lines.push(`${omittedZeroAccounts} zero-balance currency accounts omitted.`);
   return lines.join("\n");
 }
 
