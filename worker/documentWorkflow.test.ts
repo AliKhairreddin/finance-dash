@@ -8,6 +8,14 @@ type Row = Record<string, any>;
 function database(initial: Record<string, Row[]> = {}) {
   const tables = new Map(Object.entries(initial)); let counter = 0;
   const scheduled: unknown[] = [], deletedFiles: string[] = [];
+  const io = { ledgerReads: 0, ledgerWrites: 0, ledgerReadBytes: 0, ledgerWriteBytes: 0 };
+  const read = (table: string, row: Row | null) => {
+    if (table === "dashboardState" && row) {
+      io.ledgerReads++;
+      io.ledgerReadBytes += Buffer.byteLength(JSON.stringify(row));
+    }
+    return structuredClone(row);
+  };
   const ctx = {
     db: {
       query(table: string) {
@@ -18,11 +26,18 @@ function database(initial: Record<string, Row[]> = {}) {
             const fieldValue = (row: Row, field: string): any => field.split(".").reduce<any>((value, part) => value?.[part], row);
             const q = { eq(field: string, value: unknown) { conditions.push(row => fieldValue(row, field) === value); return q; }, gte(field: string, value: number) { conditions.push(row => fieldValue(row, field) >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => fieldValue(row, field) <= value); return q; } };
             select?.(q); rows = rows.filter(row => conditions.every(check => check(row))); return builder;
-          }, async first() { return rows[0] ?? null; }, async unique() { assert.ok(rows.length <= 1); return rows[0] ?? null; }, async take(count: number) { return rows.slice(0, count); }
+          }, async first() { return read(table, rows[0] ?? null); }, async unique() { assert.ok(rows.length <= 1); return read(table, rows[0] ?? null); }, async take(count: number) { return rows.slice(0, count).map(row => read(table, row)); }
         }; return builder;
       },
-      async get(id: string): Promise<Row> { const row = [...tables.values()].flat().find(row => row._id === id); if (!row) return null as unknown as Row; return row; },
-      async patch(id: string, patch: Row) { const row = await ctx.db.get(id); assert.ok(row, id); Object.assign(row, patch); },
+      async get(id: string): Promise<Row> { for (const [table, rows] of tables) { const row = rows.find(row => row._id === id); if (row) return read(table, row)!; } return null as unknown as Row; },
+      async patch(id: string, patch: Row) {
+        const row = [...tables.values()].flat().find(row => row._id === id); assert.ok(row, id);
+        Object.assign(row, structuredClone(patch));
+        if ((tables.get("dashboardState") ?? []).includes(row)) {
+          io.ledgerWrites++;
+          io.ledgerWriteBytes += Buffer.byteLength(JSON.stringify(row));
+        }
+      },
       async insert(table: string, value: Row) { const row = { _id: `${table}:${++counter}`, _creationTime: Date.now(), ...value }; tables.set(table, [...(tables.get(table) ?? []), row]); return row._id; },
       async delete(id: string) { for (const [table, rows] of tables) tables.set(table, rows.filter(row => row._id !== id)); },
       system: { async get(id: string) { return { _id: id, size: 100, sha256: "a".repeat(64) }; } }
@@ -31,7 +46,7 @@ function database(initial: Record<string, Row[]> = {}) {
     scheduler: { async runAfter(...args: unknown[]) { scheduled.push(args); } }
   };
   const run = (fn: unknown, args: Row) => (fn as { _handler: (ctx: unknown, args: Row) => Promise<any> })._handler(ctx, args);
-  return { ctx, tables, scheduled, deletedFiles, run };
+  return { ctx, tables, scheduled, deletedFiles, run, io, resetIo() { for (const key of Object.keys(io) as Array<keyof typeof io>) io[key] = 0; } };
 }
 const extraction: DocumentExtraction = { kind: "expense", entity: "dn", counterparty: "Acme", documentNumber: "ACME-101", amount: 20, currency: "USD", issueDate: "2026-08-15", dueDate: null, description: "Software", confidence: 0.99, reviewReasons: [] };
 const state = () => ({ _id: "state", key: "default", updatedAt: "2026-09-01T00:00:00Z", invoices: [], expenses: [], providers: [], paymentAllocations: [] });
@@ -56,7 +71,7 @@ test("ambiguous transactions remain unmatched until an explicit selection", asyn
 });
 test("document arrival attaches to an existing invoice's bank match without creating another invoice", async () => {
   const db = setup([{ ...tx("tx-1"), direction: "in", matchedInvoiceId: "invoice-1" }]);
-  (await db.ctx.db.get("state")).invoices = [{ id: "invoice-1", invoiceNumber: "ACME-101", customerName: "Acme", currency: "USD", amount: 20, entity: "dn", transactionId: "tx-1", status: "open" }];
+  await db.ctx.db.patch("state", { invoices: [{ id: "invoice-1", invoiceNumber: "ACME-101", customerName: "Acme", currency: "USD", amount: 20, entity: "dn", transactionId: "tx-1", status: "open" }] });
   await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...extraction, kind: "invoice" } });
   assert.equal((await db.ctx.db.get("document")).status, "matched"); assert.equal((await db.ctx.db.get("document")).invoiceId, "invoice-1");
   assert.equal((await db.ctx.db.get("state")).invoices.length, 1); assert.equal((await db.ctx.db.get("state")).invoices[0].status, "open");
@@ -77,7 +92,7 @@ test("identical uploads deduplicate across channels and discard only the redunda
 
 test("archiving an invoice preserves its existing fee-adjusted bank link without upgrading confidence", async () => {
   const db = setup([{ ...tx("tx-1"), direction: "in", amount: 19.5, date: "2026-03-01", matchedInvoiceId: "invoice-1", invoiceMatchSource: "ai", invoiceMatchConfidence: 0.98 }]);
-  (await db.ctx.db.get("state")).invoices = [{ id: "invoice-1", invoiceNumber: "ACME-101", customerName: "Acme", currency: "USD", amount: 20, entity: "dn", transactionId: "tx-1", status: "open" }];
+  await db.ctx.db.patch("state", { invoices: [{ id: "invoice-1", invoiceNumber: "ACME-101", customerName: "Acme", currency: "USD", amount: 20, entity: "dn", transactionId: "tx-1", status: "open" }] });
   await db.ctx.db.patch("document", { source: "archive", invoiceId: "invoice-1" });
   await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...extraction, kind: "invoice" } });
   assert.equal((await db.ctx.db.get("document")).status, "matched");
@@ -258,4 +273,130 @@ test("duplicate searches never silently create records after reaching the candid
   assert.equal((await db.ctx.db.get("document")).status, "needs_review");
   assert.match((await db.ctx.db.get("document")).extraction.reviewReasons.join(" "), /Too many similar/);
   assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+});
+
+async function unmatchedBatch(size: number, kind: "expense" | "invoice" = "expense") {
+  const db = setup([]);
+  db.tables.set("financialDocuments", []);
+  for (let index = 0; index < size; index++) {
+    const id = `document-${index}`;
+    await db.ctx.db.insert("financialDocuments", { ...doc(), _id: id, storageId: `blob-${index}` });
+    await db.run(documents.complete, { id, token: "lease", extraction: { ...extraction, kind, amount: 20 + index, documentNumber: `ACME-${index}` } });
+    await db.ctx.db.patch(id, { nextMatchAt: "2000-01-01T00:00:00.000Z" });
+  }
+  db.resetIo();
+  return db;
+}
+
+test("twenty unchanged rematches read the ledger once and do not rewrite accounting records", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = await unmatchedBatch(20);
+  const before = await db.ctx.db.get("state");
+  db.resetIo();
+  const startedAt = Date.now();
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 20);
+  assert.equal(db.io.ledgerReads, 1);
+  assert.equal(db.io.ledgerWrites, 0);
+  assert.equal(db.io.ledgerReadBytes, Buffer.byteLength(JSON.stringify(before)));
+  assert.equal(db.io.ledgerWriteBytes, 0);
+  assert.deepEqual(await db.ctx.db.get("state"), before, "No timestamp or accounting changes when no bank match exists");
+  for (const document of db.tables.get("financialDocuments")!) {
+    assert.equal(document.status, "unmatched");
+    assert.ok(Date.parse(document.nextMatchAt) >= startedAt + 5 * 60_000);
+    assert.ok(Date.parse(document.nextMatchAt) <= Date.now() + 5 * 60_000);
+  }
+  db.resetIo();
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 0);
+  assert.equal(db.io.ledgerReads, 0, "An empty or not-yet-due batch does not load the ledger");
+  assert.equal(db.io.ledgerWrites, 0);
+});
+
+test("unchanged invoice retries preserve invoice and dashboard revisions", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = await unmatchedBatch(3, "invoice");
+  const before = await db.ctx.db.get("state");
+  db.resetIo();
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 3);
+  assert.equal(db.io.ledgerReads, 1);
+  assert.equal(db.io.ledgerWrites, 0);
+  assert.deepEqual(await db.ctx.db.get("state"), before);
+});
+
+test("batched rematches retain every new bank link with one accounting write", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  for (const kind of ["expense", "invoice"] as const) {
+    const db = await unmatchedBatch(20, kind);
+    for (let index = 0; index < 20; index++) {
+      await db.ctx.db.insert("bankTransactions", { ...tx(`tx-${index}`), direction: kind === "invoice" ? "in" : "out", amount: 20 + index });
+    }
+    db.resetIo();
+    assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 20);
+    assert.equal(db.io.ledgerReads, 1);
+    assert.equal(db.io.ledgerWrites, 1);
+    const ledger = await db.ctx.db.get("state");
+    const records = kind === "invoice" ? ledger.invoices : ledger.expenses;
+    assert.equal(records.length, 20);
+    for (let index = 0; index < 20; index++) {
+      const document = await db.ctx.db.get(`document-${index}`);
+      assert.equal(document.status, "matched");
+      assert.equal(document.transactionId, `tx-${index}`);
+      assert.equal(document.nextMatchAt, undefined);
+      const record = records.find((row: Row) => row.id === (document.invoiceId ?? document.expenseId));
+      assert.equal(record.transactionId, document.transactionId);
+      assert.equal(kind === "invoice" ? record.status : record.paymentStatus, kind === "invoice" ? "open" : "unpaid");
+      if (kind === "invoice") assert.equal((await db.ctx.db.get(`tx-${index}`)).matchedInvoiceId, record.id);
+      else assert.equal(record.documents[0].storageId, `blob-${index}`);
+    }
+    assert.deepEqual(ledger.paymentAllocations, []);
+  }
+});
+
+test("documents sharing a purchase in one batch reuse the record and keep all attachments", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup([]);
+  db.tables.set("financialDocuments", ["first", "second"].map(id => ({ ...doc(), _id: id, storageId: `${id}-blob`, kind: "expense", extraction, status: "unmatched", nextMatchAt: "2000-01-01T00:00:00.000Z" })));
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 2);
+  assert.equal(db.io.ledgerReads, 1);
+  assert.equal(db.io.ledgerWrites, 1);
+  const first = await db.ctx.db.get("first"), second = await db.ctx.db.get("second");
+  assert.equal(first.expenseId, second.expenseId);
+  const ledger = await db.ctx.db.get("state");
+  assert.equal(ledger.expenses.length, 1);
+  assert.deepEqual(ledger.expenses[0].documents.map((file: Row) => file.storageId).sort(), ["first-blob", "second-blob"]);
+});
+
+test("claims made earlier in a batch cannot be reused by another purchase", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = await unmatchedBatch(2);
+  const second = await db.ctx.db.get("document-1");
+  await db.ctx.db.patch(second._id, { extraction: { ...second.extraction, amount: 20 } });
+  const ledger = await db.ctx.db.get("state");
+  await db.ctx.db.patch("state", { expenses: ledger.expenses.map((row: Row) => ({ ...row, grossAmount: 20, netAmount: 20 })) });
+  await db.ctx.db.insert("bankTransactions", tx("shared-tx"));
+  db.resetIo();
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service" }), 2);
+  assert.equal((await db.ctx.db.get("document-0")).transactionId, "shared-tx");
+  assert.equal((await db.ctx.db.get("document-1")).status, "unmatched");
+  assert.equal((await db.ctx.db.get("document-1")).transactionId, undefined);
+  assert.equal(db.io.ledgerReads, 1);
+  assert.equal(db.io.ledgerWrites, 1);
+});
+
+test("later rematches re-read accounting edits and retain the review safeguard", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = await unmatchedBatch(1);
+  await db.run(documents.rematch, { serviceToken: "test-service", id: "document-0" });
+  const ledger = await db.ctx.db.get("state");
+  await db.ctx.db.patch("state", { expenses: ledger.expenses.map((row: Row) => ({ ...row, grossAmount: 50, description: "Edited by finance" })) });
+  const edited = await db.ctx.db.get("state");
+  await db.ctx.db.insert("bankTransactions", tx("new-tx"));
+  db.resetIo();
+  assert.equal(await db.run(documents.rematch, { serviceToken: "test-service", id: "document-0" }), 1);
+  assert.equal(db.io.ledgerReads, 1);
+  assert.equal(db.io.ledgerWrites, 0);
+  const document = await db.ctx.db.get("document-0");
+  assert.equal(document.status, "needs_review");
+  assert.equal(document.transactionId, undefined);
+  assert.match(document.extraction.reviewReasons.join(" "), /Details differ/);
+  assert.deepEqual(await db.ctx.db.get("state"), edited);
 });
