@@ -99,7 +99,7 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
             if (blockedRecipients.has(recipient.name)) continue;
             try {
               const user = cashReportRecipient(this.env, recipient.name, "daily-slash-rejected-cards");
-              await sendTelegramMessage(this.env, user.chatId, job.message, true);
+              await sendTelegramMessage(this.env, user.chatId, job.message);
               recipient.delivered = true;
               await this.ctx.storage.put(key, job);
               console.log(JSON.stringify({ event: "slash_card_alert_sent", kind: job.notification.kind, transactionId: job.notification.transaction.id, recipient: user.username }));

@@ -67,10 +67,19 @@ export interface TelegramCommandDocumentReply {
   text?: string;
 }
 
-export type TelegramCommandReply = string | TelegramCommandDocumentReply | { messages: string[]; copyable?: true };
+export interface TelegramCopyButton { label: string; text: string }
 
-function isCopyableReply(reply: TelegramCommandReply): boolean {
-  return typeof reply !== "string" && "messages" in reply && reply.copyable === true;
+interface TelegramCopyMarkup {
+  inline_keyboard: Array<Array<{ text: string; copy_text: { text: string } }>>;
+}
+
+export type TelegramCommandReply = string | TelegramCommandDocumentReply | { messages: string[]; copyButton?: TelegramCopyButton };
+
+function telegramCopyMarkup(text: string, button?: TelegramCopyButton): TelegramCopyMarkup | undefined {
+  if (!button && text && text.length <= 256) button = { label: "Copy text", text };
+  if (!button) return undefined;
+  if (!button.label.trim() || !button.text || button.text.length > 256) throw new Error("Telegram copy text was invalid");
+  return { inline_keyboard: [[{ text: button.label, copy_text: { text: button.text } }]] };
 }
 
 export type TelegramCommandHandler = (
@@ -90,7 +99,6 @@ interface TelegramOtpMessagePayload {
       copy_text: { text: string };
     }>>;
   };
-  protect_content: true;
 }
 
 export interface TelegramSignInAlertDetails {
@@ -103,7 +111,6 @@ export interface TelegramSignInAlertDetails {
 interface TelegramSignInAlertPayload {
   chat_id: string;
   text: string;
-  protect_content: true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -222,7 +229,7 @@ export async function sendTelegramMessage(
   env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
   chatId: string,
   text: string,
-  protectContent = false
+  copyButton?: TelegramCopyButton
 ): Promise<void> {
   if (!text || text.length > TELEGRAM_MESSAGE_LIMIT_CHARACTERS) {
     throw new Error("Telegram message was invalid");
@@ -231,15 +238,14 @@ export async function sendTelegramMessage(
     chat_id: chatId,
     text,
     link_preview_options: { is_disabled: true },
-    ...(protectContent ? { protect_content: true } : {})
+    reply_markup: telegramCopyMarkup(text, copyButton)
   });
 }
 
 export async function sendTelegramDocument(
   env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
   chatId: string,
-  document: TelegramCommandDocument,
-  protectContent = false
+  document: TelegramCommandDocument
 ): Promise<void> {
   const fileName = document.fileName.trim();
   const contentType = document.contentType.trim().toLowerCase();
@@ -260,7 +266,8 @@ export async function sendTelegramDocument(
   form.set("chat_id", chatId);
   form.set("document", new Blob([document.bytes], { type: contentType }), fileName);
   if (document.caption) form.set("caption", document.caption);
-  if (protectContent) form.set("protect_content", "true");
+  const copyMarkup = telegramCopyMarkup(document.caption ?? "");
+  if (copyMarkup) form.set("reply_markup", JSON.stringify(copyMarkup));
 
   let response: Response;
   try {
@@ -295,7 +302,6 @@ export async function sendTelegramImageAlbum(
     || (document.caption?.length ?? 0) > 1024)) throw new TelegramDeliveryError("Report images are invalid or exceed 10 MB.", false);
   const form = new FormData();
   form.set("chat_id", chatId);
-  form.set("protect_content", "true");
   form.set("media", JSON.stringify(documents.map((document, index) => ({
     type: "document", media: `attach://report${index}`, caption: document.caption, disable_content_type_detection: true
   }))));
@@ -326,8 +332,7 @@ export function buildTelegramOtpMessage(chatId: string, code: string): TelegramO
         text: "Copy code",
         copy_text: { text: code }
       }]]
-    },
-    protect_content: true
+    }
   };
 }
 
@@ -375,8 +380,7 @@ export function buildTelegramSignInAlertMessage(
       `Device: ${details.device}`,
       "",
       "⚠️ Not you? Contact your dashboard administrator immediately to revoke this session and re-enable OTP."
-    ].join("\n"),
-    protect_content: true
+    ].join("\n")
   };
 }
 
@@ -385,7 +389,7 @@ export async function sendTelegramSignInAlert(
   chatId: string,
   details: TelegramSignInAlertDetails
 ): Promise<void> {
-  await telegramApi(env, "sendMessage", { ...buildTelegramSignInAlertMessage(chatId, details) });
+  await sendTelegramMessage(env, chatId, buildTelegramSignInAlertMessage(chatId, details).text);
 }
 
 export async function deleteTelegramWebhook(
@@ -578,27 +582,24 @@ export async function pollTelegramUpdates(
         : configuredUser && !role && text.startsWith("/")
           ? "You do not have Telegram command access for Finance Dash."
           : onboardingReply(update.message, users);
-      const protectContent = Boolean(configuredUser && role) && !isCopyableReply(reply);
       if (typeof reply === "string") {
-        await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, reply, protectContent);
+        await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, reply);
       } else if ("messages" in reply) {
-        for (const message of reply.messages) {
-          await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, message, protectContent);
+        for (const [index, message] of reply.messages.entries()) {
+          await (dependencies.sendMessage ?? sendTelegramMessage)(env, update.message.chatId, message, index === 0 ? reply.copyButton : undefined);
         }
       } else {
         if (reply.text) {
           await (dependencies.sendMessage ?? sendTelegramMessage)(
             env,
             update.message.chatId,
-            reply.text,
-            protectContent
+            reply.text
           );
         }
         await (dependencies.sendDocument ?? sendTelegramDocument)(
           env,
           update.message.chatId,
-          reply.document,
-          protectContent
+          reply.document
         );
       }
     }
@@ -646,7 +647,7 @@ export function configuredTelegramUser(env: WorkerEnv, message: TelegramPrivateM
 export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdate, dependencies: {
   handleCommand: TelegramCommandHandler;
   handleAttachment: (env: WorkerEnv, user: TelegramAuthUser, message: TelegramPrivateMessage) => Promise<TelegramCommandReply>;
-}): Promise<{ chatId: string; protectContent: boolean; reply: TelegramCommandReply } | null> {
+}): Promise<{ chatId: string; reply: TelegramCommandReply } | null> {
   const message = update.message; if (!message) return null;
   const account = configuredTelegramUser(env, message);
   const text = message.text?.trim() ?? "";
@@ -660,5 +661,5 @@ export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdat
     await telegramApi(env, "sendChatAction", { chat_id: message.chatId, action: "typing" }).catch(() => undefined);
     reply = await dependencies.handleCommand(env, account.user, account.role, text.startsWith("/") ? text : `/ask ${text}`);
   } else reply = "Send a question, or attach a receipt or invoice as a PDF or image.";
-  return { chatId: message.chatId, protectContent: Boolean(account) && !isCopyableReply(reply), reply };
+  return { chatId: message.chatId, reply };
 }

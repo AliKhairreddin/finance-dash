@@ -124,7 +124,7 @@ export class PartnerUpdates extends DurableObject<WorkerEnv> {
     job.notified = true;
     await this.ctx.storage.put("job", job);
     const link = new URL(`/?page=cash-flow&partnerUpdate=${encodeURIComponent(job.status.id)}`, this.env.PUBLIC_APP_URL);
-    try { await sendTelegramMessage(this.env, job.sender.chatId, `${partnerUpdateSummary(job.status)}\n\n${link}`, true); }
+    try { await sendTelegramMessage(this.env, job.sender.chatId, `${partnerUpdateSummary(job.status)}\n\n${link}`); }
     catch { console.error(JSON.stringify({ event: "partner_update_receipt_failed", id: job.status.id })); }
   }
 }

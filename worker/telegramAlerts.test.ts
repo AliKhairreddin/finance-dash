@@ -137,7 +137,7 @@ test("low and recovered virtual-account alerts reach only Amin, Ali, and Ali M",
     }
     assert.deepEqual(payloads.map((payload) => payload.chat_id), ["333333333", "111111111", "222222222", "333333333", "111111111", "222222222"]);
     assert.equal(payloads.slice(3).every(payload => String(payload.text).includes("BALANCE RECOVERED")), true);
-    assert.equal(payloads.every((payload) => payload.protect_content === true), true);
+    assert.equal(payloads.every((payload) => payload.protect_content === undefined), true);
     await assert.rejects(
       () => sendSlashVirtualAccountBalanceAlert(env, "Someone Else", notification),
       /is not an authorized Telegram user/

@@ -55,7 +55,7 @@ test("Telegram albums upload two uncompressed PNGs and distinguish rejection fro
     if (mode === "timeout") throw new Error("timeout");
     const body = init.body as FormData;
     assert.equal(body.get("chat_id"), "4");
-    assert.equal(body.get("protect_content"), "true");
+    assert.equal(body.get("protect_content"), null);
     const media = JSON.parse(body.get("media") as string);
     assert.deepEqual(media.map((item: { type: string }) => item.type), ["document", "document"]);
     for (let i = 0; i < 2; i++) assert.deepEqual(await (body.get(`report${i}`) as File).arrayBuffer(), images[i].bytes);

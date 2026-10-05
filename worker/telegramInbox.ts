@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { prepareTelegramReply, sendTelegramMessage, sendTelegramDocument, telegramUpdate, downloadTelegramAttachment, type TelegramUpdate, type TelegramPrivateMessage, type TelegramAuthUser } from "./telegram";
+import { prepareTelegramReply, sendTelegramMessage, sendTelegramDocument, telegramUpdate, downloadTelegramAttachment, type TelegramUpdate, type TelegramPrivateMessage, type TelegramAuthUser, type TelegramCopyButton } from "./telegram";
 import { handleTelegramCommand } from "./handler";
 import { financeTelegramCommands } from "./telegramCommandCatalog";
 import { ingestDocument } from "./documentIntake";
@@ -10,7 +10,7 @@ import { api } from "../convex/_generated/api";
 export interface TelegramConversationTurn { question: string; answer: string; at: number }
 type PreparedReply = NonNullable<Awaited<ReturnType<typeof prepareTelegramReply>>>;
 type QueuedUpdate = { update: TelegramUpdate; attempts: number; started?: boolean };
-type StoredReply = { chatId: string; protectContent: boolean; messages: string[]; delivered: number; document?: { fileName: string; contentType: string; caption?: string; chunks: number } };
+type StoredReply = { chatId: string; copyButton?: TelegramCopyButton; messages: string[]; delivered: number; document?: { fileName: string; contentType: string; caption?: string; chunks: number } };
 
 export async function ingestTelegramDocument(env: WorkerEnv, user: TelegramAuthUser, message: TelegramPrivateMessage): Promise<string> {
   const file = message.attachment!;
@@ -58,7 +58,8 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
   async remember(question: string, answer: string): Promise<void> { const history = await this.history(); await this.ctx.storage.put("history", [...history, { question: question.slice(0, 4096), answer: answer.slice(0, 6000), at: Date.now() }].slice(-6)); }
   private async saveReply(key: string, prepared: PreparedReply): Promise<StoredReply> {
     const reply = prepared.reply;
-    const result: StoredReply = { chatId: prepared.chatId, protectContent: prepared.protectContent, delivered: 0,
+    const result: StoredReply = { chatId: prepared.chatId, delivered: 0,
+      copyButton: typeof reply !== "string" && "messages" in reply ? reply.copyButton : undefined,
       messages: typeof reply === "string" ? [reply] : "messages" in reply ? reply.messages : reply.text ? [reply.text] : [] };
     if (typeof reply !== "string" && "document" in reply) {
       const { bytes, ...metadata } = reply.document;
@@ -83,14 +84,14 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
           const current = await this.ctx.storage.get<QueuedUpdate[]>("queue") ?? [];
           await this.ctx.storage.put("queue", current.map(row => row.update.updateId === item.update.updateId ? { ...row, started: true, attempts: row.attempts + 1 } : row));
         });
-        const result = item.started && action ? { chatId: item.update.message!.chatId, protectContent: true, reply: "The previous action was interrupted. Please check its result in the dashboard before requesting it again." }
-          : item.attempts >= 3 ? { chatId: item.update.message!.chatId, protectContent: true, reply: "I couldn’t complete that request. Please try again." }
+        const result = item.started && action ? { chatId: item.update.message!.chatId, reply: "The previous action was interrupted. Please check its result in the dashboard before requesting it again." }
+          : item.attempts >= 3 ? { chatId: item.update.message!.chatId, reply: "I couldn’t complete that request. Please try again." }
           : await prepareTelegramReply(this.env, item.update, { handleCommand: handleTelegramCommand, handleAttachment: ingestTelegramDocument });
         if (result) prepared = await this.saveReply(key, result);
       }
       if (prepared) {
         for (let i = prepared.delivered; i < prepared.messages.length; i++) {
-          await sendTelegramMessage(this.env, prepared.chatId, prepared.messages[i], prepared.protectContent);
+          await sendTelegramMessage(this.env, prepared.chatId, prepared.messages[i], i === 0 ? prepared.copyButton : undefined);
           prepared.delivered = i + 1; await this.ctx.storage.put(key, prepared);
         }
         if (prepared.document) {
@@ -98,7 +99,7 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
           for (let i = 0; i < prepared.document.chunks; i++) { const chunk = await this.ctx.storage.get<ArrayBuffer>(`${key}:file:${i}`); if (!chunk) throw new Error("Telegram attachment is unavailable"); chunks.push(chunk); size += chunk.byteLength; }
           const bytes = new Uint8Array(size); let offset = 0;
           for (const chunk of chunks) { bytes.set(new Uint8Array(chunk), offset); offset += chunk.byteLength; }
-          await sendTelegramDocument(this.env, prepared.chatId, { ...prepared.document, bytes: bytes.buffer }, prepared.protectContent);
+          await sendTelegramDocument(this.env, prepared.chatId, { ...prepared.document, bytes: bytes.buffer });
         }
       }
       await this.serialize(async () => {

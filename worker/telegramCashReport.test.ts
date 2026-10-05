@@ -4,6 +4,7 @@ import type { FxRate } from "../shared/types";
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
 import {
   buildTelegramCashReport,
+  cashReportCopyButton,
   cashReportDateIfDue,
   cashReportDelivered,
   cashReportDeliveryStateKey,
@@ -58,7 +59,10 @@ test("cash report groups banks in the requested order and shows crypto separatel
       slash({ id: "closed", name: "Closed", balance: 99_999, closedAt: now })]
   });
   assert.match(report, /Bank total ≈ USD 2,152\.00/u);
-  assert.match(report, /Wise LMD\n• USD 300\.00\n\nWise DN\n• EUR 75\.00\n• USD 100\.00\n\nRevolut\n• EUR 10\.00\n• USD 450\.00\n\nSlash\n• USD 1,200\.00/u);
+  assert.match(report, /Wise LMD ≈ USD 300\.00\n• USD 300\.00\n\nWise DN ≈ USD 190\.00\n• EUR 75\.00\n• USD 100\.00\n\nRevolut ≈ USD 462\.00\n• EUR 10\.00\n• USD 450\.00\n\nSlash ≈ USD 1,200\.00\n• USD 1,200\.00/u);
+  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Wise LMD ≈ USD 300.00\nWise DN ≈ USD 190.00\nRevolut ≈ USD 462.00\nSlash ≈ USD 1,200.00" });
+  assert.ok(cashReportCopyButton(report)!.text.length <= 256);
+  assert.doesNotMatch(report, /Balances checked|Wise:|Revolut:|Slash:|Crypto:/u);
   assert.match(report, /Bank totals by currency\n• EUR 85\.00\n• USD 2,050\.00/u);
   assert.match(report, /Crypto \(separate\)\n• BTC 0\.12345678 ≈ USD 9,876\.54\n• ETH 100\.00000000 · USD value unavailable\n• USDT 1,000\.00000000 · USD value unavailable/u);
   assert.match(report, /Crypto quotes:.*Coinbase/u);
@@ -67,16 +71,17 @@ test("cash report groups banks in the requested order and shows crypto separatel
   assert.doesNotMatch(report, /Parent Cash|Parent Credit|Amex|Seed|Closed|stale|GBP|Main|WGNR|Wagner|Reservation/u);
 });
 
-test("missing or stale quotes suppress the complete USD total and stale bank checks stay visible", () => {
+test("missing or stale quotes mark only the affected bank total unavailable", () => {
   const report = buildTelegramCashReport({
     accounts: [account({ source: "revolut", name: "Main", currency: "EUR", balance: 250, syncedAt: "2026-09-05T01:00:00Z" })],
     slashAccounts: [slash()], rates: rates.map((rate) => ({ ...rate, stale: true })), asOf: now
   });
-  assert.match(report, /Revolut\n• EUR 250\.00/u);
+  assert.match(report, /Revolut — USD total unavailable\n• EUR 250\.00/u);
   assert.match(report, /USD total unavailable/u);
-  assert.match(report, /⚠️ stale/u);
+  assert.doesNotMatch(report, /Balances checked|⚠️ stale/u);
   assert.match(report, /No current USD quote: EUR/u);
   assert.doesNotMatch(report, /Bank total ≈/u);
+  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Revolut — USD total unavailable\nSlash ≈ USD 1,000.00" });
 });
 
 test("missing crypto quotes and stale crypto balances do not affect bank totals or bank freshness", () => {
@@ -88,10 +93,10 @@ test("missing crypto quotes and stale crypto balances do not affect bank totals 
   });
   assert.match(report, /Bank total ≈ USD 0\.00/u);
   for (const group of ["Wise LMD", "Wise DN", "Revolut", "Slash"]) {
-    assert.ok(report.includes(`${group}\n• USD 0.00`));
+    assert.ok(report.includes(`${group} ≈ USD 0.00\n• USD 0.00`));
   }
   assert.match(report, /Crypto \(separate\)\n• BTC 10\.00000000 · USD value unavailable/u);
-  assert.match(report, /^Crypto:.*⚠️ stale$/mu);
+  assert.doesNotMatch(report, /Balances checked|⚠️ stale/u);
   assert.doesNotMatch(report, /^Revolut:.*stale|Bank USD total unavailable|No current USD quote|FX:|Crypto quotes:/mu);
 });
 
@@ -287,10 +292,10 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
   try {
     const reply = await handleTelegramCommand(env as never, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/cash");
     assert.ok(typeof reply !== "string" && "messages" in reply);
-    assert.equal(reply.copyable, true);
+    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Wise DN ≈ USD 100.00\nRevolut ≈ USD 120.00\nSlash ≈ USD 1,200.00" });
     assert.equal(reply.messages.length, 1);
     assert.match(reply.messages[0], /Bank total ≈ USD 1,420\.00/u);
-    assert.match(reply.messages[0], /Slash\n• USD 1,200\.00/u);
+    assert.match(reply.messages[0], /Slash ≈ USD 1,200\.00\n• USD 1,200\.00/u);
     assert.match(reply.messages[0], /Crypto \(separate\)\n• BTC 2\.00000000 ≈ USD 160,000\.00/u);
     assert.doesNotMatch(reply.messages[0].split("\n\nCrypto (separate)\n")[0], /BTC|Bitcoin|160,000|Wagner/u);
     assert.ok(requests.includes("/v2/prices/EUR-USD/spot"));

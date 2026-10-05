@@ -373,7 +373,6 @@ export async function sendSlashVirtualAccountBalanceAlert(
   await sendTelegramMessage(
     env,
     recipient.chatId,
-    buildSlashVirtualAccountBalanceAlertMessage(notification),
-    true
+    buildSlashVirtualAccountBalanceAlertMessage(notification)
   );
 }

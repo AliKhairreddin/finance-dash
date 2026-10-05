@@ -9,7 +9,9 @@ import {
   pollTelegramUpdates,
   prepareTelegramReply,
   telegramUpdate as parseTelegramUpdate,
-  sendTelegramMessage
+  sendTelegramMessage,
+  sendTelegramDocument,
+  type TelegramCopyButton
 } from "./telegram";
 import { financeTelegramCommands, readOnlyFinanceTelegramCommands } from "./telegramCommandCatalog";
 
@@ -43,31 +45,31 @@ function telegramUpdate(
   };
 }
 
-test("multipart cash replies let the authorized recipient copy every part", async () => {
-  const sent: Array<{ chatId: string; message: string; protected: boolean | undefined }> = [];
+test("multipart replies carry a single bank totals copy button on the first part", async () => {
+  const copyButton = { label: "Copy bank totals", text: "Wise LMD ≈ USD 100.00\nWise DN ≈ USD 200.00" };
+  const sent: Array<{ chatId: string; message: string; copyButton?: TelegramCopyButton }> = [];
   const result = await pollTelegramUpdates(baseEnv, 1, {
     async getUpdates() { return [telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")]; },
-    async handleCommand() { return { messages: ["First cash report part", "Remaining balances"], copyable: true }; },
-    async sendMessage(_env, chatId, message, protectContent) { sent.push({ chatId, message, protected: protectContent }); }
+    async handleCommand() { return { messages: ["First cash report part", "Remaining balances"], copyButton }; },
+    async sendMessage(_env, chatId, message, copyButton) { sent.push({ chatId, message, copyButton }); }
   });
   assert.equal(result.nextOffset, 2);
   assert.deepEqual(sent, [
-    { chatId: "5518715264", message: "First cash report part", protected: false },
-    { chatId: "5518715264", message: "Remaining balances", protected: false }
+    { chatId: "5518715264", message: "First cash report part", copyButton },
+    { chatId: "5518715264", message: "Remaining balances", copyButton: undefined }
   ]);
 });
 
-test("webhook cash replies retain copy permission while other replies stay protected", async () => {
+test("webhook replies preserve the bank totals copy button", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ ok: true, result: true });
   try {
-    for (const copyable of [true, false]) {
-      const prepared = await prepareTelegramReply(baseEnv, parseTelegramUpdate(telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")), {
-        async handleCommand() { return copyable ? { messages: ["Cash report"], copyable: true } : { messages: ["Other report"] }; },
-        async handleAttachment() { throw new Error("Unexpected attachment"); }
-      });
-      assert.equal(prepared?.protectContent, !copyable);
-    }
+    const reply = { messages: ["Cash report"], copyButton: { label: "Copy bank totals", text: "Wise LMD ≈ USD 100.00" } };
+    const prepared = await prepareTelegramReply(baseEnv, parseTelegramUpdate(telegramUpdate(1, 5518715264, "Ali", undefined, "/cash")), {
+      async handleCommand() { return reply; },
+      async handleAttachment() { throw new Error("Unexpected attachment"); }
+    });
+    assert.deepEqual(prepared, { chatId: "5518715264", reply });
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -95,8 +97,7 @@ test("Telegram OTP messages lead with a formatted code and provide a native copy
         text: "Copy code",
         copy_text: { text: "123456" }
       }]]
-    },
-    protect_content: true
+    }
   });
   assert.throws(() => buildTelegramOtpMessage("6064572340", "12345"), /OTP was invalid/);
 });
@@ -110,7 +111,6 @@ test("passwordless sign-in alerts include the security details and revocation in
   }), {
     chat_id: "6064572340",
     text: "🔐 Finance Dash sign-in detected\n\nAccount: Ali M\nTime: Aug 22, 2026 · 4:15 PM EDT\nIP address: 203.0.113.42\nDevice: Safari on iPhone\n\n⚠️ Not you? Contact your dashboard administrator immediately to revoke this session and re-enable OTP.",
-    protect_content: true
   });
   assert.equal(formatTelegramTimestamp("2026-01-22T20:15:00.000Z"), "Jan 22, 2026 · 3:15 PM EST");
 });
@@ -166,7 +166,7 @@ test("administrator and CEO users receive their assigned command roles while Mee
     TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "777888996" })
   } as never;
   const handled: Array<{ username: string; role: string; text: string }> = [];
-  const replies: Array<{ chatId: string; text: string; protectContent: boolean | undefined }> = [];
+  const replies: Array<{ chatId: string; text: string }> = [];
   const updates = [
     telegramUpdate(200, 5518715264, "Ali", undefined, "/overview"),
     telegramUpdate(201, 6064572340, "Ali M", undefined, "/sync CONFIRM"),
@@ -182,8 +182,8 @@ test("administrator and CEO users receive their assigned command roles while Mee
       handled.push({ username: user.username, role, text });
       return `${user.username}:${role}`;
     },
-    async sendMessage(_env, chatId, text, protectContent) {
-      replies.push({ chatId, text, protectContent });
+    async sendMessage(_env, chatId, text) {
+      replies.push({ chatId, text });
     }
   });
 
@@ -195,44 +195,63 @@ test("administrator and CEO users receive their assigned command roles while Mee
     { username: "Sani", role: "read-only", text: "/analytics this-month" },
     { username: "Ben", role: "read-only", text: "/invoices" }
   ]);
-  assert.deepEqual(replies.slice(0, 5).map(({ text, protectContent }) => ({ text, protectContent })), [
-    { text: "Ali:administrator", protectContent: true },
-    { text: "Ali M:administrator", protectContent: true },
-    { text: "Amin:read-only", protectContent: true },
-    { text: "Sani:read-only", protectContent: true },
-    { text: "Ben:read-only", protectContent: true }
+  assert.deepEqual(replies.slice(0, 5).map(({ text }) => ({ text })), [
+    { text: "Ali:administrator" },
+    { text: "Ali M:administrator" },
+    { text: "Amin:read-only" },
+    { text: "Sani:read-only" },
+    { text: "Ben:read-only" }
   ]);
   assert.deepEqual(replies[5], {
     chatId: "777888996",
     text: "✅ Finance Dash connected\n\nHi Meet. You’re connected as Meet.\nSign-in codes will arrive in this private chat.",
-    protectContent: false
   });
 });
 
-test("Telegram messages disable link previews and reject invalid message lengths", async () => {
+test("all Telegram text is copyable and copy buttons honor the 256 character limit", async () => {
   const originalFetch = globalThis.fetch;
   const payloads: Array<Record<string, unknown>> = [];
   globalThis.fetch = async (_input, init) => {
-    payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    payloads.push(JSON.parse(String(init?.body)));
     return Response.json({ ok: true, result: {} });
   };
   try {
-    await sendTelegramMessage(baseEnv, "5518715264", "🔗 Finance Dash\n\nhttps://finance.example", true);
-    assert.deepEqual(payloads[0]?.link_preview_options, { is_disabled: true });
-    assert.equal(payloads[0]?.protect_content, true);
-    await sendTelegramMessage(baseEnv, "5518715264", "Cash report", false);
-    assert.equal(payloads[1]?.protect_content, undefined);
-    await assert.rejects(
-      () => sendTelegramMessage(baseEnv, "5518715264", "x".repeat(4_097)),
-      /message was invalid/
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+    for (const length of [256, 257, 4096]) {
+      const text = "x".repeat(length);
+      await sendTelegramMessage(baseEnv, "5518715264", text);
+      const payload = payloads.at(-1)!;
+      assert.equal(payload.protect_content, undefined);
+      assert.deepEqual(payload.link_preview_options, { is_disabled: true });
+      assert.deepEqual(payload.reply_markup, length === 256
+        ? { inline_keyboard: [[{ text: "Copy text", copy_text: { text } }]] } : undefined);
+    }
+    const button = { label: "Copy bank totals", text: "Wise LMD ≈ USD 100.00\nWise DN ≈ USD 200.00" };
+    await sendTelegramMessage(baseEnv, "5518715264", "Full report".repeat(100), button);
+    assert.deepEqual(payloads.at(-1)?.reply_markup, { inline_keyboard: [[{ text: button.label, copy_text: { text: button.text } }]] });
+    await assert.rejects(() => sendTelegramMessage(baseEnv, "5518715264", "Report", { label: "Copy", text: "x".repeat(257) }), /copy text was invalid/);
+    await assert.rejects(() => sendTelegramMessage(baseEnv, "5518715264", "x".repeat(4097)), /message was invalid/);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
-test("command documents are delivered to the authorized chat with forwarding protection", async () => {
-  const documents: Array<{ chatId: string; fileName: string; protectContent: boolean | undefined }> = [];
+test("document captions allow native copying and short captions get a copy button", async () => {
+  const originalFetch = globalThis.fetch;
+  let form: FormData | undefined;
+  globalThis.fetch = async (_input, init) => {
+    form = init?.body as FormData;
+    return Response.json({ ok: true, result: {} });
+  };
+  try {
+    await sendTelegramDocument(baseEnv, "5518715264", {
+      fileName: "invoice.pdf", contentType: "application/pdf", bytes: new Uint8Array([1]).buffer, caption: "Invoice 2026-001"
+    });
+    assert.ok(form);
+    assert.equal(form.get("protect_content"), null);
+    assert.deepEqual(JSON.parse(String(form.get("reply_markup"))), { inline_keyboard: [[{ text: "Copy text", copy_text: { text: "Invoice 2026-001" } }]] });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("command documents are delivered to the authorized chat with copyable captions", async () => {
+  const documents: Array<{ chatId: string; fileName: string }> = [];
   let sentMessage = false;
   const result = await pollTelegramUpdates(baseEnv, 300, {
     async getUpdates() {
@@ -249,8 +268,8 @@ test("command documents are delivered to the authorized chat with forwarding pro
       };
     },
     async sendMessage() { sentMessage = true; },
-    async sendDocument(_env, chatId, document, protectContent) {
-      documents.push({ chatId, fileName: document.fileName, protectContent });
+    async sendDocument(_env, chatId, document) {
+      documents.push({ chatId, fileName: document.fileName });
     }
   });
 
@@ -259,7 +278,6 @@ test("command documents are delivered to the authorized chat with forwarding pro
   assert.deepEqual(documents, [{
     chatId: "5518715264",
     fileName: "invoice-2026-001.pdf",
-    protectContent: true
   }]);
 });
 

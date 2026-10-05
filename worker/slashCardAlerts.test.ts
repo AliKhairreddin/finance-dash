@@ -120,7 +120,7 @@ test("card jobs keep per-recipient order, retry only unfinished sends, and survi
   t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit) => {
     if (String(input).endsWith("sendMessage")) {
       const payload = JSON.parse(String(init.body));
-      assert.equal(payload.protect_content, true);
+      assert.equal(payload.protect_content, undefined);
       if (payload.chat_id === "222" && failAliM) return Response.json({ ok: false }, { status: 403 });
       sent.push({ chat: payload.chat_id, text: payload.text });
       return Response.json({ ok: true, result: { message_id: sent.length } });

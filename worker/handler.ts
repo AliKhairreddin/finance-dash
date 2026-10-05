@@ -272,7 +272,7 @@ import {
   slashVirtualAccountBalanceObservations,
   type TelegramAlertSettings
 } from "./telegramAlerts";
-import { buildTelegramCashReport, cashReportRecipient, isCashReportAccount, isCashReportCryptoAccount, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
+import { buildTelegramCashReport, cashReportCopyButton, cashReportRecipient, isCashReportAccount, isCashReportCryptoAccount, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -4115,7 +4115,7 @@ async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise
     );
     const notificationId = await digestState.prepareTelegramDigest(date, crypto.randomUUID());
     if (!notificationId) return false;
-    await sendTelegramMessage(env, recipient.chatId, message, true);
+    await sendTelegramMessage(env, recipient.chatId, message);
     await digestState.confirmTelegramDigest(notificationId);
     return true;
   }));
@@ -8054,8 +8054,8 @@ async function telegramReadCommand(
     return messages.length === 1 ? messages[0] : { messages };
   }
   if (command === "cash") {
-    const messages = splitCashReport(await getTelegramCashReport(env));
-    return { messages, copyable: true };
+    const report = await getTelegramCashReport(env);
+    return { messages: splitCashReport(report), copyButton: cashReportCopyButton(report) };
   }
   if (command === "menu") return telegramMenu(role);
   if (command === "help") {

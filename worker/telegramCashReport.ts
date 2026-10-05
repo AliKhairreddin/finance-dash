@@ -1,13 +1,12 @@
 import { slashReportDateIfDue } from "./telegramSlashReport";
 import type { AccountBalance, FxRate } from "../shared/types";
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
-import { normalizeFinanceUsername, parseTelegramAuthUsers } from "./telegram";
+import { normalizeFinanceUsername, parseTelegramAuthUsers, type TelegramCopyButton } from "./telegram";
 import { parseTelegramCommandUsers } from "./telegramCommandCatalog";
 
 export const cashReportTimezone = "Asia/Beirut";
 export const cashReportDeliveryStateKey = "cash-report-delivery";
 const maximumMessageLength = 3_800;
-const staleBalanceMs = 15 * 60_000;
 const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 
 export type CashReportAccount = AccountBalance & { syncedAt: string };
@@ -66,12 +65,6 @@ export function buildTelegramCashReport(input: {
   const totals = new Map<string, number>();
   const cryptoBalances = new Map<string, number>();
   const groups = new Map(["Wise LMD", "Wise DN", "Revolut", "Slash"].map((name) => [name, new Map<string, number>()]));
-  const syncTimes = new Map<string, string>();
-  const recordSyncTime = (label: string, syncedAt: string) => {
-    if (!Number.isFinite(Date.parse(syncedAt))) throw new Error(`${label} balance timestamp is unavailable`);
-    const previous = syncTimes.get(label);
-    if (!previous || syncedAt < previous) syncTimes.set(label, syncedAt);
-  };
   const add = (group: string, currency: string, balance: number) => {
     if (!Number.isFinite(balance)) throw new Error("Invalid bank balance");
     const asset = currency.toUpperCase();
@@ -81,8 +74,6 @@ export function buildTelegramCashReport(input: {
     totals.set(asset, (totals.get(asset) ?? 0) + balance);
   };
   for (const account of bankAccounts) {
-    const bank = account.source === "wise" ? "Wise" : "Revolut";
-    recordSyncTime(bank, account.syncedAt);
     if (account.source === "wise" && account.wiseEntity !== "dn" && account.wiseEntity !== "lmd") {
       throw new Error("Wise balance company is unavailable; cash report could not be grouped");
     }
@@ -92,7 +83,6 @@ export function buildTelegramCashReport(input: {
   for (const account of slashAccounts) add("Slash", account.currency, account.balance);
   for (const account of cryptoAccounts) {
     if (!Number.isFinite(account.balance)) throw new Error("Invalid crypto balance");
-    recordSyncTime("Crypto", account.syncedAt);
     const asset = account.currency.toUpperCase();
     cryptoBalances.set(asset, (cryptoBalances.get(asset) ?? 0) + account.balance);
   }
@@ -110,7 +100,11 @@ export function buildTelegramCashReport(input: {
   ];
   for (const [group, balances] of groups) {
     if (balances.size === 0) continue;
-    lines.push(group);
+    const missingGroupQuote = [...balances].some(([asset, balance]) => balance !== 0 && asset !== "USD" && !rates.has(asset));
+    const groupUsd = [...balances].reduce((total, [asset, balance]) =>
+      total + balance * (asset === "USD" ? 1 : rates.get(asset)?.rateUsd ?? 0), 0
+    );
+    lines.push(missingGroupQuote ? `${group} — USD total unavailable` : `${group} ≈ ${amountLabel(groupUsd, "USD")}`);
     const hasBalance = [...balances.values()].some((balance) => balance !== 0);
     for (const [asset, balance] of [...balances].sort(([a], [b]) => a.localeCompare(b))) {
       if (balance === 0 && hasBalance) continue;
@@ -131,12 +125,6 @@ export function buildTelegramCashReport(input: {
         ? ` ≈ ${amountLabel(balance * quote.rateUsd, "USD")}` : " · USD value unavailable"}`);
     }
   }
-  lines.push("", "Balances checked (Beirut)");
-  for (const [bank, checkedAt] of syncTimes) {
-    const stale = Date.parse(input.asOf) - Date.parse(checkedAt) > staleBalanceMs;
-    lines.push(`${bank}: ${timestampLabel(checkedAt)}${stale ? " ⚠️ stale" : ""}`);
-  }
-  lines.push(`Slash: ${timestampLabel(input.asOf)}`);
   if (missing.length > 0) lines.push(`⚠️ No current USD quote: ${missing.join(", ")}. Native balances shown.`);
   const usedQuotes = [...totals].filter(([asset, balance]) => asset !== "USD" && balance !== 0)
     .flatMap(([asset]) => rates.has(asset) ? [rates.get(asset)!] : []);
@@ -149,6 +137,13 @@ export function buildTelegramCashReport(input: {
     lines.push(`Crypto quotes: ${timestampLabel(cryptoQuotes.map((rate) => rate.asOf).sort()[0])} · Coinbase`);
   }
   return lines.join("\n");
+}
+
+export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
+  const text = message.split("\n").filter((line) =>
+    /^(Wise LMD|Wise DN|Revolut|Slash) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
+  ).join("\n");
+  return text && text.length <= 256 ? { label: "Copy bank totals", text } : undefined;
 }
 
 export function splitCashReport(message: string): string[] {
@@ -212,7 +207,7 @@ export async function deliverCashReportParts(
   storage: Pick<DurableObjectStorage, "get" | "put">,
   date: string,
   message: string,
-  send: (part: string) => Promise<void>
+  send: (part: string, index: number, parts: readonly string[]) => Promise<void>
 ): Promise<boolean> {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(date) || !message.trim()) throw new Error("Invalid cash report delivery");
   let state = await storage.get<CashReportDeliveryState>(cashReportDeliveryStateKey);
@@ -222,7 +217,7 @@ export async function deliverCashReportParts(
     await storage.put(cashReportDeliveryStateKey, state);
   }
   while (state.nextPart < state.parts.length) {
-    await send(state.parts[state.nextPart]);
+    await send(state.parts[state.nextPart], state.nextPart, state.parts);
     state = { ...state, nextPart: state.nextPart + 1 };
     await storage.put(cashReportDeliveryStateKey, state);
   }

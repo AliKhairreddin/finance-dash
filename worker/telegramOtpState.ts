@@ -6,6 +6,7 @@ import {
 } from "./telegram";
 import {
   cashReportDelivered,
+  cashReportCopyButton,
   cashReportDeliveryStateKey,
   cashReportRecipient,
   deliverCashReportParts,
@@ -271,8 +272,9 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
   async deliverCashReport(date: string, username: string, message: string, kind: CashReportKind): Promise<boolean> {
     return this.serialize(async () => {
       const recipient = cashReportRecipient(this.env, username, kind);
-      return deliverCashReportParts(this.ctx.storage, date, message, (part) =>
-        sendTelegramMessage(this.env, recipient.chatId, part, kind !== "weekly-cash")
+      return deliverCashReportParts(this.ctx.storage, date, message, (part, index, parts) =>
+        sendTelegramMessage(this.env, recipient.chatId, part,
+          kind === "weekly-cash" && index === 0 ? cashReportCopyButton(parts.join("\n")) : undefined)
       );
     });
   }
