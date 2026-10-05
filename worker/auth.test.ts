@@ -504,3 +504,52 @@ test("logout clears both authentication cookies", async () => {
   assert.match(setCookie, /Secure/);
   assert.match(setCookie, /SameSite=Strict/);
 });
+
+test("Hetarth stays pending until linked, then requires his own Telegram OTP for media-only access", async () => {
+  const state = new FakeTelegramOtpState();
+  const pending = { ...telegramEnv(state) as object, DASHBOARD_MEDIA_SPEND_USERS: "Hetarth" } as never;
+  let delivered = 0;
+  const dependencies = {
+    generateOtp: () => "123456",
+    async sendTelegramOtp(_env: unknown, chatId: string, code: string) {
+      assert.equal(chatId, "9090909090");
+      assert.equal(code, "123456");
+      delivered += 1;
+    }
+  };
+  const requestCode = () => formRequest("https://finance.example/login", { step: "request", username: "  HETARTH  " });
+  const pendingResponse = await enforceSiteAuthentication(requestCode(), pending, dependencies);
+  assert.equal(pendingResponse?.status, 200);
+  assert.equal(delivered, 0);
+  assert.doesNotMatch(pendingResponse?.headers.get("Set-Cookie") ?? "", /__Host-finance_session=/u);
+  const pendingToken = await createAuthSessionToken(testSessionSecret, "finance.example", "hetarth");
+  assert.equal(await getDashboardSession(new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${pendingToken}` } }), pending), null);
+  const adminToken = await createAuthSessionToken(testSessionSecret, "finance.example", "ali");
+  assert.equal((await getDashboardSession(new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${adminToken}` } }), pending))?.role, "administrator");
+
+  const active = { ...pending as object, TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "9090909090" }) } as never;
+  const challenge = await enforceSiteAuthentication(requestCode(), active, dependencies);
+  assert.equal(delivered, 1);
+  assert.equal(challenge?.status, 200);
+  const signedIn = await enforceSiteAuthentication(formRequest("https://finance.example/login", {
+    step: "verify", code: "123456", returnTo: "/?page=media-spend"
+  }, cookieFrom(challenge!, "__Host-finance_login")), active, dependencies);
+  assert.equal(signedIn?.status, 303);
+  const sessionRequest = new Request("https://finance.example/api/session", { headers: { Cookie: cookieFrom(signedIn!, "__Host-finance_session") } });
+  assert.deepEqual(await getDashboardSession(sessionRequest, active), { username: "Hetarth", role: "media-spend-reviewer" });
+  assert.equal(await getDashboardSession(sessionRequest, pending), null);
+});
+
+test("media users cannot bypass OTP or be activated without their reserved role", async () => {
+  const base = { ...telegramEnv() as object, DASHBOARD_MEDIA_SPEND_USERS: "Hetarth", TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "9090909090" }) };
+  for (const config of [
+    { ...base, TELEGRAM_PASSWORDLESS_USERS_JSON: JSON.stringify(["Hetarth"]) },
+    { ...base, DASHBOARD_MEDIA_SPEND_USERS: "" },
+    { ...base, TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "5518715264" }) },
+    { ...base, TELEGRAM_MEDIA_SPEND_USERS_JSON: "invalid" }
+  ]) {
+    assert.equal((await enforceSiteAuthentication(new Request("https://finance.example/api/session"), config as never))?.status, 503);
+  }
+  const bypass = await createAuthSessionToken(testSessionSecret, "finance.example", "passwordless:hetarth");
+  assert.equal(await getDashboardSession(new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${bypass}` } }), base as never), null);
+});

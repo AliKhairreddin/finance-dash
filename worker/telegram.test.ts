@@ -281,7 +281,7 @@ test("command documents are delivered to the authorized chat with copyable capti
   }]);
 });
 
-test("Telegram installs full and CEO menus per chat and removes Meet's menu", async () => {
+test("Telegram installs full and CEO menus per chat and removes restricted users' menus", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ method: string; payload: Record<string, any> }> = [];
   globalThis.fetch = (async (input, init) => {
@@ -298,7 +298,8 @@ test("Telegram installs full and CEO menus per chat and removes Meet's menu", as
       TELEGRAM_BOT_TOKEN: "123456:test-bot-token",
       TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "5518715264", Amin: "777888999" }),
       TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON: JSON.stringify({ Meet: "777888996" }),
-      TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M",
+      TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "9090909090" }),
+      TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M,Hetarth",
       TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin,Sanjin,Sani,Ben,Beno"
     } as never);
   } finally {
@@ -312,7 +313,8 @@ test("Telegram installs full and CEO menus per chat and removes Meet's menu", as
   })), [
     { method: "setMyCommands", chatId: "5518715264", commandCount: financeTelegramCommands.length },
     { method: "setMyCommands", chatId: "777888999", commandCount: readOnlyFinanceTelegramCommands.length },
-    { method: "deleteMyCommands", chatId: "777888996", commandCount: 0 }
+    { method: "deleteMyCommands", chatId: "777888996", commandCount: 0 },
+    { method: "deleteMyCommands", chatId: "9090909090", commandCount: 0 }
   ]);
   const installed = requests[0]?.payload.commands as Array<{ command: string; description: string }>;
   assert.match(installed.find(({ command }) => command === "overview")?.description ?? "", /^▶ TAP · /u);
@@ -375,4 +377,18 @@ test("a failed reply leaves the update available for the next polling run", asyn
     }),
     /Telegram send failed/
   );
+});
+
+
+test("media spend users receive onboarding without access to finance bot commands", async () => {
+  const replies: string[] = [];
+  let commands = 0;
+  await pollTelegramUpdates({ ...baseEnv as object, TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "9090909090" }) } as never, 0, {
+    async getUpdates() { return [telegramUpdate(400, 9090909090, "Hetarth", undefined, "/balances")]; },
+    async handleCommand() { commands += 1; return "private financial data"; },
+    async sendMessage(_env, _chatId, text) { replies.push(text); }
+  });
+  assert.equal(commands, 0);
+  assert.match(replies[0], /connected as Hetarth/u);
+  assert.doesNotMatch(replies[0], /private financial data/u);
 });

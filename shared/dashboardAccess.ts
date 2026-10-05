@@ -5,7 +5,24 @@ export const financeOperatorPages = ["banks", "documents", "analytics", "managem
 export function dashboardPageAllowed(role: DashboardAccessRole, page: string): boolean {
   if (role === "administrator") return true;
   if (role === "transaction-reviewer") return page === "banks";
+  if (role === "media-spend-reviewer") return page === "media-spend";
   return financeOperatorPages.some((allowed) => allowed === page);
+}
+
+export function dashboardHomePage(role: DashboardAccessRole): "overview" | "banks" | "media-spend" {
+  if (role === "administrator") return "overview";
+  return role === "media-spend-reviewer" ? "media-spend" : "banks";
+}
+
+export function mediaSpendReviewerCanAccess(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET") {
+    return ["/api/session", "/api/media-spend", "/api/media-spend/assignments"].includes(path);
+  }
+  if (request.method === "POST") {
+    return ["/api/media-spend/sync", "/api/media-funding/assignments", "/api/media-funding/payment-methods"].includes(path);
+  }
+  return false;
 }
 
 export function financeOperatorCanAccess(request: Request): boolean {

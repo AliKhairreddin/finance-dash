@@ -1110,3 +1110,41 @@ test("media spend range reads expose interior missing days even when global cove
     assert.equal(data.summary.days, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Hetarth's Worker session enforces Media Spend access before any financial API call", async () => {
+  const env = authenticatedEnv({
+    ASSETS: { fetch: async () => new Response("asset") },
+    DASHBOARD_MEDIA_SPEND_USERS: "Hetarth",
+    TELEGRAM_MEDIA_SPEND_USERS_JSON: JSON.stringify({ Hetarth: "9090909090" }),
+    CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service"
+  });
+  const paths: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    paths.push(body.path);
+    return Response.json({ status: "success", value: { providers: [{ id: "provider-1", name: "Provider One" }], assignments: [], paymentMethods: [] } });
+  };
+  try {
+    const session = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "hetarth"), env);
+    assert.deepEqual(await session.json(), { username: "Hetarth", role: "media-spend-reviewer" });
+    for (const [method, path] of [
+      ["GET", "/api/dashboard"], ["GET", "/api/media-funding"], ["GET", "/api/transactions"],
+      ["GET", "/api/analytics"], ["GET", "/api/documents"], ["GET", "/api/management-report"],
+      ["POST", "/api/providers"], ["POST", "/api/media-funding/providers"], ["POST", "/api/media-funding/entries"],
+      ["POST", "/api/sync"], ["DELETE", "/api/media-funding/assignments/a"]
+    ]) {
+      const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method }, "hetarth"), env);
+      assert.equal(response.status, 403, `${method} ${path}`);
+    }
+    assert.deepEqual(paths, []);
+    const assignments = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/assignments", {}, "hetarth"), env);
+    assert.equal(assignments.status, 200);
+    assert.deepEqual(await assignments.json(), { providers: [{ id: "provider-1", name: "Provider One" }], assignments: [], paymentMethods: [] });
+    assert.deepEqual(paths, ["mediaFunding:listSpendAssignments"]);
+    for (const path of ["/api/media-funding/assignments", "/api/media-funding/payment-methods"]) {
+      const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST", body: "null" }, "hetarth"), env);
+      assert.equal(response.status, 400, `${path} reaches payload validation`);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});

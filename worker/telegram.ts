@@ -25,6 +25,7 @@ type TelegramEnv = Pick<
   | "TELEGRAM_OTP_STATE"
 > & {
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
+  TELEGRAM_MEDIA_SPEND_USERS_JSON?: string;
 };
 
 interface TelegramApiEnvelope {
@@ -405,14 +406,17 @@ export async function configureTelegramBotCommands(
     | "TELEGRAM_BOT_TOKEN"
     | "TELEGRAM_COMMAND_ADMIN_USERS"
     | "TELEGRAM_COMMAND_READ_ONLY_USERS"
-  > & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string }
+  > & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string; TELEGRAM_MEDIA_SPEND_USERS_JSON?: string }
 ): Promise<void> {
   const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   const reviewerUsers = env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?.trim()
     ? parseTelegramAuthUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON)
     : [];
-  if (!administratorUsers || !reviewerUsers) throw new Error("Telegram user mapping was invalid");
-  const users = [...administratorUsers, ...reviewerUsers];
+  const mediaSpendUsers = env.TELEGRAM_MEDIA_SPEND_USERS_JSON?.trim()
+    ? parseTelegramAuthUsers(env.TELEGRAM_MEDIA_SPEND_USERS_JSON)
+    : [];
+  if (!administratorUsers || !reviewerUsers || !mediaSpendUsers) throw new Error("Telegram user mapping was invalid");
+  const users = [...administratorUsers, ...reviewerUsers, ...mediaSpendUsers];
   if (
     new Set(users.map((user) => user.normalizedUsername)).size !== users.length
     || new Set(users.map((user) => user.chatId)).size !== users.length
@@ -432,7 +436,9 @@ export async function configureTelegramBotCommands(
   }
 
   await Promise.all(users.map(async (user) => {
-    const commands = administratorNames.has(user.normalizedUsername)
+    const commands = mediaSpendUsers.some((mediaUser) => mediaUser.normalizedUsername === user.normalizedUsername)
+      ? []
+      : administratorNames.has(user.normalizedUsername)
       ? financeTelegramCommands
       : readOnlyNames.has(user.normalizedUsername)
         ? readOnlyFinanceTelegramCommands
@@ -536,7 +542,7 @@ function onboardingReply(message: TelegramPrivateMessage, users: TelegramAuthUse
 }
 
 export async function pollTelegramUpdates(
-  env: WorkerEnv & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string },
+  env: WorkerEnv & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string; TELEGRAM_MEDIA_SPEND_USERS_JSON?: string },
   offset: number,
   dependencies: TelegramPollingDependencies = {}
 ): Promise<{ nextOffset: number; processed: number }> {
@@ -545,8 +551,11 @@ export async function pollTelegramUpdates(
   const transactionReviewerUsers = env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?.trim()
     ? parseTelegramAuthUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON)
     : [];
-  if (!administratorUsers || !transactionReviewerUsers) throw new Error("Telegram user mapping was invalid");
-  const users = [...administratorUsers, ...transactionReviewerUsers];
+  const mediaSpendUsers = env.TELEGRAM_MEDIA_SPEND_USERS_JSON?.trim()
+    ? parseTelegramAuthUsers(env.TELEGRAM_MEDIA_SPEND_USERS_JSON)
+    : [];
+  if (!administratorUsers || !transactionReviewerUsers || !mediaSpendUsers) throw new Error("Telegram user mapping was invalid");
+  const users = [...administratorUsers, ...transactionReviewerUsers, ...mediaSpendUsers];
   if (
     new Set(users.map((user) => user.normalizedUsername)).size !== users.length
     || new Set(users.map((user) => user.chatId)).size !== users.length

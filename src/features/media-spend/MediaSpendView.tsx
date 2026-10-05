@@ -45,9 +45,9 @@ import {
   groupMediaSpendByFundingProvider,
   resolveMediaFundingAssignment,
   type AssignMediaFundingTargetsPayload,
-  type MediaFundingApiResponse,
+  type MediaSpendAssignmentsResponse,
   type MediaFundingAssignmentTarget,
-  type MediaFundingProvider,
+  type MediaSpendProvider,
   type MediaFundingProviderSpendGroup
 } from "../../../shared/mediaFunding";
 import {
@@ -283,7 +283,7 @@ export function MediaSpendView({
   onOpenProviderBalances
 }: {
   apiBase: string;
-  onOpenProviderBalances: () => void;
+  onOpenProviderBalances?: () => void;
 }) {
   const defaultRange = useMemo(defaultMediaSpendRange, []);
   const [dateRange, setDateRange] = useUrlDateRangeState("mediaFrom", "mediaTo", defaultRange);
@@ -327,7 +327,7 @@ export function MediaSpendView({
     allowedValues: ["hide", "include"]
   });
   const [data, setData] = useState<MediaSpendApiResponse | null>(null);
-  const [funding, setFunding] = useState<MediaFundingApiResponse | null>(null);
+  const [funding, setFunding] = useState<MediaSpendAssignmentsResponse | null>(null);
   const [search, setSearch] = useState("");
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
@@ -343,12 +343,12 @@ export function MediaSpendView({
     const query = new URLSearchParams(dateRange);
     const [spendResponse, fundingResponse] = await Promise.all([
       fetch(`${apiBase}/media-spend?${query.toString()}`, { signal }),
-      fetch(`${apiBase}/media-funding`, { signal })
+      fetch(`${apiBase}/media-spend/assignments`, { signal })
     ]);
     if (!spendResponse.ok) throw new Error(await apiErrorMessage(spendResponse, "Media spend could not be loaded"));
     if (!fundingResponse.ok) throw new Error(await apiErrorMessage(fundingResponse, "Funding assignments could not be loaded"));
     setData((await spendResponse.json()) as MediaSpendApiResponse);
-    setFunding((await fundingResponse.json()) as MediaFundingApiResponse);
+    setFunding((await fundingResponse.json()) as MediaSpendAssignmentsResponse);
   }
 
   useEffect(() => {
@@ -396,7 +396,7 @@ export function MediaSpendView({
 
   function rowFunding(row: MediaSpendRow): {
     assignment: ReturnType<typeof resolveMediaFundingAssignment>;
-    provider?: MediaFundingProvider;
+    provider?: MediaSpendProvider;
   } {
     const assignment = resolveMediaFundingAssignment(funding?.assignments ?? [], row);
     return { assignment, provider: assignment ? providersById.get(assignment.providerId) : undefined };
@@ -404,7 +404,7 @@ export function MediaSpendView({
 
   function accountFunding(group: MediaSpendAccountGroup): {
     assignment: ReturnType<typeof resolveMediaFundingAssignment>;
-    provider?: MediaFundingProvider;
+    provider?: MediaSpendProvider;
   } {
     const latestRow = group.rows.reduce((latest, row) => row.date > latest.date ? row : latest);
     const assignment = resolveMediaFundingAssignment(funding?.assignments ?? [], latestRow);
@@ -413,7 +413,7 @@ export function MediaSpendView({
 
   function businessManagerFunding(group: BusinessManagerSpendGroup): {
     childAssignments: number;
-    provider?: MediaFundingProvider;
+    provider?: MediaSpendProvider;
   } {
     const date = group.rows[0]?.date ?? dateRange.toDate;
     const businessManagerKey = mediaFundingBusinessManagerKey(group.platform, group.businessManagerId);
@@ -999,9 +999,9 @@ export function MediaSpendView({
               <Button className="secondary-button" onClick={() => setSelectedTargets(new Set())} type="button">Clear</Button>
               {(funding?.providers.length ?? 0) > 0 ? (
                 <Button className="primary-button" disabled={selectedAssignmentTargets.some((target) => target.scope === "ad_account" && funding?.assignments.some((a) => a.scope === "business_manager" && a.platform === target.platform && a.businessManagerId === target.businessManagerId && mediaFundingAssignmentIsActive(a, dateRange.toDate)))} onClick={() => setAssignmentDialogOpen(true)} type="button"><Link2 size={15} /> Assign provider</Button>
-              ) : (
+              ) : onOpenProviderBalances ? (
                 <Button className="primary-button" onClick={onOpenProviderBalances} type="button"><Link2 size={15} /> Add a provider first</Button>
-              )}
+              ) : <span role="status">Ask an administrator to add a provider first.</span>}
             </div>
           </div>
         )}
@@ -1230,10 +1230,10 @@ function MediaFundingAssignmentDialog({
 }: {
   apiBase: string;
   effectiveFrom: string;
-  providers: MediaFundingProvider[];
+  providers: MediaSpendProvider[];
   targets: MediaFundingAssignmentTarget[];
   onClose: () => void;
-  onOpenProviderBalances: () => void;
+  onOpenProviderBalances?: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
@@ -1272,7 +1272,7 @@ function MediaFundingAssignmentDialog({
         {error && <div className="inline-error">{error}</div>}
         <div className="media-funding-assignment-summary"><strong>{targets.length.toLocaleString()}</strong><span>{targetType} selected</span></div>
         {providers.length === 0 ? (
-          <div className="empty-state compact"><strong>Add a funding provider before assigning inventory</strong><Button className="primary-button" onClick={onOpenProviderBalances} type="button">Open provider balances</Button></div>
+          <div className="empty-state compact"><strong>{onOpenProviderBalances ? "Add a funding provider before assigning inventory" : "Ask an administrator to add a provider first."}</strong>{onOpenProviderBalances && <Button className="primary-button" onClick={onOpenProviderBalances} type="button">Open provider balances</Button>}</div>
         ) : (
           <>
             <label>Account provider<NativeSelect searchable value={providerId} onValueChange={setProviderId}>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>

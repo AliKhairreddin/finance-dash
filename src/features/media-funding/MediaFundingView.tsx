@@ -117,7 +117,7 @@ async function sendJson<T>(url: string, method: "POST" | "PATCH", payload: unkno
   return response.json() as Promise<T>;
 }
 
-export function FundingProviderBadge({ provider }: { provider: MediaFundingProvider }) {
+export function FundingProviderBadge({ provider }: { provider: Pick<MediaFundingProvider, "id" | "name"> }) {
   return <span className="funding-provider-badge" data-accent={providerAccent(provider.id)}>{provider.name}</span>;
 }
 

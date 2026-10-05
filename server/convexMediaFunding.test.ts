@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deleteAssignment, listOverview, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
 
 type RecordRow = Record<string, any>;
 function database(seed: Record<string, RecordRow[]>) {
@@ -112,4 +112,32 @@ test("payment method is independent of account provider and only provider-funded
     assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].classifiedSpend.own_card, 25);
     await assert.rejects(call(setPaymentMethods, ctx, { serviceToken: "wrong", targets, method: "own_card", effectiveFrom: date, updatedAt }));
   } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+
+test("spend assignment bootstrap returns only provider identities and assignment/payment history", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN;
+  process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    await call(setPaymentMethods, ctx, { serviceToken, targets: [{ platform: "Facebook", accountId: "1" }], method: "own_card", reference: "1234", effectiveFrom: date, updatedAt });
+    const queried: string[] = [];
+    const originalQuery = ctx.db.query;
+    ctx.db.query = (table) => { queried.push(table); return originalQuery(table); };
+    const result = await call(listSpendAssignments, ctx, { serviceToken });
+    assert.deepEqual(Object.keys(result).sort(), ["assignments", "paymentMethods", "providers"]);
+    assert.deepEqual(result.providers, [{ id: "meta", name: "Meta" }]);
+    assert.equal(result.assignments.length, 2);
+    assert.equal(result.assignments[0].accountId, "1");
+    assert.equal(result.paymentMethods[0].method, "own_card");
+    assert.equal(result.paymentMethods[0].reference, "1234");
+    assert.equal("updatedAt" in result.paymentMethods[0], false);
+    assert.equal("_creationTime" in result.assignments[0], false);
+    assert.equal(queried.includes("bankTransactions"), false);
+    assert.equal(queried.includes("mediaFundingProviderTotals"), false);
+    await assert.rejects(call(listSpendAssignments, ctx, { serviceToken: "wrong" }));
+  } finally {
+    if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN;
+    else process.env.CONVEX_SERVICE_TOKEN = previous;
+  }
 });

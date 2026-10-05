@@ -293,6 +293,35 @@ async function recalculateProviderTotals(
   else await ctx.db.insert("mediaFundingProviderTotals", next);
 }
 
+// Spend review needs provider identities and assignment history, not bank funding or balances.
+export const listSpendAssignments = query({
+  args: { serviceToken: v.string() },
+  returns: v.object({
+    providers: v.array(v.object({ id: v.id("mediaFundingProviders"), name: v.string() })),
+    assignments: v.array(assignmentResult),
+    paymentMethods: v.array(paymentMethodResult)
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const [providers, companies, assignments, paymentMethods] = await Promise.all([
+      requireBoundedRows(ctx.db.query("mediaFundingProviders").take(maximumProviders + 1), maximumProviders, "There are too many media funding providers"),
+      companyDirectory(ctx),
+      requireBoundedRows(ctx.db.query("mediaFundingAssignments").order("desc").take(maximumAssignments + 1), maximumAssignments, "There are too many media funding assignments"),
+      requireBoundedRows(ctx.db.query("mediaAccountPaymentMethods").take(maximumAssignments + 1), maximumAssignments, "There are too many account payment methods")
+    ]);
+    const companiesById = new Map(companies.map((company) => [company.id, company]));
+    return {
+      providers: providers.map((provider) => {
+        const company = companiesById.get(provider.companyProviderId);
+        if (!company) throw fundingError("MEDIA_FUNDING_NOT_FOUND", "Funding provider company was not found");
+        return { id: provider._id, name: company.name };
+      }),
+      assignments: assignments.map(({ _id, _creationTime: _created, ...assignment }) => ({ id: _id, ...assignment })),
+      paymentMethods: paymentMethods.map(({ _id, _creationTime: _created, updatedAt: _updated, ...payment }) => ({ id: _id, ...payment }))
+    };
+  }
+});
+
 export const listOverview = query({
   args: { serviceToken: v.string() },
   returns: v.object({

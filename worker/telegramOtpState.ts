@@ -67,7 +67,7 @@ function base64UrlEncode(value: Uint8Array<ArrayBuffer>): string {
 }
 
 async function configurationFingerprints(
-  env: WorkerEnv & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string }
+  env: WorkerEnv & { TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string; TELEGRAM_MEDIA_SPEND_USERS_JSON?: string }
 ): Promise<{ tokenFingerprint: string; commandFingerprint: string }> {
   const [tokenDigest, commandDigest] = await Promise.all([
     crypto.subtle.digest("SHA-256", textEncoder.encode(env.TELEGRAM_BOT_TOKEN)),
@@ -77,6 +77,7 @@ async function configurationFingerprints(
         "finance-telegram-webhook.v7-cash-groups",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
+        env.TELEGRAM_MEDIA_SPEND_USERS_JSON ?? "",
         env.TELEGRAM_COMMAND_ADMIN_USERS,
         env.TELEGRAM_COMMAND_READ_ONLY_USERS
       ].join("\u0000"))

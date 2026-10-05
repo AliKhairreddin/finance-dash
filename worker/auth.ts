@@ -32,6 +32,8 @@ type AuthEnv = Pick<
   | "TELEGRAM_PASSWORDLESS_USERS_JSON"
 > & {
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
+  TELEGRAM_MEDIA_SPEND_USERS_JSON?: string;
+  DASHBOARD_MEDIA_SPEND_USERS?: string;
   DASHBOARD_FINANCE_OPERATOR_USERS?: string;
 };
 
@@ -39,6 +41,7 @@ interface TelegramAuthConfig {
   users: TelegramAuthUser[];
   passwordlessUsernames: Set<string>;
   transactionReviewerUsernames: Set<string>;
+  mediaSpendUsernames: Set<string>;
   sessionSecret: string;
 }
 
@@ -90,8 +93,11 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   const botToken = env.TELEGRAM_BOT_TOKEN?.trim();
   const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   const transactionReviewerUsers = parseOptionalTelegramUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON);
-  if (!sessionSecret || !botToken || !administratorUsers || !transactionReviewerUsers || !env.TELEGRAM_OTP_STATE) return null;
-  const users = [...administratorUsers, ...transactionReviewerUsers];
+  const mediaSpendUsers = parseOptionalTelegramUsers(env.TELEGRAM_MEDIA_SPEND_USERS_JSON);
+  const mediaSpendUsernames = new Set((env.DASHBOARD_MEDIA_SPEND_USERS ?? "").split(",").map(normalizeFinanceUsername).filter(Boolean));
+  if (!sessionSecret || !botToken || !administratorUsers || !transactionReviewerUsers || !mediaSpendUsers || !env.TELEGRAM_OTP_STATE) return null;
+  if (mediaSpendUsers.some((user) => !mediaSpendUsernames.has(user.normalizedUsername))) return null;
+  const users = [...administratorUsers, ...transactionReviewerUsers, ...mediaSpendUsers];
   const normalizedUsernames = new Set<string>();
   const chatIds = new Set<string>();
   for (const user of users) {
@@ -103,10 +109,12 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   if (!passwordlessUsernames) return null;
   const transactionReviewerUsernames = new Set(transactionReviewerUsers.map((user) => user.normalizedUsername));
   if ([...transactionReviewerUsernames].some((username) => passwordlessUsernames.has(username))) return null;
+  if ([...mediaSpendUsernames].some((username) => passwordlessUsernames.has(username))) return null;
   return {
     users,
     passwordlessUsernames,
     transactionReviewerUsernames,
+    mediaSpendUsernames,
     sessionSecret
   };
 }
@@ -834,7 +842,9 @@ export async function getDashboardSession(
   if (!user) return null;
   return {
     username: user.username,
-    role: env.DASHBOARD_FINANCE_OPERATOR_USERS?.split(",").some((username) => normalizeFinanceUsername(username) === normalizedUsername)
+    role: config.mediaSpendUsernames.has(normalizedUsername)
+      ? "media-spend-reviewer"
+      : env.DASHBOARD_FINANCE_OPERATOR_USERS?.split(",").some((username) => normalizeFinanceUsername(username) === normalizedUsername)
       ? "finance-operator"
       : config.transactionReviewerUsernames.has(normalizedUsername)
       ? "transaction-reviewer"

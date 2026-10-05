@@ -238,7 +238,7 @@ import {
   createBankAnalyticsJobIdentity
 } from "../shared/analyticsJob";
 import { transactionReviewBootstrap } from "../shared/transactionReview";
-import { financeOperatorCanAccess } from "../shared/dashboardAccess";
+import { financeOperatorCanAccess, mediaSpendReviewerCanAccess } from "../shared/dashboardAccess";
 import { handleManagementReportUpload } from "./managementReportUpload";
 import { buildTransactionCsv, transactionCsvFileName } from "../shared/transactionCsv";
 import {
@@ -7107,6 +7107,16 @@ async function handleApi(
       return json(await readMediaSpend(env, range.fromDate, range.toDate));
     }
 
+    if (url.pathname === "/api/media-spend/assignments" && request.method === "GET") {
+      try {
+        return json(await getConvexClient(env).query(api.mediaFunding.listSpendAssignments, {
+          serviceToken: getConvexServiceToken(env)
+        }));
+      } catch (error) {
+        return mediaFundingStorageError(error);
+      }
+    }
+
     if (url.pathname === "/api/media-spend/sync" && request.method === "POST") {
       const body = (await request.json().catch(() => null)) as { fromDate?: string; toDate?: string } | null;
       const range = mediaSpendRange(body?.fromDate, body?.toDate);
@@ -8824,6 +8834,9 @@ export default {
       }
       if (session.role === "finance-operator" && !financeOperatorCanAccess(request)) {
         return json({ message: "This account can access Banks, Documents, Analytics, and Management only" }, { status: 403 });
+      }
+      if (session.role === "media-spend-reviewer" && !mediaSpendReviewerCanAccess(request)) {
+        return json({ message: "This account can access Media Spend and provider assignments only" }, { status: 403 });
       }
       if (url.pathname === "/api/session" && request.method === "GET") {
         return json(session);

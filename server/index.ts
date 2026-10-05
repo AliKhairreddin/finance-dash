@@ -296,6 +296,16 @@ app.get("/api/media-spend", async (request, response, next) => {
   }
 });
 
+app.get("/api/media-spend/assignments", async (_request, response, next) => {
+  try {
+    response.json(await localConvexClient().query(api.mediaFunding.listSpendAssignments, {
+      serviceToken: localConvexServiceToken()
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/media-funding", async (_request, response, next) => {
   try {
     response.json(await localConvexClient().query(api.mediaFunding.listOverview, {

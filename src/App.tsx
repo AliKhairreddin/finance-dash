@@ -220,7 +220,7 @@ import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
-import { dashboardPageAllowed } from "../shared/dashboardAccess";
+import { dashboardHomePage, dashboardPageAllowed } from "../shared/dashboardAccess";
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
 import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
@@ -673,9 +673,9 @@ function App() {
     allowedValues: activeTabs,
     history: "push"
   });
-  const activeTab = session && !dashboardPageAllowed(session.role, requestedTab) ? "banks" : requestedTab;
+  const activeTab = session && !dashboardPageAllowed(session.role, requestedTab) ? dashboardHomePage(session.role) : requestedTab;
   useEffect(() => {
-    if (session && !dashboardPageAllowed(session.role, requestedTab)) setActiveTab("banks");
+    if (session && !dashboardPageAllowed(session.role, requestedTab)) setActiveTab(dashboardHomePage(session.role));
   }, [session, requestedTab, setActiveTab]);
   const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
@@ -792,6 +792,7 @@ function App() {
   }, [searchTerm]);
 
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
+    if (!session || session.role === "media-spend-reviewer") return null;
     if ((!isTransactionReviewer && activeTab !== "banks") || (!isTransactionReviewer && bankTab === "holdings")) return null;
     const effectiveBankTab: Exclude<BankTab, "holdings"> = isTransactionReviewer || bankTab === "holdings"
       ? "all"
@@ -836,6 +837,7 @@ function App() {
     };
     return { ...request, key: JSON.stringify(request) };
   }, [
+    session?.role,
     activeTab,
     allBankSource,
     allBankDateRange,
@@ -978,6 +980,10 @@ function App() {
       return;
     }
     setTransactionReview(null);
+    if (nextSession.role === "media-spend-reviewer") {
+      setDashboard(null);
+      return;
+    }
     await loadDashboard();
   }
 
@@ -2135,6 +2141,24 @@ function App() {
         totalCount={transactionPageIsCurrent ? transactionPageState.totalCount : undefined}
         transactions={loadedBankTransactions}
       />
+    );
+  }
+
+  if (session?.role === "media-spend-reviewer") {
+    return (
+      <main className="transaction-reviewer-shell">
+        <header className="transaction-reviewer-header">
+          <div className="transaction-reviewer-brand"><Banknote size={20} /><strong>Finance</strong></div>
+          <div className="transaction-reviewer-account">
+            <span>{session.username}</span>
+            <ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />
+            <a className="secondary-button transaction-reviewer-logout" href="/logout"><LogOut aria-hidden="true" size={15} /> Log out</a>
+          </div>
+        </header>
+        <div className="transaction-reviewer-content">
+          <MediaSpendView apiBase={apiBase} />
+        </div>
+      </main>
     );
   }
 

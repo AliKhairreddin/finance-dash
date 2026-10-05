@@ -848,6 +848,10 @@
     flex-direction: column-reverse;
   }
 
+  .media-spend-toolbar .toolbar-search-field {
+    flex: 0 0 auto;
+  }
+
   .media-spend-summary {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -97,6 +97,14 @@ export interface MediaFundingApiResponse {
   summary: MediaFundingSummary;
 }
 
+export type MediaSpendProvider = Pick<MediaFundingProvider, "id" | "name">;
+
+export interface MediaSpendAssignmentsResponse {
+  providers: MediaSpendProvider[];
+  assignments: MediaFundingAssignment[];
+  paymentMethods: MediaAccountPaymentMethod[];
+}
+
 export interface MediaFundingProviderSpendGroup {
   accountCount: number;
   businessManagerCount: number;
@@ -104,7 +112,7 @@ export interface MediaFundingProviderSpendGroup {
   dayCount: number;
   key: string;
   platforms: string[];
-  provider: MediaFundingProvider | null;
+  provider: MediaSpendProvider | null;
   rows: MediaSpendRow[];
   searchText: string;
   spend: number;
@@ -263,7 +271,7 @@ export function resolveMediaFundingAssignment(
 export function groupMediaSpendByFundingProvider(
   rows: readonly MediaSpendRow[],
   assignments: readonly MediaFundingAssignment[],
-  providers: readonly MediaFundingProvider[]
+  providers: readonly MediaSpendProvider[]
 ): MediaFundingProviderSpendGroup[] {
   const providersById = new Map(providers.map((provider) => [provider.id, provider]));
   const groups = new Map<string, {
@@ -271,7 +279,7 @@ export function groupMediaSpendByFundingProvider(
     businessManagerKeys: Set<string>;
     dates: Set<string>;
     platforms: Set<string>;
-    provider: MediaFundingProvider | null;
+    provider: MediaSpendProvider | null;
     rows: MediaSpendRow[];
     searchTerms: Set<string>;
     spend: number;
