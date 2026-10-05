@@ -33,7 +33,7 @@ const rates: FxRate[] = [
   { asset: "BTC", rateUsd: 80_000, asOf: now, provider: "coinbase", stale: false }
 ];
 
-test("cash report groups companies and banks in the requested order, excludes crypto and counts open Slash accounts once", () => {
+test("cash report groups banks in the requested order and shows crypto separately from every bank total", () => {
   const report = buildTelegramCashReport({
     asOf: now, rates,
     accounts: [
@@ -57,11 +57,14 @@ test("cash report groups companies and banks in the requested order, excludes cr
       slash({ id: "reserve", name: "Reservation Account", balance: 0 }),
       slash({ id: "closed", name: "Closed", balance: 99_999, closedAt: now })]
   });
-  assert.match(report, /Total ≈ USD 2,152\.00/u);
+  assert.match(report, /Bank total ≈ USD 2,152\.00/u);
   assert.match(report, /Wise LMD\n• USD 300\.00\n\nWise DN\n• EUR 75\.00\n• USD 100\.00\n\nRevolut\n• EUR 10\.00\n• USD 450\.00\n\nSlash\n• USD 1,200\.00/u);
-  assert.match(report, /Totals by currency\n• EUR 85\.00\n• USD 2,050\.00/u);
+  assert.match(report, /Bank totals by currency\n• EUR 85\.00\n• USD 2,050\.00/u);
+  assert.match(report, /Crypto \(separate\)\n• BTC 0\.12345678 ≈ USD 9,876\.54\n• ETH 100\.00000000 · USD value unavailable\n• USDT 1,000\.00000000 · USD value unavailable/u);
+  assert.match(report, /Crypto quotes:.*Coinbase/u);
+  assert.doesNotMatch(report.split("\n\nCrypto (separate)\n")[0], /Bitcoin|BTC|ETH|USDT/u);
   assert.match(report, /7:00|07:00/u);
-  assert.doesNotMatch(report, /Parent Cash|Parent Credit|Amex|Seed|Closed|stale|Bitcoin|BTC|ETH|USDT|GBP|Main|WGNR|Wagner|Reservation/u);
+  assert.doesNotMatch(report, /Parent Cash|Parent Credit|Amex|Seed|Closed|stale|GBP|Main|WGNR|Wagner|Reservation/u);
 });
 
 test("missing or stale quotes suppress the complete USD total and stale bank checks stay visible", () => {
@@ -73,21 +76,50 @@ test("missing or stale quotes suppress the complete USD total and stale bank che
   assert.match(report, /USD total unavailable/u);
   assert.match(report, /⚠️ stale/u);
   assert.match(report, /No current USD quote: EUR/u);
-  assert.doesNotMatch(report, /Total ≈/u);
+  assert.doesNotMatch(report, /Bank total ≈/u);
 });
 
-test("excluded crypto cannot require a quote or mark cash stale, and zero bank groups stay visible", () => {
+test("missing crypto quotes and stale crypto balances do not affect bank totals or bank freshness", () => {
   const report = buildTelegramCashReport({
     accounts: [account({ wiseEntity: "lmd", balance: 0 }), account({ balance: 0 }),
       account({ source: "revolut", balance: 0 }),
-      account({ source: "revolut", currency: "btc", balance: 10, syncedAt: "invalid" })],
+      account({ source: "revolut", currency: "btc", balance: 10, syncedAt: "2026-09-05T01:00:00Z" })],
     slashAccounts: [slash({ balance: 0 })], rates: [], asOf: now
   });
-  assert.match(report, /Total ≈ USD 0\.00/u);
+  assert.match(report, /Bank total ≈ USD 0\.00/u);
   for (const group of ["Wise LMD", "Wise DN", "Revolut", "Slash"]) {
     assert.ok(report.includes(`${group}\n• USD 0.00`));
   }
-  assert.doesNotMatch(report, /BTC|Bitcoin|stale|unavailable|FX:/u);
+  assert.match(report, /Crypto \(separate\)\n• BTC 10\.00000000 · USD value unavailable/u);
+  assert.match(report, /^Crypto:.*⚠️ stale$/mu);
+  assert.doesNotMatch(report, /^Revolut:.*stale|Bank USD total unavailable|No current USD quote|FX:|Crypto quotes:/mu);
+});
+
+test("stale crypto quotes are not used and unavailable bank FX does not hide a valid crypto value", () => {
+  const accounts = [account({ currency: "EUR", balance: 100 }), account({ source: "revolut", currency: "BTC", balance: 0.5 })];
+  const staleCrypto = buildTelegramCashReport({ accounts, slashAccounts: [],
+    rates: rates.map((rate) => ({ ...rate, stale: rate.asset === "BTC" })), asOf: now });
+  assert.match(staleCrypto, /Bank total ≈ USD 120\.00/u);
+  assert.match(staleCrypto, /BTC 0\.50000000 · USD value unavailable/u);
+  assert.doesNotMatch(staleCrypto, /40,000|Crypto quotes:/u);
+  const missingFx = buildTelegramCashReport({ accounts, slashAccounts: [], rates: rates.filter((rate) => rate.asset === "BTC"), asOf: now });
+  assert.match(missingFx, /Bank USD total unavailable/u);
+  assert.match(missingFx, /BTC 0\.50000000 ≈ USD 40,000\.00/u);
+});
+
+test("crypto is grouped only by asset, with native precision, and zero or non-live holdings are omitted", () => {
+  const report = buildTelegramCashReport({ accounts: [account(),
+    account({ source: "revolut", currency: "BTC", balance: 9 }),
+    account({ source: "revolut", currency: "btc", balance: 0.69354104 }),
+    account({ source: "revolut", currency: "ETH", balance: 0 }),
+    account({ source: "revolut", currency: "BTC", balance: 10, status: "seeded" })],
+  slashAccounts: [], rates, asOf: now });
+  assert.match(report, /Bank total ≈ USD 100\.00/u);
+  assert.match(report, /BTC 9\.69354104 ≈ USD 775,483\.28/u);
+  assert.equal(report.match(/• BTC/gu)?.length, 1);
+  assert.doesNotMatch(report, /ETH/u);
+  const noCrypto = buildTelegramCashReport({ accounts: [account()], slashAccounts: [], rates, asOf: now });
+  assert.doesNotMatch(noCrypto, /Crypto/u);
 });
 
 test("Wise cash without an identified company cannot silently be assigned to another company", () => {
@@ -215,9 +247,10 @@ test("an unmapped recipient does not prevent delivery to the other authorized re
   assert.equal(sent, 1);
 });
 
-test("/cash returns a copyable report using all live Slash pages and only fiat quotes without mutations", async () => {
+test("/cash fetches fiat and crypto quotes, keeps their values separate, and remains copyable without mutations", async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
+  let cryptoQuoteUnavailable = false;
   const env = {
     CONVEX_URL: "https://cash-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service-token",
     WISE_CONNECTION_ID: "primary", WISE_ENVIRONMENT: "production",
@@ -246,6 +279,9 @@ test("/cash returns a copyable report using all live Slash pages and only fiat q
       }], metadata: second ? { count: 1 } : { count: 1, nextCursor: "page2" } });
     }
     if (url.pathname === "/v2/prices/EUR-USD/spot") return Response.json({ data: { amount: "1.2", currency: "USD", base: "EUR" } });
+    if (url.pathname === "/v2/prices/BTC-USD/spot") return cryptoQuoteUnavailable
+      ? Response.json({ error: "Unavailable" }, { status: 503 })
+      : Response.json({ data: { amount: "80000", currency: "USD", base: "BTC" } });
     throw new Error(`Unexpected request: ${url.pathname}`);
   };
   try {
@@ -253,12 +289,17 @@ test("/cash returns a copyable report using all live Slash pages and only fiat q
     assert.ok(typeof reply !== "string" && "messages" in reply);
     assert.equal(reply.copyable, true);
     assert.equal(reply.messages.length, 1);
-    assert.match(reply.messages[0], /Total ≈ USD 1,420\.00/u);
+    assert.match(reply.messages[0], /Bank total ≈ USD 1,420\.00/u);
     assert.match(reply.messages[0], /Slash\n• USD 1,200\.00/u);
-    assert.doesNotMatch(reply.messages[0], /BTC|Bitcoin|Wagner/u);
+    assert.match(reply.messages[0], /Crypto \(separate\)\n• BTC 2\.00000000 ≈ USD 160,000\.00/u);
+    assert.doesNotMatch(reply.messages[0].split("\n\nCrypto (separate)\n")[0], /BTC|Bitcoin|160,000|Wagner/u);
     assert.ok(requests.includes("/v2/prices/EUR-USD/spot"));
-    assert.ok(!requests.some((path) => path.includes("BTC")));
+    assert.ok(requests.includes("/v2/prices/BTC-USD/spot"));
     assert.equal(requests.filter((path) => path === "/virtual-account").length, 2);
+    cryptoQuoteUnavailable = true;
+    const reportWithoutCryptoQuote = await getTelegramCashReport(env as never);
+    assert.match(reportWithoutCryptoQuote, /Bank total ≈ USD 1,420\.00/u);
+    assert.match(reportWithoutCryptoQuote, /BTC 2\.00000000 · USD value unavailable/u);
     assert.equal(requests.includes("/api/mutation"), false);
     globalThis.fetch = async () => { throw new Error("Source unavailable"); };
     await assert.rejects(getTelegramCashReport(env as never));

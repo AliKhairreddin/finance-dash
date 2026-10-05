@@ -272,7 +272,7 @@ import {
   slashVirtualAccountBalanceObservations,
   type TelegramAlertSettings
 } from "./telegramAlerts";
-import { buildTelegramCashReport, cashReportRecipient, isCashReportAccount, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
+import { buildTelegramCashReport, cashReportRecipient, isCashReportAccount, isCashReportCryptoAccount, sendTelegramCashReportIfDue, splitCashReport } from "./telegramCashReport";
 import {
   appendAmexCursorFingerprint,
   amexCursorFingerprint,
@@ -4062,7 +4062,7 @@ export async function getTelegramCashReport(env: Env): Promise<string> {
     }
   }
   const assets = [
-    ...accounts.filter(isCashReportAccount),
+    ...accounts.filter((account) => isCashReportAccount(account) || isCashReportCryptoAccount(account)),
     ...slashAccounts.filter((account) => !account.closedAt)
   ].filter((account) => account.balance !== 0).map((account) => account.currency);
   let rates: FxRate[];
