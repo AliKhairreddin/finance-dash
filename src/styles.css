@@ -12543,7 +12543,17 @@ body {
 .amex-statement-summary { font-size: 12px; }
 .amex-statement-title strong { flex: 1; overflow-wrap: anywhere; }
 .amex-import-actions { justify-content: flex-end; }
-.amex-import-result { font-size: 13px; }
+.amex-import-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); }
+.amex-import-status[data-status="imported"] { border-color: var(--green-border); background: var(--green-soft); }
+.amex-import-status[data-status="failed"] { border-color: var(--amber-border); background: var(--amber-soft); }
+.amex-import-result { display: flex; gap: 10px; align-items: center; font-size: 13px; min-width: 0; }
+.amex-import-result > svg { flex-shrink: 0; }
+.amex-import-result > div { display: grid; gap: 4px; }
+.amex-import-result span { color: var(--app-muted); overflow-wrap: anywhere; }
+.amex-import-status[data-status="imported"] .amex-import-result > svg, .amex-history-status[data-status="imported"] { color: var(--green); }
+.amex-import-progress { flex-basis: 100%; width: 100%; height: 6px; accent-color: var(--ink); }
+.amex-history-status, .amex-loading { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.amex-import-status .amex-import-actions { margin-left: auto; }
 .amex-review-check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 @media (max-width: 640px) { .amex-import-dialog { padding: 16px; } .amex-upload-options { grid-template-columns: 1fr 1fr; } .amex-statement-table { max-height: 35dvh; } }
 .amex-import-heading .note-popover { position: relative; inset: auto; display: inline-flex; }
