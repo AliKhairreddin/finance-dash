@@ -5,6 +5,7 @@ import {
   bindRevenuePartnerCompany,
   calculateRevenueMetrics,
   mergeRevenuePartnerDirectory,
+  revenueRunsForPeriod,
   revenueRuleId,
   resolveRevenuePeriod
 } from "./revenue";
@@ -196,4 +197,48 @@ test("this-week revenue pulls are cumulative from Monday through the current loc
     periodEnd: "2026-07-23",
     timezone: "Asia/Beirut"
   });
+});
+
+test("last-week revenue shows only the complete selected week and its total", () => {
+  const period = resolveRevenuePeriod({ periodPreset: "last-week", now: new Date("2026-10-06T17:45:00Z") });
+  const selected = {
+    ...run("last-week", 222321, "USD", "invoiced", "2026-10-05T06:00:00Z"),
+    periodStart: "2026-09-28", periodEnd: "2026-10-04"
+  };
+  const saved = [
+    { ...selected, id: "accruing", revenue: 5259, periodStart: "2026-10-05", periodEnd: "2026-10-05" },
+    selected,
+    { ...selected, id: "older", revenue: 160685, periodStart: "2026-09-21", periodEnd: "2026-09-27" },
+    { ...selected, id: "partial", periodEnd: "2026-10-02" },
+    { ...selected, id: "overlap", periodStart: "2026-09-25" }
+  ];
+  const visible = revenueRunsForPeriod(saved, [], period);
+  assert.deepEqual(visible, [selected]);
+  assert.deepEqual(calculateRevenueMetrics([], visible).totalRevenue, { USD: 222321 });
+  assert.equal(saved.length, 5);
+});
+
+test("a fresh pull replaces saved revenue for the same rule without double-counting", () => {
+  const saved = run("saved", 100, "USD", "invoiced", "2026-07-08T00:00:00Z");
+  const fresh = { ...saved, id: "fresh", revenue: 120, status: "pulled" as const, createdAt: "2026-07-09T00:00:00Z" };
+  const visible = revenueRunsForPeriod([saved], [fresh], saved);
+  assert.deepEqual(visible, [fresh]);
+  assert.deepEqual(calculateRevenueMetrics([], visible).totalRevenue, { USD: 120 });
+  const failed = { ...fresh, id: "retry-failed", status: "failed" as const, revenue: 0 };
+  assert.deepEqual(revenueRunsForPeriod([saved], [failed], saved), [failed]);
+});
+
+test("changing the selected period excludes stale pulls and does not substitute overlapping history", () => {
+  const saved = run("saved", 100, "USD", "invoiced", "2026-07-08T00:00:00Z");
+  const custom = { ...saved, id: "custom", periodStart: "2026-07-03", periodEnd: "2026-07-05" };
+  assert.deepEqual(revenueRunsForPeriod([saved], [custom], saved), [saved]);
+  assert.deepEqual(revenueRunsForPeriod([saved], [], custom), []);
+  assert.deepEqual(revenueRunsForPeriod([saved], [custom], custom), [custom]);
+});
+
+test("the selected period keeps one latest result per rule, including separate rules for one company", () => {
+  const saved = run("saved", 100, "USD", "invoiced", "2026-07-08T00:00:00Z");
+  const latest = { ...saved, id: "latest", revenue: 120, createdAt: "2026-07-09T00:00:00Z" };
+  const other = { ...saved, id: "other", partnerId: "other-rule" };
+  assert.deepEqual(revenueRunsForPeriod([latest, saved, other], [], saved), [latest, other]);
 });

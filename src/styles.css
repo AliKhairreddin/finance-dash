@@ -6374,6 +6374,98 @@ th.amount .sortable-table-heading {
   width: min(640px, calc(100vw - 30px));
 }
 
+.payment-dialog {
+  display: flex;
+  width: min(640px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.payment-dialog.payment-dialog-expanded { width: min(1480px, calc(100vw - 32px)); }
+.payment-dialog .payment-modal { flex: 1 1 640px; width: 100%; max-height: calc(100dvh - 32px); margin: 0; border: 0; border-radius: 0; box-shadow: none; padding: 22px; }
+.payment-dialog-expanded .payment-modal { flex: 0 0 38%; min-width: 370px; }
+.payment-dialog .modal-header [data-slot="dialog-title"] { font-size: 1.12rem; line-height: 1.35; }
+.payment-transaction-field { display: grid; gap: 7px; margin: 16px 0; }
+.payment-transaction-label { font-size: 0.84rem; font-weight: 650; color: var(--label-text); }
+.payment-transaction-label > span { font-weight: 400; color: var(--app-muted); }
+.payment-transaction-trigger { display: flex; width: 100%; height: auto; min-height: 48px; justify-content: flex-start; gap: 10px; padding: 10px 12px; text-align: left; white-space: normal; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.payment-transaction-trigger:hover, .payment-transaction-trigger[aria-expanded="true"] { background: var(--hover-bg); border-color: var(--app-muted); }
+.payment-transaction-trigger > svg { flex-shrink: 0; }
+.payment-transaction-trigger > svg:last-child { margin-left: auto; }
+.payment-transaction-trigger > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.payment-transaction-trigger > span > span { color: var(--app-muted); font-size: 0.76rem; font-weight: 400; }
+.payment-transaction-field > .icon-text-button { justify-self: start; }
+.payment-transaction-picker { display: flex; flex: 1 1 62%; flex-direction: column; min-width: 0; min-height: 0; max-height: calc(100dvh - 32px); border-left: 1px solid var(--line); background: var(--panel); }
+.payment-transaction-picker[hidden] { display: none; }
+.payment-picker-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 22px 20px 14px; }
+.payment-picker-header h2 { font-size: 1.12rem; line-height: 1.35; }
+.payment-picker-header h2 > span { margin-left: 6px; font-size: 0.75rem; font-weight: 500; color: var(--app-muted); }
+.payment-picker-controls { flex-shrink: 0; padding: 0 20px; }
+.payment-picker-search { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.payment-picker-search:focus-within { outline: 2px solid var(--app-muted); outline-offset: 2px; }
+.payment-picker-search > svg { flex-shrink: 0; color: var(--app-muted); }
+.payment-picker-search input { border: 0; box-shadow: none; padding: 0; outline: none; background: transparent; }
+.payment-picker-search input:focus-visible { box-shadow: none; }
+.payment-picker-search input::-webkit-search-cancel-button { display: none; }
+.payment-picker-quick-filters { display: flex; gap: 8px; margin-top: 12px; }
+.payment-picker-quick-filters > .searchable-select { flex: 1; min-width: 0; }
+.payment-picker-quick-filters > button { flex-shrink: 0; }
+.payment-filter-count { display: inline-grid; place-items: center; min-width: 17px; height: 17px; border-radius: 4px; background: var(--hover-bg); font-size: 0.7rem; }
+.payment-picker-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
+.payment-picker-filters label { display: grid; gap: 5px; font-size: 0.76rem; font-weight: 600; color: var(--label-text); }
+.payment-picker-account { grid-column: 1 / -1; }
+.payment-picker-status { display: flex; align-items: center; gap: 7px; min-height: 42px; color: var(--app-muted); font-size: 0.76rem; }
+.payment-picker-status > span { display: inline-flex; align-items: center; gap: 6px; }
+.payment-picker-status > .note-popover { position: static; display: inline-flex; }
+.payment-picker-status > button:last-child { margin-left: auto; }
+.payment-picker-results { flex: 1; min-height: 120px; overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
+.payment-picker-table { width: 100%; table-layout: fixed; font-size: 0.76rem; border-collapse: collapse; }
+.payment-picker-table thead { position: sticky; top: 0; z-index: 1; background: var(--subtle-bg); }
+.payment-picker-table th, .payment-picker-table td { padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.payment-picker-table th:first-child, .payment-picker-table td:first-child { padding-left: 20px; }
+.payment-picker-table th:first-child { width: 33%; }
+.payment-picker-table th:nth-child(2) { width: 21%; }
+.payment-picker-table th:nth-child(3) { width: 15%; }
+.payment-picker-table th:nth-child(4) { width: 20%; }
+.payment-picker-table th:last-child { width: 76px; }
+.payment-picker-table .amount { text-align: right; font-variant-numeric: tabular-nums; }
+.payment-picker-table td strong { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.payment-picker-table td > span { display: block; margin-top: 4px; font-size: 0.72rem; color: var(--app-muted); overflow-wrap: anywhere; }
+.payment-picker-table td .payment-transaction-match { color: var(--green); font-weight: 600; }
+.payment-picker-table tr.payment-transaction-selected { background: var(--selected-option-bg); }
+.payment-picker-table tbody tr:hover { background: var(--hover-bg); }
+.payment-picker-table .secondary-button { min-height: 28px; height: 28px; padding: 0 8px; font-size: 0.72rem; }
+.payment-transaction-check { color: var(--green); }
+.payment-picker-empty { display: grid; place-items: center; gap: 10px; padding: 44px 20px; color: var(--app-muted); text-align: center; font-size: 0.8rem; }
+.payment-picker-empty strong { color: var(--ink); }
+.payment-picker-more { display: flex; justify-content: center; padding: 16px; }
+.payment-picker-footer { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); background: var(--subtle-bg); font-size: 0.76rem; }
+.payment-picker-footer strong { margin-left: 5px; }
+
+@media (max-width: 1000px) {
+  .payment-dialog-expanded .payment-modal { display: none; }
+  .payment-transaction-picker { height: calc(100dvh - 32px); border-left: 0; }
+}
+
+@media (max-width: 600px) {
+  .payment-dialog, .payment-dialog.payment-dialog-expanded { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .payment-dialog .payment-modal { max-height: calc(100dvh - 16px); padding: 16px; }
+  .payment-transaction-picker { max-height: calc(100dvh - 16px); height: calc(100dvh - 16px); }
+  .payment-picker-header { padding: 16px 12px 12px; }
+  .payment-picker-controls { padding: 0 12px; }
+  .payment-picker-table { min-width: 650px; }
+  .payment-picker-quick-filters { flex-wrap: wrap; }
+  .payment-picker-quick-filters > .searchable-select { flex: 1 1 120px; }
+  .payment-picker-footer { padding: 12px; }
+  .payment-picker-footer > span { display: grid; gap: 3px; }
+  .payment-picker-footer strong { margin: 0; }
+}
+
 .payment-match-status > .note-popover {
   position: static;
   display: inline-flex;
@@ -12342,6 +12434,10 @@ body {
 .cash-flow-report-note { display: block; padding: 0 16px 12px; font-size: .8rem; }
 .cash-flow-report-note textarea { margin-top: 6px; min-height: 54px; }
 .cash-flow-entry-table .amount small { display: block; font-variant-numeric: tabular-nums; }
+.cash-flow-account-order { display: flex; justify-content: flex-end; padding: 0 12px; }
+.cash-flow-account-summary th:last-child { width: 140px; }
+.cash-flow-account-summary .amount { font-variant-numeric: tabular-nums; }
+.cash-flow-account-summary .amount .inline-error { display: block; }
 
 /* Invoice forms use the shared focus-managed dialog without a second modal frame. */
 .invoice-editor-dialog { width: min(720px, calc(100vw - 24px)); max-width: calc(100vw - 24px); padding: 0; display: block; }

@@ -1,3 +1,4 @@
+import { PaymentTransactionPicker, paymentBankLabel } from "./PaymentTransactionPicker";
 import { DocumentCreateMenu } from "@/features/expenses/DocumentsView";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
@@ -15,6 +16,7 @@ import {
   Mail,
   RefreshCw,
   Send,
+  Search,
   Sparkles,
   Trash2,
   X
@@ -69,6 +71,7 @@ import { calculateInvoiceSummaryTotals, isClosedBillingPeriod } from "../../../s
 import { dashboardInvoiceDeletionBlockReason } from "../../../shared/invoiceDeletion";
 import { bankPeriodPresetLabel, bankPeriodPresetRange, bankPeriodPresets, type BankPeriodPreset } from "../../../shared/bankPeriods";
 import { financeOperatingDate } from "../../../shared/operatingDate";
+import { revenueRunsForPeriod } from "../../../shared/revenue";
 
 type InvoiceTab = "all" | "pending" | "paid";
 type InvoiceStatusFilter = "all" | "draft" | "open";
@@ -301,8 +304,10 @@ export function RevenueView({
     () => [...new Set([...pullResults.map((run) => run.currency), ...dashboard.revenueRuns.map((run) => run.currency), ...dashboard.revenueAccruals.map((row) => row.currency)])].sort(),
     [dashboard.revenueAccruals, dashboard.revenueRuns, pullResults]
   );
-  const previewRunIds = new Set(pullResults.map((run) => run.id));
-  const displayedRuns = [...pullResults, ...dashboard.revenueRuns.filter(run => !previewRunIds.has(run.id))];
+  const displayedRuns = revenueRunsForPeriod(dashboard.revenueRuns, pullResults, {
+    periodStart: revenueDateRange.fromDate,
+    periodEnd: revenueDateRange.toDate
+  });
   function revenueRunSortValue(run: RevenueRun): boolean | number | string | undefined {
     const partner = partnersById.get(run.partnerId);
     if (runSortKey === "activity") return run.source === "quinstreet" ? run.leads : run.conversions;
@@ -653,7 +658,8 @@ export function InvoicesView({
   onUpdateDraft,
   onSendInvoices,
   onBulkRecordPayments,
-  onRecordPayment
+  onRecordPayment,
+  onNotice
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
@@ -664,6 +670,7 @@ export function InvoicesView({
   onSendInvoices: (invoiceIds: string[], mode: MeritSendMode) => Promise<void>;
   onBulkRecordPayments: (payload: BulkRecordInvoicePaymentsPayload) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
+  onNotice: (message: string) => void;
 }) {
   const [tab, setTab] = useUrlState<InvoiceTab>("invoiceTab", "pending", {
     allowedValues: ["all", "pending", "paid"],
@@ -707,6 +714,7 @@ export function InvoicesView({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [invoiceActionError, setInvoiceActionError] = useState<string | null>(null);
+  const [copyingList, setCopyingList] = useState(false);
 
   const salesInvoices = dashboard.invoices.filter((invoice) => invoice.documentType === "sales_invoice");
   const allRows: DisplayInvoiceRow[] = [
@@ -737,6 +745,11 @@ export function InvoicesView({
     if (sortKey === "forecast") return dashboard.invoicePredictions.find((prediction) => prediction.invoiceId === row.invoice.id)?.predictedDate;
     if (sortKey === "period") return row.invoice.periodStart;
     return `${row.status}:${matchId(row.invoice) ? "matched" : "unmatched"}:${row.invoice.meritStatus ?? "none"}:${row.invoice.meritDeliveryStatus}`;
+  }
+
+  function compareInvoiceRows(left: DisplayInvoiceRow, right: DisplayInvoiceRow): number {
+    return compareTableValues(invoiceSortValue(left), invoiceSortValue(right), sortDirection)
+      || left.id.localeCompare(right.id);
   }
 
   const filteredRows = allRows
@@ -796,10 +809,7 @@ export function InvoicesView({
       if (tab === "paid") return row.status === "paid";
       return true;
     })
-    .sort((left, right) =>
-      compareTableValues(invoiceSortValue(left), invoiceSortValue(right), sortDirection)
-      || left.id.localeCompare(right.id)
-    );
+    .sort(compareInvoiceRows);
 
   function requestSort(nextSortKey: InvoiceSortKey) {
     if (nextSortKey === sortKey) {
@@ -826,7 +836,10 @@ export function InvoicesView({
     )
     .map((row) => row.invoice.id);
   const allActionableSelected = actionableVisibleIds.length > 0 && actionableVisibleIds.every((id) => selectedIds.includes(id));
-  const selectedInvoices = salesInvoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const selectedInvoices = allRows
+    .filter((row) => selectedIds.includes(row.id))
+    .sort(compareInvoiceRows)
+    .map((row) => row.invoice);
   const allSelectedSendable = selectedInvoices.length > 0
     && selectedInvoices.length === selectedIds.length
     && selectedInvoices.every((invoice) => invoiceCanBeSelected(invoice, providersById));
@@ -854,6 +867,26 @@ export function InvoicesView({
 
   function toggleSelected(id: string, checked: boolean) {
     setSelectedIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
+  }
+
+  async function copyInvoiceList() {
+    if (selectedInvoices.length === 0 || copyingList) return;
+    setCopyingList(true);
+    setInvoiceActionError(null);
+    try {
+      const list = selectedInvoices.map((invoice) => {
+        const provider = invoice.providerId ? providersById.get(invoice.providerId) : undefined;
+        return [provider?.name ?? invoice.customerName, money(invoice.amount, invoice.currency), invoice.invoiceNumber]
+          .map((value) => value.replace(/[\t\r\n]+/g, " ").trim())
+          .join("\t");
+      }).join("\n");
+      await navigator.clipboard.writeText(list);
+      onNotice(`${selectedInvoices.length} invoice${selectedInvoices.length === 1 ? "" : "s"} copied to clipboard.`);
+    } catch {
+      setInvoiceActionError("Could not copy the invoice list. Allow clipboard access in your browser and try again.");
+    } finally {
+      setCopyingList(false);
+    }
   }
 
   async function editInvoice(invoice: Invoice) {
@@ -1044,6 +1077,15 @@ export function InvoicesView({
                 <Button
                   className="icon-text-button"
                   type="button"
+                  title="Copy company names, amounts, and invoice numbers"
+                  onClick={() => void copyInvoiceList()}
+                  disabled={copyingList || selectedInvoices.length === 0}
+                >
+                  {copyingList ? <Loader2 className="spin" size={15} /> : <Copy size={15} />} Copy List
+                </Button>
+                <Button
+                  className="icon-text-button"
+                  type="button"
                   title={selectedPayableInvoices.length > 0 ? "Record the full outstanding balance in this dashboard only" : "Only unpaid drafts or open invoices can be recorded as paid"}
                   onClick={() => setBulkPaymentInvoices(selectedPayableInvoices)}
                   disabled={selectedPayableInvoices.length === 0}
@@ -1194,7 +1236,7 @@ export function InvoicesView({
         {!meritWriteEnabled && (
           <div className="income-callout warning"><CircleAlert size={17} /><span>Merit writes are currently disabled by the deployment switch. Draft review and local payment controls remain available.</span></div>
         )}
-        {(duplicateError || invoiceActionError) && <div className="inline-error">{duplicateError || invoiceActionError}</div>}
+        {(duplicateError || invoiceActionError) && <div className="inline-error" role="alert">{duplicateError || invoiceActionError}</div>}
 
         <div className="table-wrap">
           <table className="data-table modern-income-table invoice-control-table">
@@ -1778,6 +1820,10 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
   const [candidateIsDone, setCandidateIsDone] = useState(false);
   const candidateAbortRef = useRef<AbortController | null>(null);
   const paymentEditedRef = useRef(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const candidateCursorsRef = useRef(new Set<string>());
+  const selectedCandidateRef = useRef<Transaction | null>(null);
   const [suggestions, setSuggestions] = useState<InvoicePaymentSuggestions | null>(null);
   const [amount, setAmount] = useState(String(remaining));
   const [paidAt, setPaidAt] = useState(financeOperatingDate());
@@ -1791,6 +1837,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
 
   function selectTransaction(value: string, transactions: Transaction[]) {
     const row = availableInvoicePaymentTransactions(invoice, transactions, paymentAllocations).find(item => item.transaction.id === value);
+    selectedCandidateRef.current = row?.transaction ?? null;
     setTransactionId(row ? value : "");
     const nextSource = row?.transaction.source;
     setSource(nextSource && paymentSourceOptions.some(item => item.value === nextSource) ? nextSource as PaymentSource : "");
@@ -1808,6 +1855,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
     setCandidatesError(null);
     setCandidateContinueCursor(null);
     setCandidateIsDone(false);
+    candidateCursorsRef.current.clear();
 
     async function loadCandidates() {
       const query = new URLSearchParams({ currency: invoice.currency, limit: "200" });
@@ -1827,6 +1875,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
         const nextSuggestions = suggestionResult.status === "fulfilled" ? suggestionResult.value : null;
         setSuggestions(nextSuggestions);
         const transactions = [...new Map([
+          ...(selectedCandidateRef.current ? [selectedCandidateRef.current] : []),
           ...(pageResult.status === "fulfilled" ? pageResult.value.transactions : []),
           ...(nextSuggestions?.suggestions.map(item => item.transaction) ?? [])
         ].map(transaction => [transaction.id, transaction])).values()];
@@ -1854,7 +1903,8 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
 
     return () => {
       controller.abort();
-      if (candidateAbortRef.current === controller) candidateAbortRef.current = null;
+      candidateAbortRef.current?.abort();
+      candidateAbortRef.current = null;
     };
   }, [candidateLoadAttempt, invoice.id, invoice.currency]);
 
@@ -1880,6 +1930,10 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
       }
       const page = (await response.json()) as TransactionPage;
       if (controller.signal.aborted) return;
+      if (!page.isDone && (!page.continueCursor || page.continueCursor === candidateContinueCursor || candidateCursorsRef.current.has(page.continueCursor))) {
+        throw new Error("Bank history search did not advance. Retry to reload transactions.");
+      }
+      candidateCursorsRef.current.add(candidateContinueCursor);
       const incomingIds = new Set(page.transactions.map((transaction) => transaction.id));
       setCandidateTransactions((current) => [
         ...current.filter((transaction) => !incomingIds.has(transaction.id)),
@@ -1896,10 +1950,20 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
     }
   }
 
-  const suggestedIds = new Set(suggestions?.suggestions.map(item => item.transaction.id));
-  const eligibleTransactions = availableInvoicePaymentTransactions(invoice, candidateTransactions, paymentAllocations)
-    .sort((left, right) => Number(suggestedIds.has(right.transaction.id)) - Number(suggestedIds.has(left.transaction.id))
-      || right.transaction.date.localeCompare(left.transaction.date));
+  useEffect(() => {
+    if (pickerOpen && !candidatesLoading && !candidatesError && !candidateIsDone && candidateContinueCursor) {
+      void loadMoreCandidates();
+    }
+  }, [pickerOpen, candidatesLoading, candidatesError, candidateIsDone, candidateContinueCursor]);
+
+  const eligibleTransactions = useMemo(
+    () => availableInvoicePaymentTransactions(invoice, candidateTransactions, paymentAllocations),
+    [invoice, candidateTransactions, paymentAllocations]
+  );
+  function closePicker() {
+    setPickerOpen(false);
+    requestAnimationFrame(() => pickerTriggerRef.current?.focus());
+  }
   const selectedSuggestion = suggestions?.suggestions.find(item => item.transaction.id === transactionId);
   const selectedTransaction = eligibleTransactions.find((row) => row.transaction.id === transactionId);
   const maximumPayment = selectedTransaction ? Math.min(remaining, selectedTransaction.available) : remaining;
@@ -1925,57 +1989,27 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
     }
   }
 
-  return createPortal(
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal payment-modal" role="dialog" aria-modal="true" aria-labelledby="mark-paid-title" onSubmit={handleSubmit} onChangeCapture={() => { paymentEditedRef.current = true; }}>
-        <div className="modal-header"><div><p className="eyebrow">Dashboard payment</p><h2 id="mark-paid-title">Record payment for {invoice.invoiceNumber}</h2></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
+  return (
+    <Dialog open onOpenChange={(open, details) => {
+      if (open || submitting) return;
+      if (pickerOpen && details.reason === "escape-key") { details.cancel(); closePicker(); }
+      else onClose();
+    }}>
+      <DialogContent className={`payment-dialog ${pickerOpen ? "payment-dialog-expanded" : ""}`} aria-labelledby="mark-paid-title" showCloseButton={false}>
+      <form className="modal payment-modal" onSubmit={handleSubmit} onChangeCapture={() => { paymentEditedRef.current = true; }}>
+        <div className="modal-header"><div><p className="eyebrow">Dashboard payment</p><DialogTitle id="mark-paid-title">Record payment for {invoice.invoiceNumber}</DialogTitle></div><Button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></Button></div>
         <div className="merit-unchanged-banner"><CircleAlert size={18} /><div><strong>Merit will stay unchanged</strong><span>This only updates payment status and history in this dashboard.</span></div></div>
         {error && <div className="inline-error">{error}</div>}
-        <label>
-          Bank transaction (all banks, optional)
-          <NativeSelect
-            value={transactionId}
-            disabled={candidatesLoading}
-            onValueChange={(value) => {
-              paymentEditedRef.current = true;
-              selectTransaction(value, candidateTransactions);
-            }}
-          >
-            <NativeSelectOption value="">
-              {candidatesLoading
-                ? "Loading matching transactions…"
-                : candidatesError
-                  ? "Transactions unavailable · manual payment only"
-                  : eligibleTransactions.length === 0
-                    ? "No matches · manual payment only"
-                    : "Choose a bank transaction (optional)"}
-            </NativeSelectOption>
-            {eligibleTransactions.map(({ transaction, available }) => (
-              <NativeSelectOption key={transaction.id} value={transaction.id}>
-                {suggestions?.suggestions.find(item => item.transaction.id === transaction.id)?.kind === "linked" ? "Matched · " : suggestedIds.has(transaction.id) ? "Suggested · " : ""}{dateLabel(transaction.date)} · {paymentSourceOptions.find(item => item.value === transaction.source)?.label} · {transaction.accountName} · {transaction.counterparty} · {money(available, transaction.currency)} remaining
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-          {candidatesError && (
-            <span className="field-help">
-              {candidatesError}{" "}
-              <Button type="button" className="icon-text-button" onClick={() => setCandidateLoadAttempt((attempt) => attempt + 1)}>
-                <RefreshCw size={13} /> Retry
-              </Button>
-            </span>
-          )}
-          {!candidateIsDone && candidateContinueCursor && (
-            <Button
-              type="button"
-              className="icon-text-button"
-              onClick={() => void loadMoreCandidates()}
-              disabled={candidatesLoading}
-            >
-              {candidatesLoading ? <Loader2 className="spin" size={13} /> : <ChevronRight size={13} />}
-              Load older matching transactions
-            </Button>
-          )}
-        </label>
+        <div className="payment-transaction-field">
+          <span className="payment-transaction-label">Bank transaction <span>(optional)</span></span>
+          <Button ref={pickerTriggerRef} type="button" className="payment-transaction-trigger" aria-label={selectedTransaction ? "Change bank transaction" : "Search bank transactions"} aria-expanded={pickerOpen} aria-controls="payment-transaction-picker" onClick={() => setPickerOpen(true)}>
+            <Search size={18} aria-hidden="true" />
+            <span>{selectedTransaction ? <><strong>{selectedTransaction.transaction.counterparty || selectedTransaction.transaction.rawName}</strong><span>{paymentBankLabel(selectedTransaction.transaction.source)} · {selectedTransaction.transaction.accountName} · {money(selectedTransaction.available, invoice.currency)}</span></> : <strong>Search bank transactions</strong>}</span>
+            <ChevronRight size={17} aria-hidden="true" />
+          </Button>
+          {selectedTransaction && <Button type="button" className="icon-text-button" onClick={() => { paymentEditedRef.current = true; selectTransaction("", candidateTransactions); }}>Clear selection</Button>}
+          {candidatesError && !pickerOpen && <div className="inline-error">{candidatesError} <Button type="button" className="icon-text-button" onClick={() => setCandidateLoadAttempt(attempt => attempt + 1)}>Retry</Button></div>}
+        </div>
         {selectedSuggestion && <div className="row-actions payment-match-status"><span className="status-pill good">{selectedSuggestion.kind === "linked" ? "Matched to invoice" : selectedSuggestion.kind === "exact" ? "Exact match found" : "Review amount difference"}</span><InfoPopover label="Payment match details"><p>{selectedSuggestion.reason}</p><p>Confirming this payment adds it to the collection forecast history. Full exact matches are recorded as paid automatically. Amount differences need review.</p></InfoPopover></div>}
         {!candidatesLoading && suggestions && !suggestions.searchComplete && <div className="inline-error">The automatic search could not cover all bank history. Review the match or load older transactions.</div>}
         {!candidatesLoading && suggestions && !suggestions.recommendedTransactionId && suggestions.suggestions.length > 0 && <div className="field-help" role="status">Review the possible matches before recording payment.</div>}
@@ -1984,9 +2018,16 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
         <label>Transaction reference<Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Bank or internal reference" /></label>
         <label>Payment note<Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context for this payment" /></label>
         <div className="payment-balance-line"><span>Invoice {money(invoice.amount, invoice.currency)}</span><span>Already recorded {money(allocated, invoice.currency)}</span>{selectedTransaction && <span>Transaction available {money(selectedTransaction.available, invoice.currency)}</span>}<strong>Remaining {money(remaining, invoice.currency)}</strong></div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || candidatesLoading || !source || Number(amount) <= 0 || Number(amount) > maximumPayment || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record in dashboard</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !source || Number(amount) <= 0 || Number(amount) > maximumPayment || !paidAt}>{submitting ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Record in dashboard</Button></div>
       </form>
-    </div>,
-    document.body
+      <PaymentTransactionPicker
+        open={pickerOpen} rows={eligibleTransactions} selectedId={transactionId} remaining={remaining} currency={invoice.currency}
+        suggestions={suggestions} loading={candidatesLoading} complete={candidateIsDone} error={candidatesError}
+        onRetry={() => setCandidateLoadAttempt(attempt => attempt + 1)}
+        onSelect={id => { paymentEditedRef.current = true; selectTransaction(id, candidateTransactions); closePicker(); }}
+        onClose={closePicker}
+      />
+      </DialogContent>
+    </Dialog>
   );
 }

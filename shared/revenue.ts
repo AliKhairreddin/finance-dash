@@ -20,6 +20,26 @@ export interface RevenuePeriod {
   timezone: string;
 }
 
+export function revenueRunsForPeriod(
+  savedRuns: RevenueRun[],
+  pullResults: RevenueRun[],
+  period: Pick<RevenuePeriod, "periodStart" | "periodEnd">
+): RevenueRun[] {
+  const runsByPartner = new Map<string, RevenueRun>();
+  // A pull replaces the saved result for its rule, including failed retries
+  // whose IDs differ. Partial or overlapping periods are not the selected total.
+  for (const runs of [savedRuns, pullResults]) {
+    const latestByPartner = new Map<string, RevenueRun>();
+    for (const run of runs) {
+      if (run.periodStart !== period.periodStart || run.periodEnd !== period.periodEnd) continue;
+      const previous = latestByPartner.get(run.partnerId);
+      if (!previous || run.createdAt > previous.createdAt) latestByPartner.set(run.partnerId, run);
+    }
+    for (const [partnerId, run] of latestByPartner) runsByPartner.set(partnerId, run);
+  }
+  return [...runsByPartner.values()];
+}
+
 export function mergeRevenuePartnerDirectory(partners: RevenuePartner[]): RevenuePartner[] {
   return [...partners].sort((left, right) => {
     const teamOrder = (left.teamId ?? "").localeCompare(right.teamId ?? "");

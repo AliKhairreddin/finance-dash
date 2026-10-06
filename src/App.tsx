@@ -2474,6 +2474,7 @@ function App() {
           onSendInvoices={sendInvoices}
           onBulkRecordPayments={recordBulkInvoicePayments}
           onRecordPayment={recordInvoicePayment}
+          onNotice={setNotice}
         />
       )}
 
