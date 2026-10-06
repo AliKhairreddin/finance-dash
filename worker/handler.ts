@@ -203,9 +203,9 @@ import {
   reconcileExactInvoicePayments
 } from "../shared/income";
 import {
-  mediaSpendMaximumRangeDays,
   mediaSpendMaximumResultRows,
   mediaSpendDates,
+  mediaSpendMaximumSyncDays,
   mediaSpendRefreshRange,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummaryRange,
@@ -788,9 +788,9 @@ async function boundedResponseText(response: Response, maximumBytes = maximumExt
   }
 }
 
-async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
+async function fetchJson<T>(url: string, init: RequestInit, maximumBytes = maximumExternalJsonBytes): Promise<T> {
   const response = await fetch(url, init);
-  const text = await boundedResponseText(response);
+  const text = await boundedResponseText(response, maximumBytes);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
@@ -900,7 +900,7 @@ async function fetchLemonMaxSpend(
       Authorization: `Bearer ${credentials.bearerToken}`
     },
     signal: AbortSignal.timeout(45_000)
-  });
+  }, 16 * 1024 * 1024);
   return parseLemonMaxSpendSummaryRange(
     response,
     fromDate,
@@ -960,33 +960,49 @@ async function syncMediaSpend(
   env: Env,
   fromDate: string,
   toDate: string,
-  dateOrder: "ascending" | "descending" = "ascending"
-): Promise<void> {
+  options: { scheduled?: boolean } = {}
+): Promise<boolean> {
+  const dates = mediaSpendDates(fromDate, toDate);
+  if (dates.length > mediaSpendMaximumSyncDays) throw new ApiError(400, `Choose at most ${mediaSpendMaximumSyncDays} days for the daily LemonMax pull`);
   const credentials = requireLemonMaxCredentials(env);
   const serviceToken = getConvexServiceToken(env);
   const convex = getConvexClient(env);
   const attemptId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
-  await convex.mutation(api.mediaSpend.startSync, {
+  const acquired = await convex.mutation(api.mediaSpend.startSync, {
     serviceToken,
     attemptId,
     fromDate,
     toDate,
     startedAt
   });
+  if (acquired !== "started") {
+    if (options.scheduled) return false;
+    if (acquired === "busy") throw new ApiError(409, "Media spend is already syncing");
+    throw new ApiError(429, "LemonMax has already been requested today (India time). The next automatic pull is at 2:00 PM India time tomorrow.");
+  }
 
   try {
     let rowCount = 0;
     let totalSpend = 0;
-    const dates = mediaSpendDates(fromDate, toDate);
-    if (dateOrder === "descending") dates.reverse();
+    // One unfiltered range request consumes the day's API allowance for every platform/account.
+    const fetchedRows = await fetchLemonMaxSpend(env, fromDate, toDate, startedAt, credentials);
+    const rowsByDate = new Map<string, MediaSpendRow[]>();
+    for (const row of fetchedRows) {
+      const rows = rowsByDate.get(row.date) ?? [];
+      rows.push(row);
+      rowsByDate.set(row.date, rows);
+    }
+    const missingDates: string[] = [];
     for (const date of dates) {
-      const rows = await fetchLemonMaxSpend(env, date, date, startedAt, credentials);
+      const rows = rowsByDate.get(date) ?? [];
       if (rows.length === 0) {
-        throw new Error(`LemonMax returned no account rows for ${date}; stored data was preserved`);
+        missingDates.push(date);
+        continue;
       }
-      await convex.mutation(api.mediaSpend.replaceDate, {
+      const changes = await convex.mutation(api.mediaSpend.replaceDate, {
         serviceToken,
+        attemptId,
         date,
         rows
       });
@@ -999,15 +1015,17 @@ async function syncMediaSpend(
         serviceToken,
         attemptId,
         date,
-        direction: dateOrder === "descending" ? "backward" : "forward",
+        direction: "forward",
         updatedAt: new Date().toISOString()
       });
       if (!coverageAdvanced) throw new Error("Media spend sync attempt was superseded");
+      console.log(JSON.stringify({ event: "media_spend_date_reconciled", date, accounts: new Set(rows.map((row) => `${row.platform}:${row.accountId}`)).size, ...changes }));
       rowCount += rows.length;
       totalSpend += rows.reduce((total, row) => total + row.spend, 0);
     }
+    if (missingDates.length) throw new Error(`LemonMax returned no account rows for ${missingDates.join(", ")}; stored data was preserved and missing days will be included in the next daily pull`);
     const completedAt = new Date().toISOString();
-    await convex.mutation(api.mediaSpend.completeSync, {
+    const completed = await convex.mutation(api.mediaSpend.completeSync, {
       serviceToken,
       attemptId,
       completedAt,
@@ -1015,13 +1033,14 @@ async function syncMediaSpend(
       rowCount,
       totalSpend
     });
+    if (!completed) throw new Error("Media spend sync attempt was superseded");
     console.log(JSON.stringify({
       event: "media_spend_sync_completed",
       fromDate,
       toDate,
       rows: rowCount
     }));
-    return;
+    return true;
   } catch (error) {
     const message = cleanLemonMaxError(error, credentials);
     await convex.mutation(api.mediaSpend.failSync, {
@@ -1195,27 +1214,6 @@ async function deleteMediaFundingAssignment(
   } catch (error) {
     return mediaFundingStorageError(error);
   }
-}
-
-async function bootstrapMediaSpend(env: Env, scheduledTime: number): Promise<boolean> {
-  if (lemonMaxMissingConfiguration(env).length > 0) return false;
-  const yesterday = mediaSpendYesterdayInIndia(scheduledTime);
-  const current = await readMediaSpend(env, yesterday, yesterday);
-  if (
-    current.sync.status === "running"
-    || (current.sync.status === "failed" && (current.sync.consecutiveFailures ?? 0) >= 3)
-  ) return false;
-  const syncStartDate = lemonMaxSyncStartDate(env);
-  if (syncStartDate > yesterday) {
-    throw new ApiError(503, "LemonMax sync start date is after yesterday");
-  }
-  if (!current.sync.coveredFrom) {
-    throw new ApiError(503, "LemonMax stored coverage start is not initialized");
-  }
-  const range = mediaSpendHistoricalBackfillRange(syncStartDate, current.sync.coveredFrom);
-  if (!range) return false;
-  await syncMediaSpend(env, range.fromDate, range.toDate, "descending");
-  return true;
 }
 
 function wiseBaseUrl(env: Env): string {
@@ -2227,21 +2225,6 @@ function isoDateShift(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
-}
-
-export function mediaSpendHistoricalBackfillRange(
-  syncStartDate: string,
-  coveredFrom: string
-): { fromDate: string; toDate: string } | null {
-  if (coveredFrom <= syncStartDate) return null;
-  const toDate = isoDateShift(coveredFrom, -1);
-  const boundedFromDate = isoDateShift(toDate, 1 - mediaSpendMaximumRangeDays);
-  return {
-    fromDate: boundedFromDate < syncStartDate
-      ? syncStartDate
-      : boundedFromDate,
-    toDate
-  };
 }
 
 function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
@@ -8911,18 +8894,6 @@ export default {
     }
     if (controller.cron === "*/5 * * * *") {
       try {
-        if (await bootstrapMediaSpend(env, controller.scheduledTime)) {
-          console.log(JSON.stringify({ event: "media_spend_bootstrap_completed" }));
-        }
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "media_spend_bootstrap_failed",
-          scheduledTime: controller.scheduledTime,
-          error: error instanceof Error ? error.message : String(error)
-        }));
-        failures.push(error);
-      }
-      try {
         await enqueueSlashMetadataRepair(env);
         await processPendingBankBackfills(env);
       } catch (error) {
@@ -9041,7 +9012,7 @@ export default {
           serviceToken: getConvexServiceToken(env)
         });
         const range = mediaSpendRefreshRange(lemonMaxSyncStartDate(env), yesterday, state?.coveredThrough);
-        await syncMediaSpend(env, range.fromDate, range.toDate);
+        await syncMediaSpend(env, range.fromDate, range.toDate, { scheduled: true });
       } catch (error) {
         console.error(JSON.stringify({
           event: "media_spend_sync_failed",

@@ -2,6 +2,8 @@ export const mediaSpendSource = "lemonmax" as const;
 export const mediaSpendCurrency = "USD" as const;
 export const mediaSpendMaximumRangeDays = 92;
 export const mediaSpendMaximumResultRows = 6_000;
+export const mediaSpendSyncLeaseMs = 120_000;
+export const mediaSpendMaximumSyncDays = 14;
 
 export interface MediaSpendRow {
   key: string;
@@ -241,7 +243,7 @@ export function mediaSpendRefreshRange(startDate: string, yesterday: string, cov
   const refreshStart = nextMissing < recentStart ? nextMissing : recentStart;
   const fromDate = startDate > refreshStart ? startDate : refreshStart;
   // Catch up a long outage in bounded contiguous batches, without skipping to yesterday.
-  const batchEnd = shift(fromDate, mediaSpendMaximumRangeDays - 1);
+  const batchEnd = shift(fromDate, mediaSpendMaximumSyncDays - 1);
   return { fromDate, toDate: batchEnd < yesterday ? batchEnd : yesterday };
 }
 
@@ -264,6 +266,10 @@ export function mediaSpendYesterdayInIndia(now: Date | number): string {
   const yesterday = new Date(`${indiaDate}T00:00:00.000Z`);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   return yesterday.toISOString().slice(0, 10);
+}
+
+export function mediaSpendPullDateInIndia(now: number): string {
+  return new Date(now + 330 * 60 * 1_000).toISOString().slice(0, 10);
 }
 
 export function validateMediaSpendDateRange(fromDate: string, toDate: string): void {

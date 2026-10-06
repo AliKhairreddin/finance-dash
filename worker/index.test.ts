@@ -14,7 +14,6 @@ import worker, {
   fetchMeritVendors,
   hasSavedWiseBalanceAccounts,
   incrementalBankDateRange,
-  mediaSpendHistoricalBackfillRange,
   missingBankActivityRanges,
   mergeInvoices
 } from "./handler";
@@ -44,22 +43,6 @@ test("saved Wise balance accounts do not depend on a transaction sync record", (
     updatedAt: "2026-07-31T00:00:00.000Z",
     status: "live"
   }]), true);
-});
-
-test("media spend history backfills backward in bounded contiguous chunks", () => {
-  assert.deepEqual(
-    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-08-01"),
-    { fromDate: "2026-05-01", toDate: "2026-07-31" }
-  );
-  assert.deepEqual(
-    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-05-01"),
-    { fromDate: "2026-01-29", toDate: "2026-04-30" }
-  );
-  assert.deepEqual(
-    mediaSpendHistoricalBackfillRange("2026-01-01", "2026-01-29"),
-    { fromDate: "2026-01-01", toDate: "2026-01-28" }
-  );
-  assert.equal(mediaSpendHistoricalBackfillRange("2026-01-01", "2026-01-01"), null);
 });
 
 const workerTestAuth = {
@@ -1077,7 +1060,7 @@ test("media spend sync rejects empty and truncated API data before replacing sto
         }
         const body = JSON.parse(String(init?.body));
         mutations.push(body.path);
-        return Response.json({ status: "success", value: body.path === "mediaSpend:startSync" ? null : true });
+        return Response.json({ status: "success", value: body.path === "mediaSpend:startSync" ? "started" : true });
       };
       const response = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1147,4 +1130,27 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
       assert.equal(response.status, 400, `${path} reaches payload validation`);
     }
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("manual media sync respects the shared daily allowance before contacting LemonMax", async (t) => {
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(new URL(String(input)).hostname, "test.convex.cloud");
+    const body = JSON.parse(String(init?.body));
+    calls.push(body.path);
+    return Response.json({ status: "success", value: "daily_limit" });
+  });
+  const env = authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service",
+    LEMONMAX_AUTH_TOKEN: "auth", LEMONMAX_BEARER_TOKEN: "bearer", LEMONMAX_SPEND_CURRENCY: "USD", LEMONMAX_SYNC_START_DATE: "2026-08-01" });
+  const response = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fromDate: "2026-10-04", toDate: "2026-10-05" })
+  }), env);
+  assert.equal(response.status, 429);
+  assert.match(await response.text(), /already been requested today/);
+  assert.deepEqual(calls, ["mediaSpend:startSync"]);
+  const tooLarge = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fromDate: "2026-09-01", toDate: "2026-09-30" })
+  }), env);
+  assert.equal(tooLarge.status, 400);
+  assert.deepEqual(calls, ["mediaSpend:startSync"]);
 });

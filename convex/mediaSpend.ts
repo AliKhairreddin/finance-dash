@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { mediaSpendContiguousCoverage } from "../shared/mediaSpend";
+import { mediaSpendContiguousCoverage, mediaSpendPullDateInIndia, mediaSpendSyncLeaseMs } from "../shared/mediaSpend";
+import type { Doc } from "./_generated/dataModel";
 
 const source = v.literal("lemonmax");
 const syncStatus = v.union(v.literal("running"), v.literal("healthy"), v.literal("failed"));
@@ -52,6 +53,10 @@ function requireIsoDate(value: string): void {
 
 function requireTimestamp(value: string): void {
   if (Number.isNaN(Date.parse(value))) throw new ConvexError({ code: "INVALID_MEDIA_SPEND_TIMESTAMP" });
+}
+
+function ownsSync(state: Doc<"mediaSpendSyncState"> | null, attemptId: string): boolean {
+  return state?.status === "running" && state.attemptId === attemptId && (state.leaseExpiresAt ?? 0) > Date.now();
 }
 
 export const listDate = query({
@@ -106,8 +111,9 @@ export const getSyncState = query({
       .query("mediaSpendSyncState")
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
+    const interrupted = storedSync?.status === "running" && (storedSync.leaseExpiresAt ?? 0) <= Date.now();
     return storedSync ? {
-      status: storedSync.status,
+      status: interrupted ? "failed" as const : storedSync.status,
       lastAttemptAt: storedSync.lastAttemptAt,
       lastSuccessAt: storedSync.lastSuccessAt,
       coveredFrom: storedSync.coveredFrom,
@@ -116,7 +122,7 @@ export const getSyncState = query({
       requestedTo: storedSync.requestedTo,
       rowCount: storedSync.rowCount,
       totalSpend: storedSync.totalSpend,
-      lastError: storedSync.lastError,
+      lastError: interrupted ? "Media spend import was interrupted. The next daily pull will retry missing coverage." : storedSync.lastError,
       consecutiveFailures: storedSync.consecutiveFailures
     } : null;
   }
@@ -130,7 +136,7 @@ export const startSync = mutation({
     toDate: v.string(),
     startedAt: v.string()
   },
-  returns: v.null(),
+  returns: v.union(v.literal("started"), v.literal("busy"), v.literal("daily_limit")),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.fromDate);
@@ -144,11 +150,15 @@ export const startSync = mutation({
       .query("mediaSpendSyncState")
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
+    if (existing?.status === "running" && (existing.leaseExpiresAt ?? 0) > Date.now()) return "busy";
+    // Reserve the daily API allowance transactionally, even if the request later fails.
+    if (existing && mediaSpendPullDateInIndia(Date.parse(existing.lastAttemptAt)) === mediaSpendPullDateInIndia(Date.now())) return "daily_limit";
     const next = {
       key: syncStateKey,
       source: "lemonmax" as const,
       status: "running" as const,
       attemptId: args.attemptId,
+      leaseExpiresAt: Date.now() + mediaSpendSyncLeaseMs,
       requestedFrom: args.fromDate,
       requestedTo: args.toDate,
       lastAttemptAt: args.startedAt,
@@ -162,7 +172,7 @@ export const startSync = mutation({
     };
     if (existing) await ctx.db.replace(existing._id, next);
     else await ctx.db.insert("mediaSpendSyncState", next);
-    return null;
+    return "started";
   }
 });
 
@@ -208,9 +218,10 @@ export const advanceCoverage = mutation({
       .query("mediaSpendSyncState")
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
-    if (!storedSync || storedSync.attemptId !== args.attemptId) return false;
+    if (!storedSync || !ownsSync(storedSync, args.attemptId)) return false;
     await ctx.db.patch(storedSync._id, {
       ...mediaSpendContiguousCoverage(storedSync.coveredFrom, storedSync.coveredThrough, args.date),
+      leaseExpiresAt: Date.now() + mediaSpendSyncLeaseMs,
       updatedAt: args.updatedAt
     });
     return true;
@@ -220,10 +231,11 @@ export const advanceCoverage = mutation({
 export const replaceDate = mutation({
   args: {
     serviceToken: v.string(),
+    attemptId: v.string(),
     date: v.string(),
     rows: v.array(mediaSpendRow)
   },
-  returns: v.object({ inserted: v.number(), replaced: v.number(), deleted: v.number() }),
+  returns: v.object({ inserted: v.number(), replaced: v.number(), deleted: v.number(), unchanged: v.number() }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.date);
@@ -242,6 +254,10 @@ export const replaceDate = mutation({
       incomingKeys.add(row.key);
     }
 
+    const sync = await ctx.db.query("mediaSpendSyncState")
+      .withIndex("by_key", (q) => q.eq("key", syncStateKey)).unique();
+    if (!ownsSync(sync, args.attemptId)) throw new ConvexError({ code: "MEDIA_SPEND_SYNC_SUPERSEDED" });
+
     const existing = await ctx.db
       .query("mediaSpendDaily")
       .withIndex("by_date", (q) => q.eq("date", args.date))
@@ -257,11 +273,17 @@ export const replaceDate = mutation({
     let inserted = 0;
     let replaced = 0;
     let deleted = 0;
+    let unchanged = 0;
     for (const row of args.rows) {
       const stored = existingByKey.get(row.key);
       if (stored) {
-        await ctx.db.replace(stored._id, row);
-        replaced += 1;
+        const changed = (Object.keys(row) as (keyof typeof row)[])
+          .filter((key) => key !== "syncedAt").some((key) => stored[key] !== row[key])
+          || stored.accountName !== row.accountName || stored.businessManagerName !== row.businessManagerName;
+        if (changed) {
+          await ctx.db.replace(stored._id, row);
+          replaced += 1;
+        } else unchanged += 1;
       } else {
         await ctx.db.insert("mediaSpendDaily", row);
         inserted += 1;
@@ -273,7 +295,7 @@ export const replaceDate = mutation({
         deleted += 1;
       }
     }
-    return { inserted, replaced, deleted };
+    return { inserted, replaced, deleted, unchanged };
   }
 });
 
@@ -295,7 +317,7 @@ export const completeSync = mutation({
       .query("mediaSpendSyncState")
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
-    if (!existing || existing.attemptId !== args.attemptId) return false;
+    if (!existing || !ownsSync(existing, args.attemptId)) return false;
     await ctx.db.replace(existing._id, {
       key: syncStateKey,
       source: "lemonmax",
@@ -330,7 +352,7 @@ export const failSync = mutation({
       .query("mediaSpendSyncState")
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
-    if (!existing || existing.attemptId !== args.attemptId) return false;
+    if (!existing || !ownsSync(existing, args.attemptId)) return false;
     await ctx.db.replace(existing._id, {
       key: syncStateKey,
       source: "lemonmax",

@@ -52,8 +52,8 @@ import {
 } from "../../../shared/mediaFunding";
 import {
   groupMediaSpendByAccount,
-  mediaSpendDates,
   mediaSpendYesterdayInIndia,
+  mediaSpendPullDateInIndia,
   validateMediaSpendDateRange,
   type MediaSpendAccountGroup,
   type MediaSpendApiResponse,
@@ -336,7 +336,6 @@ export function MediaSpendView({
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function loadData(signal?: AbortSignal): Promise<void> {
@@ -731,29 +730,25 @@ export function MediaSpendView({
     const yesterday = mediaSpendYesterdayInIndia(Date.now());
     const toDate = dateRange.toDate < yesterday ? dateRange.toDate : yesterday;
     if (dateRange.fromDate > toDate) return;
-    const dates = mediaSpendDates(dateRange.fromDate, toDate);
     setIsSyncing(true);
     setError(null);
     try {
-      for (const [index, date] of dates.entries()) {
-        setSyncProgress(`${index + 1}/${dates.length}`);
-        const response = await fetch(`${apiBase}/media-spend/sync`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fromDate: date, toDate: date })
-        });
-        if (!response.ok) throw new Error(await apiErrorMessage(response, "Media spend sync failed"));
-      }
+      const response = await fetch(`${apiBase}/media-spend/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromDate: dateRange.fromDate, toDate })
+      });
+      if (!response.ok) throw new Error(await apiErrorMessage(response, "Media spend sync failed"));
       await loadData();
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Media spend sync failed");
     } finally {
       setIsSyncing(false);
-      setSyncProgress("");
     }
   }
 
   const sync = data?.sync;
+  const pulledToday = Boolean(sync?.lastAttemptAt && mediaSpendPullDateInIndia(Date.parse(sync.lastAttemptAt)) === mediaSpendPullDateInIndia(Date.now()));
   const selectedPeriodCovered = Boolean(
     sync?.coveredFrom
     && sync.coveredThrough
@@ -820,13 +815,16 @@ export function MediaSpendView({
           />
           <Button
             className="secondary-button"
-            disabled={isLoading || isSyncing || !data?.configured || dateRange.fromDate > mediaSpendYesterdayInIndia(Date.now())}
+            disabled={isLoading || isSyncing || pulledToday || !data?.configured || dateRange.fromDate > mediaSpendYesterdayInIndia(Date.now())}
             onClick={() => void syncSelectedPeriod()}
             type="button"
           >
             {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            {isSyncing ? `Syncing ${syncProgress}` : "Sync period"}
+            {isSyncing ? "Syncing" : pulledToday ? "Daily pull used" : "Sync period"}
           </Button>
+          <InfoPopover label="media spend sync schedule">
+            <span>LemonMax is pulled once daily at 2:00 PM India time. Each pull includes all available platforms and accounts. Manual sync supports up to 14 days and uses that day's pull.</span>
+          </InfoPopover>
         </div>
       </header>
 
@@ -862,7 +860,7 @@ export function MediaSpendView({
             <span className={`status-pill ${statusTone}`}><Database size={12} />{statusLabel}</span>
             {Boolean(data?.missingDates.length) && (
               <InfoPopover label="missing media spend days">
-                <span>No account data stored for {data!.missingDates.map(dateLabel).join(", ")}. Sync the period to retry available days.</span>
+                <span>No account data stored for {data!.missingDates.map(dateLabel).join(", ")}. Missing coverage is retried with the next daily pull at 2:00 PM India time.</span>
               </InfoPopover>
             )}
             <span>

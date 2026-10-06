@@ -961,6 +961,7 @@ export default defineSchema({
     source: v.literal("lemonmax"),
     status: v.union(v.literal("running"), v.literal("healthy"), v.literal("failed")),
     attemptId: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
     requestedFrom: v.string(),
     requestedTo: v.string(),
     lastAttemptAt: v.string(),

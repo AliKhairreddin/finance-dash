@@ -5,6 +5,7 @@ import {
   mediaSpendContiguousCoverage,
   mediaSpendDates,
   mediaSpendRefreshRange,
+  mediaSpendPullDateInIndia,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummary,
   parseLemonMaxSpendSummaryRange,
@@ -147,12 +148,12 @@ test("refreshes the last fourteen days and catches up every day after outages", 
   assert.deepEqual(mediaSpendRefreshRange("2026-08-01", "2026-09-23", "2026-09-22"),
     { fromDate: "2026-09-10", toDate: "2026-09-23" });
   assert.deepEqual(mediaSpendRefreshRange("2026-08-01", "2026-09-23", "2026-09-02"),
-    { fromDate: "2026-09-03", toDate: "2026-09-23" });
+    { fromDate: "2026-09-03", toDate: "2026-09-16" });
   assert.deepEqual(mediaSpendRefreshRange("2026-09-20", "2026-09-23"),
     { fromDate: "2026-09-20", toDate: "2026-09-23" });
   const batch = mediaSpendRefreshRange("2026-01-01", "2026-09-23", "2026-01-01");
   assert.equal(batch.fromDate, "2026-01-02");
-  assert.equal(mediaSpendDates(batch.fromDate, batch.toDate).length, 92);
+  assert.equal(mediaSpendDates(batch.fromDate, batch.toDate).length, 14);
 });
 
 test("coverage cannot jump over missing days in either direction", () => {
@@ -179,4 +180,10 @@ test("bounds user-facing media spend ranges", () => {
     () => validateMediaSpendDateRange("2026-01-01", "2026-08-27"),
     /cannot exceed 92 days/
   );
+});
+
+
+test("daily API allowance uses India calendar days across UTC midnight", () => {
+  assert.equal(mediaSpendPullDateInIndia(Date.parse("2026-10-06T18:29:59Z")), "2026-10-06");
+  assert.equal(mediaSpendPullDateInIndia(Date.parse("2026-10-06T18:30:00Z")), "2026-10-07");
 });
