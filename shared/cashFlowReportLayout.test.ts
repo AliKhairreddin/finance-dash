@@ -60,9 +60,9 @@ test("cash export converts and consolidates each provider while keeping Wise ent
   const cash = plan.sections.filter(section => section.id.startsWith("cash:"));
   const rows = cash.flatMap(section => section.rows);
   assert.deepEqual(rows.map(row => [row.name, row.usd?.totalUsd]), [
-    ["Wise DN", 127], ["Wise LMD", 7], ["Revolut", 20], ["Slash", 15], ["Kraken", 10]
+    ["Wise LMD", 7], ["Wise DN", 127], ["Revolut", 20], ["Slash", 15], ["Kraken", 10]
   ]);
-  assert.deepEqual(rows.flatMap(row => row.lines), cashAccounts);
+  assert.deepEqual(rows.flatMap(row => row.lines).map(row => row.id).sort(), cashAccounts.map(row => row.id).sort());
   assert.equal(cash.reduce((sum, section) => sum + section.total, 0), 179);
   assert.deepEqual(cashAccounts, original);
   assert.ok(cash.every(section => section.usd));
@@ -77,8 +77,8 @@ test("cash export recognizes manual entity labels and keeps unrelated accounts s
   ] });
   const plan = planCashFlowPng(context, input, [{ asset: "EUR", rateUsd: 1.2, provider: "coinbase", asOf: "2026-09-07" }]);
   const rows = plan.sections.filter(section => section.id.startsWith("cash:")).flatMap(section => section.rows);
-  assert.deepEqual(rows.map(row => row.name), ["Wise DN", "Wise LMD", "Slash", "Slash cashback", "Other treasury"]);
-  assert.equal(rows[0].usd?.totalUsd, 32);
+  assert.deepEqual(rows.map(row => row.name), ["Wise LMD", "Wise DN", "Slash", "Slash Cashback", "Other treasury"]);
+  assert.equal(rows[1].usd?.totalUsd, 32);
 });
 
 test("cash export flags missing rates even for offsetting balances and excludes unchecked currencies", () => {

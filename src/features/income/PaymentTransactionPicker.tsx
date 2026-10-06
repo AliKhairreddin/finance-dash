@@ -13,7 +13,7 @@ import {
 import type { InvoicePaymentSuggestions } from "../../../shared/invoicePaymentSuggestions";
 
 type SortKey = "transaction" | "bank" | "date" | "available";
-const bankNames: Record<string, string> = { wise: "Wise", revolut: "Revolut", slash: "Slash", amex: "Amex" };
+const bankNames: Record<string, string> = { wise: "Wise", revolut: "Revolut", slash: "Slash", amex: "Amex", mercury: "Mercury" };
 export const paymentBankLabel = (source: string) => bankNames[source] ?? source;
 const money = (value: number, currency: string) => new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
 const dateLabel = (date: string) => new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${date.slice(0, 10)}T00:00:00`));

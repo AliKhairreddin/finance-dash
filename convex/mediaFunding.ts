@@ -61,7 +61,7 @@ const bankFundingResult = v.object({
   id: v.string(),
   providerId: v.id("mediaFundingProviders"),
   companyProviderId: v.string(),
-  source: v.union(v.literal("wise"), v.literal("revolut"), v.literal("slash"), v.literal("amex")),
+  source: v.union(v.literal("wise"), v.literal("revolut"), v.literal("slash"), v.literal("amex"), v.literal("mercury")),
   accountName: v.string(),
   date: v.string(),
   counterparty: v.string(),

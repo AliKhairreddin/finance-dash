@@ -30,6 +30,7 @@ function sourceLabel(source: Transaction["source"]): string {
   if (source === "revolut") return "Revolut";
   if (source === "slash") return "Slash";
   if (source === "amex") return "Amex";
+  if (source === "mercury") return "Mercury";
   return source.toUpperCase();
 }
 

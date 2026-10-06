@@ -244,6 +244,14 @@ test("exact invoice reconciliation requires amount, currency, and company eviden
   assert.equal(result.transactions[0].invoiceMatchSource, "exact");
   assert.equal(result.transactions[0].invoiceMatchConfidence, 1);
 
+  const mercuryResult = reconcileExactInvoicePayments({
+    invoices: [invoice], transactions: [{ ...transaction, id: "mercury-payment-1", source: "mercury", accountName: "Mercury Checking" }],
+    allocations: [], providers: [provider], now: new Date("2026-07-10T12:00:00.000Z")
+  });
+  assert.equal(mercuryResult.matched, 1);
+  assert.equal(mercuryResult.invoices[0].status, "paid");
+  assert.equal(mercuryResult.allocations[0].source, "mercury");
+
   const feeAdjusted = reconcileExactInvoicePayments({
     invoices: [invoice],
     transactions: [{ ...transaction, id: "wise-payment-fee", amount: 925 }],

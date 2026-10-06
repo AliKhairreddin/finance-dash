@@ -7,6 +7,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
@@ -18,6 +19,7 @@ const bankSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex")
 );
 
@@ -452,6 +454,7 @@ const paymentSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex"),
   v.literal("cash"),
   v.literal("kraken"),

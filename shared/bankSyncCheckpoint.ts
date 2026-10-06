@@ -1,4 +1,4 @@
-export type BankSyncProvider = "revolut" | "slash" | "wise" | "amex";
+export type BankSyncProvider = "revolut" | "slash" | "wise" | "amex" | "mercury";
 
 export type BankSyncCheckpoint = string;
 

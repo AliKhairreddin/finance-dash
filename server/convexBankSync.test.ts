@@ -4,6 +4,7 @@ import { ConvexError } from "convex/values";
 import {
   claimLease,
   finishBackfillAttempt,
+  getPendingBackfills,
   registerAccountSet,
   retryBackfill,
   saveCheckpoint
@@ -20,7 +21,7 @@ after(() => {
 });
 
 type BackfillStatus = "queued" | "running" | "complete" | "failed";
-type BankSource = "wise" | "revolut" | "slash" | "amex";
+type BankSource = "wise" | "revolut" | "slash" | "amex" | "mercury";
 
 interface RetryBackfillResult {
   key: string;
@@ -292,16 +293,22 @@ function bankSyncMemoryContext(seed: Record<string, MemoryRow[]>) {
   const db = {
     query(table: string) {
       const constraints: Array<[string, unknown]> = [];
+      const upperBounds: Array<[string, string]> = [];
       const range = {
         eq(field: string, value: unknown) {
           constraints.push([field, value]);
           return range;
+        },
+        lte(field: string, value: string) {
+          upperBounds.push([field, value]);
+          return range;
         }
       };
       const selected = () => rowsFor(table).filter((row) =>
-        constraints.every(([field, value]) => row[field] === value)
+        constraints.every(([field, value]) => row[field] === value) && upperBounds.every(([field, value]) => String(row[field]) <= value)
       );
       const chain = {
+        order() { return chain; },
         withIndex(_index: string, configure: (builder: typeof range) => unknown) {
           configure(range);
           return chain;
@@ -395,7 +402,7 @@ test("a first configured bank connection binds atomically when it has no prior l
   ) => Promise<{ claimed: boolean; fence: number | null }> })._handler;
   const result = await handler(ctx, {
     serviceToken,
-    source: "amex",
+    source: "mercury",
     connectionKey,
     token: "lease-token",
     leaseMs: 60_000
@@ -403,6 +410,16 @@ test("a first configured bank connection binds atomically when it has no prior l
   assert.deepEqual(result, { claimed: true, fence: 1 });
   assert.equal(ctx.tables.bankConnectionBindings.length, 1);
   assert.equal(ctx.tables.bankConnectionBindings[0]?.connectionKey, connectionKey);
+  assert.equal(ctx.tables.bankIdentityMigrations[0]?.source, "mercury");
+  assert.equal(ctx.tables.bankIdentityMigrations[0]?.version, 2);
+});
+
+test("Mercury historical sync is eligible even when the run limit is smaller than the bank directory", async () => {
+  const ctx = bankSyncMemoryContext({ bankBackfillJobs: [{ ...makeJob({ source: "mercury", status: "queued", nextAttemptAt: "2025-01-01T00:00:00.000Z" }) }] });
+  const handler = (getPendingBackfills as unknown as { _handler: (context: { db: unknown }, args: { serviceToken: string; limit: number }) => Promise<RetryBackfillResult[]> })._handler;
+  const jobs = await handler(ctx, { serviceToken, limit: 1 });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].source, "mercury");
 });
 
 test("live and historical lanes keep independent checkpoint compare-and-set state", async () => {

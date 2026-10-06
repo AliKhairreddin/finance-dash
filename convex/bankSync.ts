@@ -11,6 +11,7 @@ const bankSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex")
 );
 const checkpointValue = v.object({
@@ -99,7 +100,7 @@ function normalizedAccountIds(accountIds: string[]): string[] {
 }
 
 function backfillJobKey(
-  source: "wise" | "revolut" | "slash" | "amex",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
   connectionKey: string,
   fromDate: string,
   toDate: string
@@ -115,7 +116,7 @@ function assertSuppliedBackfillJobKey(key: string): void {
 
 function publicBackfillJob(stored: {
   key: string;
-  source: "wise" | "revolut" | "slash" | "amex";
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury";
   connectionKey: string;
   fromDate: string;
   toDate: string;
@@ -261,11 +262,11 @@ export const getPendingBackfills = query({
     );
     const now = new Date().toISOString();
     const staleBefore = new Date(Date.now() - staleBackfillAttemptMs).toISOString();
-    const jobs = await Promise.all(["wise", "revolut", "slash", "amex"].slice(0, limit).map(async (source) => {
+    const jobs = await Promise.all(["wise", "revolut", "slash", "amex", "mercury"].map(async (source) => {
       const queued = await ctx.db
         .query("bankBackfillJobs")
         .withIndex("by_source_status_next_attempt", (q) =>
-          q.eq("source", source as "wise" | "revolut" | "slash" | "amex")
+          q.eq("source", source as "wise" | "revolut" | "slash" | "amex" | "mercury")
             .eq("status", "queued")
             .lte("nextAttemptAt", now)
         )
@@ -275,14 +276,14 @@ export const getPendingBackfills = query({
       const running = await ctx.db
         .query("bankBackfillJobs")
         .withIndex("by_source_status_next_attempt", (q) =>
-          q.eq("source", source as "wise" | "revolut" | "slash" | "amex")
+          q.eq("source", source as "wise" | "revolut" | "slash" | "amex" | "mercury")
             .eq("status", "running")
         )
         .order("asc")
         .first();
       return running && running.updatedAt <= staleBefore ? running : null;
     }));
-    return jobs.filter((job): job is NonNullable<typeof job> => job !== null).map(publicBackfillJob);
+    return jobs.filter((job): job is NonNullable<typeof job> => job !== null).sort((a, b) => a.nextAttemptAt.localeCompare(b.nextAttemptAt)).slice(0, limit).map(publicBackfillJob);
   }
 });
 

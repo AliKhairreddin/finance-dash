@@ -1,6 +1,6 @@
-export type DataSource = "wise" | "revolut" | "slash" | "amex" | "merit" | "manual" | "tune" | "quinstreet";
+export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "merit" | "manual" | "tune" | "quinstreet";
 
-export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex">;
+export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury">;
 
 export type Direction = "in" | "out";
 
@@ -24,7 +24,7 @@ export type MeritSendMode = "save" | "deliver";
 
 export type MeritDeliveryStatus = "not-sent" | "saved" | "delivered" | "delivery-failed";
 
-export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "cash" | "kraken" | "trust" | "other";
+export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "cash" | "kraken" | "trust" | "other";
 
 export type InvoiceMatchSource = "exact" | "tolerance" | "ai" | "manual";
 
@@ -773,7 +773,7 @@ export interface ImportWiseStatementSummary {
   duplicateTransactions: number;
 }
 
-export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash">;
+export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash" | "mercury">;
 
 export interface TransactionPage {
   fromDate: string;

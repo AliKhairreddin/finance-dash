@@ -390,7 +390,7 @@ export function transactionsShareMerchant(
 export function transactionAiGroupKey(
   transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
 ): string {
-  const genericTokens = new Set(["wise", "revolut", "slash", "amex", "ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
+  const genericTokens = new Set(["wise", "revolut", "slash", "amex", "mercury", "ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
   const counterpartyTokens = canonicalTransactionText(transaction.counterparty)
     .split(" ")
     .filter((token) => {
@@ -745,6 +745,8 @@ export function enrichTransactions(
   categoryMemory: TransactionCategoryRule[] = []
 ): Transaction[] {
   return transactions.map((transaction) => {
+    if (transaction.source === "mercury" && transaction.categorySource === "rule"
+      && transaction.classificationComplete && ["Internal transfer", "Intercompany transfer"].includes(transaction.category)) return transaction;
     const wiseClassification = wiseMovementClassification(transaction);
     if (wiseClassification) return { ...transaction, ...wiseClassification };
     if (isSlashDailyCardPayment(transaction)) {

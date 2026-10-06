@@ -45,6 +45,7 @@
     "WISE_ENVIRONMENT": "production",
     "WISE_CONNECTION_ID": "primary",
     "WISE_PROFILE_IDS": "31035977,65909506",
+    "MERCURY_CONNECTION_ID": "mojo-labs",
     "REVOLUT_ENVIRONMENT": "production",
     "REVOLUT_CONNECTION_ID": "primary",
     "REVOLUT_ISSUER": "finance.thatcanadian.dev",

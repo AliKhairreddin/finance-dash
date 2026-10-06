@@ -112,6 +112,8 @@ interface __BaseEnv_WorkerEnv {
 	WISE_CONNECTION_ID: string;
 	WISE_PROFILE_IDS: string;
 	WISE_ENVIRONMENT: string;
+	MERCURY_API_TOKEN: string;
+	MERCURY_CONNECTION_ID: string;
 	REVOLUT_ENVIRONMENT: string;
 	REVOLUT_CONNECTION_ID: string;
 	REVOLUT_CLIENT_ID: string;

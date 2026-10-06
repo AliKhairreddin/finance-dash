@@ -705,7 +705,7 @@ export function hasNonZeroAccountBalance(account: AccountBalance): boolean {
 }
 
 function isPaymentSource(source: Transaction["source"]): source is Extract<PaymentSource, Transaction["source"]> {
-  return source === "wise" || source === "revolut" || source === "slash" || source === "amex";
+  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
 }
 
 function calendarDayDifference(start: string, end: string): number {

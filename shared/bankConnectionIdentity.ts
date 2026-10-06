@@ -1,6 +1,7 @@
 import type { BankTransactionSource } from "./types";
 
 export interface BankConnectionIdentityEnvironment {
+  MERCURY_CONNECTION_ID?: string;
   WISE_ENVIRONMENT?: string;
   WISE_CONNECTION_ID?: string;
   REVOLUT_ENVIRONMENT?: string;
@@ -15,6 +16,10 @@ function bankConnectionIdentityMaterial(
   environment: BankConnectionIdentityEnvironment,
   source: BankTransactionSource
 ): unknown | null {
+  if (source === "mercury") {
+    const connectionId = environment.MERCURY_CONNECTION_ID?.trim();
+    return connectionId ? ["https://api.mercury.com/api/v1", connectionId] : null;
+  }
   if (source === "wise") {
     const connectionId = environment.WISE_CONNECTION_ID?.trim();
     if (!connectionId) return null;

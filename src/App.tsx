@@ -298,7 +298,7 @@ type DirectoryDeleteTarget =
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
-const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "holdings"];
+const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "mercury", "holdings"];
 const transactionSortKeys: readonly TransactionSortKey[] = [
   "account",
   "amount",
@@ -1393,6 +1393,11 @@ function App() {
     [bankTab, loadedBankTransactions]
   );
 
+  const mercuryTransactions = useMemo(
+    () => bankTab === "mercury" ? loadedBankTransactions : [],
+    [bankTab, loadedBankTransactions]
+  );
+
   const amexTransactions = useMemo(
     () => bankTab === "amex" ? loadedBankTransactions : [],
     [bankTab, loadedBankTransactions]
@@ -2206,7 +2211,7 @@ function App() {
     ...overviewConversions.flatMap((conversion) => conversion.staleCurrencies)
   ])].sort();
   const incompleteLiquiditySources = dashboard.integrationStatus
-    .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash") && status.mode === "partial")
+    .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash" || status.id === "mercury") && status.mode === "partial")
     .map((status) => status.label);
   return (
     <main className="app-shell">
@@ -2388,6 +2393,7 @@ function App() {
           wiseTransactions={wiseTransactions}
           wiseDateRange={wiseDateRange}
           revolutTransactions={revolutTransactions}
+          mercuryTransactions={mercuryTransactions}
           revolutDateRange={revolutDateRange}
           slashTransactions={slashTransactions}
           slashDateRange={slashDateRange}
@@ -3601,6 +3607,7 @@ function BanksView({
   wiseTransactions,
   wiseDateRange,
   revolutTransactions,
+  mercuryTransactions,
   revolutDateRange,
   slashTransactions,
   slashDateRange,
@@ -3673,6 +3680,7 @@ function BanksView({
   wiseTransactions: Transaction[];
   wiseDateRange: BankTransactionDateRange;
   revolutTransactions: Transaction[];
+  mercuryTransactions: Transaction[];
   revolutDateRange: RevolutTransactionDateRange;
   slashTransactions: Transaction[];
   slashDateRange: SlashTransactionDateRange;
@@ -4193,17 +4201,18 @@ function BanksView({
           )}
         />
       )}
-      {activeBank === "revolut" && (
-        <RevolutView
+      {(activeBank === "revolut" || activeBank === "mercury") && (
+        <ConnectedBankView
+          source={activeBank}
           activityView={activityView}
           bankGroupType={bankGroupType}
           bankGroupLabel={bankGroupLabel}
           dashboard={dashboard}
-          period={revolutDateRange}
-          rows={revolutTransactions}
-          dateRange={revolutDateRange}
+          period={activeBank === "mercury" ? allBankDateRange : revolutDateRange}
+          rows={activeBank === "mercury" ? mercuryTransactions : revolutTransactions}
+          dateRange={activeBank === "mercury" ? allBankDateRange : revolutDateRange}
           isLoadingDateRange={isLoadingTransactions}
-          onLoadDateRange={onLoadRevolutTransactions}
+          onLoadDateRange={activeBank === "mercury" ? onLoadAllBankTransactions : onLoadRevolutTransactions}
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
@@ -4230,7 +4239,7 @@ function BanksView({
           bankActivitySummary={bankActivitySummary}
           isLoadingBankActivitySummary={isLoadingBankActivitySummary}
           bankActivitySummaryError={bankActivitySummaryError}
-          periodActivity={periodSourceById.get("revolut") ?? null}
+          periodActivity={periodSourceById.get(activeBank) ?? null}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
@@ -7326,13 +7335,14 @@ function BankDateRangeControls({
         windowDays={windowDays}
       />
       <InfoPopover label="automatic bank updates">
-        Revolut and Slash refresh automatically. Slash account and card metadata is verified on import, and any unchecked history is repaired in the background.
+        Revolut, Slash, and Mercury refresh automatically. Slash account and card metadata is verified on import, and any unchecked history is repaired in the background.
       </InfoPopover>
     </div>
   );
 }
 
-function RevolutView({
+function ConnectedBankView({
+  source,
   dashboard,
   rows,
   dateRange,
@@ -7340,6 +7350,7 @@ function RevolutView({
   onLoadDateRange,
   ...reconciliationProps
 }: ConnectedBankViewProps & {
+  source: "revolut" | "mercury";
   dateRange: RevolutTransactionDateRange;
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: RevolutTransactionDateRange) => Promise<void>;
@@ -7357,7 +7368,7 @@ function RevolutView({
       {...reconciliationProps}
       dashboard={dashboard}
       rows={rows}
-      source="revolut"
+      source={source}
       wide
       rangeControls={rangeControls}
     />

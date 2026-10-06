@@ -12440,7 +12440,7 @@ body {
 .cash-flow-entry-table .amount small { display: block; font-variant-numeric: tabular-nums; }
 .cash-flow-account-order { display: flex; justify-content: flex-end; padding: 0 12px; }
 .cash-flow-account-summary th:last-child { width: 140px; }
-.cash-flow-account-summary .amount { font-variant-numeric: tabular-nums; }
+.cash-flow-account-summary .amount { text-align: right !important; font-variant-numeric: tabular-nums; }
 .cash-flow-account-summary .amount .inline-error { display: block; }
 
 /* Invoice forms use the shared focus-managed dialog without a second modal frame. */

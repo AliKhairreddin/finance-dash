@@ -13,6 +13,6 @@ test("dashboard snapshot exposes only a bounded transaction review preview", () 
 test("local analytics reports unverified history instead of asserting complete coverage", () => {
   const snapshot = getAnalyticsSnapshot("2026-09-08", "2026-09-08");
   assert.equal(snapshot.version, 3);
-  assert.deepEqual(snapshot.coverage.map((item) => item.source), ["wise", "revolut", "slash", "amex"]);
+  assert.deepEqual(snapshot.coverage.map((item) => item.source), ["wise", "revolut", "slash", "amex", "mercury"]);
   assert.ok(snapshot.coverage.every((item) => item.missingRanges[0].fromDate === snapshot.fromDate && item.missingRanges[0].toDate === snapshot.toDate));
 });

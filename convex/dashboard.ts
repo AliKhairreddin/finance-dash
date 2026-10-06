@@ -30,6 +30,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex"),
   v.literal("merit"),
   v.literal("manual"),
@@ -437,6 +438,7 @@ const paymentAllocation = v.object({
     v.literal("wise"),
     v.literal("revolut"),
     v.literal("slash"),
+    v.literal("mercury"),
     v.literal("amex"),
     v.literal("cash"),
     v.literal("kraken"),
@@ -631,8 +633,8 @@ const maximumLegacyLedgerMigrationBatchSize = 100;
 
 function isBankTransactionSource(
   source: string
-): source is "wise" | "revolut" | "slash" | "amex" {
-  return source === "wise" || source === "revolut" || source === "slash" || source === "amex";
+): source is "wise" | "revolut" | "slash" | "amex" | "mercury" {
+  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
 }
 
 export const disposeOrphanedLegacyTeamAssignments = mutation({

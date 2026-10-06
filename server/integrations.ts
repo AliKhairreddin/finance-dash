@@ -1,3 +1,4 @@
+import { fetchMercuryActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
 import crypto from "node:crypto";
 import type {
   AccountBalance,
@@ -134,7 +135,7 @@ export function getIntegrationStatus(
   wiseBalanceIssue?: string,
   revenuePartners: RevenuePartner[] = [],
   meritIssue?: string,
-  bankIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {},
+  bankIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury", string>> = {},
   fxRates: FxRate[] = [],
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
@@ -142,6 +143,7 @@ export function getIntegrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !process.env[name]);
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseBalanceIssue : undefined;
 
+  const mercuryNeeds = ["MERCURY_API_TOKEN", "MERCURY_CONNECTION_ID"].filter((name) => !process.env[name]);
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
     "REVOLUT_ISSUER",
@@ -186,6 +188,14 @@ export function getIntegrationStatus(
           : "Wise rows stay empty until an API token and selected profile IDs are configured."),
       needs: wiseNeeds,
       issue: activeWiseIssue
+    },
+    {
+      id: "mercury", label: "Mercury", configured: mercuryNeeds.length === 0,
+      mode: mercuryNeeds.length === 0 && !bankIssues.mercury ? "live" : "partial",
+      message: bankIssues.mercury ?? (mercuryNeeds.length === 0
+        ? "Read-only balances and transactions refresh automatically every 15 minutes or on Sync."
+        : "Connect a read-only Mercury API token to load balances and transactions."),
+      needs: mercuryNeeds, issue: bankIssues.mercury
     },
     {
       id: "revolut",
@@ -884,4 +894,9 @@ function tuneNumber(row: Record<string, unknown>, field: "payout" | "clicks" | "
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export async function fetchMercuryActivity(dateRange?: { fromDate: string; toDate: string }) {
+  if (!process.env.MERCURY_API_TOKEN) return { accounts: [], transactions: [] };
+  return fetchMercuryApiActivity({ apiToken: process.env.MERCURY_API_TOKEN, dateRange });
 }

@@ -5,30 +5,38 @@ import { wiseEntityFromAccountName, wiseEntityShortLabel } from "./wiseEntities"
 export const cashFlowSections = ["cashAccounts", "receivables", "openBalances", "payables", "investments"] as const;
 type Position = Pick<CashFlowSnapshot, (typeof cashFlowSections)[number]>;
 
-/** Group only the exported cash rows; keep every source balance for conversion,
- * exclusions and notes, and keep the two Wise entities separate. */
-export function cashFlowCashAccountGroups(lines: CashFlowLine[]): Array<{ key: string; name: string; lines: CashFlowLine[] }> {
+export const cashFlowCashAccountOrder = ["Wise LMD", "Wise DN", "Revolut", "Trust Crypto", "Slash", "Kraken", "Slash Cashback", "Mercury"] as const;
+
+/** Share the account order between the dashboard and reports without changing
+ * source balances, currencies, exclusions, formulas or notes. Empty groups are
+ * display slots only; they are never saved as financial records. */
+export function cashFlowCashAccountGroups(lines: CashFlowLine[], includeEmpty = false): Array<{ key: string; name: string; lines: CashFlowLine[] }> {
   const groups = new Map<string, { key: string; name: string; lines: CashFlowLine[] }>();
+  if (includeEmpty) for (const name of cashFlowCashAccountOrder) groups.set(name.toLowerCase(), { key: name.toLowerCase(), name, lines: [] });
   for (const line of lines) {
     let name = line.name.trim().replace(/\s+/g, " ");
     const words = name.split(" ");
     if (words.length > 1 && words.at(-1)?.toUpperCase() === line.currency.trim().toUpperCase()) {
       name = words.slice(0, -1).join(" ").replace(/[\s·–—-]+$/, "");
     }
-    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex)-/)?.[1];
-    if (source === "wise" || /\bwise\b/i.test(name)) {
+    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex|mercury)-/)?.[1];
+    if (/^slash[\s·–—-]+cashback$/i.test(name)) {
+      name = "Slash Cashback";
+    } else if (source === "wise" || /\bwise\b/i.test(name)) {
       const entity = wiseEntityFromAccountName(name);
       const shortEntity = name.match(/^wise[\s·–—-]+(dn|lmd)$/i)?.[1].toUpperCase();
       if (entity || shortEntity) name = `Wise ${entity ? wiseEntityShortLabel(entity) : shortEntity}`;
     } else if (source) {
-      name = { revolut: "Revolut", slash: "Slash", amex: "Amex" }[source]!;
+      name = { revolut: "Revolut", slash: "Slash", amex: "Amex", mercury: "Mercury" }[source]!;
     }
+    name = cashFlowCashAccountOrder.find(account => account.toLowerCase() === name.toLowerCase()) ?? name;
     const key = name ? name.toLowerCase() : line.id;
     const group = groups.get(key);
     if (group) group.lines.push(line);
     else groups.set(key, { key, name, lines: [line] });
   }
-  return [...groups.values()];
+  const order = new Map<string, number>(cashFlowCashAccountOrder.map((name, index) => [name.toLowerCase(), index]));
+  return [...groups.values()].sort((a, b) => (order.get(a.key) ?? order.size) - (order.get(b.key) ?? order.size) || a.name.localeCompare(b.name));
 }
 
 export function cashFlowUsdTotal(lines: CashFlowLine[], rates: FxRate[]): number {

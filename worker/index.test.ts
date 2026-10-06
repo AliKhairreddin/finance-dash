@@ -19,7 +19,7 @@ import worker, {
 } from "./handler";
 
 test("automatic bank transaction sync includes every configured bank", () => {
-  assert.deepEqual(automaticTransactionBankSources, ["wise", "revolut", "slash", "amex"]);
+  assert.deepEqual(automaticTransactionBankSources, ["wise", "revolut", "slash", "amex", "mercury"]);
 });
 
 test("saved Wise balance accounts do not depend on a transaction sync record", () => {
@@ -318,7 +318,7 @@ test("transaction page API validates every bound before reading storage", async 
 });
 
 test("transaction page API rejects unconfigured banks without statement import support", async () => {
-  for (const source of ["wise", "revolut", "slash"] as const) {
+  for (const source of ["wise", "revolut", "slash", "mercury"] as const) {
     const response = await worker.fetch(
       await authenticatedRequest(
         `https://finance.example/api/transactions?fromDate=2026-06-01&toDate=2026-06-30&source=${source}&direction=out&order=asc&limit=200`
@@ -332,6 +332,15 @@ test("transaction page API rejects unconfigured banks without statement import s
       source
     );
   }
+});
+
+test("historical transaction sync accepts Mercury and requires its configuration", async () => {
+  const response = await worker.fetch(await authenticatedRequest("https://finance.example/api/transactions/sync", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: "mercury", fromDate: "2026-10-01", toDate: "2026-10-06" })
+  }), authenticatedEnv({}));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { message: "mercury is not configured for transaction sync" });
 });
 
 test("Amex statement transactions and summaries are readable without live bank API credentials", async (t) => {

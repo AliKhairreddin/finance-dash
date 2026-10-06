@@ -515,11 +515,11 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       throw new ClientRequestError("Transaction date range is invalid");
     }
     const rawSource = typeof request.query.source === "string" ? request.query.source : undefined;
-    if (rawSource && rawSource !== "wise" && rawSource !== "revolut" && rawSource !== "slash" && rawSource !== "amex") {
+    if (rawSource && rawSource !== "wise" && rawSource !== "revolut" && rawSource !== "slash" && rawSource !== "amex" && rawSource !== "mercury") {
       throw new ClientRequestError("Transaction source is invalid");
     }
     const source: BankTransactionSource | undefined =
-      rawSource === "wise" || rawSource === "revolut" || rawSource === "slash" || rawSource === "amex"
+      rawSource === "wise" || rawSource === "revolut" || rawSource === "slash" || rawSource === "amex" || rawSource === "mercury"
         ? rawSource
         : undefined;
     const rawDirection = typeof request.query.direction === "string" ? request.query.direction : undefined;

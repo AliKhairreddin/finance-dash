@@ -96,6 +96,7 @@ const paymentSourceOptions: Array<{ value: PaymentSource; label: string }> = [
   { value: "revolut", label: "Revolut" },
   { value: "slash", label: "Slash" },
   { value: "amex", label: "Amex" },
+  { value: "mercury", label: "Mercury" },
   { value: "cash", label: "Cash" },
   { value: "kraken", label: "Kraken" },
   { value: "trust", label: "Trust Wallet" },

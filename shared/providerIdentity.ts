@@ -30,7 +30,7 @@ function decodeExactHex(value: string): string | null {
 
 /** Builds an injective, versioned ID from exact provider identity components. */
 export function bankProviderTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex",
+  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury",
   components: readonly string[]
 ): string {
   if (components.length === 0 || components.length > 4) {
@@ -43,7 +43,7 @@ export function bankProviderTransactionId(
 
 /** Verifies the exact versioned grammar emitted by each connector or the migration surrogate. */
 export function isCurrentBankTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex",
+  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury",
   value: string
 ): boolean {
   const prefix = `${namespace}-v2-`;
@@ -64,7 +64,7 @@ export function isCurrentBankTransactionId(
 }
 
 export function isLegacySurrogateBankTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex",
+  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury",
   value: string
 ): boolean {
   const prefix = `${namespace}-v2-`;

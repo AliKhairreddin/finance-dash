@@ -27,7 +27,8 @@ import { ToolbarSearchField } from "@/components/ui/filter-toolbar";
 import { InvoiceEditorDialog } from "@/features/income/IncomeViews";
 import { downloadInvoicePdfFile } from "@/lib/invoice-download";
 import { useUrlState } from "@/lib/url-state";
-import { cashFlowSnapshotTotals as snapshotTotals, cashFlowUsdTotal as usdTotal } from "../../../shared/cashFlowReport";
+import { cashFlowCashAccountGroups, cashFlowSnapshotTotals as snapshotTotals, cashFlowUsdTotal as usdTotal } from "../../../shared/cashFlowReport";
+import { convertCurrencyTotalsToUsd, sumCurrencyTotals } from "../../../shared/currencyTotals";
 import { downloadCashFlowPng } from "./exportCashFlowPng";
 import { SharePartnerUpdate } from "../partner-updates/SharePartnerUpdate";
 import { financeOperatingDate } from "../../../shared/operatingDate";
@@ -197,6 +198,10 @@ function EditableCashFlowSection({
   onLive: () => void;
   onChange: (lines: CashFlowLine[]) => void;
 }) {
+  const [cashView, setCashView] = useUrlState("cashFlowCashView", "accounts", { allowedValues: ["accounts", "details"] });
+  const [cashGroup, setCashGroup] = useUrlState("cashFlowCashGroup", "");
+  const showAccounts = sectionKey === "cashAccounts" && cashView === "accounts";
+  const selectedGroup = sectionKey === "cashAccounts" && cashGroup ? cashFlowCashAccountGroups(lines).find(group => group.key === cashGroup) : undefined;
   const [sortKey, setSortKey] = useUrlState<CashFlowLineSortKey>(`cashFlow${sectionKey}Sort`, "name", {
     allowedValues: ["amount", "currency", "included", "name", "notes", "dueDate"]
   });
@@ -205,7 +210,7 @@ function EditableCashFlowSection({
   });
   const [query, setQuery] = useUrlState(`cashFlow${sectionKey}Query`, "");
   const sortValue = (item: CashFlowLine) => sortKey === "included" ? !item.excludedFromTotals : item[sortKey];
-  const visibleLines = lines.filter(item => `${item.name} ${item.notes ?? ""} ${item.currency}`.toLowerCase().includes(query.trim().toLowerCase())).sort((left, right) =>
+  const visibleLines = (selectedGroup?.lines ?? lines).filter(item => `${item.name} ${item.notes ?? ""} ${item.currency}`.toLowerCase().includes(query.trim().toLowerCase())).sort((left, right) =>
     compareTableValues(sortValue(left), sortValue(right), sortDirection) || left.id.localeCompare(right.id)
   );
 
@@ -226,19 +231,20 @@ function EditableCashFlowSection({
       <div className="panel-header compact-panel-header">
         <div><h3>{title}</h3><span>{lines.some(invalidCashFlowLine) ? "—" : money(usdTotal(lines, rates))}</span></div>
         <div className="row-actions">
+        {sectionKey === "cashAccounts" && <Button type="button" className="icon-text-button" onClick={() => { setCashView(showAccounts ? "details" : "accounts"); setCashGroup(""); }}>{showAccounts ? "Balance details" : "Account totals"}</Button>}
         <Button className="icon-text-button" type="button" disabled={saving} onClick={onLive}><RefreshCw size={14} /> Live values</Button>
         <Button className="icon-text-button" type="button" disabled={saving || lines.some(invalidCashFlowLine)} onClick={onSave}><Save size={14} /> Save</Button>
         <Button
           className="icon-text-button"
           type="button"
-          onClick={() => onChange([...lines, line(`cash-flow-line-${crypto.randomUUID()}`, "", 0, "USD")])}
+          onClick={() => { onChange([...lines, line(`cash-flow-line-${crypto.randomUUID()}`, selectedGroup?.name ?? "", 0, "USD")]); if (sectionKey === "cashAccounts") setCashView("details"); }}
         >
           <Plus size={14} /> Add row
         </Button>
         </div>
       </div>
       {sectionKey === "openBalances" && <div className="list-toolbar"><ToolbarSearchField ariaLabel="Search open balances" placeholder="Search balances" value={query} onChange={setQuery} /></div>}
-      <div className="table-wrap">
+      {showAccounts ? <CashAccountSummary lines={lines} rates={rates} onEdit={(key) => { setCashGroup(key); setCashView("details"); }} onAdd={(name) => { onChange([...lines, line(`cash-flow-line-${crypto.randomUUID()}`, name, 0, "USD")]); setCashGroup(name.toLowerCase()); setCashView("details"); }} /> : <div className="table-wrap">
         <table className="data-table cash-flow-entry-table">
           <thead><tr>
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Name</SortableTableHead>
@@ -263,9 +269,47 @@ function EditableCashFlowSection({
             )) : <tr><td colSpan={7}>No rows</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
     </section>
   );
+}
+
+function CashAccountSummary({ lines, rates, onEdit, onAdd }: {
+  lines: CashFlowLine[];
+  rates: FxRate[];
+  onEdit: (key: string) => void;
+  onAdd: (name: string) => void;
+}) {
+  type SortKey = "report" | "name" | "amount";
+  const [sortKey, setSortKey] = useUrlState<SortKey>("cashFlowAccountSort", "report", { allowedValues: ["report", "name", "amount"] });
+  const [direction, setDirection] = useUrlState<TableSortDirection>("cashFlowAccountOrder", "asc", { allowedValues: ["asc", "desc"] });
+  const groups = cashFlowCashAccountGroups(lines, true).map(group => {
+    const included = group.lines.filter(item => !item.excludedFromTotals);
+    const invalid = included.some(invalidCashFlowLine) || included.some(item => !item.currency.trim());
+    const usd = invalid ? null : convertCurrencyTotalsToUsd(sumCurrencyTotals(included, item => item.amount), rates);
+    const missing = invalid ? [] : convertCurrencyTotalsToUsd(sumCurrencyTotals(included, item => Math.abs(item.amount)), rates).excludedCurrencies;
+    return { ...group, amount: group.lines.length && !invalid && !missing.length ? usd?.totalUsd : undefined, missing, invalid };
+  });
+  if (sortKey !== "report") groups.sort((a, b) => compareTableValues(a[sortKey], b[sortKey], direction) || a.key.localeCompare(b.key));
+  function requestSort(key: SortKey) {
+    if (key === sortKey) setDirection(current => current === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setDirection("asc"); }
+  }
+  return <>
+    <div className="cash-flow-account-order"><Button type="button" variant="ghost" aria-pressed={sortKey === "report"} onClick={() => { setSortKey("report"); setDirection("asc"); }}>Report order{sortKey === "report" ? " ✓" : ""}</Button></div>
+    <div className="table-wrap"><table className="data-table cash-flow-account-summary" aria-label="Cash account totals">
+      <thead><tr>
+        <SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="name">Account</SortableTableHead>
+        <SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="amount" className="amount" description="Included balances converted to USD. Open balance details to edit individual currencies, formulas, and exclusions.">Balance (USD)</SortableTableHead>
+        <th scope="col">Actions</th>
+      </tr></thead>
+      <tbody>{groups.map(group => <tr key={group.key}>
+        <td>{group.name}</td>
+        <td className="amount">{money(group.amount ?? NaN)}{group.missing.length > 0 && <span className="inline-error">Missing rate: {group.missing.join(", ")}</span>}{group.invalid && <span className="inline-error">Check balance details</span>}{!group.lines.length && <InfoPopover label={`${group.name} balance`}>{group.key === "mercury" ? "No Mercury balance loaded. Sync the bank or add a manual balance." : "No balance recorded. Add a balance to include this account in the snapshot."}</InfoPopover>}</td>
+        <td><Button type="button" className="icon-text-button" aria-label={group.lines.length ? `Edit ${group.name} balances` : `Add ${group.name} balance`} onClick={() => group.lines.length ? onEdit(group.key) : onAdd(group.name)}>{group.lines.length ? <Edit3 size={14} /> : <Plus size={14} />}{group.lines.length ? "Edit" : "Add balance"}</Button></td>
+      </tr>)}</tbody>
+    </table></div>
+  </>;
 }
 
 function CashFlowAmountInput({ item, title, onChange }: { item: CashFlowLine; title: string; onChange: (patch: Partial<CashFlowLine>) => void }) {

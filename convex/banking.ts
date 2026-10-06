@@ -26,13 +26,14 @@ import {
   ensureBankConnectionBinding
 } from "./bankLease";
 
-type BankSource = "wise" | "revolut" | "slash" | "amex";
+type BankSource = "wise" | "revolut" | "slash" | "amex" | "mercury";
 
-const allBankSources: BankSource[] = ["wise", "revolut", "slash", "amex"];
+const allBankSources: BankSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
 const bankSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("mercury"),
   v.literal("amex")
 );
 const bankConnection = v.object({ source: bankSource, connectionKey: v.string() });

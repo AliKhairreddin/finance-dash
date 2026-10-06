@@ -176,6 +176,7 @@ import {
   fetchMeritTaxes,
   fetchMeritVendors,
   fetchRevolutActivity,
+  fetchMercuryActivity,
   fetchSlashActivity,
   fetchRevenuePartnerRevenue,
   fetchWiseActivity,
@@ -245,7 +246,7 @@ let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseBalanceSyncIssue: string | undefined;
 let meritSyncIssue: string | undefined;
-let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex", string>> = {};
+let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury", string>> = {};
 
 function runtimeAiSettings(): StoredAiSettings {
   return {
@@ -1828,7 +1829,7 @@ export async function downloadInvoicePdf(invoiceId: string): Promise<{
 }
 
 function validPaymentSource(source: string): source is PaymentAllocation["source"] {
-  return ["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"].includes(source);
+  return ["wise", "revolut", "slash", "amex", "mercury", "cash", "kraken", "trust", "other"].includes(source);
 }
 
 function bulkPaymentAllocationId(operationId: string, invoiceId: string): string {
@@ -2641,11 +2642,12 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Rev
 export async function syncExternalActivity(
   slashDateRange?: SlashTransactionDateRange
 ): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, amex, merit, liveMeritTaxes, meritCustomers, meritVendors] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, mercury, merit, liveMeritTaxes, meritCustomers, meritVendors] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(slashDateRange),
     fetchAmexActivity(),
+    fetchMercuryActivity(slashDateRange),
     fetchMeritInvoices(invoices),
     fetchMeritTaxes(),
     fetchMeritCustomers(),
@@ -2657,6 +2659,7 @@ export async function syncExternalActivity(
     return `${label} balance sync failed: ${message.slice(0, 240)}`;
   };
   bankSyncIssues = {
+    ...(mercury.status === "rejected" ? { mercury: bankIssue("Mercury", mercury.reason) } : {}),
     ...(revolut.status === "rejected" ? { revolut: bankIssue("Revolut", revolut.reason) } : {}),
     ...(slash.status === "rejected" ? { slash: bankIssue("Slash", slash.reason) } : {}),
     ...(amex.status === "rejected" ? { amex: bankIssue("Amex", amex.reason) } : {})
@@ -2688,6 +2691,10 @@ export async function syncExternalActivity(
       accounts = [...accounts.filter((account) => account.source !== "amex"), ...amex.value.accounts];
     }
     liveTransactions.push(...amex.value.transactions);
+  }
+  if (mercury.status === "fulfilled" && process.env.MERCURY_API_TOKEN) {
+    accounts = [...accounts.filter(account => account.source !== "mercury"), ...mercury.value.accounts];
+    liveTransactions.push(...mercury.value.transactions);
   }
   const meritConfigured = Boolean(process.env.MERIT_API_ID && process.env.MERIT_API_KEY);
   if (meritConfigured && meritCustomers.status === "fulfilled") {
@@ -2857,7 +2864,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       (transaction.source === "wise"
         || transaction.source === "revolut"
         || transaction.source === "slash"
-        || transaction.source === "amex")
+        || transaction.source === "amex" || transaction.source === "mercury")
       && (!options.source || transaction.source === options.source)
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
@@ -2895,7 +2902,7 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): Analytic
         (transaction.source === "wise"
           || transaction.source === "revolut"
           || transaction.source === "slash"
-          || transaction.source === "amex")
+          || transaction.source === "amex" || transaction.source === "mercury")
         && transaction.date >= fromDate
         && transaction.date <= toDate
       )
@@ -2903,7 +2910,7 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): Analytic
   );
   // The local in-memory store has no verified history intervals.
   // Its existing records are useful, but must not be presented as complete history.
-  const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
+  const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
   return { ...accumulator.finish(), coverage: sources.map((source) => ({ source, missingRanges: [{ fromDate, toDate }] })) };
 }
 

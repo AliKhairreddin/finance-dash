@@ -12,7 +12,7 @@ const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 export type CashReportAccount = AccountBalance & { syncedAt: string };
 
 export function isCashReportAccount(account: CashReportAccount): boolean {
-  return (account.source === "wise" || account.source === "revolut")
+  return (account.source === "wise" || account.source === "revolut" || account.source === "mercury")
     && account.status === "live" && cashCurrencies.has(account.currency.toUpperCase());
 }
 
@@ -64,7 +64,7 @@ export function buildTelegramCashReport(input: {
   ).map((rate) => [rate.asset.toUpperCase(), rate]));
   const totals = new Map<string, number>();
   const cryptoBalances = new Map<string, number>();
-  const groups = new Map(["Wise LMD", "Wise DN", "Revolut", "Slash"].map((name) => [name, new Map<string, number>()]));
+  const groups = new Map(["Wise LMD", "Wise DN", "Revolut", "Slash", "Mercury"].map((name) => [name, new Map<string, number>()]));
   const add = (group: string, currency: string, balance: number) => {
     if (!Number.isFinite(balance)) throw new Error("Invalid bank balance");
     const asset = currency.toUpperCase();
@@ -77,7 +77,7 @@ export function buildTelegramCashReport(input: {
     if (account.source === "wise" && account.wiseEntity !== "dn" && account.wiseEntity !== "lmd") {
       throw new Error("Wise balance company is unavailable; cash report could not be grouped");
     }
-    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : "Revolut";
+    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? "Mercury" : "Revolut";
     add(group, account.currency, account.balance);
   }
   for (const account of slashAccounts) add("Slash", account.currency, account.balance);
@@ -141,7 +141,7 @@ export function buildTelegramCashReport(input: {
 
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
   const text = message.split("\n").filter((line) =>
-    /^(Wise LMD|Wise DN|Revolut|Slash) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
+    /^(Wise LMD|Wise DN|Revolut|Slash|Mercury) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
   ).join("\n");
   return text && text.length <= 256 ? { label: "Copy bank totals", text } : undefined;
 }

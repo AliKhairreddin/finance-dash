@@ -1,3 +1,4 @@
+import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "./amexStatements";
 import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
@@ -390,12 +391,13 @@ interface BankBackfillJob {
   updatedAt: string;
 }
 
-const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex"];
+const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
 export const automaticTransactionBankSources: readonly BankTransactionSource[] = [
   "wise",
   "revolut",
   "slash",
-  "amex"
+  "amex",
+  "mercury"
 ];
 
 export function hasSavedWiseBalanceAccounts(accounts: readonly AccountBalance[]): boolean {
@@ -427,6 +429,7 @@ async function bankStorageConnectionDirectory(env: Env): Promise<Array<{
 }
 
 function bankSourceConfigured(env: Env, source: BankTransactionSource): boolean {
+  if (source === "mercury") return Boolean(env.MERCURY_API_TOKEN?.trim() && env.MERCURY_CONNECTION_ID?.trim());
   if (source === "wise") {
     return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim() && env.ZOHO_CLIENT_ID?.trim() && env.ZOHO_CLIENT_SECRET?.trim() && env.ZOHO_REFRESH_TOKEN?.trim());
   }
@@ -1543,7 +1546,7 @@ function upsertPersistedTransaction(state: PersistedState, updated: Transaction)
     updated.source === "wise"
     || updated.source === "revolut"
     || updated.source === "slash"
-    || updated.source === "amex"
+    || updated.source === "amex" || updated.source === "mercury"
   ) {
     state.dirtyBankTransactionIds.add(updated.id);
   }
@@ -2899,10 +2902,6 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
   const migratedWiseStatementImports = migrateLegacyWiseStatementImports(storedWiseStatementImports);
   const bankSyncStates = new Map(activityMetadata.syncStates.map((syncState) => [syncState.source, syncState]));
   const bankSyncHealth = new Map(activityMetadata.syncHealth.map((health) => [health.source, health]));
-  const wiseSyncState = bankSyncStates.get("wise");
-  const revolutSyncState = bankSyncStates.get("revolut");
-  const slashSyncState = bankSyncStates.get("slash");
-  const amexSyncState = bankSyncStates.get("amex");
   const state: PersistedState = {
     revision: stored?.updatedAt ?? null,
     providers: mergeProviderDirectory(stored?.providers ?? []),
@@ -2929,20 +2928,7 @@ async function loadPersisted(env: Env): Promise<PersistedState> {
     meritTaxes: stored?.meritTaxes ?? [],
     aiSettings: stored?.aiSettings ?? { ...defaultAiSettings },
     bankAccounts: activityMetadata.accounts,
-    bankSyncStates: {
-      ...(wiseSyncState
-        ? { wise: { ...wiseSyncState, source: "wise" as const } }
-        : {}),
-      ...(revolutSyncState
-        ? { revolut: { ...revolutSyncState, source: "revolut" as const } }
-        : {}),
-      ...(slashSyncState
-        ? { slash: { ...slashSyncState, source: "slash" as const } }
-        : {}),
-      ...(amexSyncState
-        ? { amex: { ...amexSyncState, source: "amex" as const } }
-        : {})
-    },
+    bankSyncStates: Object.fromEntries(bankSyncStates) as Partial<Record<BankTransactionSource, BankSyncState>>,
     bankSyncHealth: Object.fromEntries(bankSyncHealth) as Partial<Record<BankTransactionSource, BankSyncHealth>>,
     bankTransactionBaseline: new Map(),
     dirtyBankTransactionIds: new Set()
@@ -2967,7 +2953,7 @@ async function saveBankTransactionUpdates(
         transaction.source === "wise"
         || transaction.source === "revolut"
         || transaction.source === "slash"
-        || transaction.source === "amex"
+        || transaction.source === "amex" || transaction.source === "mercury"
       )
       && state.dirtyBankTransactionIds.has(transaction.id)
       && state.bankTransactionBaseline.get(transaction.id) !== JSON.stringify(transaction)
@@ -3160,6 +3146,7 @@ function integrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS", "ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN"].filter((name) => !env[name as keyof Env]);
   const wiseBalanceIssue = wiseNeeds.length === 0 ? bankIssues.wise ?? wiseActivity?.balanceIssue : undefined;
 
+  const mercuryNeeds = ["MERCURY_API_TOKEN", "MERCURY_CONNECTION_ID"].filter((name) => !env[name as keyof Env]);
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
     "REVOLUT_ISSUER",
@@ -3207,6 +3194,14 @@ function integrationStatus(
           : "Configure Wise balance access and Zoho API credentials to sync these accounts."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
+    },
+    {
+      id: "mercury" as DataSource, label: "Mercury", configured: mercuryNeeds.length === 0,
+      mode: mercuryNeeds.length === 0 && !bankIssues.mercury ? "live" : "partial",
+      message: bankIssues.mercury ?? (mercuryNeeds.length === 0
+        ? "Read-only balances and transactions refresh automatically every 15 minutes or on Sync."
+        : "Connect a read-only Mercury API token to load balances and transactions."),
+      needs: mercuryNeeds, issue: bankIssues.mercury
     },
     {
       id: "revolut" as DataSource,
@@ -3699,6 +3694,56 @@ async function syncRevolutActivity(
   });
 }
 
+async function syncMercuryActivity(
+  env: Env,
+  requestedRange?: SlashTransactionDateRange,
+  laneKey = "live",
+  pageBudget = 10
+): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "mercury");
+  return withBankSyncLease(env, "mercury", connectionKey, async (lease) => {
+    const storedCheckpoint = await bankSyncCheckpoint(env, "mercury", connectionKey, laneKey);
+    if (
+      storedCheckpoint
+      && requestedRange
+      && (storedCheckpoint.fromDate !== requestedRange.fromDate || storedCheckpoint.toDate !== requestedRange.toDate)
+    ) return false;
+    const range = storedCheckpoint
+      ?? requestedRange
+      ?? await bankSyncState(env, "mercury", connectionKey).then(state => state ? incrementalBankDateRange(state) : undefined);
+    const activity = await fetchMercuryActivityBatch({
+      apiToken: env.MERCURY_API_TOKEN,
+      ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
+      pageBudget,
+      collectTransactions: false,
+      onAccountsDiscovered: async (accounts) => {
+        await registerDiscoveredBankAccountSet(
+          env,
+          "mercury",
+          laneKey,
+          storedCheckpoint,
+          accounts,
+          lease
+        );
+      },
+      onTransactionPage: async (transactions) => {
+        await upsertSyncedLedgerTransactions(env, "mercury", transactions, lease);
+      }
+    });
+    await persistCheckpointedBankSync(
+      env,
+      "mercury",
+      range ?? activity.dateRange,
+      laneKey,
+      storedCheckpoint?.checkpoint ?? null,
+      storedCheckpoint?.accountIds ?? null,
+      lease,
+      activity
+    );
+    return activity.complete;
+  });
+}
+
 async function syncSlashActivity(
   env: Env,
   requestedRange?: SlashTransactionDateRange,
@@ -3875,6 +3920,9 @@ async function syncLatestBankActivity(
   const laneKey = options.dateRange
     ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
     : "live";
+  if (includes("mercury") && bankSourceConfigured(env, "mercury")) {
+    jobs.push({ source: "mercury", run: syncMercuryActivity(env, options.dateRange, laneKey) });
+  }
   if (includes("wise") && bankSourceConfigured(env, "wise")) {
     jobs.push({ source: "wise", run: syncWiseActivity(env, options.dateRange) });
   }
@@ -4030,7 +4078,7 @@ export async function getTelegramSlashRejectedCardsReport(env: Env, asOf = Date.
 
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
-    .filter((connection) => connection.source === "wise" || connection.source === "revolut");
+    .filter((connection) => connection.source === "wise" || connection.source === "revolut" || connection.source === "mercury");
   const [accounts, slashAccounts] = await Promise.all([
     getConvexClient(env).query(api.banking.getCashReportAccounts, {
       serviceToken: getConvexServiceToken(env), connections
@@ -4112,6 +4160,7 @@ async function syncBankSourceRange(
   laneKey: string
 ): Promise<boolean> {
   if (source === "wise") return syncWiseActivity(env, range);
+  if (source === "mercury") return syncMercuryActivity(env, range, laneKey, 1);
   if (source === "revolut") return syncRevolutActivity(env, range, laneKey, 1);
   if (source === "slash") return syncSlashActivity(env, range, laneKey, 1);
   return syncAmexActivity(env, range, laneKey, 1);
@@ -4379,6 +4428,9 @@ async function getSnapshot(
     && !state.bankSyncStates.amex
   ) {
     bankIssues.amex ??= "No saved Amex activity yet. The next automatic refresh will create the initial 45-day cache.";
+  }
+  if (bankSourceConfigured(env, "mercury") && !state.bankSyncStates.mercury) {
+    bankIssues.mercury ??= "No saved Mercury activity yet. Sync to load account balances and transactions.";
   }
   const wise: WiseActivityResult = {
     ...emptyWiseActivity(),
@@ -4790,7 +4842,7 @@ async function autoCategorizeState(
       (transaction.source === "wise"
         || transaction.source === "revolut"
         || transaction.source === "slash"
-        || transaction.source === "amex")
+        || transaction.source === "amex" || transaction.source === "mercury")
       && JSON.stringify(categorized) !== JSON.stringify(transaction)
     ) {
       state.dirtyBankTransactionIds.add(transaction.id);
@@ -6241,7 +6293,7 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
   return { dashboard: await getSnapshot(env), outcomes };
 }
 
-const paymentSources = new Set<PaymentAllocation["source"]>(["wise", "revolut", "slash", "amex", "cash", "kraken", "trust", "other"]);
+const paymentSources = new Set<PaymentAllocation["source"]>(["wise", "revolut", "slash", "amex", "mercury", "cash", "kraken", "trust", "other"]);
 
 function isInvoicePaymentSource(value: DataSource): value is Extract<DataSource, PaymentAllocation["source"]> {
   return paymentSources.has(value as PaymentAllocation["source"]);
@@ -6922,7 +6974,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     throw new ApiError(400, "Transaction date range is invalid");
   }
   const source = url.searchParams.get("source");
-  if (source !== null && source !== "wise" && source !== "revolut" && source !== "slash" && source !== "amex") {
+  if (source !== null && source !== "wise" && source !== "revolut" && source !== "slash" && source !== "amex" && source !== "mercury") {
     throw new ApiError(400, "Transaction source is invalid");
   }
   const direction = url.searchParams.get("direction");
@@ -7315,6 +7367,7 @@ async function handleApi(
         && payload.source !== "revolut"
         && payload.source !== "slash"
         && payload.source !== "amex"
+        && payload.source !== "mercury"
       ) {
         throw new ApiError(400, "Historical transaction sync source is invalid");
       }
@@ -7818,7 +7871,7 @@ function telegramTransactionOptions(
   const periodTokens = new Set(["today", "yesterday", "last-7-days", "this-month", "last-month"]);
   const hasCustomPeriod = /^\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/u.test(tokens[0] ?? "");
   const period = periodTokens.has(tokens[0] ?? "") || hasCustomPeriod ? tokens.shift() : undefined;
-  const sources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex"]);
+  const sources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex", "mercury"]);
   const sourceToken = tokens[0]?.toLowerCase() as BankTransactionSource | undefined;
   const source = sourceToken && sources.has(sourceToken) ? (tokens.shift() as BankTransactionSource) : undefined;
   const range = telegramDateRange(period);
@@ -8263,7 +8316,7 @@ async function telegramReadCommand(
   }
   if (command === "balances") {
     const filter = (args || "all").toLowerCase();
-    if (!["all", "slash", "wise", "revolut", "amex", "holdings"].includes(filter)) {
+    if (!["all", "slash", "wise", "revolut", "amex", "mercury", "holdings"].includes(filter)) {
       throw new ApiError(400, telegramHelp.balances);
     }
     if (filter === "slash") {

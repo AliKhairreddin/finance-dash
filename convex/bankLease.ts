@@ -19,7 +19,7 @@ export async function assertBankLedgerReady(ctx: MutationCtx | QueryCtx): Promis
 
 export async function assertBankConnectionBinding(
   ctx: MutationCtx | QueryCtx,
-  source: "wise" | "revolut" | "slash" | "amex",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
   connectionKey: string
 ): Promise<void> {
   const binding = await ctx.db
@@ -37,7 +37,7 @@ export async function assertBankConnectionBinding(
 
 export async function ensureBankConnectionBinding(
   ctx: MutationCtx,
-  source: "wise" | "revolut" | "slash" | "amex",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
   connectionKey: string
 ): Promise<void> {
   const binding = await ctx.db
@@ -65,6 +65,8 @@ export async function ensureBankConnectionBinding(
       expectedConnectionKey: null
     });
   }
+  const identity = await ctx.db.query("bankIdentityMigrations").withIndex("by_source", q => q.eq("source", source)).unique();
+  if (!identity) await ctx.db.insert("bankIdentityMigrations", { source, version: 2, completedAt: new Date().toISOString() });
   await ctx.db.insert("bankConnectionBindings", {
     source,
     connectionKey,
@@ -74,7 +76,7 @@ export async function ensureBankConnectionBinding(
 
 export async function assertActiveBankSyncLease(
   ctx: MutationCtx,
-  source: "wise" | "revolut" | "slash" | "amex",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
   credential: BankSyncLeaseCredential
 ): Promise<void> {
   if (
