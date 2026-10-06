@@ -30,21 +30,21 @@ function provider(transactions: Record<string, unknown>[]) {
   }) as typeof fetch;
 }
 
-test("the first Mercury sync starts January 2026 and freezes its range in the checkpoint", async () => {
+test("the first Mercury sync starts at account opening and freezes the entire history in its checkpoint", async () => {
   const dates: string[] = [];
   const fetcher: typeof fetch = async input => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("accounts")) return response({ accounts: [account], page: {} });
     dates.push(url.searchParams.get("start") ?? url.searchParams.get("postedStart")!);
-    return response({ transactions: [transaction(1, { createdAt: "2025-12-11T12:00:00Z", postedAt: "2025-12-11T12:00:00Z" }), transaction(2)], page: {} });
+    return response({ transactions: [transaction(1, { createdAt: "2025-12-11T12:00:00Z", postedAt: "2025-12-11T12:00:00Z" })], page: {} });
   };
   const first = await fetchMercuryActivityBatch({ apiToken: "test-token", now: options.now, fetcher, pageBudget: 1 });
-  assert.deepEqual(first.dateRange, { fromDate: "2026-01-01", toDate: "2026-10-06" });
+  assert.deepEqual(first.dateRange, { fromDate: "2025-09-05", toDate: "2026-10-06" });
   assert.equal(first.transactions.length, 1);
   const second = await fetchMercuryActivityBatch({ apiToken: "test-token", now: options.now + 86400000, fetcher, checkpoint: first.nextCheckpoint! });
   assert.equal(second.complete, true);
   assert.deepEqual(second.dateRange, first.dateRange);
-  assert.deepEqual(dates, ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
+  assert.deepEqual(dates, ["2025-09-05T00:00:00.000Z", "2025-09-05T00:00:00.000Z"]);
 });
 
 test("Mercury resumes provider cursors and finds older-created activity posted in the requested period", async () => {
@@ -117,7 +117,6 @@ test("Mercury connection identity remains stable across token rotation and separ
   assert.notEqual(key, await bankConnectionKey({ MERCURY_CONNECTION_ID: "other-company" }, "mercury"));
   assert.equal(await bankConnectionKey({}, "mercury"), null);
 });
-
 
 test("Mercury rejects redirects without forwarding the API credential", async () => {
   let calls = 0;

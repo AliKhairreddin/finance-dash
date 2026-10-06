@@ -1,5 +1,4 @@
 import type { AccountBalance, Transaction } from "./types";
-import { bankHistoryStartDate } from "./bankPeriods";
 import { bankProviderTransactionId } from "./providerIdentity";
 import { assertBankAccountInput, assertBankTransactionInput } from "./bankRecordValidation";
 import { decodeBankSyncCheckpoint, encodeBankSyncCheckpoint, type BankSyncCheckpoint } from "./bankSyncCheckpoint";
@@ -147,7 +146,7 @@ export async function fetchMercuryActivityBatch(options: MercuryActivityOptions)
   const checkpoint = options.checkpoint ? decodeBankSyncCheckpoint(options.checkpoint, "mercury") : undefined;
   const discoveredAccounts = await accounts(options);
   const discovered = discoveredAccounts.balances;
-  const range = options.dateRange ?? { fromDate: discoveredAccounts.openedOn > bankHistoryStartDate ? discoveredAccounts.openedOn : bankHistoryStartDate, toDate: new Date(now).toISOString().slice(0, 10) };
+  const range = options.dateRange ?? { fromDate: discoveredAccounts.openedOn, toDate: new Date(now).toISOString().slice(0, 10) };
   const start = checkpoint?.windowStart ?? `${range.fromDate}T00:00:00.000Z`;
   const end = checkpoint?.windowEnd ?? new Date(Date.parse(`${range.toDate}T00:00:00.000Z`) + dayMs).toISOString();
   if (!Number.isFinite(Date.parse(start)) || Date.parse(start) >= Date.parse(end)) throw new Error("Invalid Mercury date range");

@@ -1,5 +1,4 @@
 import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
-import { bankHistoryStartDate } from "../shared/bankPeriods";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "./amexStatements";
 import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
@@ -3384,10 +3383,10 @@ export function incrementalBankDateRange(
     (latest, range) => latest === null || range.toDate > latest ? range.toDate : latest,
     null
   );
-  if (!latestCoveredDate) return { fromDate: bankHistoryStartDate, toDate: current.toDate };
+  if (!latestCoveredDate) return current;
   const boundedLatestCoveredDate = latestCoveredDate > current.toDate ? current.toDate : latestCoveredDate;
   return {
-    fromDate: [bankHistoryStartDate, isoDateShift(boundedLatestCoveredDate, 1 - bankSyncOverlapDays)].sort().at(-1)!,
+    fromDate: isoDateShift(boundedLatestCoveredDate, 1 - bankSyncOverlapDays),
     toDate: current.toDate
   };
 }
@@ -4175,9 +4174,6 @@ async function enqueueBankBackfill(
   if (!bankSourceConfigured(env, source)) {
     throw new ApiError(409, `${source} is not configured for transaction sync`);
   }
-  if (range.fromDate < bankHistoryStartDate) {
-    throw new ApiError(400, `Bank transaction history starts ${bankHistoryStartDate}`);
-  }
   if (source === "wise") {
     if (range.toDate < zohoWiseStartDate) throw new ApiError(409, `Wise API coverage starts ${zohoWiseStartDate}; existing CSV history is preserved`);
     range = { ...range, fromDate: range.fromDate < zohoWiseStartDate ? zohoWiseStartDate : range.fromDate };
@@ -4223,13 +4219,6 @@ async function runBankBackfillJob(env: Env, key: string): Promise<BankBackfillJo
     attemptToken
   });
   if (!attempt.started) return attempt.job;
-  if (stored.fromDate < bankHistoryStartDate) {
-    return convex.mutation(api.bankSync.finishBackfillAttempt, {
-      serviceToken, key, connectionKey: stored.connectionKey, attemptToken,
-      complete: false, terminal: true,
-      error: `Bank transaction history starts ${bankHistoryStartDate}`
-    });
-  }
   if (stored.source === "wise") {
     return convex.mutation(api.bankSync.finishBackfillAttempt, {
       serviceToken,
@@ -4317,7 +4306,7 @@ async function reconcilePendingBankTransactions(env: Env): Promise<void> {
     serviceToken: getConvexServiceToken(env),
     connections
   });
-  await Promise.all(pending.flatMap((item) => item.dates.filter(date => date >= bankHistoryStartDate).map((date) =>
+  await Promise.all(pending.flatMap((item) => item.dates.map((date) =>
     enqueueBankBackfill(env, item.source, { fromDate: date, toDate: date })
   )));
   await processPendingBankBackfills(env);

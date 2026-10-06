@@ -1,5 +1,3 @@
-export const bankHistoryStartDate = "2026-01-01";
-
 export const bankPeriodPresets = [
   "today",
   "yesterday",
