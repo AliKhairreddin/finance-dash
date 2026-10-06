@@ -1,4 +1,5 @@
 import type { TransactionPage } from "./types";
+import { bankHistoryStartDate } from "./bankPeriods";
 
 type DateRange = { fromDate: string; toDate: string };
 
@@ -10,14 +11,15 @@ export function claimAutomaticHistoryRequests(
   return (coverage ?? []).flatMap((item) => {
     // Wise history comes from the daily Zoho feed. Opening or sorting the
     // ledger cannot fill older CSV gaps or advance the upstream feed date.
-    if (item.source === "wise" || item.missingRanges.length === 0) return [];
+    const missingRanges = item.missingRanges.filter(range => range.toDate >= bankHistoryStartDate);
+    if (item.source === "wise" || missingRanges.length === 0) return [];
     const key = `${item.source}:${period.fromDate}:${period.toDate}`;
     if (attempted.has(key)) return [];
     attempted.add(key);
     return [{
       source: item.source,
-      fromDate: item.missingRanges.reduce((first, range) => range.fromDate < first ? range.fromDate : first, item.missingRanges[0].fromDate),
-      toDate: item.missingRanges.reduce((last, range) => range.toDate > last ? range.toDate : last, item.missingRanges[0].toDate)
+      fromDate: [bankHistoryStartDate, missingRanges.reduce((first, range) => range.fromDate < first ? range.fromDate : first, missingRanges[0].fromDate)].sort().at(-1)!,
+      toDate: missingRanges.reduce((last, range) => range.toDate > last ? range.toDate : last, missingRanges[0].toDate)
     }];
   });
 }

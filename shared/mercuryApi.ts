@@ -1,4 +1,5 @@
 import type { AccountBalance, Transaction } from "./types";
+import { bankHistoryStartDate } from "./bankPeriods";
 import { bankProviderTransactionId } from "./providerIdentity";
 import { assertBankAccountInput, assertBankTransactionInput } from "./bankRecordValidation";
 import { decodeBankSyncCheckpoint, encodeBankSyncCheckpoint, type BankSyncCheckpoint } from "./bankSyncCheckpoint";
@@ -65,7 +66,7 @@ function nextPage(payload: RecordValue, seen: Set<string>): string | undefined {
 async function get(options: MercuryActivityOptions, path: string, params: URLSearchParams): Promise<RecordValue> {
   if (!options.apiToken?.trim()) throw new Error("MERCURY_API_TOKEN is not configured");
   const response = await fetchBankProvider(options.fetcher ?? fetch, `${apiBase}/${path}?${params}`, {
-    headers: { Authorization: `Bearer ${options.apiToken.trim()}`, Accept: "application/json" }, redirect: "error"
+    headers: { Authorization: `Bearer ${options.apiToken.trim()}`, Accept: "application/json" }, redirect: "manual"
   }, { provider: "Mercury" });
   if (!response.ok) { await response.body?.cancel(); throw new Error(`Mercury API request failed (${response.status})`); }
   return record(await readBoundedResponseJson(response, "Mercury"), path);
@@ -146,7 +147,7 @@ export async function fetchMercuryActivityBatch(options: MercuryActivityOptions)
   const checkpoint = options.checkpoint ? decodeBankSyncCheckpoint(options.checkpoint, "mercury") : undefined;
   const discoveredAccounts = await accounts(options);
   const discovered = discoveredAccounts.balances;
-  const range = options.dateRange ?? { fromDate: discoveredAccounts.openedOn, toDate: new Date(now).toISOString().slice(0, 10) };
+  const range = options.dateRange ?? { fromDate: discoveredAccounts.openedOn > bankHistoryStartDate ? discoveredAccounts.openedOn : bankHistoryStartDate, toDate: new Date(now).toISOString().slice(0, 10) };
   const start = checkpoint?.windowStart ?? `${range.fromDate}T00:00:00.000Z`;
   const end = checkpoint?.windowEnd ?? new Date(Date.parse(`${range.toDate}T00:00:00.000Z`) + dayMs).toISOString();
   if (!Number.isFinite(Date.parse(start)) || Date.parse(start) >= Date.parse(end)) throw new Error("Invalid Mercury date range");

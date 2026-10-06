@@ -23,28 +23,28 @@ const response = (data: unknown) => new Response(JSON.stringify(data), { headers
 function provider(transactions: Record<string, unknown>[]) {
   return (async (input, init) => {
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer test-token");
-    assert.equal(init?.redirect, "error");
+    assert.equal(init?.redirect, "manual");
     const url = new URL(String(input));
     assert.equal(url.origin, "https://api.mercury.com");
     return url.pathname.endsWith("accounts") ? response({ accounts: [account], page: {} }) : response({ transactions, page: {} });
   }) as typeof fetch;
 }
 
-test("the first Mercury sync starts at account opening and freezes the entire history in its checkpoint", async () => {
+test("the first Mercury sync starts January 2026 and freezes its range in the checkpoint", async () => {
   const dates: string[] = [];
   const fetcher: typeof fetch = async input => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("accounts")) return response({ accounts: [account], page: {} });
     dates.push(url.searchParams.get("start") ?? url.searchParams.get("postedStart")!);
-    return response({ transactions: [transaction(1, { createdAt: "2025-12-11T12:00:00Z", postedAt: "2025-12-11T12:00:00Z" })], page: {} });
+    return response({ transactions: [transaction(1, { createdAt: "2025-12-11T12:00:00Z", postedAt: "2025-12-11T12:00:00Z" }), transaction(2)], page: {} });
   };
   const first = await fetchMercuryActivityBatch({ apiToken: "test-token", now: options.now, fetcher, pageBudget: 1 });
-  assert.deepEqual(first.dateRange, { fromDate: "2025-09-05", toDate: "2026-10-06" });
+  assert.deepEqual(first.dateRange, { fromDate: "2026-01-01", toDate: "2026-10-06" });
   assert.equal(first.transactions.length, 1);
   const second = await fetchMercuryActivityBatch({ apiToken: "test-token", now: options.now + 86400000, fetcher, checkpoint: first.nextCheckpoint! });
   assert.equal(second.complete, true);
   assert.deepEqual(second.dateRange, first.dateRange);
-  assert.deepEqual(dates, ["2025-09-05T00:00:00.000Z", "2025-09-05T00:00:00.000Z"]);
+  assert.deepEqual(dates, ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
 });
 
 test("Mercury resumes provider cursors and finds older-created activity posted in the requested period", async () => {
@@ -116,4 +116,15 @@ test("Mercury connection identity remains stable across token rotation and separ
   assert.match(key!, /^[0-9a-f]{64}$/);
   assert.notEqual(key, await bankConnectionKey({ MERCURY_CONNECTION_ID: "other-company" }, "mercury"));
   assert.equal(await bankConnectionKey({}, "mercury"), null);
+});
+
+
+test("Mercury rejects redirects without forwarding the API credential", async () => {
+  let calls = 0;
+  await assert.rejects(fetchMercuryActivityBatch({ ...options, fetcher: async (_input, init) => {
+    calls++;
+    assert.equal(init?.redirect, "manual");
+    return new Response(null, { status: 302, headers: { Location: "https://untrusted.example" } });
+  } }), /Mercury API request failed \(302\)/);
+  assert.equal(calls, 1);
 });

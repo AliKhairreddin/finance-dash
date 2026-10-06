@@ -1163,3 +1163,11 @@ test("manual media sync respects the shared daily allowance before contacting Le
   assert.equal(tooLarge.status, 400);
   assert.deepEqual(calls, ["mediaSpend:startSync"]);
 });
+
+
+test("initial bank sync starts January 2026 and overlap never crosses that boundary", () => {
+  const now = Date.parse("2026-10-06T18:00:00Z");
+  assert.deepEqual(incrementalBankDateRange(null, now), { fromDate: "2026-01-01", toDate: "2026-10-06" });
+  assert.deepEqual(incrementalBankDateRange({ source: "mercury", coveredRanges: [{ fromDate: "2026-01-01", toDate: "2026-01-01" }], lastSyncedAt: "2026-01-01T12:00:00Z" }, now),
+    { fromDate: "2026-01-01", toDate: "2026-10-06" });
+});

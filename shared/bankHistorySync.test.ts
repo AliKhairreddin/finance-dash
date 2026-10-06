@@ -59,3 +59,14 @@ test("history sync preserves provider errors and rejects false completion respon
   t.mock.method(globalThis, "fetch", async () => Response.json({ status: "running" }));
   await assert.rejects(waitForBankHistorySync("/api", "job", new AbortController().signal), /invalid status/);
 });
+
+
+test("all banks limit automatic history requests to January 2026 onward", () => {
+  const old = { fromDate: "2025-01-01", toDate: "2025-12-31" };
+  const crossing = { fromDate: "2025-09-01", toDate: "2026-10-06" };
+  for (const source of ["mercury", "revolut", "slash", "amex"] as const) {
+    assert.deepEqual(claimAutomaticHistoryRequests([{ source, missingRanges: [old] }], old, new Set()), []);
+    assert.deepEqual(claimAutomaticHistoryRequests([{ source, missingRanges: [crossing] }], crossing, new Set()),
+      [{ source, fromDate: "2026-01-01", toDate: "2026-10-06" }]);
+  }
+});
