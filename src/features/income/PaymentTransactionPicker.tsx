@@ -76,7 +76,16 @@ export function PaymentTransactionPicker({
   return (
     <aside id="payment-transaction-picker" className="payment-transaction-picker" aria-labelledby="payment-picker-title" hidden={!open}>
       <div className="payment-picker-header">
-        <div><p className="eyebrow">Bank transactions</p><h2 id="payment-picker-title">Find a payment <span>{currency}</span></h2></div>
+        <div className="payment-picker-heading">
+          <p className="eyebrow">Bank transactions</p>
+          <div className="payment-picker-title-line">
+            <h2 id="payment-picker-title">Find a payment <span>{currency}</span></h2>
+            <div className="payment-picker-status">
+              <span role="status">{filtered.length.toLocaleString()} result{filtered.length === 1 ? "" : "s"}{!complete && " so far"}{loading && <Loader2 className="spin" size={13} aria-label="Loading bank history" />}</span>
+              <InfoPopover label="Eligible payment transactions">Incoming, posted or settled transactions in {currency} with funds available. Amount filters use the unallocated balance. {complete ? "All bank history has been loaded." : "Older bank history loads while search is open."}</InfoPopover>
+            </div>
+          </div>
+        </div>
         <Button type="button" className="icon-button" onClick={onClose} aria-label="Close transaction search"><X size={18} /></Button>
       </div>
       <div className="payment-picker-controls">
@@ -97,6 +106,7 @@ export function PaymentTransactionPicker({
             <NativeSelectOption value="partial">Partially allocated</NativeSelectOption>
           </NativeSelect>
           <Button type="button" className="secondary-button" aria-expanded={showFilters} aria-controls="payment-picker-filters" onClick={() => setShowFilters(value => !value)}><SlidersHorizontal size={14} /> Filters{filterCount > 0 && <span className="payment-filter-count">{filterCount}</span>}</Button>
+          {(filterCount > 0 || filters.query) && <Button type="button" className="icon-text-button" onClick={() => { setFilters(emptyPaymentTransactionFilters); setVisibleLimit(75); }}>Reset filters</Button>}
         </div>
         {showFilters && <div className="payment-picker-filters" id="payment-picker-filters">
           <label className="payment-picker-account">Account<NativeSelect aria-label="Filter by account" value={filters.account} searchable={false} onValueChange={value => updateFilter("account", value)}><NativeSelectOption value="">All accounts</NativeSelectOption>{accounts.map(([key, label]) => <NativeSelectOption key={key} value={key}>{label}</NativeSelectOption>)}</NativeSelect></label>
@@ -105,11 +115,6 @@ export function PaymentTransactionPicker({
           <label>Min available ({currency})<Input aria-label="Minimum available amount" type="number" min="0" step="0.01" placeholder="0.00" value={filters.minimum} onChange={event => updateFilter("minimum", event.target.value)} /></label>
           <label>Max available ({currency})<Input aria-label="Maximum available amount" type="number" min="0" step="0.01" placeholder="Any amount" value={filters.maximum} onChange={event => updateFilter("maximum", event.target.value)} /></label>
         </div>}
-        <div className="payment-picker-status">
-          <span role="status">{filtered.length.toLocaleString()} result{filtered.length === 1 ? "" : "s"}{!complete && " so far"}{loading && <Loader2 className="spin" size={13} aria-label="Loading bank history" />}</span>
-          <InfoPopover label="Eligible payment transactions">Incoming, posted or settled transactions in {currency} with funds available. Amount filters use the unallocated balance. {complete ? "All bank history has been loaded." : "Older bank history loads while search is open."}</InfoPopover>
-          {(filterCount > 0 || filters.query) && <Button type="button" className="icon-text-button" onClick={() => { setFilters(emptyPaymentTransactionFilters); setVisibleLimit(75); }}>Reset filters</Button>}
-        </div>
         {rangeError && <div className="inline-error" role="alert">{rangeError}</div>}
         {error && <div className="inline-error" role="alert">{error} <Button type="button" className="icon-text-button" onClick={onRetry}>Retry</Button></div>}
       </div>
