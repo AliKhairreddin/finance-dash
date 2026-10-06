@@ -54,6 +54,7 @@ import {
   groupMediaSpendByAccount,
   mediaSpendYesterdayInIndia,
   mediaSpendPullDateInIndia,
+  summarizeMediaSpend,
   validateMediaSpendDateRange,
   type MediaSpendAccountGroup,
   type MediaSpendApiResponse,
@@ -365,13 +366,6 @@ export function MediaSpendView({
     return () => controller.abort();
   }, [dateRange.fromDate, dateRange.toDate]);
 
-  const activitySummary = useMemo(() => {
-    const activeRows = (data?.rows ?? []).filter((row) => row.spend !== 0);
-    return {
-      accounts: new Set(activeRows.map((row) => `${row.platform}:${row.accountId}`)).size,
-      businessManagers: new Set(activeRows.map((row) => `${row.platform}:${row.businessManagerId ?? ""}`)).size
-    };
-  }, [data?.rows]);
   const canIncludeZeroSpend = dateRange.fromDate === dateRange.toDate;
   const includeZeroSpend = canIncludeZeroSpend && zeroSpendVisibility === "include";
   const providersById = useMemo(
@@ -537,6 +531,17 @@ export function MediaSpendView({
     );
   }, [providerSortDirection, providerSortKey, providerSpendGroups, search]);
   const showingAccountDetail = viewMode === "accounts" && Boolean(selectedAccountKey);
+  // Summarize every matching row in the current view, before pagination.
+  const visibleSpendRows = useMemo(() => {
+    if (viewMode === "providers") return visibleProviders.flatMap((group) => group.rows);
+    if (viewMode === "businessManagers") return visibleBusinessManagers.flatMap((group) => group.rows);
+    return showingAccountDetail ? visibleDailyRows : visibleAccountGroups.flatMap((group) => group.rows);
+  }, [showingAccountDetail, viewMode, visibleAccountGroups, visibleBusinessManagers, visibleDailyRows, visibleProviders]);
+  const visibleSummary = useMemo(() => summarizeMediaSpend(visibleSpendRows), [visibleSpendRows]);
+  const activitySummary = useMemo(
+    () => summarizeMediaSpend(visibleSpendRows.filter((row) => row.spend !== 0)),
+    [visibleSpendRows]
+  );
   const visibleRowCount = viewMode === "accounts"
     ? showingAccountDetail ? visibleDailyRows.length : visibleAccountGroups.length
     : viewMode === "businessManagers"
@@ -838,7 +843,7 @@ export function MediaSpendView({
       <div className="media-spend-summary" aria-label="Media spend summary">
         <article className="media-spend-summary-card total">
           <span className="media-spend-summary-icon"><BadgeDollarSign size={17} /></span>
-          <div><span>Reported spend</span><strong>{data ? money(data.summary.totalSpend, data.currency) : "—"}</strong></div>
+          <div><span>Reported spend</span><strong>{data ? money(visibleSummary.totalSpend, data.currency) : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><WalletCards size={17} /></span>
@@ -850,7 +855,7 @@ export function MediaSpendView({
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><Rows3 size={17} /></span>
-          <div><span>Reported days</span><strong>{data?.summary.days ?? "—"}</strong></div>
+          <div><span>Reported days</span><strong>{data ? visibleSummary.days : "—"}</strong></div>
         </article>
       </div>
 
@@ -1185,7 +1190,7 @@ export function MediaSpendView({
               : `${visibleAccountGroups.length.toLocaleString()} shown · ${activitySummary.accounts.toLocaleString()} active · ${(data?.summary.accounts ?? 0).toLocaleString()} total ad accounts`
             : viewMode === "businessManagers"
               ? `${visibleBusinessManagers.length.toLocaleString()} shown · ${activitySummary.businessManagers.toLocaleString()} active · ${(data?.summary.businessManagers ?? 0).toLocaleString()} total BMs`
-              : `${visibleProviders.length.toLocaleString()} shown · ${providerSpendGroups.length.toLocaleString()} groups · ${providerSpendGroups.reduce((total, group) => total + group.rows.length, 0).toLocaleString()} account-day rows · ${money(visibleProviders.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} shown / ${money(providerSpendGroups.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} total`} · {data?.summary.platforms ?? 0} platform{data?.summary.platforms === 1 ? "" : "s"}</span>
+              : `${visibleProviders.length.toLocaleString()} shown · ${providerSpendGroups.length.toLocaleString()} groups · ${providerSpendGroups.reduce((total, group) => total + group.rows.length, 0).toLocaleString()} account-day rows · ${money(visibleProviders.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} shown / ${money(providerSpendGroups.reduce((total, group) => total + group.spend, 0), data?.currency ?? "USD")} total`} · {visibleSummary.platforms} platform{visibleSummary.platforms === 1 ? "" : "s"}</span>
           <div className="media-spend-pagination">
             <span>Page {page + 1} of {pageCount}</span>
             <Button className="icon-button" aria-label="Previous media spend page" disabled={page === 0} onClick={() => setPage((current) => current - 1)} type="button">
