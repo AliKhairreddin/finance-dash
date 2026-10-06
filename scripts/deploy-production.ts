@@ -20,6 +20,8 @@ export function productionEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessE
     CONVEX_DEPLOYMENT: productionDeployment,
     CONVEX_URL: productionUrl,
     VITE_CONVEX_URL: productionUrl,
+    // Convex's env command loads dotenv; its stdout must contain only the token.
+    DOTENV_CONFIG_QUIET: "true",
     // Never use a local development service token to verify production.
     CONVEX_SERVICE_TOKEN: undefined
   };

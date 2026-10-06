@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 import { productionDeployment, productionEnvironment, productionUrl } from "../scripts/deploy-production";
 
 test("production releases ignore development URLs and service tokens", () => {
@@ -27,4 +28,12 @@ test("production releases reject keys and host overrides targeting another deplo
 test("production releases preserve a key scoped to the production deployment", () => {
   const key = `${productionDeployment}|test`;
   assert.equal(productionEnvironment({ CONVEX_DEPLOY_KEY: key }).CONVEX_DEPLOY_KEY, key);
+});
+
+test("dotenv cannot contaminate captured production credentials with status messages", () => {
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", 'import { config } from "dotenv"; config({ path: [] }); console.log("production-token");'], {
+    env: productionEnvironment({ DOTENV_CONFIG_QUIET: "false" }), encoding: "utf8"
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.trim(), "production-token");
 });
