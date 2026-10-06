@@ -268,19 +268,19 @@ async function recordAndMatch(ctx: MutationCtx, state: Doc<"dashboardState">, do
 
 export const candidates = query({
   args: { serviceToken: v.string(), id: v.id("financialDocuments"), extraction: v.optional(documentExtraction) },
-  returns: v.array(v.object({ id: v.string(), date: v.string(), counterparty: v.string(), accountName: v.string(), amount: v.number(), currency: v.string(), cardLastFour: v.optional(v.string()), cardHolderName: v.optional(v.string()), matchKind: v.union(v.literal("exact"), v.literal("foreign_currency")) })),
+  returns: v.object({ limited: v.boolean(), rows: v.array(v.object({ source: v.string(), description: v.string(), rawName: v.string(), accountId: v.optional(v.string()), id: v.string(), date: v.string(), counterparty: v.string(), accountName: v.string(), amount: v.number(), currency: v.string(), cardLastFour: v.optional(v.string()), cardHolderName: v.optional(v.string()), matchKind: v.union(v.literal("exact"), v.literal("foreign_currency")) })) }),
   handler: async (ctx, args) => {
-    authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["unmatched", "needs_review", "failed"].includes(doc.status)) return [];
+    authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["unmatched", "needs_review", "failed"].includes(doc.status)) return { rows: [], limited: false };
     const extraction = args.extraction ? validateExtraction(args.extraction) : doc.extraction;
-    if (!extraction) return [];
+    if (!extraction) return { rows: [], limited: false };
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     const existingExpenses = existingDocumentExpenses(state?.expenses ?? [], doc, extraction);
     const { rows: related } = await relatedDocuments(ctx, doc, extraction);
     const expenseIds = [...new Set([...existingExpenses.map(e => e.id), ...related.flatMap(file => file.expenseId ? [file.expenseId] : [])])];
     const expenseId = doc.expenseId ?? (expenseIds.length === 1 ? expenseIds[0] : undefined);
     const candidates = await bankCandidates(ctx, extraction, false); const rows = [];
-    for (const tx of candidates.rows) if ((!tx.matchedInvoiceId || tx.matchedInvoiceId === doc.invoiceId) && await unclaimed(ctx, tx.id, doc, doc.invoiceId, expenseId)) rows.push({ id: tx.id, date: tx.date, counterparty: tx.counterparty, accountName: tx.accountName, amount: tx.amount, currency: tx.currency, cardLastFour: tx.cardLastFour, cardHolderName: tx.cardHolderName, matchKind: documentReviewMatchKind(extraction, tx)! });
-    return rows.slice(0, 60);
+    for (const tx of candidates.rows) if ((!tx.matchedInvoiceId || tx.matchedInvoiceId === doc.invoiceId) && await unclaimed(ctx, tx.id, doc, doc.invoiceId, expenseId)) rows.push({ source: tx.source, description: tx.description, rawName: tx.rawName, accountId: tx.accountId, id: tx.id, date: tx.date, counterparty: tx.counterparty, accountName: tx.accountName, amount: tx.amount, currency: tx.currency, cardLastFour: tx.cardLastFour, cardHolderName: tx.cardHolderName, matchKind: documentReviewMatchKind(extraction, tx)! });
+    return { rows, limited: candidates.limited };
   }
 });
 export const confirmMatch = mutation({

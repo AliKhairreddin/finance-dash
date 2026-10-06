@@ -121,11 +121,11 @@ test("company review exposes Amex FX candidates and confirms company plus bank l
   const { db, receipt } = amexSetup();
   await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...receipt, entity: null } });
   assert.equal((await db.ctx.db.get("document")).status, "needs_review");
-  const candidates = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
+  const { rows: candidates } = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
   assert.equal(candidates.length, 1); assert.equal(candidates[0].matchKind, "foreign_currency");
   assert.equal(candidates[0].cardLastFour, "1029"); assert.equal(candidates[0].cardHolderName, "Test Cardholder");
   assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
-  const changedCompany = await db.run(documents.candidates, { serviceToken: "test-service", id: "document", extraction: { ...receipt, counterparty: "Other" } });
+  const { rows: changedCompany } = await db.run(documents.candidates, { serviceToken: "test-service", id: "document", extraction: { ...receipt, counterparty: "Other" } });
   assert.equal(changedCompany.length, 0, "Candidates use the edited document details");
   await assert.rejects(db.run(documents.review, { serviceToken: "test-service", id: "document", extraction: { ...receipt, entity: null }, transactionId: "amex-1", confirmCurrencyConversion: true }), /Choose Digital Nudge/);
   await assert.rejects(db.run(documents.review, { serviceToken: "test-service", id: "document", extraction: receipt, transactionId: "amex-1" }), /Confirm the bank charge/);
@@ -154,13 +154,13 @@ test("Amex matches recheck active identities, claims, company and posted status 
     const { db, receipt } = amexSetup();
     await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
     await db.ctx.db.patch("amex-1", changes);
-    assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+    assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), { rows: [], limited: false });
     await assert.rejects(db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true }), /no longer fits/);
   }
   const { db, receipt } = amexSetup();
   await db.run(documents.complete, { id: "document", token: "lease", extraction: receipt });
   await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "other-document", transactionId: "amex-1", expenseId: "other-expense", status: "matched" });
-  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), { rows: [], limited: false });
   await assert.rejects(db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true }), /already claimed/);
 });
 
@@ -170,7 +170,7 @@ test("a receipt and invoice for the same expense share its confirmed Amex link",
   await db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true });
   await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "second", storageId: "second-blob", fileName: "invoice.pdf" });
   await db.run(documents.complete, { id: "second", token: "lease", extraction: { ...receipt, entity: null } });
-  const choices = await db.run(documents.candidates, { serviceToken: "test-service", id: "second", extraction: receipt });
+  const { rows: choices } = await db.run(documents.candidates, { serviceToken: "test-service", id: "second", extraction: receipt });
   assert.equal(choices.length, 1);
   await db.run(documents.review, { serviceToken: "test-service", id: "second", extraction: receipt });
   const second = await db.ctx.db.get("second"), first = await db.ctx.db.get("document"), ledger = await db.ctx.db.get("state");
@@ -200,7 +200,7 @@ test("bulk trash and restore preserve originals, financial records and bank link
   assert.equal(await db.run(documents.trash, args), 0, "trash is idempotent");
   assert.equal((db.tables.get("documentFolders") ?? []).find(f => f.key === "dn:2026-08")?.count, 0);
   assert.equal(await db.run(documents.rematch, { serviceToken: "test-service", id: "document" }), 0);
-  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), []);
+  assert.deepEqual(await db.run(documents.candidates, { serviceToken: "test-service", id: "document" }), { rows: [], limited: false });
   assert.deepEqual(await db.ctx.db.get("state"), before); assert.deepEqual(await db.ctx.db.get("tx-1"), bank);
   assert.equal((await db.run(documents.get, { serviceToken: "test-service", id: "document" })).url, "https://storage.example/blob");
   assert.equal(await db.run(documents.restore, args), 1); assert.equal(await db.run(documents.restore, args), 0);
@@ -399,4 +399,27 @@ test("later rematches re-read accounting edits and retain the review safeguard",
   assert.equal(document.transactionId, undefined);
   assert.match(document.extraction.reviewReasons.join(" "), /Details differ/);
   assert.deepEqual(await db.ctx.db.get("state"), edited);
+});
+
+test("document search returns bank/reference details past the old dropdown cap without changing match eligibility", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const transactions = Array.from({ length: 80 }, (_, i) => ({ ...tx(`tx-${i}`), accountId: "wise-usd" }));
+  const db = setup([...transactions, { ...tx("pending"), status: "pending" }, { ...tx("other-company"), wiseEntity: "lmd" }, { ...tx("claimed"), matchedInvoiceId: "other-invoice" }]);
+  await db.ctx.db.patch("document", { status: "needs_review", extraction });
+  const result = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
+  assert.equal(result.rows.length, 80);
+  assert.equal(result.limited, false);
+  assert.equal(result.rows[0].source, "wise");
+  assert.equal(result.rows[0].description, "ACME-101");
+  assert.equal(result.rows[0].accountId, "wise-usd");
+  assert.deepEqual((await db.ctx.db.get("state")).expenses, []);
+});
+
+test("document search reports bounded history instead of silently presenting it as complete", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup(Array.from({ length: 202 }, (_, i) => tx(`tx-${i}`)));
+  await db.ctx.db.patch("document", { status: "needs_review", extraction });
+  const result = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
+  assert.equal(result.limited, true);
+  assert.equal(result.rows.length, 201);
 });

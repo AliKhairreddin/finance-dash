@@ -12066,6 +12066,28 @@ body {
 @media (max-width: 640px) { .document-form-grid { grid-template-columns: 1fr; } .documents-page > .panel-header { align-items: flex-start; gap: 12px; flex-wrap: wrap; } .document-toolbar > input { max-width: none; } }
 
 .document-dialog { width: min(680px, calc(100vw - 32px)); max-width: 680px; max-height: 90vh; overflow-y: auto; }
+.document-dialog.document-match-dialog { display: flex; width: min(680px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); gap: 0; padding: 0; overflow: hidden; background: var(--panel); }
+.document-match-dialog.document-match-dialog-expanded { width: min(1480px, calc(100vw - 32px)); }
+.document-match-main { flex: 1 1 680px; min-width: 0; max-height: calc(100dvh - 32px); padding: 22px; overflow-y: auto; overscroll-behavior: contain; }
+.document-match-dialog-expanded .document-match-main { flex: 0 0 38%; min-width: 370px; }
+.document-match-main > .panel-header { padding: 0 0 18px; margin-bottom: 18px; }
+.document-match-main [data-slot="dialog-title"] { font-size: 1.12rem; line-height: 1.35; overflow-wrap: anywhere; }
+.document-match-main > .row-actions { margin-top: 18px; }
+.document-bank-field { display: grid; gap: 8px; }
+.document-match-main > .document-bank-field { margin-top: 18px; }
+.document-match-dialog .payment-picker-quick-filters { flex-wrap: wrap; }
+.document-match-dialog .payment-picker-quick-filters > .searchable-select { flex: 1 1 150px; }
+.document-match-dialog .payment-picker-filters label { min-width: 0; }
+.document-match-dialog .payment-picker-status > .note-popover { margin-left: 0; }
+.document-transaction-picker .payment-picker-footer > button { width: auto; }
+.payment-picker-table td .document-transaction-fx { color: var(--amber); }
+@media (max-width: 1000px) {
+  .document-match-dialog-expanded .document-match-main { display: none; }
+}
+@media (max-width: 600px) {
+  .document-dialog.document-match-dialog { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .document-match-main { max-height: calc(100dvh - 16px); padding: 16px; }
+}
 .document-transaction-details { display: flex; gap: 24px; flex-wrap: wrap; margin: 16px 0; }
 .document-transaction-details dt { color: var(--muted-foreground); font-size: 12px; }
 .document-transaction-details dd { margin: 4px 0 0; font-weight: 600; }
