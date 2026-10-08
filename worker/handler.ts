@@ -1,3 +1,5 @@
+import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
+import { wagnerSpendStore } from "../shared/wagnerSpendStore";
 import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "./amexStatements";
@@ -7132,6 +7134,10 @@ async function handleApi(
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
       return json(await getSnapshot(env));
+    }
+
+    if (["/api/media-spend/wagner", "/api/media-spend/wagner/dimensions"].includes(url.pathname) && request.method === "GET") {
+      return handleWagnerSpendApi(url, envString(env, "WAGNER_API_KEY"), wagnerSpendStore(getConvexClient(env), getConvexServiceToken(env)));
     }
 
     if (url.pathname === "/api/media-spend" && request.method === "GET") {

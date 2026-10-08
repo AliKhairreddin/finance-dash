@@ -17,7 +17,8 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { WagnerSpendView } from "./WagnerSpendView";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -279,12 +280,26 @@ function mediaSpendPreset(value: string): CalendarDateRange {
   throw new Error("Unknown media spend date preset");
 }
 
-export function MediaSpendView({
+export function MediaSpendView(props: { apiBase: string; onOpenProviderBalances?: () => void }) {
+  const [team, setTeam] = useUrlState<"cognitive" | "wagner">("mediaTeam", "cognitive", { allowedValues: ["cognitive", "wagner"] });
+  const teamPicker = <div className="segmented-control media-team-switch" role="group" aria-label="Media spend team">
+    {(["cognitive", "wagner"] as const).map(value => <button key={value} type="button"
+      aria-pressed={team === value} className={team === value ? "active" : ""} onClick={() => setTeam(value)}>
+      {value === "cognitive" ? "Cognitive" : "Wagner"}
+    </button>)}
+  </div>;
+  return team === "wagner" ? <WagnerSpendView apiBase={props.apiBase} teamPicker={teamPicker} />
+    : <CognitiveSpendView {...props} teamPicker={teamPicker} />;
+}
+
+function CognitiveSpendView({
   apiBase,
-  onOpenProviderBalances
+  onOpenProviderBalances,
+  teamPicker
 }: {
   apiBase: string;
   onOpenProviderBalances?: () => void;
+  teamPicker: ReactNode;
 }) {
   const defaultRange = useMemo(defaultMediaSpendRange, []);
   const [dateRange, setDateRange] = useUrlDateRangeState("mediaFrom", "mediaTo", defaultRange);
@@ -791,6 +806,7 @@ export function MediaSpendView({
               <span>Daily ad delivery reported by LemonMax. It is intentionally excluded from official cash spend, management reporting, profit, and cash-flow calculations.</span>
               <span>Funding-provider assignments feed the separate Provider balances ledger without changing official accounting.</span>
             </InfoPopover>
+            {teamPicker}
           </div>
         </div>
         <div className="media-spend-header-actions">

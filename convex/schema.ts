@@ -941,6 +941,17 @@ export default defineSchema({
     .index("by_import_entry", ["importId", "entryId"])
     .index("by_import_date", ["importId", "date"])
     .index("by_import_segment_date", ["importId", "segment", "date"]),
+  wagnerSpendCache: defineTable({
+    key: v.string(),
+    attemptId: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    savedAt: v.optional(v.number()),
+    refreshAfter: v.optional(v.union(v.number(), v.null())),
+    chunkCount: v.optional(v.number())
+  }).index("by_key", ["key"]),
+  wagnerSpendCacheChunks: defineTable({
+    reportId: v.id("wagnerSpendCache"), part: v.number(), text: v.string()
+  }).index("by_report_and_part", ["reportId", "part"]),
   mediaSpendDaily: defineTable({
     key: v.string(),
     source: v.literal("lemonmax"),

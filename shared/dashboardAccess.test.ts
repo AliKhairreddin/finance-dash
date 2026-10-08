@@ -14,6 +14,7 @@ test("media spend reviewer APIs allow the full spend page but deny other financi
   for (const [method, path] of [
     ["GET", "/api/session"], ["GET", "/api/media-spend?fromDate=2026-10-01&toDate=2026-10-04"],
     ["GET", "/api/media-spend/assignments"], ["POST", "/api/media-spend/sync"],
+    ["GET", "/api/media-spend/wagner"], ["GET", "/api/media-spend/wagner/dimensions"],
     ["POST", "/api/media-funding/assignments"], ["POST", "/api/media-funding/payment-methods"]
   ]) {
     assert.equal(mediaSpendReviewerCanAccess(new Request(`https://finance.example${path}`, { method })), true, `${method} ${path}`);

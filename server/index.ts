@@ -1,3 +1,5 @@
+import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
+import { wagnerSpendStore } from "../shared/wagnerSpendStore";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "../worker/amexStatements";
 import cors from "cors";
@@ -263,6 +265,13 @@ app.get("/api/transaction-review", (_request, response) => {
 
 app.get("/api/dashboard", (_request, response) => {
   response.json(getSnapshot());
+});
+
+app.get(["/api/media-spend/wagner", "/api/media-spend/wagner/dimensions"], async (request, response, next) => {
+  try {
+    const result = await handleWagnerSpendApi(new URL(request.originalUrl, "http://localhost"), process.env.WAGNER_API_KEY, wagnerSpendStore(localConvexClient(), localConvexServiceToken()));
+    response.status(result.status).set("Cache-Control", "no-store").json(await result.json());
+  } catch (error) { next(error); }
 });
 
 app.get("/api/media-spend", async (request, response, next) => {

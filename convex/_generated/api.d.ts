@@ -23,6 +23,7 @@ import type * as managementReport from "../managementReport.js";
 import type * as managementReportUpload from "../managementReportUpload.js";
 import type * as mediaFunding from "../mediaFunding.js";
 import type * as mediaSpend from "../mediaSpend.js";
+import type * as wagnerSpendCache from "../wagnerSpendCache.js";
 
 import type {
   ApiFromModules,
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   managementReportUpload: typeof managementReportUpload;
   mediaFunding: typeof mediaFunding;
   mediaSpend: typeof mediaSpend;
+  wagnerSpendCache: typeof wagnerSpendCache;
 }>;
 
 /**

@@ -17,7 +17,8 @@ export function dashboardHomePage(role: DashboardAccessRole): "overview" | "bank
 export function mediaSpendReviewerCanAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
   if (request.method === "GET") {
-    return ["/api/session", "/api/media-spend", "/api/media-spend/assignments"].includes(path);
+    return ["/api/session", "/api/media-spend", "/api/media-spend/assignments",
+      "/api/media-spend/wagner", "/api/media-spend/wagner/dimensions"].includes(path);
   }
   if (request.method === "POST") {
     return ["/api/media-spend/sync", "/api/media-funding/assignments", "/api/media-funding/payment-methods"].includes(path);
