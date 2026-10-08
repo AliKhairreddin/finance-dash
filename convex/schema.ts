@@ -1,4 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
+import { redtrackRow, redtrackSource } from "./redtrackSchema";
 import { v } from "convex/values";
 import { financialDocumentFields } from "./documentSchema";
 import { amexStatementFields } from "./amexStatementSchema";
@@ -593,6 +594,12 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  redtrackAdvertiserLinks: defineTable({ sourceId: v.string(), url: v.string() }).index("by_source_id", ["sourceId"]),
+  redtrackDays: defineTable({ date: v.string(), savedAt: v.number(), rowCount: v.number(), chunkCount: v.number() }).index("by_date", ["date"]),
+  redtrackDayChunks: defineTable({ dayId: v.id("redtrackDays"), part: v.number(), rows: v.array(redtrackRow) }).index("by_day_part", ["dayId", "part"]),
+  redtrackSyncState: defineTable({ key: v.string(), attemptId: v.optional(v.string()), leaseUntil: v.optional(v.number()),
+    nextRequestAt: v.optional(v.number()), retryAt: v.optional(v.number()), lastError: v.optional(v.string()),
+    sources: v.optional(v.array(redtrackSource)), sourcesSavedAt: v.optional(v.number()) }).index("by_key", ["key"]),
   amexStatementImports: defineTable(amexStatementFields).index("by_content_hash", ["contentHash"]),
   amexStatementAccounts: defineTable({ id: v.string(), name: v.string(), source: v.literal("amex"), currency: v.string() }).index("by_account_id", ["id"]),
   financialDocuments: defineTable(financialDocumentFields)

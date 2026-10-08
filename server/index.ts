@@ -1,6 +1,7 @@
+import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
+import { handleRedTrackApi } from "../worker/redtrack";
 import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
 import { wagnerSpendStore } from "../shared/wagnerSpendStore";
-import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "../worker/amexStatements";
 import cors from "cors";
 import { handleDocumentApi } from "../worker/documentIntake";
@@ -250,6 +251,21 @@ app.post(
   }
 );
 app.use(express.json({ limit: "1mb" }));
+
+app.use("/api/redtrack", async (request, response, next) => {
+  try {
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(request.headers)) if (typeof value === "string") headers.set(key, value);
+    const origin = request.get("Origin");
+    const localOrigin = origin && /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/.test(origin) ? origin : `http://localhost:${port}`;
+    const result = await handleRedTrackApi(new Request(`${localOrigin}${request.originalUrl}`, {
+      method: request.method, headers,
+      ...(request.method === "PUT" ? { body: JSON.stringify(request.body) } : {})
+    }), { CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken() });
+    if (!result) return next();
+    response.status(result.status).set("Cache-Control", "no-store").json(await result.json());
+  } catch (error) { next(error); }
+});
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true, service: "finance-dash-api", time: new Date().toISOString() });

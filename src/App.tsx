@@ -45,6 +45,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  TrendingUp,
   Upload,
   UserRound,
   WalletCards,
@@ -224,11 +225,12 @@ import { dashboardHomePage, dashboardPageAllowed } from "../shared/dashboardAcce
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
 import { MediaFundingView } from "@/features/media-funding/MediaFundingView";
 import { MediaSpendView } from "@/features/media-spend/MediaSpendView";
+import { RedTrackView } from "@/features/redtrack/RedTrackView";
 
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -2326,6 +2328,7 @@ function App() {
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
       {activeTab === "media-spend" && <MediaSpendView apiBase={apiBase} onOpenProviderBalances={() => setActiveTab("media-funding")} />}
+      {activeTab === "redtrack" && <RedTrackView apiBase={apiBase} />}
 
       {activeTab === "media-funding" && (
         <MediaFundingView
@@ -3007,6 +3010,7 @@ function Sidebar({
   ];
   const accountingItems: SidebarItem[] = [
     { id: "revenue", label: "Revenue", icon: <BadgeDollarSign size={17} /> },
+    { id: "redtrack", label: "RedTrack", icon: <TrendingUp size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FileText size={17} /> },
     { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> },
     { id: "documents", label: "Documents", icon: <FileText size={17} /> }

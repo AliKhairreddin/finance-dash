@@ -23,6 +23,9 @@ import type * as managementReport from "../managementReport.js";
 import type * as managementReportUpload from "../managementReportUpload.js";
 import type * as mediaFunding from "../mediaFunding.js";
 import type * as mediaSpend from "../mediaSpend.js";
+import type * as redtrack from "../redtrack.js";
+import type * as redtrackCache from "../redtrackCache.js";
+import type * as redtrackSchema from "../redtrackSchema.js";
 import type * as wagnerSpendCache from "../wagnerSpendCache.js";
 
 import type {
@@ -47,6 +50,9 @@ declare const fullApi: ApiFromModules<{
   managementReportUpload: typeof managementReportUpload;
   mediaFunding: typeof mediaFunding;
   mediaSpend: typeof mediaSpend;
+  redtrack: typeof redtrack;
+  redtrackCache: typeof redtrackCache;
+  redtrackSchema: typeof redtrackSchema;
   wagnerSpendCache: typeof wagnerSpendCache;
 }>;
 

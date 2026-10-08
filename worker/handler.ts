@@ -1,6 +1,7 @@
+import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
+import { handleRedTrackApi } from "./redtrack";
 import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
 import { wagnerSpendStore } from "../shared/wagnerSpendStore";
-import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleAmexStatementApi } from "./amexStatements";
 import { fetchZohoWiseActivity, rejectZohoWiseCsvOverlap, zohoWiseStartDate } from "../shared/zohoWise";
@@ -7120,6 +7121,8 @@ async function handleApi(
       partnerRecipients(env);
       return json(await job.start(match[1], session.username, await getPartnerReportData(env)), { status: 202 });
     }
+    const redTrackResponse = await handleRedTrackApi(request, env);
+    if (redTrackResponse) return redTrackResponse;
     const statementResponse = await handleAmexStatementApi(request, env);
     if (statementResponse) return statementResponse;
     const documentResponse = await handleDocumentApi(request, env);

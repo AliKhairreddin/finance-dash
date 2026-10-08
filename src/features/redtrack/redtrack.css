@@ -1,0 +1,31 @@
+.redtrack-page .redtrack-summary { grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr)); }
+.redtrack-summary .media-spend-summary-card { display: flex; justify-content: space-between; }
+.redtrack-summary .media-spend-summary-card > div { flex: 1; }
+.redtrack-summary .media-spend-summary-card strong { overflow: visible; text-overflow: clip; }
+.redtrack-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.redtrack-filters label, .redtrack-link-form label { display: grid; gap: 7px; min-width: 0; font-size: 12px; font-weight: 600; }
+.redtrack-filters [data-slot="select-trigger"], .redtrack-filters button { max-width: 100%; }
+.redtrack-view-controls, .redtrack-link-actions, .redtrack-dialog-actions { display: flex; align-items: center; gap: 8px; }
+.redtrack-view-controls > * { min-width: 180px; }
+.redtrack-toolbar { flex-wrap: wrap; }
+.redtrack-toolbar .media-spend-toolbar-controls { flex-wrap: wrap; }
+.redtrack-table { min-width: 940px; }
+.redtrack-label-cell { min-width: 150px; max-width: 340px; white-space: normal; overflow-wrap: anywhere; }
+.redtrack-label-cell .bank-group-drilldown { text-align: left; white-space: normal; }
+.redtrack-link-actions { white-space: nowrap; }
+.redtrack-dashboard-link { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-weight: 600; text-decoration: none; }
+.redtrack-dashboard-link:hover { text-decoration: underline; }
+.redtrack-link-dialog { max-width: min(560px, calc(100vw - 32px)); }
+.redtrack-link-form { display: grid; gap: 18px; }
+.redtrack-dialog-actions { justify-content: flex-end; }
+.redtrack-notice { padding: 8px 18px; font-size: 13px; }
+@media (max-width: 1000px) { .redtrack-page .redtrack-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .redtrack-filters { grid-template-columns: 1fr; }
+  .redtrack-view-controls { flex-wrap: wrap; }
+  .redtrack-toolbar .toolbar-search-field { min-width: 150px; }
+  .redtrack-page .media-spend-header-actions { display: grid; grid-template-columns: 36px minmax(0, 1fr); width: 100%; }
+  .redtrack-page .media-spend-header-actions > :first-child { grid-column: 1 / -1; }
+  .redtrack-summary .media-spend-summary-card > svg { display: none; }
+  .redtrack-summary .media-spend-summary-card strong { font-size: 1.1rem; }
+}
