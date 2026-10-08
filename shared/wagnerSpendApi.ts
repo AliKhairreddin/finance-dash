@@ -129,7 +129,8 @@ export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined,
     if (!apiKey?.trim()) throw new WagnerApiError(503, "Wagner spend is not configured.");
     const response = await fetch(upstream, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-      redirect: "error", signal: AbortSignal.timeout(30_000)
+      // Workers supports manual/follow only. Reject 3xx below without forwarding credentials.
+      redirect: "manual", signal: AbortSignal.timeout(30_000)
     });
     if (!response.ok) {
       await response.body?.cancel();

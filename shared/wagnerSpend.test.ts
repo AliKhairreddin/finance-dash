@@ -77,7 +77,7 @@ test("Wagner proxy sends credentials only in headers and forwards supported filt
     const url = new URL(String(input)); calls.push(url);
     assert.equal(url.origin, "https://www.inchops.com");
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer private-test-key");
-    assert.equal(init?.redirect, "error");
+    assert.equal(init?.redirect, "manual");
     assert.ok(init?.signal);
     assert.equal(url.searchParams.get("team"), "team-303");
     assert.equal(url.searchParams.get("buyer"), "none");
