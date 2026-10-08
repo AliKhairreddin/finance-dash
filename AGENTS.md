@@ -6,6 +6,16 @@ DO NOT CREATE BACKWARDS COMPATIBILITY OR FALLBACK.
 
 This dashboard is live. Preserve existing financial data and verify migrations before switching deployments.
 
+## External API data and rate limits
+
+Default to saving reusable API data in Convex and serving the dashboard from saved data. Do not call upstream reporting APIs on every page load or ordinary refresh.
+
+- Set an explicit freshness policy: reuse historical data, refresh recent or mutable periods at bounded intervals, and account for late corrections. Prefer incremental synchronization or webhooks over repeated full-history pulls.
+- Deduplicate records and concurrent requests, honor provider rate limits, and use bounded retries. Refresh controls must respect these limits and reuse valid saved data.
+- Validate response completeness and financial totals before replacing saved data. Failed or partial pulls must preserve existing data and must not appear as zero spend or revenue. Track source timestamps and coverage and expose meaningful pending, stale, or failed states.
+- State the storage scope honestly. Saving a report/filter combination is not the same as importing a complete dataset. Provide a deliberate reconciliation path for historical corrections when needed.
+- Keep API keys server-side, preserve access controls, and respect provider retention restrictions. Truly live, transient, or non-retainable data can use direct requests or short-lived caching when required; do not apply this principle blindly to authentication or write operations.
+
 ## Production deployment
 
 - The live site `finance.thatcanadian.dev` MUST use the Convex production deployment `famous-oyster-878` (`https://famous-oyster-878.convex.cloud`).
