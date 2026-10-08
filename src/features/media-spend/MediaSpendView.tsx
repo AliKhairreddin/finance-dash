@@ -12,13 +12,14 @@ import {
   Layers3,
   List,
   Loader2,
-  RefreshCw,
   Rows3,
   WalletCards,
   X
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { WagnerSpendView } from "./WagnerSpendView";
+import { MediaSpendDataStatus } from "./MediaSpendDataStatus";
+import { mediaSpendPeriodStatus, mediaSpendReimportAvailability } from "../../../shared/mediaSpendStatus";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,8 +54,6 @@ import {
 } from "../../../shared/mediaFunding";
 import {
   groupMediaSpendByAccount,
-  mediaSpendYesterdayInIndia,
-  mediaSpendPullDateInIndia,
   summarizeMediaSpend,
   validateMediaSpendDateRange,
   type MediaSpendAccountGroup,
@@ -142,15 +141,6 @@ function dateLabel(value: string): string {
     day: "numeric",
     year: "numeric"
   }).format(new Date(`${value}T00:00:00`));
-}
-
-function dateTimeLabel(value: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(new Date(value));
 }
 
 function accountSpendSortValue(
@@ -369,6 +359,7 @@ function CognitiveSpendView({
   useEffect(() => {
     const controller = new AbortController();
     setIsLoading(true);
+    setData(null);
     setError(null);
     void loadData(controller.signal)
       .catch((loadError: unknown) => {
@@ -747,49 +738,35 @@ function CognitiveSpendView({
   }
 
   async function syncSelectedPeriod(): Promise<void> {
-    const yesterday = mediaSpendYesterdayInIndia(Date.now());
-    const toDate = dateRange.toDate < yesterday ? dateRange.toDate : yesterday;
-    if (dateRange.fromDate > toDate) return;
+    if (!data || isSyncing || isLoading) return;
+    const { fromDate, toDate, disabledReason } = mediaSpendReimportAvailability(data, Date.now());
+    if (disabledReason) return;
     setIsSyncing(true);
     setError(null);
     try {
       const response = await fetch(`${apiBase}/media-spend/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fromDate: dateRange.fromDate, toDate })
+        body: JSON.stringify({ fromDate, toDate })
       });
-      if (!response.ok) throw new Error(await apiErrorMessage(response, "Media spend sync failed"));
-      await loadData();
+      if (!response.ok) throw new Error(await apiErrorMessage(response, "LemonMax import did not complete"));
     } catch (syncError) {
-      setError(syncError instanceof Error ? syncError.message : "Media spend sync failed");
+      setError(syncError instanceof Error ? syncError.message : "LemonMax import did not complete");
     } finally {
+      // Failed attempts also change source health and consume the daily allowance.
+      // Reload only saved data, including any successfully imported days.
+      try {
+        await loadData();
+      } catch (loadError) {
+        setError((current) => current ?? (loadError instanceof Error ? loadError.message : "Saved spend could not be loaded"));
+      }
       setIsSyncing(false);
     }
   }
 
   const sync = data?.sync;
-  const pulledToday = Boolean(sync?.lastAttemptAt && mediaSpendPullDateInIndia(Date.parse(sync.lastAttemptAt)) === mediaSpendPullDateInIndia(Date.now()));
-  const selectedPeriodCovered = Boolean(
-    sync?.coveredFrom
-    && sync.coveredThrough
-    && dateRange.fromDate >= sync.coveredFrom
-    && dateRange.toDate <= sync.coveredThrough
-    && data?.missingDates.length === 0
-  );
-  const statusTone = !data?.configured || sync?.status === "failed"
-    ? "danger"
-    : sync?.status === "healthy" && selectedPeriodCovered
-      ? "good"
-      : "warning";
-  const statusLabel = !data?.configured
-    ? "Not configured"
-    : sync?.status === "healthy"
-      ? selectedPeriodCovered ? "Current" : "Incomplete period"
-      : sync?.status === "failed"
-        ? "Sync failed"
-        : sync?.status === "running"
-          ? "Syncing"
-          : "Awaiting first sync";
+  const selectedPeriodCovered = data ? mediaSpendPeriodStatus(data).complete : false;
+  const hasSavedDays = data !== null && data.summary.days > 0;
 
   return (
     <section className="media-spend-page">
@@ -798,7 +775,7 @@ function CognitiveSpendView({
           <div className="media-spend-eyebrow">
             <span>Analytics</span>
             <Badge variant="outline">Provisional</Badge>
-            <Badge variant="outline">Live data</Badge>
+            <Badge variant="outline">Saved data</Badge>
           </div>
           <div className="media-spend-title-row">
             <h2>Actual media spend</h2>
@@ -834,18 +811,6 @@ function CognitiveSpendView({
             ]}
             triggerLabel={calendarDateRangeLabel(dateRange)}
           />
-          <Button
-            className="secondary-button"
-            disabled={isLoading || isSyncing || pulledToday || !data?.configured || dateRange.fromDate > mediaSpendYesterdayInIndia(Date.now())}
-            onClick={() => void syncSelectedPeriod()}
-            type="button"
-          >
-            {isSyncing ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            {isSyncing ? "Syncing" : pulledToday ? "Daily pull used" : "Sync period"}
-          </Button>
-          <InfoPopover label="media spend sync schedule">
-            <span>LemonMax is pulled once daily at 2:00 PM India time. Each pull includes all available platforms and accounts. Manual sync supports up to 14 days and uses that day's pull.</span>
-          </InfoPopover>
         </div>
       </header>
 
@@ -859,15 +824,15 @@ function CognitiveSpendView({
       <div className="media-spend-summary" aria-label="Media spend summary">
         <article className="media-spend-summary-card total">
           <span className="media-spend-summary-icon"><BadgeDollarSign size={17} /></span>
-          <div><span>Reported spend</span><strong>{data ? money(visibleSummary.totalSpend, data.currency) : "—"}</strong></div>
+          <div><span>Reported spend</span><strong>{hasSavedDays ? money(visibleSummary.totalSpend, data.currency) : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><WalletCards size={17} /></span>
-          <div><span>Active accounts</span><strong>{data ? activitySummary.accounts.toLocaleString() : "—"}</strong></div>
+          <div><span>Active accounts</span><strong>{hasSavedDays ? activitySummary.accounts.toLocaleString() : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><BriefcaseBusiness size={17} /></span>
-          <div><span>Active BMs</span><strong>{data ? activitySummary.businessManagers.toLocaleString() : "—"}</strong></div>
+          <div><span>Active BMs</span><strong>{hasSavedDays ? activitySummary.businessManagers.toLocaleString() : "—"}</strong></div>
         </article>
         <article className="media-spend-summary-card">
           <span className="media-spend-summary-icon"><Rows3 size={17} /></span>
@@ -877,23 +842,7 @@ function CognitiveSpendView({
 
       <section className="panel media-spend-panel">
         <div className="media-spend-toolbar">
-          <div className="media-spend-source-state">
-            <span className={`status-pill ${statusTone}`}><Database size={12} />{statusLabel}</span>
-            {Boolean(data?.missingDates.length) && (
-              <InfoPopover label="missing media spend days">
-                <span>No account data stored for {data!.missingDates.map(dateLabel).join(", ")}. Missing coverage is retried with the next daily pull at 2:00 PM India time.</span>
-              </InfoPopover>
-            )}
-            <span>
-              {sync?.lastSuccessAt
-                ? `Last synced ${dateTimeLabel(sync.lastSuccessAt)}${sync.coveredFrom && sync.coveredThrough
-                  ? ` · coverage ${calendarDateRangeLabel({ fromDate: sync.coveredFrom, toDate: sync.coveredThrough })}`
-                  : sync.coveredThrough
-                    ? ` · through ${dateLabel(sync.coveredThrough)}`
-                    : ""}`
-                : "LemonMax account-level delivery"}
-            </span>
-          </div>
+          <MediaSpendDataStatus data={data} isLoading={isLoading} isSyncing={isSyncing} onReimport={() => void syncSelectedPeriod()} />
           <div className="media-spend-toolbar-controls">
             <div className="segmented-control bank-activity-view-toggle media-spend-view-toggle" aria-label="Media spend view">
               <button
@@ -1027,6 +976,8 @@ function CognitiveSpendView({
 
         {isLoading && !data ? (
           <div className="media-spend-loading"><Loader2 className="spin" size={22} /><span>Loading media spend</span></div>
+        ) : !data && error ? (
+          <div className="empty-state"><CircleAlert size={22} /><strong>Saved media spend could not be loaded</strong></div>
         ) : visibleRowCount === 0 ? (
           <div className="empty-state">
             <Database size={22} />

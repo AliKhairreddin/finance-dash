@@ -309,6 +309,121 @@
   background: var(--amber-soft);
 }
 
+.media-spend-data-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+}
+
+.media-spend-period-status,
+.media-spend-update-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.media-spend-period-status {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-spend-data-state .warning {
+  color: var(--amber);
+}
+
+.media-spend-data-info {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--app-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.media-spend-data-info:hover,
+.media-spend-data-info[data-popup-open] {
+  color: var(--ink);
+  background: var(--control-bg);
+}
+
+.media-spend-data-info:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.media-spend-data-popover {
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(640px, var(--available-height));
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--modal-shadow);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.media-spend-data-description,
+.media-spend-data-popover p {
+  margin: 6px 0 0;
+  color: var(--app-muted);
+}
+
+.media-spend-data-facts {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0;
+}
+
+.media-spend-data-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.media-spend-data-facts dt { color: var(--app-muted); }
+.media-spend-data-facts dd { margin: 0; text-align: right; font-weight: 550; }
+
+.media-spend-data-issue {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--amber-border);
+  border-radius: 8px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  overflow-wrap: anywhere;
+}
+
+.media-spend-data-issue p { color: inherit; }
+
+.media-spend-data-schedule,
+.media-spend-data-reimport {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.media-spend-data-reimport .secondary-button {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.media-spend-data-reimport summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .media-spend-toolbar .toolbar-search-field {
   width: min(330px, 42vw);
 }
