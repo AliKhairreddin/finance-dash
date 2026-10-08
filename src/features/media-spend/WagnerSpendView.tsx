@@ -156,7 +156,7 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
     </div>
     <section className="panel media-spend-panel" aria-busy={isLoading}>
       <div className="media-spend-toolbar">
-        <div className="media-spend-source-state">
+        <div className="media-spend-source-state wagner-source-state">
           <span className={`status-pill ${error ? "danger" : pending || beyondCoverage ? "warning" : "good"}`}><Database size={12} />{isLoading ? "Loading" : error ? "Unavailable" : pending ? "Pending days included" : beyondCoverage ? "Partial coverage" : "Saved"}</span>
           {data && <span>{data.dataThrough ? `Data through ${data.dataThrough}` : "No reported spend"}</span>}
           {data && <InfoPopover label="Wagner data freshness"><span>Saved {new Date(data.savedAt).toLocaleString()}. {data.refreshAfter ? `Eligible for refresh after ${new Date(data.refreshAfter).toLocaleString()}.` : "Historical report; no automatic source requests."}</span><span>Generated {new Date(data.generatedAt).toLocaleString()}. The latest reported date does not guarantee that every account has finished reporting.</span></InfoPopover>}
