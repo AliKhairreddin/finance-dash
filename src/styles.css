@@ -309,6 +309,22 @@
   background: var(--amber-soft);
 }
 
+.media-spend-sync-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 6px 0 0;
+  color: var(--app-muted);
+  font-size: 0.75rem;
+}
+
+.media-spend-sync-summary time,
+.media-spend-sync-summary strong {
+  color: var(--ink);
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+
 .media-spend-data-state {
   display: flex;
   align-items: center;

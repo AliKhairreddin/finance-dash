@@ -7,11 +7,27 @@ import type { MediaSpendApiResponse } from "../../../shared/mediaSpend";
 import { mediaSpendPeriodStatus, mediaSpendReimportAvailability } from "../../../shared/mediaSpendStatus";
 
 const dateTime = (value: string) => new Intl.DateTimeFormat("en-US", {
-  month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short"
 }).format(new Date(value));
 const date = (value: string) => new Intl.DateTimeFormat("en-US", {
   month: "short", day: "numeric", year: "numeric"
 }).format(new Date(`${value}T00:00:00`));
+
+export function MediaSpendSyncSummary({ data, isLoading }: {
+  data: MediaSpendApiResponse | null;
+  isLoading: boolean;
+}) {
+  return <p className="media-spend-sync-summary" role="status" aria-label="Cognitive data freshness">
+    {data ? <>
+      <span>Last successful pull: {data.sync.lastSuccessAt
+        ? <time dateTime={data.sync.lastSuccessAt}>{dateTime(data.sync.lastSuccessAt)}</time>
+        : <strong>No successful pull yet</strong>}</span>
+      <span>Data through: {data.sync.coveredThrough
+        ? <time dateTime={data.sync.coveredThrough}>{date(data.sync.coveredThrough)}</time>
+        : <strong>No saved coverage</strong>}</span>
+    </> : <span>{isLoading ? "Loading pull status…" : "Pull status unavailable"}</span>}
+  </p>;
+}
 
 export function MediaSpendDataStatus({ data, isLoading, isSyncing, onReimport }: {
   data: MediaSpendApiResponse | null;

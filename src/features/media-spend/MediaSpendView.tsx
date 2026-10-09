@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { WagnerSpendView } from "./WagnerSpendView";
-import { MediaSpendDataStatus } from "./MediaSpendDataStatus";
+import { MediaSpendDataStatus, MediaSpendSyncSummary } from "./MediaSpendDataStatus";
 import { mediaSpendPeriodStatus, mediaSpendReimportAvailability } from "../../../shared/mediaSpendStatus";
 import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
@@ -785,6 +785,7 @@ function CognitiveSpendView({
             </InfoPopover>
             {teamPicker}
           </div>
+          <MediaSpendSyncSummary data={data} isLoading={isLoading} />
         </div>
         <div className="media-spend-header-actions">
           <CalendarPeriodPicker
