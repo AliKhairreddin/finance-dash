@@ -12700,3 +12700,24 @@ body {
 .document-relationship .note-popover { margin-left: 0; }
 .document-bulk-message { margin: 0; padding: 0 14px 12px; font-size: 13px; }
 .document-delete-files { overflow-wrap: anywhere; font-size: 13px; color: var(--app-muted); }
+
+.document-purchase-files { margin-top: 5px; }
+.document-purchase-files > summary, .document-reference-details > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.document-original-link > span { text-transform: capitalize; }
+.document-purchase-review { min-height: 26px; padding: 2px 0; font-size: 12px; color: var(--foreground); }
+.document-reference-details { margin: 12px 0; }
+.document-reference-details[open] > summary { margin-bottom: 12px; }
+.document-purchase-dialog { max-height: 85vh; overflow-y: auto; }
+.document-purchase-card { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.document-purchase-card p { margin: 6px 0; font-size: 12px; }
+.document-purchase-option { margin-top: 12px; }
+.document-purchase-option > .row-actions { margin-top: 8px; }
+.documents-page { grid-template-columns: minmax(0, 1fr); }
+.documents-page > * { min-width: 0; }
+.document-header-actions { flex-wrap: wrap; }
+.document-purchase-card a { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .document-header-actions { margin-left: 0; max-width: 100%; }
+  .document-view-controls { min-width: 0; width: 100%; }
+  .document-purchase-dialog { padding: 16px; }
+}

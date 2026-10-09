@@ -17,6 +17,8 @@ import type * as bankSync from "../bankSync.js";
 import type * as banking from "../banking.js";
 import type * as dashboard from "../dashboard.js";
 import type * as documentProcessing from "../documentProcessing.js";
+import type * as documentPurchases from "../documentPurchases.js";
+import type * as documentRecheck from "../documentRecheck.js";
 import type * as documentSchema from "../documentSchema.js";
 import type * as documents from "../documents.js";
 import type * as managementReport from "../managementReport.js";
@@ -44,6 +46,8 @@ declare const fullApi: ApiFromModules<{
   banking: typeof banking;
   dashboard: typeof dashboard;
   documentProcessing: typeof documentProcessing;
+  documentPurchases: typeof documentPurchases;
+  documentRecheck: typeof documentRecheck;
   documentSchema: typeof documentSchema;
   documents: typeof documents;
   managementReport: typeof managementReport;

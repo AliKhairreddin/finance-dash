@@ -20,11 +20,19 @@ Merit originals are archived on download and in quarter-hour batches. Existing e
 
 ## Duplicate recognition and Trash
 
-The default **Grouped documents** view combines corroborated copies and invoice/receipt pairs while preserving every original download. Identity uses supplier, document number, total, currency, nearby dates, company, extraction confidence, and specific filenames. Generic filenames such as `invoice.pdf` never establish identity alone. Conflicting document numbers or accounting links remain separate and are flagged for review. Recognized copies reuse the same expense, including when an earlier source file is in Trash, instead of recording the purchase twice. Exact byte duplicates are still caught at intake across all channels.
+The default **Grouped documents** view shows one purchase with expandable original files, usually led by its invoice. Accept either an invoice or receipt; when both arrive, preserve both. Arrival order and whether files arrive in one email or separate emails do not determine purchase identity.
+
+Extraction stores the document type plus separate invoice, receipt, order and payment references. A receipt's printed invoice number connects it to the invoice even when its receipt number differs. Automatic grouping requires corroborated supplier, gross amount, currency and reference evidence, with no company or accounting conflicts. Invoice/receipt dates may differ by up to 120 days; copies of the same type require dates within seven days. Equal amounts or the same email never prove identity. Specific filenames and the primary document number also remain corroborating evidence for copies.
+
+The backend saves a stable purchase ID on every related original. Processing and manual bank matching reuse one expense and update all active files in that purchase; neither operation changes its payment status. Recognized copies reuse the same expense even when an earlier source file is in Trash. Exact byte duplicates are caught at intake across all channels.
+
+A possible supporting file stays in **Needs review** before it can create another expense. **Review related files** offers **Same purchase** and **Separate purchases**. These choices persist across rematches and subsequent copies. Same purchase preserves both originals and refuses conflicting amounts, currencies, companies, expenses or bank links. Existing conflicting accounting records must be reviewed separately; the system never deletes or silently consolidates those records.
+
+**Check saved files** deliberately starts a durable, serial recheck of existing expense originals. It enriches references and purchase links only, preserves previously saved financial metadata, and cannot create new accounting entries. Successful reference checks are versioned and reused. Repeated starts are deduplicated; leases, watchdogs, three bounded attempts and provider Retry-After guidance govern failed requests. Progress and failures are visible in Documents; retrying skips successful checks. A new reading that disagrees with saved supplier, amount, currency, company or date is retained as a visible error without replacing good data. Company and reference corrections remain available through document review. Normal refresh only reads saved data.
 
 Choose **All files** to select an individual original. Selecting a grouped row selects all its files for ZIP download or **Delete selected**. Deletion requires confirmation and moves the selected originals to **Trash**, where **Restore selected** returns them to the library. Trashing files preserves their IDs, storage, linked expenses, invoices, and bank transactions; it does not undo accounting entries. Trashed files are excluded from processing and rematching. Files currently processing must finish before deletion. Bulk mutations validate the entire batch before writing, with at most 200 files per batch.
 
-Grouping is calculated from existing metadata without a migration or removal of source files. Folder counts represent rows in the chosen view; the toolbar also reports the number of original files.
+Grouping uses saved purchase connections and corroborated metadata. Reference enrichment is additive and never removes source files. Folder counts represent rows in the chosen view; the toolbar also reports the number of original files.
 
 ## Deployment and operations
 

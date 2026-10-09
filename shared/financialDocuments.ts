@@ -6,6 +6,14 @@ export const documentMaximumBytes = 10 * 1024 * 1024;
 export const documentContentTypes = ["application/pdf", "image/png", "image/jpeg", "image/webp"] as const;
 export type FinancialDocumentKind = "expense" | "invoice" | "unknown";
 export type FinancialDocumentStatus = "queued" | "processing" | "needs_review" | "unmatched" | "matched" | "failed";
+export interface DocumentIdentity {
+  type: "invoice" | "receipt" | "other" | "unknown";
+  invoiceNumber: string;
+  receiptNumber: string;
+  orderNumber: string;
+  paymentReference: string;
+  confidence: number;
+}
 export interface DocumentExtraction {
   kind: FinancialDocumentKind;
   entity: WiseEntity | null;
@@ -18,6 +26,7 @@ export interface DocumentExtraction {
   description: string;
   confidence: number;
   reviewReasons: string[];
+  identity?: DocumentIdentity;
 }
 export interface FinancialDocument {
   _id: string;
@@ -39,6 +48,23 @@ export interface FinancialDocument {
   processedAt?: string;
   matchedAt?: string;
   deletedAt?: string;
+  purchaseId?: string;
+  separateFrom?: string[];
+  purchaseReviewIds?: string[];
+  referenceVersion?: number;
+  referencesCheckedAt?: string;
+  referenceError?: string;
+}
+
+export function validateDocumentIdentity(value: unknown): DocumentIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Document references are missing");
+  const input = value as Record<string, unknown>;
+  const text = (key: string) => typeof input[key] === "string" ? input[key].trim().slice(0, 100) : "";
+  return {
+    type: input.type === "invoice" || input.type === "receipt" || input.type === "other" ? input.type : "unknown",
+    invoiceNumber: text("invoiceNumber"), receiptNumber: text("receiptNumber"), orderNumber: text("orderNumber"), paymentReference: text("paymentReference"),
+    confidence: typeof input.confidence === "number" && Number.isFinite(input.confidence) ? Math.max(0, Math.min(1, input.confidence)) : 0
+  };
 }
 
 export function validDocumentDate(value: unknown): value is string {
@@ -85,7 +111,7 @@ export function validateExtraction(value: unknown): DocumentExtraction {
   if (!issueDate) reasons.push("Check the document date");
   if (!text("counterparty", 200)) reasons.push("Check the supplier or customer");
   if (confidence < 0.9) reasons.push("Extraction needs review");
-  return { kind, entity, amount, currency, issueDate, dueDate, confidence, counterparty: text("counterparty", 200), documentNumber: text("documentNumber", 100), description: text("description", 1200), reviewReasons: [...new Set(reasons)] };
+  return { kind, entity, amount, currency, issueDate, dueDate, confidence, counterparty: text("counterparty", 200), documentNumber: text("documentNumber", 100), description: text("description", 1200), reviewReasons: [...new Set(reasons)], ...(row.identity === undefined ? {} : { identity: validateDocumentIdentity(row.identity) }) };
 }
 
 function normalized(value: string): string {

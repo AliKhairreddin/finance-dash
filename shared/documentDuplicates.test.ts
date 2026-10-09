@@ -76,3 +76,37 @@ test("group selection and searches include all originals; All files and Trash al
   assert.equal(selectedDocumentFiles(all, new Set(["receipt"])).length, 1);
   assert.deepEqual(documentLibraryView(documents, "expense", "all", "trash").documents.map(d => d._id), ["deleted"]);
 });
+
+test("printed invoice references join differently numbered receipts despite missing company", () => {
+  const identity = { type: "invoice" as const, invoiceNumber: "WGQLAA-00005", receiptNumber: "", orderNumber: "", paymentReference: "", confidence: .99 };
+  const invoice = file("invoice", {}, { identity, confidence: .7, entity: null });
+  const receipt = file("receipt", { fileName: "payment.pdf" }, { identity: { ...identity, type: "receipt", receiptNumber: "9922-4433" }, documentNumber: "9922-4433", confidence: .7, entity: null });
+  assert.equal(documentRelationship(invoice, receipt)?.kind, "supporting");
+  assert.equal(groupFinancialDocuments([receipt, invoice]).length, 1);
+  assert.equal(documentRelationship(invoice, { ...receipt, extraction: { ...receipt.extraction!, identity: { ...identity, type: "receipt", invoiceNumber: "OTHER-555" } } })?.kind, "possible");
+});
+
+test("a shared order never overrides conflicting invoice numbers", () => {
+  const identity = { type: "invoice" as const, invoiceNumber: "INV-100", receiptNumber: "", orderNumber: "ORDER-100", paymentReference: "", confidence: .99 };
+  const first = file("one", {}, { identity });
+  const second = file("two", {}, { identity: { ...identity, invoiceNumber: "INV-101" } });
+  assert.equal(documentRelationship(first, second)?.kind, "possible");
+  assert.equal(groupFinancialDocuments([first, second]).length, 2);
+});
+
+test("saved purchase decisions survive different filenames and document numbers", () => {
+  const first = file("one", { purchaseId: "purchase" });
+  const second = file("two", { purchaseId: "purchase", fileName: "Receipt-900.pdf" }, { documentNumber: "900", issueDate: "2026-10-25" });
+  assert.equal(documentRelationship(first, second)?.kind, "supporting");
+  assert.equal(groupFinancialDocuments([first, second]).length, 1);
+  assert.equal(documentRelationship({ ...first, separateFrom: ["two"] }, second), null);
+  assert.equal(groupFinancialDocuments([{ ...first, separateFrom: ["two"] }, second]).length, 2);
+});
+
+test("a late receipt can refer to an invoice but recurring invoices do not merge across months", () => {
+  const identity = { type: "invoice" as const, invoiceNumber: "INV-100", receiptNumber: "", orderNumber: "", paymentReference: "", confidence: .99 };
+  const first = file("one", {}, { identity });
+  const second = file("two", {}, { identity, issueDate: "2026-10-19" });
+  assert.equal(documentRelationship(first, second)?.kind, "possible");
+  assert.equal(documentRelationship(first, { ...second, extraction: { ...second.extraction!, identity: { ...identity, type: "receipt" } } })?.kind, "supporting");
+});

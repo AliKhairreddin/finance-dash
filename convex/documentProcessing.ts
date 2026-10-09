@@ -8,14 +8,19 @@ export const process = internalAction({
   handler: async (ctx, { id }) => {
     const token = crypto.randomUUID();
     if (!await ctx.runMutation(internal.documents.claim, { id, token })) return null;
+    let retryAfterMs: number | undefined;
     try {
       const endpoint = processEndpoint();
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${globalThis.process.env.CONVEX_SERVICE_TOKEN}` }, body: JSON.stringify({ id }), signal: AbortSignal.timeout(120_000) });
-      if (!response.ok) throw new Error(`Document processor returned ${response.status}`);
+      if (!response.ok) {
+        const retry = response.headers.get("Retry-After");
+        if (retry && /^\d+$/.test(retry)) retryAfterMs = Math.min(900_000, Number(retry) * 1000);
+        throw new Error(`Document processor returned ${response.status}`);
+      }
       const extraction = validateExtraction(await response.json());
       await ctx.runMutation(internal.documents.complete, { id, token, extraction });
     } catch (error) {
-      await ctx.runMutation(internal.documents.recover, { id, token, error: error instanceof Error ? error.message : "Document processing failed" });
+      await ctx.runMutation(internal.documents.recover, { id, token, error: error instanceof Error ? error.message : "Document processing failed", ...(retryAfterMs ? { retryAfterMs } : {}) });
     }
     return null;
   }

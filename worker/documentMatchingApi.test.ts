@@ -37,3 +37,15 @@ test("bulk deletion and restoration forward bounded file selections to soft-dele
   const single = await handleDocumentApi(new Request("https://finance.example/api/documents/one", { method: "DELETE" }), env);
   assert.equal(single?.status, 200); assert.equal(calls.at(-1)?.name, "documents:trash"); assert.deepEqual(calls.at(-1)?.args.ids, ["one"]);
 });
+
+test("purchase decisions and saved-file rechecks use authenticated document endpoints", async t => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  t.mock.method(ConvexHttpClient.prototype, "mutation", async (fn: Parameters<typeof getFunctionName>[0], args: Record<string, unknown>) => { calls.push({ name: getFunctionName(fn), args }); return null; });
+  const response = await handleDocumentApi(new Request("https://finance.example/api/documents/one/purchase", { method: "POST", body: JSON.stringify({ otherId: "two", decision: "same" }) }), env);
+  assert.equal(response?.status, 200); assert.equal(calls[0].name, "documents:resolvePurchase"); assert.equal(calls[0].args.serviceToken, "service");
+  assert.equal(calls[0].args.decision, "same");
+  const invalid = await handleDocumentApi(new Request("https://finance.example/api/documents/one/purchase", { method: "POST", body: JSON.stringify({ otherId: "two", decision: "delete" }) }), env);
+  assert.equal(invalid?.status, 400); assert.equal(calls.length, 1);
+  await handleDocumentApi(new Request("https://finance.example/api/documents/recheck", { method: "POST" }), env);
+  assert.equal(calls[1].name, "documentRecheck:start");
+});

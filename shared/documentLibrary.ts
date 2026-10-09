@@ -25,5 +25,5 @@ export function filterLibraryDocuments(documents: DocumentGroup[], month: string
   const query = search.trim().toLowerCase();
   return documents.filter(document => (month === "all" || document.month === month)
     && (status === "all" || document.status === status)
-    && document.files.some(file => `${file.fileName} ${file.extraction?.counterparty ?? ""} ${file.extraction?.documentNumber ?? ""}`.toLowerCase().includes(query)));
+    && document.files.some(file => `${file.fileName} ${file.extraction?.counterparty ?? ""} ${file.extraction?.documentNumber ?? ""} ${Object.values(file.extraction?.identity ?? {}).join(" ")}`.toLowerCase().includes(query)));
 }

@@ -603,6 +603,8 @@ export default defineSchema({
   amexStatementImports: defineTable(amexStatementFields).index("by_content_hash", ["contentHash"]),
   amexStatementAccounts: defineTable({ id: v.string(), name: v.string(), source: v.literal("amex"), currency: v.string() }).index("by_account_id", ["id"]),
   financialDocuments: defineTable(financialDocumentFields)
+    .index("by_kind", ["kind"])
+    .index("by_purchase", ["purchaseId"])
     .index("by_kind_currency_amount_date", ["kind", "extraction.currency", "extraction.amount", "extraction.issueDate"])
     .index("by_storage", ["storageId"])
     .index("by_content_hash", ["contentHash"])
@@ -613,6 +615,11 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_transaction", ["transactionId"])
     .index("by_invoice", ["invoiceId"]),
+  documentRechecks: defineTable({
+    key: v.string(), runId: v.string(), status: v.union(v.literal("running"), v.literal("completed")), cursor: v.union(v.string(), v.null()), exhausted: v.boolean(),
+    currentId: v.optional(v.id("financialDocuments")), token: v.optional(v.string()), leaseUntil: v.optional(v.number()), attempts: v.number(),
+    checked: v.number(), skipped: v.number(), failed: v.number(), startedAt: v.string(), updatedAt: v.string()
+  }).index("by_key", ["key"]),
   documentFolders: defineTable({ key: v.string(), entity: v.optional(wiseEntity), month: v.string(), count: v.number() }).index("by_key", ["key"]),
   documentSettings: defineTable({ key: v.string(), allowedSenders: v.array(v.string()) }).index("by_key", ["key"]),
   dashboardState: defineTable({

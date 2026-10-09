@@ -19,7 +19,7 @@ import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow"
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
-import { handleDocumentApi, extractDocument, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
+import { handleDocumentApi, extractDocument, DocumentExtractionError, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
 type Env = WorkerEnv;
 import type {
   AccountBalance,
@@ -8863,7 +8863,7 @@ export default {
     if (new URL(request.url).pathname === "/api/internal/documents/process") {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
-      catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: 502 }); }
+      catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: error instanceof DocumentExtractionError && error.status === 429 ? 429 : 502, ...(error instanceof DocumentExtractionError && error.retryAfterSeconds ? { headers: { "Retry-After": String(error.retryAfterSeconds) } } : {}) }); }
     }
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;

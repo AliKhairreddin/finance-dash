@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as documents from "../convex/documents";
+import * as referenceChecks from "../convex/documentRecheck";
 import type { DocumentExtraction } from "../shared/financialDocuments";
 
 // A small indexed database harness exercises the registered mutation handlers.
@@ -26,7 +27,7 @@ function database(initial: Record<string, Row[]> = {}) {
             const fieldValue = (row: Row, field: string): any => field.split(".").reduce<any>((value, part) => value?.[part], row);
             const q = { eq(field: string, value: unknown) { conditions.push(row => fieldValue(row, field) === value); return q; }, gte(field: string, value: number) { conditions.push(row => fieldValue(row, field) >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => fieldValue(row, field) <= value); return q; } };
             select?.(q); rows = rows.filter(row => conditions.every(check => check(row))); return builder;
-          }, async first() { return read(table, rows[0] ?? null); }, async unique() { assert.ok(rows.length <= 1); return read(table, rows[0] ?? null); }, async take(count: number) { return rows.slice(0, count).map(row => read(table, row)); }
+          }, async paginate(options: { cursor: string | null; numItems: number }) { const offset = Number(options.cursor ?? 0); return { page: rows.slice(offset, offset + options.numItems).map(row => read(table, row)), isDone: offset + options.numItems >= rows.length, continueCursor: String(offset + options.numItems) }; }, async first() { return read(table, rows[0] ?? null); }, async unique() { assert.ok(rows.length <= 1); return read(table, rows[0] ?? null); }, async take(count: number) { return rows.slice(0, count).map(row => read(table, row)); }
         }; return builder;
       },
       async get(id: string): Promise<Row> { for (const [table, rows] of tables) { const row = rows.find(row => row._id === id); if (row) return read(table, row)!; } return null as unknown as Row; },
@@ -170,9 +171,7 @@ test("a receipt and invoice for the same expense share its confirmed Amex link",
   await db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "amex-1", confirmCurrencyConversion: true });
   await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "second", storageId: "second-blob", fileName: "invoice.pdf" });
   await db.run(documents.complete, { id: "second", token: "lease", extraction: { ...receipt, entity: null } });
-  const { rows: choices } = await db.run(documents.candidates, { serviceToken: "test-service", id: "second", extraction: receipt });
-  assert.equal(choices.length, 1);
-  await db.run(documents.review, { serviceToken: "test-service", id: "second", extraction: receipt });
+  assert.equal((await db.ctx.db.get("second")).status, "matched", "supporting files inherit the accepted purchase without another manual review");
   const second = await db.ctx.db.get("second"), first = await db.ctx.db.get("document"), ledger = await db.ctx.db.get("state");
   assert.equal(second.transactionId, first.transactionId); assert.equal(second.expenseId, first.expenseId); assert.equal(second.status, "matched");
   assert.equal(ledger.expenses.length, 1); assert.equal(ledger.expenses[0].documents.length, 2);
@@ -422,4 +421,150 @@ test("document search reports bounded history instead of silently presenting it 
   const result = await db.run(documents.candidates, { serviceToken: "test-service", id: "document" });
   assert.equal(result.limited, true);
   assert.equal(result.rows.length, 201);
+});
+
+const identity = (type: "invoice" | "receipt", invoiceNumber = "ACME-101") => ({ type, invoiceNumber, receiptNumber: type === "receipt" ? "9999-8888" : "", orderNumber: "", paymentReference: "", confidence: .99 });
+
+test("invoice and receipt references create one purchase in either arrival order, across emails", async () => {
+  for (const receiptFirst of [false, true]) {
+    const db = setup();
+    const invoice = { ...extraction, identity: identity("invoice") };
+    const receipt = { ...extraction, documentNumber: "9999-8888", entity: null, confidence: .7, identity: identity("receipt") };
+    await db.ctx.db.patch("document", { source: "email", sourceContext: "Forwarded email A", fileName: receiptFirst ? "receipt.pdf" : "invoice.pdf" });
+    await db.run(documents.complete, { id: "document", token: "lease", extraction: receiptFirst ? receipt : invoice });
+    await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "later", storageId: "later-blob", source: "email", sourceContext: "Forwarded email B", fileName: receiptFirst ? "invoice.pdf" : "receipt.pdf" });
+    await db.run(documents.complete, { id: "later", token: "lease", extraction: receiptFirst ? invoice : receipt });
+    const ledger = await db.ctx.db.get("state"), first = await db.ctx.db.get("document"), later = await db.ctx.db.get("later");
+    assert.equal(ledger.expenses.length, 1); assert.equal(ledger.expenses[0].documents.length, 2);
+    assert.equal(ledger.expenses[0].paymentStatus, "unpaid");
+    assert.equal(first.purchaseId, later.purchaseId); assert.equal(first.expenseId, later.expenseId);
+    assert.equal(first.status, "matched"); assert.equal(later.status, "matched");
+    assert.equal(first.transactionId, "tx-1"); assert.equal(later.transactionId, "tx-1");
+  }
+});
+
+async function uncertainPair() {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup();
+  await db.ctx.db.patch("document", { fileName: "invoice.pdf" });
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...extraction, identity: identity("invoice") } });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "receipt", storageId: "receipt-blob", fileName: "receipt.pdf" });
+  await db.run(documents.complete, { id: "receipt", token: "lease", extraction: { ...extraction, documentNumber: "9999-8888", identity: identity("receipt", "") } });
+  return db;
+}
+
+test("a possible supporting file waits for a decision instead of duplicating an expense", async () => {
+  const db = await uncertainPair();
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 1);
+  const receipt = await db.ctx.db.get("receipt");
+  assert.equal(receipt.status, "needs_review"); assert.equal(receipt.expenseId, undefined);
+  assert.deepEqual(receipt.purchaseReviewIds, ["document"]);
+  await db.run(documents.review, { serviceToken: "test-service", id: "receipt", extraction: receipt.extraction });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 1, "editing metadata cannot bypass the purchase decision");
+  await db.run(documents.resolvePurchase, { serviceToken: "test-service", id: "receipt", otherId: "document", decision: "same" });
+  const linked = await db.ctx.db.get("receipt"), original = await db.ctx.db.get("document");
+  assert.equal(linked.expenseId, original.expenseId); assert.equal(linked.transactionId, original.transactionId);
+  assert.equal((await db.ctx.db.get("state")).expenses[0].documents.length, 2);
+  assert.deepEqual(linked.purchaseReviewIds, []);
+});
+
+test("Separate purchases is remembered during subsequent rematches and copies", async () => {
+  const db = await uncertainPair();
+  await db.run(documents.resolvePurchase, { serviceToken: "test-service", id: "receipt", otherId: "document", decision: "separate" });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 2);
+  await db.run(documents.rematch, { serviceToken: "test-service", id: "receipt" });
+  const receipt = await db.ctx.db.get("receipt");
+  assert.equal(receipt.status, "unmatched"); assert.deepEqual(receipt.separateFrom, ["document"]);
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "copy", storageId: "copy-blob", fileName: "invoice-copy.pdf" });
+  await db.run(documents.complete, { id: "copy", token: "lease", extraction: { ...extraction, identity: identity("invoice") } });
+  const copy = await db.ctx.db.get("copy");
+  assert.ok(copy.separateFrom.includes("receipt"));
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 2);
+  await db.run(documents.rematch, { serviceToken: "test-service", id: "receipt" });
+  assert.equal((await db.ctx.db.get("receipt")).status, "unmatched");
+});
+
+test("manual grouping refuses conflicting accounting links or companies", async () => {
+  for (const changes of [{ expenseId: "other-expense" }, { entity: "lmd" }]) {
+    const db = await uncertainPair();
+    await db.ctx.db.patch("receipt", changes);
+    await assert.rejects(db.run(documents.resolvePurchase, { serviceToken: "test-service", id: "receipt", otherId: "document", decision: "same" }), /different expenses|company/);
+    assert.notEqual((await db.ctx.db.get("receipt")).purchaseId, (await db.ctx.db.get("document")).purchaseId);
+  }
+  const db = await uncertainPair();
+  await assert.rejects(db.run(documents.resolvePurchase, { serviceToken: "wrong", id: "receipt", otherId: "document", decision: "same" }), /Unauthorized/);
+});
+
+test("matching a grouped purchase once updates every original", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup([]);
+  await db.run(documents.complete, { id: "document", token: "lease", extraction: { ...extraction, identity: identity("invoice") } });
+  await db.ctx.db.insert("financialDocuments", { ...doc(), _id: "receipt", storageId: "receipt-blob" });
+  await db.run(documents.complete, { id: "receipt", token: "lease", extraction: { ...extraction, documentNumber: "9999-8888", identity: identity("receipt") } });
+  db.tables.set("bankTransactions", [tx("tx-1")]);
+  await db.run(documents.confirmMatch, { serviceToken: "test-service", id: "document", transactionId: "tx-1" });
+  assert.equal((await db.ctx.db.get("receipt")).transactionId, "tx-1");
+  assert.equal((await db.ctx.db.get("receipt")).status, "matched");
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 1);
+});
+
+async function recheckSetup() {
+  const db = await uncertainPair();
+  await db.ctx.db.patch("receipt", { referenceVersion: undefined });
+  await db.ctx.db.insert("documentRechecks", { _id: "recheck", key: "purchase-references-v1", runId: "run", status: "running", cursor: "2", exhausted: true,
+    currentId: "receipt", token: "check", attempts: 1, checked: 0, skipped: 0, failed: 0, startedAt: "2026-10-08", updatedAt: "2026-10-08" });
+  return db;
+}
+
+test("historical reference check adds supporting files without changing financial values or payment state", async () => {
+  const db = await recheckSetup();
+  const original = (await db.ctx.db.get("state")).expenses[0];
+  original.paymentStatus = "paid"; original.paidAt = "2026-09-01"; original.vatAmount = 3; original.netAmount = 17;
+  await db.ctx.db.patch("state", { expenses: [original], paymentAllocations: [{ id: "saved-allocation" }] });
+  await db.run(referenceChecks.complete, { runId: "run", token: "check", extraction: { ...extraction, documentNumber: "9999-8888", identity: identity("receipt") } });
+  const ledger = await db.ctx.db.get("state"), result = ledger.expenses[0];
+  assert.equal(ledger.expenses.length, 1); assert.equal(result.documents.length, 2);
+  for (const field of ["grossAmount", "vatAmount", "netAmount", "paymentStatus", "paidAt", "transactionId", "id"]) assert.equal(result[field], original[field], field);
+  assert.deepEqual(ledger.paymentAllocations, [{ id: "saved-allocation" }]);
+  assert.equal((await db.ctx.db.get("receipt")).referenceVersion, 1);
+  assert.equal((await db.ctx.db.get("recheck")).checked, 1);
+});
+
+test("reference check discrepancies preserve good data and report failure", async () => {
+  const db = await recheckSetup();
+  const before = await db.ctx.db.get("receipt"), ledger = await db.ctx.db.get("state");
+  await db.run(referenceChecks.complete, { runId: "run", token: "check", extraction: { ...extraction, amount: 999, identity: identity("receipt") } });
+  const after = await db.ctx.db.get("receipt");
+  assert.deepEqual(after.extraction, before.extraction); assert.equal(after.referenceVersion, undefined);
+  assert.match(after.referenceError, /disagrees/); assert.deepEqual(await db.ctx.db.get("state"), ledger);
+  assert.equal((await db.ctx.db.get("recheck")).failed, 1);
+});
+
+test("historical rechecks do not create expenses for unrecorded documents", async () => {
+  const db = await recheckSetup();
+  await db.ctx.db.patch("state", { expenses: [] });
+  await db.ctx.db.patch("document", { expenseId: undefined, transactionId: undefined, status: "needs_review" });
+  await db.run(referenceChecks.complete, { runId: "run", token: "check", extraction: { ...extraction, identity: identity("receipt") } });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+});
+
+test("reference jobs deduplicate starts, serialize requests, and reject expired completions", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  assert.deepEqual(await db.run(referenceChecks.start, { serviceToken: "test-service" }), { started: true });
+  assert.deepEqual(await db.run(referenceChecks.start, { serviceToken: "test-service" }), { started: false });
+  const job = db.tables.get("documentRechecks")![0];
+  assert.equal(await db.run(referenceChecks.claim, { runId: job.runId, token: "first" }), "document");
+  assert.equal(await db.run(referenceChecks.claim, { runId: job.runId, token: "concurrent" }), null);
+  await db.run(referenceChecks.complete, { runId: job.runId, token: "expired", extraction: { ...extraction, identity: identity("invoice") } });
+  assert.equal((await db.ctx.db.get("document")).referenceVersion, undefined);
+  await db.run(referenceChecks.recover, { runId: job.runId, token: "first", error: "Rate limited", retryAfterMs: 60_000 });
+  assert.equal(await db.run(referenceChecks.claim, { runId: job.runId, token: "too-soon" }), null);
+  await db.ctx.db.patch(job._id, { leaseUntil: 0 });
+  assert.equal(await db.run(referenceChecks.claim, { runId: job.runId, token: "retry" }), "document");
+  await db.ctx.db.patch(job._id, { attempts: 3 });
+  await db.run(referenceChecks.recover, { runId: job.runId, token: "retry", error: "Failed after three attempts" });
+  assert.equal((await db.ctx.db.get(job._id)).failed, 1);
+  assert.match((await db.ctx.db.get("document")).referenceError, /three attempts/);
 });
