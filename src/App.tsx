@@ -34,7 +34,6 @@ import {
   Moon,
   PanelRightOpen,
   Pencil,
-  Pin,
   PieChart,
   Plus,
   RefreshCw,
@@ -4868,7 +4867,7 @@ function useAnalyticsCategoryCompanies({
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!selection || !analytics || !segment || segment.categories.length !== 1 || selection.category === "Other") {
+    if (!selection || !analytics || !segment) {
       setLoaded(null);
       setLoading(false);
       setError(null);
@@ -5101,8 +5100,8 @@ function AnalyticsView({
 
   useEffect(() => {
     if (!analytics) return;
-    const defaultSpend = spendPieGroup?.segments.find((segment) => segment.category !== "Other") ?? spendPieGroup?.segments[0];
-    const defaultRevenue = revenuePieGroup?.segments.find((segment) => segment.category !== "Other") ?? revenuePieGroup?.segments[0];
+    const defaultSpend = spendPieGroup?.segments[0];
+    const defaultRevenue = revenuePieGroup?.segments[0];
     if (!selectedSpendSegment && spendCategory !== (defaultSpend?.category ?? "")) {
       setSpendCategory(defaultSpend?.category ?? "");
     }
@@ -5239,7 +5238,7 @@ function AnalyticsView({
 
   function openAnalyticsCategoryDetail(direction: "in" | "out"): void {
     const segment = direction === "out" ? selectedSpendSegment : selectedRevenueSegment;
-    if (!segment || segment.category === "Other") return;
+    if (!segment) return;
     const nextUrl = new URL(window.location.href);
     nextUrl.searchParams.set("analyticsCategoryDetail", direction);
     window.history.pushState(
@@ -5770,6 +5769,16 @@ function CategoryDistributionPanel({
   onSelectCategory: (category: string) => void;
   onOpenBreakdown: () => void;
 }) {
+  const [sortKey, setSortKey] = useUrlState<AnalyticsCategoryBreakdownSortKey>(`analytics${direction === "out" ? "Spend" : "Revenue"}DistributionSort`, "amount", { allowedValues: analyticsCategoryBreakdownSortKeys });
+  const [sortDirection, setSortDirection] = useUrlState<SortDirection>(`analytics${direction === "out" ? "Spend" : "Revenue"}DistributionOrder`, "desc", { allowedValues: ["asc", "desc"] });
+  const sortedSegments = [...(group?.segments ?? [])].sort((left, right) => {
+    const value = (segment: CategoryPieSegment) => sortKey === "name" ? segment.category : sortKey === "transactions" ? segment.count : segment.amount;
+    return compareTableValues(value(left), value(right), sortDirection) || left.category.localeCompare(right.category);
+  });
+  function requestSort(key: AnalyticsCategoryBreakdownSortKey) {
+    if (key === sortKey) setSortDirection(value => value === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDirection("asc"); }
+  }
   const selectedSegment = group?.segments.find((segment) => segment.category === selectedCategory) ?? null;
   const previewSegment = selectedSegment;
 
@@ -5801,38 +5810,39 @@ function CategoryDistributionPanel({
             />
             <div className="pie-center category-distribution-center" aria-live="polite">
               <span>{previewSegment?.category ?? "Total"}</span>
-              <strong>{compactMoney(previewSegment?.amount ?? group.total, "USD")}</strong>
+              <strong>{(previewSegment?.amount ?? group.total) < 1000 ? money(previewSegment?.amount ?? group.total, "USD") : compactMoney(previewSegment?.amount ?? group.total, "USD")}</strong>
               <small>{previewSegment ? formatShare(previewSegment.amount, group.total) : "100%"}</small>
             </div>
           </div>
           <div className="category-distribution-legend" aria-label={`${title} category shares`}>
-            {group.segments.map((segment, index) => {
-              const selected = segment.category === selectedSegment?.category;
-              return (
-                <button
-                  aria-label={`${selected ? "Selected" : "Select"} ${segment.category}: ${money(segment.amount, "USD")}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
-                  aria-pressed={selected}
-                  className={`category-distribution-row ${selected ? "active selected" : ""}`}
-                  key={segment.category}
-                  onClick={() => onSelectCategory(segment.category)}
-                  type="button"
-                >
-                  <span className="category-distribution-rank">{index + 1}</span>
-                  <span className="legend-swatch" style={{ backgroundColor: segment.color }} />
-                  <span className="legend-name" title={segment.category}>{segment.category}</span>
-                  <strong>{money(segment.amount, "USD")}</strong>
-                  <small>{formatShare(segment.amount, group.total)}</small>
-                  <span className="category-distribution-pin" aria-hidden="true">
-                    {selected && <Pin size={13} />}
-                  </span>
-                </button>
-              );
-            })}
+            <span className="category-distribution-count">{group.segments.length} categories</span>
+            <div className="category-distribution-table-scroll" tabIndex={0} role="region" aria-label={`${title}: all categories`}>
+              <table className="data-table category-distribution-table">
+                <thead><tr>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Category</SortableTableHead>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="transactions">Transactions</SortableTableHead>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="amount" className="amount">Amount</SortableTableHead>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="share" className="amount">Share</SortableTableHead>
+                </tr></thead>
+                <tbody>{sortedSegments.map(segment => {
+                  const selected = segment.category === selectedSegment?.category;
+                  return <tr key={segment.category} className={selected ? "category-distribution-selected" : ""}>
+                    <td><button
+                      aria-label={`${selected ? "Selected" : "Select"} ${segment.category}: ${money(segment.amount, "USD")}, ${formatShare(segment.amount, group.total)}, ${segment.count.toLocaleString()} ${segment.count === 1 ? "transaction" : "transactions"}`}
+                      aria-pressed={selected} className="category-distribution-select" onClick={() => onSelectCategory(segment.category)} type="button">
+                      <span className="legend-swatch" style={{ backgroundColor: segment.color }} /><span>{segment.category}</span>
+                    </button></td>
+                    <td className="amount">{segment.count.toLocaleString()}</td>
+                    <td className="amount"><strong>{money(segment.amount, "USD")}</strong></td>
+                    <td className="amount">{formatShare(segment.amount, group.total)}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
           </div>
           <CategoryDistributionPreview
             companyRows={companyRows}
             error={companiesError}
-            group={group}
             loading={companiesLoading}
             previewSegment={previewSegment}
             selected={previewSegment?.category === selectedSegment?.category}
@@ -5851,7 +5861,6 @@ function CategoryDistributionPanel({
 }
 
 function CategoryDistributionPreview({
-  group,
   previewSegment,
   selected,
   companyRows,
@@ -5860,7 +5869,6 @@ function CategoryDistributionPreview({
   onOpenBreakdown,
   onRetry,
 }: {
-  group: CategoryPieGroup;
   previewSegment: CategoryPieSegment | null;
   selected: boolean;
   companyRows: Array<AnalyticsCategoryCompanyView & { name: string; kind: string }>;
@@ -5879,29 +5887,20 @@ function CategoryDistributionPreview({
     );
   }
 
-  const isOther = previewSegment.category === "Other";
   const visibleCompanies = selected ? companyRows.slice(0, 2) : [];
 
   return (
     <aside className="category-distribution-preview" aria-live="polite">
       <div className="category-preview-summary">
         <h3>{previewSegment.category} details</h3>
-        <p><strong>{compactMoney(previewSegment.amount, "USD")}</strong> <span>converted</span></p>
+        <p><strong>{money(previewSegment.amount, "USD")}</strong> <span>converted</span></p>
         <p><strong>{previewSegment.count.toLocaleString()}</strong> <span>{previewSegment.count === 1 ? "transaction" : "transactions"}</span></p>
         <p className="category-preview-native" title={formatCurrencyTotals(previewSegment.nativeTotals)}>
           Native: {formatCurrencyTotals(previewSegment.nativeTotals)}
         </p>
       </div>
       <div className="category-preview-companies">
-        {isOther ? (
-          <>
-            <h4>{previewSegment.categories.length.toLocaleString()} smaller categories</h4>
-            <div className="category-preview-tail">
-              {previewSegment.categories.slice(0, 4).map((category) => <span key={category}>{category}</span>)}
-              {previewSegment.categories.length > 4 && <span>+{previewSegment.categories.length - 4} more</span>}
-            </div>
-          </>
-        ) : !selected ? (
+        {!selected ? (
           <div className="category-preview-hint">Click to pin this category and load its top companies.</div>
         ) : error ? (
           <div className="category-preview-error" role="alert">
@@ -5929,7 +5928,7 @@ function CategoryDistributionPreview({
           </>
         )}
       </div>
-      {!isOther && selected && (
+      {selected && (
         <Button
           type="button"
           className="secondary-button category-preview-action"

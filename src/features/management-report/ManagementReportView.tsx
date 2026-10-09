@@ -1,3 +1,5 @@
+import { BreakdownLink, ManagementBreakdown, ReportValueLink } from "./ManagementBreakdown";
+import { platformSpendRows, type BusinessReportMetric, type ReportBreakdownTarget } from "../../../shared/managementReportBreakdown";
 import { platformReportingPeriod } from "../../../shared/managementReport";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import {
@@ -89,7 +91,7 @@ function ManagementReportUpload({ apiBase, onImported }: { apiBase: string; onIm
 
 type PerformanceDimension = "team" | "offer" | "platform";
 type LedgerSortKey = "bank" | "company" | "date" | "nativeAmount" | "nature" | "period" | "team" | "usdAmount";
-type ManagementReportSection = "summary" | "performance" | "ledger" | "ownership";
+type ManagementReportSection = "summary" | "performance" | "ledger" | "ownership" | "breakdown";
 type SummaryPeriod = "ytd" | string;
 type TrendSortKey = "grossProfit" | "marketingSpend" | "month" | "netProfit" | "operatingSpend" | "revenue";
 type CompositionSortKey = "metric" | "value";
@@ -199,22 +201,24 @@ function toneLabel(tone: ManagementReportKpi["tone"]): string {
   return "Reported";
 }
 
-function KpiGrid({ kpis }: { kpis: ManagementReportKpi[] }) {
+function KpiGrid({ kpis, targets }: { kpis: ManagementReportKpi[]; targets?: ReportBreakdownTarget[] }) {
   return (
     <div className={`management-report-kpi-grid ${kpis.length > 4 ? "dense" : ""}`}>
-      {kpis.map((kpi) => (
-        <article className="management-report-kpi" key={kpi.id}>
+      {kpis.map((kpi, index) => {
+        const content = <>
           <div className="management-report-kpi-topline">
             <span>{kpi.label}</span>
             <span className={`management-report-tone ${kpi.tone ?? "neutral"}`}>
-              {toneIcon(kpi.tone)}
-              <span>{toneLabel(kpi.tone)}</span>
+              {toneIcon(kpi.tone)}<span>{toneLabel(kpi.tone)}</span>
             </span>
           </div>
           <strong>{kpiValue(kpi)}</strong>
-          <small>{kpi.detail ?? "Management workbook actual"}</small>
-        </article>
-      ))}
+          <small>{kpi.detail ?? "Management workbook actual"}{targets?.[index] && <ArrowUpRight size={15} aria-hidden="true" />}</small>
+        </>;
+        return targets?.[index]
+          ? <BreakdownLink key={kpi.id} className="management-report-kpi management-report-kpi-link" target={targets[index]} label={`Break down ${kpi.label}: ${kpiValue(kpi)}`}>{content}</BreakdownLink>
+          : <article className="management-report-kpi" key={kpi.id}>{content}</article>;
+      })}
     </div>
   );
 }
@@ -415,7 +419,7 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
           <tbody>
             {sortedTrend.length > 0 ? sortedTrend.map((point) => (
               <tr className={selectedPeriod === point.period ? "management-report-selected-row" : ""} key={point.period}>
-                <td>{shortMonthPeriodLabel(point.period)}</td><td className="amount">{money(point.revenue)}</td><td className="amount">{money(point.marketingSpend)}</td><td className="amount">{money(point.operatingSpend)}</td><td className={`amount ${valueTone(point.grossProfit)}`}>{money(point.grossProfit)}</td><td className={`amount ${valueTone(point.netProfit)}`}>{money(point.netProfit)}</td>
+                <td>{shortMonthPeriodLabel(point.period)}</td><td className="amount"><ReportValueLink value={point.revenue} metric="revenue" period={point.period} /></td><td className="amount"><ReportValueLink value={point.marketingSpend} metric="marketing-spend" period={point.period} /></td><td className="amount"><ReportValueLink value={point.operatingSpend} metric="operating-spend" period={point.period} /></td><td className={`amount ${valueTone(point.grossProfit)}`}><ReportValueLink value={point.grossProfit} metric="gross-profit" period={point.period} /></td><td className={`amount ${valueTone(point.netProfit)}`}><ReportValueLink value={point.netProfit} metric="net-profit" period={point.period} /></td>
               </tr>
             )) : <tr><td className="management-report-empty-row" colSpan={6}>No monthly trend is available.</td></tr>}
           </tbody>
@@ -425,7 +429,7 @@ function TrendPanel({ selectedPeriod, trend }: { selectedPeriod: SummaryPeriod; 
   );
 }
 
-function SummaryComposition({ actual, periodLabel }: { actual: PeriodActual; periodLabel: string }) {
+function SummaryComposition({ actual, periodLabel, period }: { actual: PeriodActual; periodLabel: string; period: string }) {
   const [sortKey, setSortKey] = useUrlState<CompositionSortKey>("managementCompositionSort", "value", {
     allowedValues: ["metric", "value"]
   });
@@ -433,10 +437,10 @@ function SummaryComposition({ actual, periodLabel }: { actual: PeriodActual; per
     allowedValues: ["asc", "desc"]
   });
   const rows = [
-    { label: "Revenue", value: actual.revenue },
-    { label: "Marketing spend", value: actual.marketingSpend },
-    { label: "Operating spend", value: actual.operatingSpend },
-    { label: "Net profit", value: actual.netProfit }
+    { metric: "revenue" as const, label: "Revenue", value: actual.revenue },
+    { metric: "marketing-spend" as const, label: "Marketing spend", value: actual.marketingSpend },
+    { metric: "operating-spend" as const, label: "Operating spend", value: actual.operatingSpend },
+    { metric: "net-profit" as const, label: "Net profit", value: actual.netProfit }
   ];
   const sortedRows = [...rows].sort((left, right) => compareTableValues(
     sortKey === "metric" ? left.label : left.value,
@@ -460,12 +464,12 @@ function SummaryComposition({ actual, periodLabel }: { actual: PeriodActual; per
         <div className="management-report-panel-heading"><h3 id="management-report-composition-title">P&amp;L composition</h3><p>{periodLabel} consolidated actual.</p></div>
       </div>
       <div className="management-report-panel-body">
-        <div aria-hidden="true" className="management-report-breakdown">
+        <div className="management-report-breakdown">
           {rows.map((row) => (
-            <div className="management-report-breakdown-row" key={row.label}>
+            <BreakdownLink className="management-report-breakdown-row management-report-chart-link" target={{ metric: row.metric, period }} key={row.label}>
               <div className="management-report-breakdown-copy"><span>{row.label}</span><strong>{money(row.value)}</strong></div>
               <div className="management-report-breakdown-track"><div className="management-report-breakdown-bar" style={{ width: `${Math.abs(row.value) / maximum * 100}%` }} /></div>
-            </div>
+            </BreakdownLink>
           ))}
         </div>
       </div>
@@ -476,7 +480,7 @@ function SummaryComposition({ actual, periodLabel }: { actual: PeriodActual; per
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="metric">Metric</SortableTableHead>
             <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="value">Actual</SortableTableHead>
           </tr></thead>
-          <tbody>{sortedRows.map((row) => <tr key={row.label}><td>{row.label}</td><td className={`amount ${valueTone(row.value)}`}>{money(row.value)}</td></tr>)}</tbody>
+          <tbody>{sortedRows.map((row) => <tr key={row.label}><td><BreakdownLink target={{ metric: row.metric, period }}>{row.label}</BreakdownLink></td><td className={`amount ${valueTone(row.value)}`}><ReportValueLink value={row.value} metric={row.metric} period={period} /></td></tr>)}</tbody>
         </table>
       </div>
     </section>
@@ -487,10 +491,8 @@ function PlatformSpendDonut({ dashboard, selectedPeriod }: { dashboard: Manageme
   const colors = ["#18181b", "#6366f1", "#0ea5e9", "#14b8a6", "#f59e0b", "#ec4899"];
   const rows = useMemo(() => {
     const byPlatform = new Map<string, number>();
-    for (const row of dashboard.platforms) {
-      if (row.isTotal || /ytd/i.test(row.periodLabel) || row.spend <= 0) continue;
-      if (selectedPeriod === "ytd" ? row.period > dashboard.metadata.asOf : row.period !== selectedPeriod) continue;
-      byPlatform.set(row.platform, (byPlatform.get(row.platform) ?? 0) + row.spend);
+    for (const row of platformSpendRows(dashboard, selectedPeriod)) {
+      byPlatform.set(row.label, (byPlatform.get(row.label) ?? 0) + row.value!);
     }
     return [...byPlatform.entries()]
       .map(([label, value]) => ({ label, value }))
@@ -511,8 +513,8 @@ function PlatformSpendDonut({ dashboard, selectedPeriod }: { dashboard: Manageme
     <section className="management-report-panel management-report-platform-mix" aria-labelledby="management-report-platform-mix-title">
       <div className="management-report-panel-header"><div className="management-report-panel-heading"><h3 id="management-report-platform-mix-title">Platform spend mix</h3><p>{periodLabel} manual PLP allocation.</p></div></div>
       <div className="management-report-donut-layout">
-        {total > 0 ? <div aria-label={`Platform spend mix totaling ${money(total)}`} className="management-report-donut" role="img" style={{ backgroundImage: `conic-gradient(${gradient})` }}><span>{money(total)}</span></div> : <div className="management-report-empty-row">No platform spend for this period.</div>}
-        {total > 0 && <dl className="management-report-donut-legend">{rows.map((row, index) => <div key={row.label}><dt><i style={{ background: colors[index % colors.length] }} />{row.label}</dt><dd>{percent(row.value / total)}</dd></div>)}</dl>}
+        {total > 0 ? <div aria-label={`Platform spend mix totaling ${money(total)}`} className="management-report-donut" role="group" style={{ backgroundImage: `conic-gradient(${gradient})` }}><span><BreakdownLink target={{ metric: "platform-spend", period: selectedPeriod }} label={`Break down platform spend: ${money(total)}`}>{money(total)}</BreakdownLink></span></div> : <div className="management-report-empty-row">No platform spend for this period.</div>}
+        {total > 0 && <dl className="management-report-donut-legend">{rows.map((row, index) => <div key={row.label}><dt><i style={{ background: colors[index % colors.length] }} /><BreakdownLink target={{ metric: "platform-spend", period: selectedPeriod, platform: row.label }}>{row.label}</BreakdownLink></dt><dd><BreakdownLink target={{ metric: "platform-spend", period: selectedPeriod, platform: row.label }}>{percent(row.value / total)}</BreakdownLink></dd></div>)}</dl>}
       </div>
     </section>
   );
@@ -603,14 +605,14 @@ function BusinessUnitTable({ selectedPeriod, units }: { selectedPeriod: SummaryP
           <tbody>
             {visibleRows.length > 0 ? visibleRows.map(({ actual, unit }) => (
               <tr key={unit.id}>
-                <td className="wrap"><strong>{unit.name}</strong><small>{selectedPeriod === "ytd" ? unit.latestPeriodLabel : monthPeriodLabel(selectedPeriod)}</small></td>
+                <td className="wrap"><strong><BreakdownLink target={{ metric: "net-profit", scope: unit.id, period: selectedPeriod }}>{unit.name}</BreakdownLink></strong><small>{selectedPeriod === "ytd" ? unit.latestPeriodLabel : monthPeriodLabel(selectedPeriod)}</small></td>
                 <td>{businessUnitKindLabel(unit)}</td>
                 <td><span className={`management-report-entity-status ${unit.active ? "" : "inactive"}`}>{unit.active ? <CheckCircle2 size={11} aria-hidden="true" /> : <CircleAlert size={11} aria-hidden="true" />}{unit.active ? "Active" : "Inactive"}</span></td>
-                <td className="amount">{actual ? money(actual.revenue) : "—"}</td>
-                <td className="amount">{actual ? money(actual.marketingSpend) : "—"}</td>
-                <td className="amount">{actual ? money(actual.operatingSpend) : "—"}</td>
-                <td className={`amount ${actual ? valueTone(actual.netProfit) : "management-report-muted"}`}>{actual ? money(actual.netProfit) : "—"}</td>
-                <td className={`amount ${actual ? valueTone(actual.netMargin) : "management-report-muted"}`}>{actual ? percent(actual.netMargin) : "—"}</td>
+                <td className="amount">{actual ? <ReportValueLink value={actual.revenue} metric="revenue" period={selectedPeriod} scope={unit.id} /> : "—"}</td>
+                <td className="amount">{actual ? <ReportValueLink value={actual.marketingSpend} metric="marketing-spend" period={selectedPeriod} scope={unit.id} /> : "—"}</td>
+                <td className="amount">{actual ? <ReportValueLink value={actual.operatingSpend} metric="operating-spend" period={selectedPeriod} scope={unit.id} /> : "—"}</td>
+                <td className={`amount ${actual ? valueTone(actual.netProfit) : "management-report-muted"}`}>{actual ? <ReportValueLink value={actual.netProfit} metric="net-profit" period={selectedPeriod} scope={unit.id} /> : "—"}</td>
+                <td className={`amount ${actual ? valueTone(actual.netMargin) : "management-report-muted"}`}>{actual ? <ReportValueLink value={actual.netMargin} metric="net-margin" period={selectedPeriod} scope={unit.id} /> : "—"}</td>
               </tr>
             )) : <tr><td className="management-report-empty-row" colSpan={8}>No business units have data for this period or match these filters.</td></tr>}
           </tbody>
@@ -640,7 +642,7 @@ function SummaryTab({
   const periodLabel = effectivePeriod === "ytd"
     ? `YTD through ${monthPeriodLabel(dashboard.metadata.asOf)}`
     : monthPeriodLabel(effectivePeriod);
-  const kpis: ManagementReportKpi[] = effectivePeriod === "ytd" ? dashboard.kpis : [
+  const kpis: ManagementReportKpi[] = [
     { id: "period-revenue", label: "Revenue", value: actual.revenue, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
     { id: "period-marketing", label: "Marketing spend", value: actual.marketingSpend, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
     { id: "period-operating", label: "Operating spend", value: actual.operatingSpend, unit: "currency", currency: "USD", tone: "neutral", detail: periodLabel },
@@ -655,11 +657,11 @@ function SummaryTab({
 
   return (
     <div className="management-report-tab-panel">
-      <KpiGrid kpis={kpis} />
+      <KpiGrid kpis={kpis} targets={(["revenue", "marketing-spend", "operating-spend", "gross-profit", "net-profit", "net-margin"] as BusinessReportMetric[]).map(metric => ({ metric, period: effectivePeriod }))} />
       {dashboard.bank.postCloseEntryCount > 0 && (
         <div className="management-report-summary-note warning"><TriangleAlert size={16} aria-hidden="true" /><span><strong>{wholeNumber.format(dashboard.bank.postCloseEntryCount)} post-close bank entries</strong> are shown in Ledger for visibility but excluded from the official reporting period through {dateLabel(dashboard.bank.officialThrough)}.</span></div>
       )}
-      <div className="management-report-summary-visuals"><PlatformSpendDonut dashboard={dashboard} selectedPeriod={effectivePeriod} /><SummaryComposition actual={actual} periodLabel={periodLabel} /></div>
+      <div className="management-report-summary-visuals"><PlatformSpendDonut dashboard={dashboard} selectedPeriod={effectivePeriod} /><SummaryComposition actual={actual} periodLabel={periodLabel} period={effectivePeriod} /></div>
       <TrendPanel selectedPeriod={effectivePeriod} trend={dashboard.trend} />
       <BusinessUnitTable selectedPeriod={effectivePeriod} units={dashboard.businessUnits} />
     </div>
@@ -725,7 +727,7 @@ function TeamPerformance({ teams }: { teams: ManagementReportBusinessUnit[] }) {
             </label>
           }
         />
-        <div className="management-report-panel-body"><KpiGrid kpis={teamKpis(selected)} /></div>
+        <div className="management-report-panel-body"><KpiGrid kpis={teamKpis(selected)} targets={(["revenue", "marketing-spend", "net-profit", "net-margin"] as BusinessReportMetric[]).map(metric => ({ metric, scope: selected.id, period: "ytd" }))} /></div>
         <div className="management-report-table-wrap">
           <table className="management-report-table">
             <caption>{selected.name} actual and budget comparison</caption>
@@ -1012,7 +1014,7 @@ function OwnershipTab({ dashboard }: { dashboard: ManagementReportDashboard }) {
 
 export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
   const [section, setSection] = useUrlState<ManagementReportSection>("managementSection", "summary", {
-    allowedValues: ["summary", "performance", "ledger", "ownership"],
+    allowedValues: ["summary", "performance", "ledger", "ownership", "breakdown"],
     history: "push"
   });
   const [selectedPeriod, setSelectedPeriod] = useUrlState<SummaryPeriod>("managementPeriod", "ytd", {
@@ -1090,17 +1092,18 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
           <p className="eyebrow">Manual workbook</p>
           <h2>Management report</h2>
         </div>
-        <div className={`management-report-page-controls ${section === "summary" ? "with-period" : ""}`}>
+        <div className={`management-report-page-controls ${(section === "summary" || section === "breakdown") ? "with-period" : ""}`}>
           {uploadControl}
           <label className="management-report-field management-report-view-field">View
             <NativeSelect value={section} onValueChange={(value) => setSection(value as ManagementReportSection)}>
               <NativeSelectOption value="summary">Summary</NativeSelectOption>
+              {section === "breakdown" && <NativeSelectOption value="breakdown">Breakdown</NativeSelectOption>}
               <NativeSelectOption value="performance">Performance</NativeSelectOption>
               <NativeSelectOption value="ledger">Ledger</NativeSelectOption>
               <NativeSelectOption value="ownership">Ownership</NativeSelectOption>
             </NativeSelect>
           </label>
-          {section === "summary" && (
+          {(section === "summary" || section === "breakdown") && (
             <label className="management-report-field management-report-period-field">Period
               <NativeSelect value={selectedPeriod} onValueChange={setSelectedPeriod}>
                 <NativeSelectOption value="ytd">{yearToDateOptionLabel(dashboard.metadata.asOf)}</NativeSelectOption>
@@ -1112,6 +1115,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
       </header>
       <div className="management-report-content">
         {section === "summary" && <SummaryTab dashboard={dashboard} selectedPeriod={selectedPeriod} setSelectedPeriod={setSelectedPeriod} />}
+        {section === "breakdown" && <ManagementBreakdown dashboard={dashboard} period={selectedPeriod} />}
         {section === "performance" && <PerformanceTab dashboard={dashboard} />}
         {section === "ledger" && <LedgerTab dashboard={dashboard} />}
         {section === "ownership" && <OwnershipTab dashboard={dashboard} />}

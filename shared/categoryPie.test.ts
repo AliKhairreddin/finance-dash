@@ -43,21 +43,21 @@ test("analytics pie groups convert currencies into one USD chart and preserve na
   );
 });
 
-test("analytics pie groups merge duplicate category rows and group the long tail", () => {
+test("analytics pie groups merge duplicate categories without grouping smaller categories", () => {
   const groups = analyticsCategoryPieGroups([
     categoryRow("Software", { USD: 40 }, { USD: 2 }),
     categoryRow("Software", { USD: 10 }, { USD: 1 }),
     categoryRow("Travel", { USD: 20 }, { USD: 1 }),
     categoryRow("Invalid", { USD: Number.NaN }, { USD: 1 }),
     categoryRow("", { USD: 99 }, { USD: 1 })
-  ], [], 1);
+  ], []);
 
   assert.equal(groups.out?.total, 70);
   assert.deepEqual(
-    groups.out?.segments.map(({ category, categories, amount, count }) => ({ category, categories, amount, count })),
+    groups.out?.segments.map(({ category, amount, count }) => ({ category, amount, count })),
     [
-      { category: "Software", categories: ["Software"], amount: 50, count: 3 },
-      { category: "Other", categories: ["Travel"], amount: 20, count: 1 }
+      { category: "Software", amount: 50, count: 3 },
+      { category: "Travel", amount: 20, count: 1 }
     ]
   );
 });
@@ -93,4 +93,17 @@ test("donut segment paths stay finite for partial and full-circle slices", () =>
   assert.equal(partial.includes("NaN"), false);
   assert.equal(full.includes("NaN"), false);
   assert.equal((full.match(/ A /g) ?? []).length, 4);
+});
+
+
+test("every small category remains independently selectable, including a real Other category", () => {
+  const categories = Array.from({ length: 25 }, (_, index) => categoryRow(`Category ${index}`, { USD: index === 24 ? 0.01 : 1_000 - index }, { USD: 1 }));
+  categories.push(categoryRow("Other", { USD: 2 }, { USD: 2 }));
+  const group = analyticsCategoryPieGroups(categories, []).out!;
+  assert.equal(group.segments.length, 26);
+  assert.equal(group.segments.at(-1)?.amount, 0.01);
+  assert.equal(new Set(group.segments.map(segment => segment.category)).size, 26);
+  assert.equal(group.segments.find(segment => segment.category === "Other")?.amount, 2);
+  assert.equal(group.segments.reduce((sum, segment) => sum + segment.count, 0), 27);
+  assert.ok(Math.abs(group.total - categories.reduce((sum, row) => sum + row.moneyOut.USD, 0)) < 0.00001);
 });

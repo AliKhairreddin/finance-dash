@@ -14,7 +14,6 @@ const otherCategoryColor = "#d4d4d8";
 
 export type CategoryPieSegment = {
   category: string;
-  categories: string[];
   amount: number;
   count: number;
   color: string;
@@ -120,7 +119,6 @@ function pendingDirectionSegments(
   const nativeTotals = combineCurrencyTotals(...[...categories.values()].map((value) => value.nativeTotals));
   const segments = [...categories].map(([category, value]) => ({
     category,
-    categories: [category],
     amount: convertCurrencyTotalsToUsd(value.nativeTotals, rates).totalUsd,
     count: value.count,
     nativeTotals: value.nativeTotals
@@ -128,25 +126,6 @@ function pendingDirectionSegments(
     .sort((left, right) => right.amount - left.amount || left.category.localeCompare(right.category));
 
   return { nativeTotals, segments };
-}
-
-function groupTail(
-  segments: PendingCategoryPieSegment[],
-  visibleCategoryLimit: number
-): PendingCategoryPieSegment[] {
-  const visible = segments.slice(0, visibleCategoryLimit);
-  const tail = segments.slice(visibleCategoryLimit);
-  if (tail.length === 0) return visible;
-  return [
-    ...visible,
-    {
-      category: "Other",
-      categories: tail.map((segment) => segment.category),
-      amount: tail.reduce((sum, segment) => sum + segment.amount, 0),
-      count: tail.reduce((sum, segment) => sum + segment.count, 0),
-      nativeTotals: combineCurrencyTotals(...tail.map((segment) => segment.nativeTotals))
-    }
-  ];
 }
 
 function categoricalColors(
@@ -171,7 +150,7 @@ function categoricalColors(
   for (const [category, categoryNeighbors] of orderedCategories) {
     const used = new Set([...categoryNeighbors].map((neighbor) => assigned.get(neighbor)).filter(Boolean));
     const color = categoryChartPalette.find((candidate) => !used.has(candidate))
-      ?? categoryChartPalette[assigned.size % categoryChartPalette.length];
+      ?? `hsl(${Math.round(assigned.size * 137.508) % 360} 58% 45%)`;
     assigned.set(category, color);
   }
   return assigned;
@@ -201,17 +180,13 @@ function finishGroup(
 
 export function analyticsCategoryPieGroups(
   rows: readonly BankAnalyticsCategoryBreakdown[],
-  rates: FxRate[],
-  visibleCategoryLimit = 5
+  rates: FxRate[]
 ): CategoryPieGroups {
-  if (!Number.isSafeInteger(visibleCategoryLimit) || visibleCategoryLimit < 1 || visibleCategoryLimit > 8) {
-    throw new Error("Analytics category chart limit must be between 1 and 8");
-  }
   const inbound = pendingDirectionSegments(rows, "in", rates);
   const outbound = pendingDirectionSegments(rows, "out", rates);
   const pending = {
-    in: groupTail(inbound.segments, visibleCategoryLimit),
-    out: groupTail(outbound.segments, visibleCategoryLimit)
+    in: inbound.segments,
+    out: outbound.segments
   };
   const colors = categoricalColors(pending);
   return {

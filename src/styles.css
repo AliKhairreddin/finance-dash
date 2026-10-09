@@ -4563,7 +4563,7 @@ th.amount .sortable-table-heading {
 
 .category-distribution-body {
   display: grid;
-  grid-template-columns: minmax(210px, 0.76fr) minmax(320px, 1.08fr) minmax(252px, 0.92fr);
+  grid-template-columns: minmax(190px, 0.65fr) minmax(450px, 1.55fr) minmax(240px, 0.9fr);
   gap: 14px;
   align-items: stretch;
   padding: 14px;
@@ -4571,7 +4571,7 @@ th.amount .sortable-table-heading {
 }
 
 .category-distribution-chart {
-  width: clamp(216px, 22vw, 272px);
+  width: min(100%, 248px);
   align-self: center;
 }
 
@@ -4608,8 +4608,80 @@ th.amount .sortable-table-heading {
 
 .category-distribution-legend {
   display: grid;
-  align-content: center;
+  align-content: start;
   min-width: 0;
+}
+
+.category-distribution-count {
+  padding: 0 8px 8px;
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.category-distribution-table-scroll {
+  max-height: 350px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.category-distribution-table-scroll:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.category-distribution-table {
+  min-width: 430px;
+  width: 100%;
+  font-size: 12px;
+}
+
+.category-distribution-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+
+.category-distribution-table td,
+.category-distribution-table th {
+  padding: 9px 8px;
+}
+
+.category-distribution-table .amount {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.category-distribution-select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.category-distribution-select > span:last-child {
+  white-space: normal;
+  min-width: 90px;
+}
+
+.category-distribution-select:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.category-distribution-table .category-distribution-selected td {
+  background: var(--control-bg);
+  font-weight: 600;
 }
 
 .category-distribution-row {
@@ -8952,6 +9024,142 @@ th.amount .sortable-table-heading {
   color: var(--app-muted);
   font-size: 11px;
   line-height: 1.4;
+}
+
+.management-report-kpi-link {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.management-report-kpi-link:hover {
+  border-color: var(--ink);
+  background: var(--control-bg);
+}
+
+.management-report-kpi-link small {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.management-report-value-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 4px;
+}
+
+.management-report-value-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.management-report-chart-link {
+  color: inherit;
+  text-decoration: none;
+  border-radius: 4px;
+}
+
+.management-report-chart-link:hover {
+  background: var(--control-bg);
+}
+
+.management-report-kpi-link:focus-visible,
+.management-report-value-link:focus-visible,
+.management-report-chart-link:focus-visible,
+.management-report-metric-link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.management-report-breadcrumbs,
+.management-report-detail-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.management-report-breadcrumbs {
+  font-size: 12px;
+  color: var(--app-muted);
+}
+
+.management-report-detail-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+}
+
+.management-report-detail-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  scroll-margin-top: 20px;
+}
+
+.management-report-detail-heading .note-popover {
+  position: static;
+}
+
+.management-report-detail-total {
+  display: block;
+  margin: 12px 0;
+  font-size: clamp(24px, 3vw, 34px);
+  font-variant-numeric: tabular-nums;
+}
+
+.management-report-detail-hero p,
+.management-report-detail-hero small {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-muted);
+}
+
+.management-report-metric-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 380px;
+}
+
+.management-report-metric-link {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.management-report-metric-link.active,
+.management-report-metric-link:hover {
+  background: var(--control-bg);
+  border-color: var(--ink);
+}
+
+.management-report-zero-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--app-muted);
+}
+
+.management-report-missing {
+  color: var(--amber);
+}
+
+@media (max-width: 760px) {
+  .management-report-detail-hero {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 18px;
+  }
 }
 
 .management-report-tone {

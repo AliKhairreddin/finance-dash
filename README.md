@@ -220,6 +220,10 @@ npm run import:management-report -- "https://docs.google.com/spreadsheets/d/SPRE
 
 A local `.xlsx` path is also accepted. Imports are idempotent by workbook content hash. The Summary view keeps its selected YTD or monthly period, table sorting, and unit filters in the URL. Future bank, advertising, revenue, invoice, and FX APIs should write normalized ledger and metric records behind the same reporting model instead of recreating spreadsheet formulas.
 
+Management Summary amounts open shareable breakdown pages for revenue, marketing and operating spend, gross/net profit, margin, and PLP platform allocations. Business-unit subtotals link to their imported workbook lines and source cells. Profit calculations reconcile against the reported values; missing cells and differences stay visible. Operating-cost lines below a unit's `TOTAL SPEND` subtotal appear separately as excluded amounts. Breakdown navigation uses the saved import without reimporting or fetching upstream data.
+
+Analytics spend and revenue charts retain every category individually, with no size threshold or synthetic “Other” bucket. The category tables sort by name, transactions, amount, or share, retain their selection and sort in the URL, and open the existing company/merchant breakdown and filtered transaction view. Converted charts continue to disclose missing FX coverage; native amounts remain authoritative.
+
 ## Wise Statement Imports
 
 Wise balances and transactions are synchronized automatically every five minutes across the configured business profiles. The sync resumes from durable checkpoints, rereads a short overlap window for late provider changes, and deduplicates transactions by their Wise balance-scoped provider reference. CSV import remains available for historical recovery:
