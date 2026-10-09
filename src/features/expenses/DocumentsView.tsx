@@ -100,7 +100,6 @@ function ReviewDocument({ document, apiBase, onClose, onSaved }: { document: Fin
   const [draft, setDraft] = useState<DocumentExtraction>(document.extraction ?? { kind: "unknown", entity: document.entity ?? null, counterparty: "", documentNumber: "", issueDate: null, dueDate: null, amount: null, currency: null, description: "", confidence: 1, reviewReasons: [] });
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const identity: DocumentIdentity = draft.identity ?? { type: "unknown", invoiceNumber: "", receiptNumber: "", orderNumber: "", paymentReference: "", confidence: 0 };
-  const editIdentity = (key: keyof DocumentIdentity, value: string) => setDraft({ ...draft, identity: { ...identity, [key]: value, confidence: 1 } });
   const bank = useDocumentCandidates(document._id, apiBase, draft);
   return <Dialog open onOpenChange={(value, event) => { if (!value && !busy) { if (bank.open && event.reason === "escape-key") { event.cancel(); bank.close(); } else onClose(); } }}><DialogContent className={`document-dialog document-match-dialog${bank.open ? " document-match-dialog-expanded" : ""}`} showCloseButton={false}>
     <div className="document-match-main">
@@ -121,10 +120,7 @@ function ReviewDocument({ document, apiBase, onClose, onSaved }: { document: Fin
         <label>Gross total<Input type="number" min="0.01" step="0.01" required value={draft.amount ?? ""} onChange={e => setDraft({ ...draft, amount: Number(e.target.value) })} /></label>
         <label>Currency<Input required pattern="[A-Z]{3}" maxLength={3} value={draft.currency ?? ""} onChange={e => setDraft({ ...draft, currency: e.target.value.toUpperCase() })} /></label>
       </div>
-      <details className="document-reference-details"><summary>Invoice and receipt references</summary><div className="document-form-grid">
-        <label>File type<NativeSelect aria-label="File type" value={identity.type} onValueChange={value => editIdentity("type", value)}><NativeSelectOption value="unknown">Unknown</NativeSelectOption><NativeSelectOption value="invoice">Invoice</NativeSelectOption><NativeSelectOption value="receipt">Receipt</NativeSelectOption><NativeSelectOption value="other">Other</NativeSelectOption></NativeSelect></label>
-        {([['invoiceNumber', 'Invoice number'], ['receiptNumber', 'Receipt number'], ['orderNumber', 'Order number'], ['paymentReference', 'Payment reference']] as const).map(([key, label]) => <label key={key}>{label}<Input value={identity[key]} onChange={event => editIdentity(key, event.target.value)} /></label>)}
-      </div></details>
+      <details className="document-reference-details"><summary>Invoice and receipt references</summary><ReferenceFields identity={identity} onChange={identity => setDraft({ ...draft, identity })} /></details>
       <label>Description<Input value={draft.description} onChange={e => setDraft({ ...draft, description: e.target.value })} /></label>
       <DocumentBankPicker bank={bank} extraction={draft} disabled={busy} />
       {error && <p role="alert" className="inline-error">{error}</p>}
@@ -152,6 +148,7 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
   const [matchDocument, setMatchDocument] = useState<FinancialDocument | null>(null);
   const [review, setReview] = useState<FinancialDocument | null>(null);
   const [purchaseReview, setPurchaseReview] = useState<DocumentGroup | null>(null);
+  const [referenceReview, setReferenceReview] = useState<FinancialDocument | null>(null);
   const [recheck, setRecheck] = useState<RecheckStatus | null>(null);
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [selection, setSelection] = useState<{ scope: string; ids: Set<string> }>({ scope: "", ids: new Set() });
@@ -273,7 +270,7 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
       <div className="table-wrap"><table className="data-table document-table"><thead><tr><th className="document-select-cell"><Checkbox aria-label="Select all documents in this view" checked={allSelected} indeterminate={selected.length > 0 && !allSelected} disabled={!rows.length || loading || busy} onCheckedChange={selectAll} /></th>{head("file", "Document / company")}{head("date", "Date")}{head("kind", "Type")}{head("amount", "Amount")}{head("source", "Received via")}{head("status", "Status")}{head("match", "Bank match")}<th>Actions</th></tr></thead><tbody>
         {rows.map(doc => <tr key={doc._id} data-selected={selectedIds.has(doc._id) || undefined}>
           <td className="document-select-cell"><Checkbox aria-label={`Select ${doc.fileName}${doc.files.length > 1 ? ` and ${doc.files.length - 1} related ${doc.files.length === 2 ? "file" : "files"}` : ""}`} checked={selectedIds.has(doc._id)} disabled={busy} onCheckedChange={checked => setSelection(current => { const ids = new Set(current.scope === scope ? current.ids : []); if (checked) ids.add(doc._id); else ids.delete(doc._id); return { scope, ids }; })} /></td>
-          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><DocumentFiles document={doc} apiBase={apiBase} onReview={() => setPurchaseReview(doc)} /></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{[...new Set(doc.files.map(file => file.source))].sort().join(", ")}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.referenceError || doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.referenceError || doc.error || doc.matchReason || doc.extraction?.reviewReasons.join(". ")}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{!doc.deletedAt && ["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{!doc.deletedAt && doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{!doc.deletedAt && doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
+          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><DocumentFiles document={doc} apiBase={apiBase} onReview={() => setPurchaseReview(doc)} onReferenceReview={setReferenceReview} /></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{[...new Set(doc.files.map(file => file.source))].sort().join(", ")}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.referenceError || doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.referenceError || doc.error || doc.matchReason || doc.extraction?.reviewReasons.join(". ")}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{!doc.deletedAt && ["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{!doc.deletedAt && doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{!doc.deletedAt && doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
         {!rows.length && <tr><td colSpan={9}>{loading ? <span role="status"><Loader2 size={16} className="spin" /> Loading documents…</span> : "No documents in this view"}</td></tr>}
       </tbody></table></div>
     </section>
@@ -286,19 +283,49 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
     </DialogContent></Dialog>}
     {matchDocument && <MatchDocument document={matchDocument} apiBase={apiBase} onClose={() => setMatchDocument(null)} onSaved={() => void refresh()} />}
     {purchaseReview && <ReviewPurchase document={purchaseReview} documents={documents} apiBase={apiBase} onClose={() => setPurchaseReview(null)} onSaved={() => { void refresh(); window.dispatchEvent(new Event("finance:documents-changed")); }} />}
+    {referenceReview && <ReviewReferences document={referenceReview} apiBase={apiBase} onClose={() => setReferenceReview(null)} onSaved={() => { void refresh(); window.dispatchEvent(new Event("finance:documents-changed")); }} />}
     {review && <ReviewDocument document={review} apiBase={apiBase} onClose={() => setReview(null)} onSaved={() => void refresh()} />}
   </div>;
 }
 
 
-function DocumentFiles({ document: doc, apiBase, onReview }: { document: DocumentGroup; apiBase: string; onReview: () => void }) {
+function DocumentFiles({ document: doc, apiBase, onReview, onReferenceReview }: { document: DocumentGroup; apiBase: string; onReview: () => void; onReferenceReview: (file: FinancialDocument) => void }) {
   const roles = new Set(doc.files.map(documentFileRole));
   const title = roles.has("invoice") && roles.has("receipt") ? "Invoice + receipt" : `${doc.files.length} files`;
   const links = doc.files.map(file => <a className="document-original-link" key={file._id} href={`${apiBase}/documents/${file._id}/file`}><span>{documentFileRole(file) === "unknown" ? "Original" : documentFileRole(file)}</span> · {file.fileName}</a>);
   return <>
     {doc.files.length > 1 ? <details className="document-purchase-files"><summary>{title}</summary>{links}</details> : links}
+    {doc.files.filter(file => !file.deletedAt && file.referenceError).map(file => <Button key={file._id} variant="ghost" className="document-purchase-review" aria-label={`Review references for ${file.fileName}`} title={file.fileName} onClick={() => onReferenceReview(file)}>Review references</Button>)}
     {!doc.deletedAt && doc.possibleRelatedIds.length > 0 && <Button variant="ghost" className="document-purchase-review" onClick={onReview}>Review related files</Button>}
   </>;
+}
+
+function ReferenceFields({ identity, onChange }: { identity: DocumentIdentity; onChange: (identity: DocumentIdentity) => void }) {
+  const edit = (key: keyof DocumentIdentity, value: string) => onChange({ ...identity, [key]: value, confidence: 1 });
+  return <div className="document-form-grid">
+    <label>File type<NativeSelect aria-label="File type" value={identity.type} onValueChange={value => edit("type", value)}><NativeSelectOption value="unknown">Unknown</NativeSelectOption><NativeSelectOption value="invoice">Invoice</NativeSelectOption><NativeSelectOption value="receipt">Receipt</NativeSelectOption><NativeSelectOption value="other">Other</NativeSelectOption></NativeSelect></label>
+    {([['invoiceNumber', 'Invoice number'], ['receiptNumber', 'Receipt number'], ['orderNumber', 'Order number'], ['paymentReference', 'Payment reference']] as const).map(([key, label]) => <label key={key}>{label}<Input value={identity[key]} onChange={event => edit(key, event.target.value)} /></label>)}
+  </div>;
+}
+
+function ReviewReferences({ document: doc, apiBase, onClose, onSaved }: { document: FinancialDocument; apiBase: string; onClose: () => void; onSaved: () => void }) {
+  const [identity, setIdentity] = useState<DocumentIdentity>(doc.extraction?.identity ?? { type: "unknown", invoiceNumber: "", receiptNumber: "", orderNumber: "", paymentReference: "", confidence: 0 });
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="document-dialog document-purchase-dialog" showCloseButton={false}>
+    <div className="panel-header"><DialogTitle>Review purchase references</DialogTitle><Button aria-label="Close reference review" disabled={busy} onClick={onClose}><X size={18} /></Button></div>
+    <PurchaseFileSummary file={doc} apiBase={apiBase} />
+    {doc.referenceError && <p className="inline-error">{doc.referenceError}</p>}
+    <form onSubmit={async event => {
+      event.preventDefault(); setBusy(true); setError("");
+      try { await request(`${apiBase}/documents/${doc._id}/references`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(identity) }); onSaved(); onClose(); }
+      catch (error) { setError(error instanceof Error ? error.message : "Could not save references"); }
+      finally { setBusy(false); }
+    }}>
+      <ReferenceFields identity={identity} onChange={setIdentity} />
+      {error && <p role="alert" className="inline-error">{error}</p>}
+      <div className="row-actions"><Button type="submit" className="primary-button" disabled={busy}>{busy && <Loader2 className="spin" size={15} />}Save references</Button><InfoPopover label="Reviewing references"><p>Check the original file before saving. This updates purchase references and related files while preserving saved financial details.</p></InfoPopover></div>
+    </form>
+  </DialogContent></Dialog>;
 }
 
 function PurchaseFileSummary({ file, apiBase }: { file: FinancialDocument; apiBase: string }) {

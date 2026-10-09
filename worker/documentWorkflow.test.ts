@@ -540,6 +540,35 @@ test("reference check discrepancies preserve good data and report failure", asyn
   assert.equal((await db.ctx.db.get("recheck")).failed, 1);
 });
 
+test("manual reference review works on recorded files without changing financial data", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = setup();
+  await db.run(documents.complete, { id: "document", token: "lease", extraction });
+  await db.ctx.db.patch("document", { referenceError: "New reading disagrees" });
+  const before = await db.ctx.db.get("state"), original = await db.ctx.db.get("document");
+  await db.run(documents.reviewReferences, { serviceToken: "test-service", id: "document", identity: identity("invoice") });
+  const saved = await db.ctx.db.get("document");
+  assert.equal(saved.status, "matched"); assert.equal(saved.transactionId, original.transactionId);
+  assert.equal(saved.extraction.amount, original.extraction.amount); assert.equal(saved.extraction.issueDate, original.extraction.issueDate);
+  assert.equal(saved.extraction.identity.invoiceNumber, "ACME-101"); assert.equal(saved.extraction.identity.confidence, 1);
+  assert.equal(saved.referenceError, undefined); assert.equal(saved.referenceVersion, 1);
+  assert.deepEqual(await db.ctx.db.get("state"), before);
+  await assert.rejects(db.run(documents.reviewReferences, { serviceToken: "wrong", id: "document", identity: identity("invoice") }), /Unauthorized/);
+});
+
+test("manual references cannot create an expense or be overwritten by an older recheck", async () => {
+  process.env.CONVEX_SERVICE_TOKEN = "test-service";
+  const db = await recheckSetup();
+  await db.ctx.db.patch("state", { expenses: [] });
+  await db.ctx.db.patch("document", { expenseId: undefined, transactionId: undefined });
+  const approved = identity("receipt", "MANUAL-2026");
+  await db.run(documents.reviewReferences, { serviceToken: "test-service", id: "receipt", identity: approved });
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+  await db.run(referenceChecks.complete, { runId: "run", token: "check", extraction: { ...extraction, identity: identity("receipt") } });
+  assert.equal((await db.ctx.db.get("receipt")).extraction.identity.invoiceNumber, "MANUAL-2026");
+  assert.equal((await db.ctx.db.get("state")).expenses.length, 0);
+});
+
 test("historical rechecks do not create expenses for unrecorded documents", async () => {
   const db = await recheckSetup();
   await db.ctx.db.patch("state", { expenses: [] });

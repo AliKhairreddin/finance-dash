@@ -73,7 +73,7 @@ export const complete = internalMutation({
     if (!job || job.runId !== args.runId || job.token !== args.token || !job.currentId || job.status !== "running") return null;
     const doc = await ctx.db.get(job.currentId);
     let error: string | undefined;
-    if (doc && !doc.deletedAt && doc.extraction) {
+    if (doc && !doc.deletedAt && doc.extraction && doc.referenceVersion !== version) {
       const old = doc.extraction, fresh = args.extraction;
       if (!fresh.identity) error = "The reference check returned no identifiers; existing details were preserved";
       else if (fresh.kind !== old.kind || fresh.amount !== old.amount || fresh.currency !== old.currency || documentSupplier(fresh.counterparty) !== documentSupplier(old.counterparty)

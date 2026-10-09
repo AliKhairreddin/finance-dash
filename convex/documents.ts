@@ -3,7 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { documentEntity, documentExtraction, financialDocumentValidator } from "./documentSchema";
+import { documentEntity, documentExtraction, documentIdentity, financialDocumentValidator } from "./documentSchema";
 import { documentMatchCandidates, documentReviewMatchKind, documentMaximumBytes, documentContentTypes, validateExtraction, type DocumentExtraction } from "../shared/financialDocuments";
 import { bumpBankLedgerRevision } from "./dashboard";
 import { wiseEntityFromAccountName } from "../shared/wiseEntities";
@@ -372,6 +372,17 @@ export const retry = mutation({
 export const review = mutation({
   args: { serviceToken: v.string(), id: v.id("financialDocuments"), extraction: documentExtraction, transactionId: v.optional(v.string()), confirmCurrencyConversion: v.optional(v.boolean()) }, returns: v.null(),
   handler: async (ctx, args) => { authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.deletedAt || !["needs_review", "failed"].includes(doc.status)) throw new ConvexError("Only unrecorded documents can be reviewed"); const extraction = validateExtraction({ ...args.extraction, confidence: 1, reviewReasons: [] }); if (extraction.reviewReasons.length) throw new ConvexError(extraction.reviewReasons.join(". ")); await recordAndMatchDocuments(ctx, [{ document: doc, extraction, transactionId: args.transactionId, confirmCurrencyConversion: args.confirmCurrencyConversion }]); return null; }
+});
+export const reviewReferences = mutation({
+  args: { serviceToken: v.string(), id: v.id("financialDocuments"), identity: documentIdentity }, returns: v.null(),
+  handler: async (ctx, args) => {
+    authorize(args.serviceToken);
+    const doc = await ctx.db.get(args.id);
+    if (!doc?.extraction || doc.deletedAt || doc.kind !== "expense" || ["queued", "processing", "failed"].includes(doc.status)) throw new ConvexError("This file is not ready for reference review");
+    await reconcileExistingDocument(ctx, doc, { ...doc.extraction, identity: { ...args.identity, confidence: 1 } });
+    await ctx.db.patch(doc._id, { referenceVersion: 1, referencesCheckedAt: nowIso(), referenceError: undefined });
+    return null;
+  }
 });
 export const rematch = mutation({
   args: { serviceToken: v.string(), id: v.optional(v.id("financialDocuments")) }, returns: v.number(),

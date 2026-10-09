@@ -3,7 +3,7 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import PostalMime from "postal-mime";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { documentInbox, documentContentType, documentMaximumBytes, documentContentTypes, validateDocumentFile, validateExtraction, type DocumentExtraction } from "../shared/financialDocuments";
+import { documentInbox, documentContentType, documentMaximumBytes, documentContentTypes, validateDocumentFile, validateDocumentIdentity, validateExtraction, type DocumentExtraction } from "../shared/financialDocuments";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 
 export type DocumentEnv = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OPENROUTER_API_KEY"> & { PUBLIC_APP_URL: string; DOCUMENT_AI_MODEL: string };
@@ -133,13 +133,18 @@ export async function handleDocumentApi(request: Request, env: DocumentEnv): Pro
     }
     if (route === "/api/documents/recheck" && request.method === "GET") return Response.json(await convex.query(api.documentRecheck.status, auth(env)));
     if (route === "/api/documents/recheck" && request.method === "POST") return Response.json(await convex.mutation(api.documentRecheck.start, auth(env)));
-    const match = /^\/api\/documents\/([^/]+)(?:\/(file|review|retry|match|candidates|purchase))?$/.exec(route);
+    const match = /^\/api\/documents\/([^/]+)(?:\/(file|review|retry|match|candidates|purchase|references))?$/.exec(route);
     if (!match) return Response.json({ message: "Document endpoint not found" }, { status: 404 });
     const id = match[1] as Id<"financialDocuments">;
     if (request.method === "POST" && match[2] === "purchase") {
       const body = await request.json() as { otherId?: string; decision?: string };
       if (!body.otherId || !["same", "separate"].includes(body.decision ?? "")) throw new Error("Choose Same purchase or Separate purchases");
       await convex.mutation(api.documents.resolvePurchase, { ...auth(env), id, otherId: body.otherId as Id<"financialDocuments">, decision: body.decision as "same" | "separate" });
+    }
+    else if (request.method === "POST" && match[2] === "references") {
+      const identity = validateDocumentIdentity(await request.json());
+      if (!identity) throw new Error("Review the file's purchase references");
+      await convex.mutation(api.documents.reviewReferences, { ...auth(env), id, identity });
     }
     else if (request.method === "POST" && match[2] === "retry") await convex.mutation(api.documents.retry, { ...auth(env), id });
     else if (request.method === "POST" && match[2] === "review") {
