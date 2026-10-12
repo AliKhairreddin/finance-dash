@@ -326,6 +326,9 @@ function CognitiveSpendView({
   const [selectedProviderId, setSelectedProviderId] = useUrlState("mediaProvider", "", {
     isValid: (value) => value.length <= 200
   });
+  const [selectedPlatform, setSelectedPlatform] = useUrlState("mediaPlatform", "", {
+    isValid: (value) => value.length <= 80
+  });
   const [selectedAccountKey, setSelectedAccountKey] = useUrlState("mediaAccount", "", {
     isValid: (value) => value.length <= 500
   });
@@ -381,6 +384,11 @@ function CognitiveSpendView({
   const spendRows = useMemo(() => includeZeroSpend
     ? (data?.rows ?? [])
     : (data?.rows ?? []).filter((row) => row.spend !== 0), [data?.rows, includeZeroSpend]);
+  const platformOptions = useMemo(() => {
+    const platforms = new Set((data?.rows ?? []).map((row) => row.platform));
+    if (selectedPlatform) platforms.add(selectedPlatform);
+    return [...platforms].sort((left, right) => left.localeCompare(right));
+  }, [data?.rows, selectedPlatform]);
   const allAccountGroups = useMemo(() => groupMediaSpendByAccount(data?.rows ?? []), [data?.rows]);
   const allBusinessManagerGroups = useMemo(() => groupBusinessManagers(data?.rows ?? []), [data?.rows]);
   const selectedBusinessManager = useMemo(
@@ -448,11 +456,12 @@ function CognitiveSpendView({
   const scopedSpendRows = useMemo(() => spendRows.filter((row) => {
     return (
       (!selectedAccountKey || mediaFundingAccountKey(row.platform, row.accountId) === selectedAccountKey)
+      && (!selectedPlatform || row.platform === selectedPlatform)
       && (!selectedBusinessManagerKey || businessManagerKey(row) === selectedBusinessManagerKey)
       && (!paymentFilter || paymentMethodForRow(row) === paymentFilter)
       && (!selectedProviderId || (rowFunding(row).provider?.id ?? "unassigned") === selectedProviderId)
     );
-  }), [funding?.paymentMethods, paymentFilter, funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedProviderId, spendRows]);
+  }), [funding?.paymentMethods, paymentFilter, funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedPlatform, selectedProviderId, spendRows]);
   const businessManagerGroups = useMemo(() => groupBusinessManagers(scopedSpendRows), [scopedSpendRows]);
   const providerSpendGroups = useMemo(() => groupMediaSpendByFundingProvider(
     scopedSpendRows,
@@ -611,6 +620,7 @@ function CognitiveSpendView({
     search,
     selectedAccountKey,
     selectedBusinessManagerKey,
+    selectedPlatform,
     selectedProviderId,
     viewMode
   ]);
@@ -621,7 +631,7 @@ function CognitiveSpendView({
 
   useEffect(() => {
     setSelectedTargets(new Set());
-  }, [dateRange.fromDate, dateRange.toDate, selectedAccountKey, selectedBusinessManagerKey, selectedProviderId, viewMode]);
+  }, [dateRange.fromDate, dateRange.toDate, selectedAccountKey, selectedBusinessManagerKey, selectedPlatform, selectedProviderId, viewMode]);
 
   function requestAccountSort(nextSortKey: AccountSpendSortKey): void {
     if (nextSortKey === accountSortKey) {
@@ -900,8 +910,14 @@ function CognitiveSpendView({
                   : "Search provider, account, BM"}
               value={search}
             />
-            <FilterPopover activeCount={Number(Boolean(selectedProviderId)) + Number(Boolean(selectedBusinessManagerKey)) + Number(Boolean(paymentFilter))} title="Filter media spend">
+            <FilterPopover activeCount={Number(Boolean(selectedPlatform)) + Number(Boolean(selectedProviderId)) + Number(Boolean(selectedBusinessManagerKey)) + Number(Boolean(paymentFilter))} title="Filter media spend">
               <FilterFieldGroup title="Accounts">
+                <label>Platform
+                  <NativeSelect aria-label="Filter media spend by platform" value={selectedPlatform} onValueChange={setSelectedPlatform}>
+                    <NativeSelectOption value="">All platforms</NativeSelectOption>
+                    {platformOptions.map((platform) => <NativeSelectOption key={platform} value={platform}>{platform}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
                 <label>Provider
                   <NativeSelect aria-label="Filter media spend by provider" searchable value={selectedProviderId} onValueChange={setSelectedProviderId}>
                     <NativeSelectOption value="">All providers</NativeSelectOption>
@@ -929,6 +945,7 @@ function CognitiveSpendView({
 
         <ActiveFilterBar
           filters={[
+            ...(selectedPlatform ? [{ key: "platform", label: `Platform: ${selectedPlatform}`, onRemove: () => setSelectedPlatform("") }] : []),
             ...(paymentFilter ? [{ key: "paymentMethod", label: `Payment: ${mediaPaymentMethodLabels[paymentFilter]}`, onRemove: () => setPaymentFilter("") }] : []),            ...(selectedAccountKey ? [{
               key: "account",
               label: `Ad account: ${selectedAccount?.accountName ?? selectedAccount?.accountId ?? "Selected"}`,
@@ -946,6 +963,7 @@ function CognitiveSpendView({
             }] : [])
           ]}
           onClearAll={() => {
+            setSelectedPlatform("");
             setPaymentFilter("");
             setSelectedAccountKey("");
             setSelectedBusinessManagerKey("");
