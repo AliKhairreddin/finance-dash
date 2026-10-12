@@ -1,0 +1,11 @@
+# Company contracts
+
+Administrators can open **Contracts** or the document icon on a **Companies** card. Uploads can be assigned to a company immediately or submitted for recognition. **Unassigned** contains pending, uncertain, failed, and orphaned assignments. Documents can be downloaded, reassigned, or retried from this view. Sorting and filters are saved in the URL.
+
+Forward attachments to `contracts@finance.thatcanadian.dev`. PDF, DOCX, UTF-8 text, PNG, JPEG and WebP are supported (10 MB per file; 25 MB per email). Inline signature images are ignored; unsupported attachments and empty emails are rejected explicitly. The inbox uses the same sender restrictions as receipts, configured in Documents. Incoming email is acknowledged only after its attachments and recognition jobs have been saved in Convex.
+
+Originals and metadata are stored in the new `companyDocuments` table and Convex file storage, independently of receipts, expenses, invoices and bank balances. No existing financial records require migration. Page loads read saved data only. Identical content is deduplicated across email and upload; a duplicate never silently moves an already filed document. Removing a company leaves its documents available under Unassigned.
+
+Recognition uses the existing server-side document AI configuration and Zero Data Retention routing. It extracts counterparties from each attachment, using explicit forwarding context when the attachment has no identity. Automatic assignment requires confidence of at least 0.9 and exactly one saved-company identity match (name, legal name, alias, email, tax ID or registration number). Our own entities are excluded. Failures preserve the file, retry at most three times, honor Retry-After, and then remain available for manual review. Attempt tokens and a durable timeout prevent delayed jobs from overwriting manual assignments.
+
+`npm run deploy` deploys production Convex and Cloudflare, then ensures and verifies the email routing rule. `npm run contracts:configure-inbox` can verify it separately using Wrangler credentials with zone read and email routing write permissions. A conflicting existing rule is reported, not overwritten. Existing `DOCUMENT_PROCESSOR_URL` and service token configuration also serve contract processing through `/api/internal/contracts/process`.

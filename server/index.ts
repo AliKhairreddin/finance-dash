@@ -1,3 +1,4 @@
+import { handleCompanyDocumentApi } from "../worker/companyDocuments";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleRedTrackApi } from "../worker/redtrack";
 import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
@@ -226,6 +227,16 @@ app.use("/api/documents", express.raw({ type: () => true, limit: "10mb" }), asyn
     const headers = new Headers(); for (const [key, value] of Object.entries(request.headers)) if (typeof value === "string") headers.set(key, value);
     const body = Buffer.isBuffer(request.body) && request.body.length ? new Uint8Array(request.body) : undefined;
     const result = await handleDocumentApi(new Request(`http://localhost:${port}${request.originalUrl}`, { method: request.method, headers, ...(body ? { body } : {}) }), {
+      CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken(), OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? "", PUBLIC_APP_URL: process.env.PUBLIC_APP_URL ?? "https://finance.thatcanadian.dev", DOCUMENT_AI_MODEL: process.env.DOCUMENT_AI_MODEL ?? "google/gemini-3.8-flash"
+    });
+    if (!result) return next(); response.status(result.status); result.headers.forEach((value, key) => response.setHeader(key, value)); response.send(Buffer.from(await result.arrayBuffer()));
+  } catch (error) { next(error); }
+});
+app.use("/api/contracts", express.raw({ type: () => true, limit: "10mb" }), async (request, response, next) => {
+  try {
+    const headers = new Headers(); for (const [key, value] of Object.entries(request.headers)) if (typeof value === "string") headers.set(key, value);
+    const body = Buffer.isBuffer(request.body) && request.body.length ? new Uint8Array(request.body) : undefined;
+    const result = await handleCompanyDocumentApi(new Request(`http://localhost:${port}${request.originalUrl}`, { method: request.method, headers, ...(body ? { body } : {}) }), {
       CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken(), OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? "", PUBLIC_APP_URL: process.env.PUBLIC_APP_URL ?? "https://finance.thatcanadian.dev", DOCUMENT_AI_MODEL: process.env.DOCUMENT_AI_MODEL ?? "google/gemini-3.8-flash"
     });
     if (!result) return next(); response.status(result.status); result.headers.forEach((value, key) => response.setHeader(key, value)); response.send(Buffer.from(await result.arrayBuffer()));

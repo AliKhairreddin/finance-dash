@@ -12945,3 +12945,13 @@ body {
   .document-view-controls { min-width: 0; width: 100%; }
   .document-purchase-dialog { padding: 16px; }
 }
+
+.contracts-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 0 20px 18px; }
+.contracts-toolbar > input { width: 210px; }
+.contracts-company-filter { max-width: 250px; }
+.contracts-inbox { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; }
+.contracts-inbox a { color: var(--muted-foreground); }
+.contracts-notice { padding: 0 20px; font-size: 13px; }
+.contracts-filename { overflow-wrap: anywhere; }
+.contracts-panel .wrap { max-width: 300px; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .contracts-inbox { margin-left: 0; flex-wrap: wrap; } .contracts-toolbar { padding: 0 12px 12px; } }

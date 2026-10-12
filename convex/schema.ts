@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { redtrackRow, redtrackSource } from "./redtrackSchema";
 import { v } from "convex/values";
+import { companyDocumentFields } from "./companyDocumentSchema";
 import { financialDocumentFields } from "./documentSchema";
 import { amexStatementFields } from "./amexStatementSchema";
 
@@ -594,6 +595,7 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  companyDocuments: defineTable(companyDocumentFields).index("by_content_hash", ["contentHash"]),
   redtrackAdvertiserLinks: defineTable({ sourceId: v.string(), url: v.string() }).index("by_source_id", ["sourceId"]),
   redtrackDays: defineTable({ date: v.string(), savedAt: v.number(), rowCount: v.number(), chunkCount: v.number() }).index("by_date", ["date"]),
   redtrackDayChunks: defineTable({ dayId: v.id("redtrackDays"), part: v.number(), rows: v.array(redtrackRow) }).index("by_day_part", ["dayId", "part"]),

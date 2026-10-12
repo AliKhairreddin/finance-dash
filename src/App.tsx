@@ -1,3 +1,4 @@
+import { ContractsView } from "@/features/contracts/ContractsView";
 import { useAmexStatementAccounts } from "./features/banking/useAmexStatementAccounts";
 import { AmexStatementImport } from "./features/banking/AmexStatementImport";
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
@@ -229,7 +230,7 @@ import { RedTrackView } from "@/features/redtrack/RedTrackView";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "contracts", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -2323,6 +2324,7 @@ function App() {
       )}
 
       {activeTab === "documents" && <DocumentsView apiBase={apiBase} />}
+      {activeTab === "contracts" && <ContractsView apiBase={apiBase} providers={dashboard.providers} />}
 
       {activeTab === "management" && <ManagementReportView apiBase={apiBase} />}
 
@@ -3021,6 +3023,7 @@ function Sidebar({
   ];
   const workspaceItems: SidebarItem[] = [
     { id: "providers", label: "Companies", icon: <Building2 size={17} /> },
+    { id: "contracts", label: "Contracts", icon: <FileText size={17} /> },
     { id: "settings", label: "Settings", icon: <Settings size={17} /> }
   ];
   const activeItem = [...primaryItems, ...cashFlowItems, ...accountingItems, ...operationsItems, ...workspaceItems]
@@ -7555,6 +7558,7 @@ function ProvidersView({
                 <span>{providerTypeLabel(provider.type)}</span>
               </div>
               <div className="provider-card-actions">
+                <a className="icon-button" aria-label={`Documents for ${provider.name}`} title="Company documents" href={`?page=contracts&contractCompany=${encodeURIComponent(provider.id)}`}><FileText size={15} /></a>
                 <Button className="icon-button" aria-label={`Edit ${provider.name}`} title="Edit company" onClick={() => onEditProvider(provider)}>
                   <Pencil size={15} />
                 </Button>

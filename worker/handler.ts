@@ -1,3 +1,5 @@
+import { handleCompanyDocumentApi, receiveContractEmail, recognizeContract } from "./companyDocuments";
+import { contractsInbox } from "../shared/companyDocuments";
 import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
 import { handleRedTrackApi } from "./redtrack";
 import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
@@ -7124,6 +7126,8 @@ async function handleApi(
     if (redTrackResponse) return redTrackResponse;
     const statementResponse = await handleAmexStatementApi(request, env);
     if (statementResponse) return statementResponse;
+    const contractResponse = await handleCompanyDocumentApi(request, env);
+    if (contractResponse) return contractResponse;
     const documentResponse = await handleDocumentApi(request, env);
     if (documentResponse) return documentResponse;
 
@@ -8859,6 +8863,11 @@ export default {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try { return json(await categorizeHistoricalBankBacklog(env)); } catch { return json({ message: "Classification deferred to the scheduled backlog" }, { status: 503 }); }
     }
+    if (new URL(request.url).pathname === "/api/internal/contracts/process") {
+      if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try { const { id } = await request.json() as { id: string }; return json(await recognizeContract(env, id)); }
+      catch (error) { return json({ message: "Company recognition failed" }, { status: error instanceof DocumentExtractionError && error.status === 429 ? 429 : 502, ...(error instanceof DocumentExtractionError && error.retryAfterSeconds ? { headers: { "Retry-After": String(error.retryAfterSeconds) } } : {}) }); }
+    }
     if (new URL(request.url).pathname === "/api/internal/documents/process") {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
@@ -8892,7 +8901,7 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
-  async email(message: ForwardableEmailMessage, env: Env): Promise<void> { await receiveDocumentEmail(message, env); },
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> { await (message.to.toLowerCase() === contractsInbox ? receiveContractEmail(message, env) : receiveDocumentEmail(message, env)); },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
     if (controller.cron === "* * * * *") {

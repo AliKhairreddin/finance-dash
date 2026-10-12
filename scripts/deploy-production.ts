@@ -64,6 +64,7 @@ function main(): void {
   if (mode === "all" || mode === "cloudflare") {
     run("npx", ["wrangler", "deploy"], env);
     run("npm", ["run", "slash:configure:card-alerts"], env);
+    run("npm", ["run", "contracts:configure-inbox"], env);
   }
 }
 

@@ -25,7 +25,8 @@
     "verify:production": "tsx scripts/deploy-production.ts verify",
     "slash:configure:card-alerts": "tsx scripts/configure-slash-card-alerts.ts",
     "preview": "vite preview --host 0.0.0.0",
-    "lint": "tsc -b --pretty false"
+    "lint": "tsc -b --pretty false",
+    "contracts:configure-inbox": "tsx scripts/configure-contract-inbox.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
