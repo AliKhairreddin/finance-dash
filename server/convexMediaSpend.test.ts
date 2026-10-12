@@ -44,7 +44,7 @@ test("completing a later sync does not claim coverage over an unsynced gap", asy
   }
 });
 
-test("daily reservation blocks duplicate pulls and failed/abandoned retries until the next India day", async (t) => {
+test("sync reservation blocks overlapping pulls but allows same-day retries and completed re-imports", async (t) => {
   const previousToken = process.env.CONVEX_SERVICE_TOKEN;
   process.env.CONVEX_SERVICE_TOKEN = "media-test";
   t.after(() => { if (previousToken === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previousToken; });
@@ -61,12 +61,16 @@ test("daily reservation blocks duplicate pulls and failed/abandoned retries unti
   assert.equal(await handlerOf(startSync)({ db }, args), "started");
   assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "duplicate" }), "busy");
   assert.equal(writes, 1);
-  assert.equal(await handlerOf(failSync)({ db }, { serviceToken: "media-test", attemptId: "first", failedAt: args.startedAt, error: "HTTP 429" }), true);
-  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "retry" }), "daily_limit");
+  assert.equal(await handlerOf(failSync)({ db }, { serviceToken: "media-test", attemptId: "first", failedAt: args.startedAt, error: "Missing account rows" }), true);
+  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "retry" }), "started");
+  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "overlapping-retry" }), "busy");
   stored = { ...stored, status: "running", leaseExpiresAt: now - 1 };
-  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "abandoned" }), "daily_limit");
-  stored = { ...stored, lastAttemptAt: "2026-10-05T08:30:00Z" };
-  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "next-day" }), "started");
+  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "abandoned" }), "started");
+  assert.equal(await handlerOf(completeSync)({ db }, {
+    serviceToken: "media-test", attemptId: "abandoned", completedAt: args.startedAt,
+    coveredThrough: args.toDate, rowCount: 1, totalSpend: 5
+  }), true);
+  assert.equal(await handlerOf(startSync)({ db }, { ...args, attemptId: "reimport" }), "started");
 });
 
 test("stale sync attempts cannot write rows or claim success", async (t) => {

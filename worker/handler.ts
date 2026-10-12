@@ -969,7 +969,7 @@ async function syncMediaSpend(
   options: { scheduled?: boolean } = {}
 ): Promise<boolean> {
   const dates = mediaSpendDates(fromDate, toDate);
-  if (dates.length > mediaSpendMaximumSyncDays) throw new ApiError(400, `Choose at most ${mediaSpendMaximumSyncDays} days for the daily LemonMax pull`);
+  if (dates.length > mediaSpendMaximumSyncDays) throw new ApiError(400, `Choose at most ${mediaSpendMaximumSyncDays} days per LemonMax import`);
   const credentials = requireLemonMaxCredentials(env);
   const serviceToken = getConvexServiceToken(env);
   const convex = getConvexClient(env);
@@ -982,16 +982,15 @@ async function syncMediaSpend(
     toDate,
     startedAt
   });
-  if (acquired !== "started") {
+  if (acquired === "busy") {
     if (options.scheduled) return false;
-    if (acquired === "busy") throw new ApiError(409, "Media spend is already syncing");
-    throw new ApiError(429, "LemonMax has already been requested today (India time). The next automatic pull is at 3:30 PM India time tomorrow.");
+    throw new ApiError(409, "Media spend is already syncing");
   }
 
   try {
     let rowCount = 0;
     let totalSpend = 0;
-    // One unfiltered range request consumes the day's API allowance for every platform/account.
+    // Each import uses one unfiltered range request for every platform/account.
     const fetchedRows = await fetchLemonMaxSpend(env, fromDate, toDate, startedAt, credentials);
     const rowsByDate = new Map<string, MediaSpendRow[]>();
     for (const row of fetchedRows) {

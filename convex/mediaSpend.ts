@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { mediaSpendContiguousCoverage, mediaSpendPullDateInIndia, mediaSpendSyncLeaseMs } from "../shared/mediaSpend";
+import { mediaSpendContiguousCoverage, mediaSpendSyncLeaseMs } from "../shared/mediaSpend";
 import type { Doc } from "./_generated/dataModel";
 
 const source = v.literal("lemonmax");
@@ -136,7 +136,7 @@ export const startSync = mutation({
     toDate: v.string(),
     startedAt: v.string()
   },
-  returns: v.union(v.literal("started"), v.literal("busy"), v.literal("daily_limit")),
+  returns: v.union(v.literal("started"), v.literal("busy")),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.fromDate);
@@ -151,8 +151,6 @@ export const startSync = mutation({
       .withIndex("by_key", (q) => q.eq("key", syncStateKey))
       .unique();
     if (existing?.status === "running" && (existing.leaseExpiresAt ?? 0) > Date.now()) return "busy";
-    // Reserve the daily API allowance transactionally, even if the request later fails.
-    if (existing && mediaSpendPullDateInIndia(Date.parse(existing.lastAttemptAt)) === mediaSpendPullDateInIndia(Date.now())) return "daily_limit";
     const next = {
       key: syncStateKey,
       source: "lemonmax" as const,

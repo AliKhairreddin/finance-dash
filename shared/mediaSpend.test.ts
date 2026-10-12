@@ -5,7 +5,6 @@ import {
   mediaSpendContiguousCoverage,
   mediaSpendDates,
   mediaSpendRefreshRange,
-  mediaSpendPullDateInIndia,
   mediaSpendYesterdayInIndia,
   parseLemonMaxSpendSummary,
   parseLemonMaxSpendSummaryRange,
@@ -180,10 +179,4 @@ test("bounds user-facing media spend ranges", () => {
     () => validateMediaSpendDateRange("2026-01-01", "2026-08-27"),
     /cannot exceed 92 days/
   );
-});
-
-
-test("daily API allowance uses India calendar days across UTC midnight", () => {
-  assert.equal(mediaSpendPullDateInIndia(Date.parse("2026-10-06T18:29:59Z")), "2026-10-06");
-  assert.equal(mediaSpendPullDateInIndia(Date.parse("2026-10-06T18:30:00Z")), "2026-10-07");
 });

@@ -84,7 +84,7 @@ export function MediaSpendDataStatus({ data, isLoading, isSyncing, onReimport }:
             </div>
             <details className="media-spend-data-reimport">
               <summary>Re-import selected dates</summary>
-              <p>For missing data or historical corrections. Imports every account and platform for the selected completed days. Uses the single daily import allowance and may replace today's scheduled update.</p>
+              <p>For missing data or historical corrections. Imports every account and platform for the selected completed days. Only one import can run at a time.</p>
               <Button className="secondary-button" disabled={isLoading || updating || availability.disabledReason !== null} onClick={onReimport} type="button" aria-describedby="media-spend-reimport-reason">
                 {updating ? <Loader2 aria-hidden="true" className="spin" size={14} /> : <RefreshCw aria-hidden="true" size={14} />}
                 {updating ? "Importing…" : "Import from LemonMax"}

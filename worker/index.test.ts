@@ -1141,21 +1141,21 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("manual media sync respects the shared daily allowance before contacting LemonMax", async (t) => {
+test("manual media sync rejects overlapping imports and oversized ranges before contacting LemonMax", async (t) => {
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(new URL(String(input)).hostname, "test.convex.cloud");
     const body = JSON.parse(String(init?.body));
     calls.push(body.path);
-    return Response.json({ status: "success", value: "daily_limit" });
+    return Response.json({ status: "success", value: "busy" });
   });
   const env = authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service",
     LEMONMAX_AUTH_TOKEN: "auth", LEMONMAX_BEARER_TOKEN: "bearer", LEMONMAX_SPEND_CURRENCY: "USD", LEMONMAX_SYNC_START_DATE: "2026-08-01" });
   const response = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fromDate: "2026-10-04", toDate: "2026-10-05" })
   }), env);
-  assert.equal(response.status, 429);
-  assert.match(await response.text(), /already been requested today/);
+  assert.equal(response.status, 409);
+  assert.match(await response.text(), /already syncing/);
   assert.deepEqual(calls, ["mediaSpend:startSync"]);
   const tooLarge = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-spend/sync", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fromDate: "2026-09-01", toDate: "2026-09-30" })

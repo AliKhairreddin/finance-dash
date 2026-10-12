@@ -48,19 +48,16 @@ test("daily schedule imports every platform with exactly one unfiltered range re
   assert.equal(mutations.at(-1)?.path, "mediaSpend:completeSync");
 });
 
-test("duplicate daily events and in-progress imports do not consume another API request", async (t) => {
-  for (const reservation of ["daily_limit", "busy"]) {
-    const calls: string[] = [];
-    const fetchMock = t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      assert.equal(new URL(String(input)).hostname, "test.convex.cloud");
-      const body = JSON.parse(String(init?.body));
-      calls.push(body.path);
-      return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? null : reservation });
-    });
-    await worker.scheduled(scheduled, env);
-    assert.deepEqual(calls, ["mediaSpend:getSyncState", "mediaSpend:startSync"]);
-    fetchMock.mock.restore();
-  }
+test("scheduled events during an in-progress import do not make another API request", async (t) => {
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(new URL(String(input)).hostname, "test.convex.cloud");
+    const body = JSON.parse(String(init?.body));
+    calls.push(body.path);
+    return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? null : "busy" });
+  });
+  await worker.scheduled(scheduled, env);
+  assert.deepEqual(calls, ["mediaSpend:getSyncState", "mediaSpend:startSync"]);
 });
 
 test("unpublished days preserve stored rows and report failure without a second API call", async (t) => {
@@ -84,7 +81,7 @@ test("unpublished days preserve stored rows and report failure without a second 
   assert.deepEqual(completed, ["mediaSpend:failSync"]);
 });
 
-test("a full fourteen-day account report over 4 MB fits in the single daily request", async (t) => {
+test("a full fourteen-day account report over 4 MB fits in a single request", async (t) => {
   const dates = Array.from({ length: 14 }, (_, i) =>
     new Date(Date.parse("2026-09-22T00:00:00Z") + i * 86_400_000).toISOString().slice(0, 10));
   const data = dates.flatMap((date) => Array.from({ length: 2452 }, (_, i) => ({ ...summary.data[0], Date: date, "Account ID": String(i), "Account Name": `Account ${i} - managed media`, Spend: 0 })));

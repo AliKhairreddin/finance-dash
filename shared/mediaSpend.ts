@@ -268,10 +268,6 @@ export function mediaSpendYesterdayInIndia(now: Date | number): string {
   return yesterday.toISOString().slice(0, 10);
 }
 
-export function mediaSpendPullDateInIndia(now: number): string {
-  return new Date(now + 330 * 60 * 1_000).toISOString().slice(0, 10);
-}
-
 export function validateMediaSpendDateRange(fromDate: string, toDate: string): void {
   if (!validIsoDate(fromDate) || !validIsoDate(toDate) || fromDate > toDate) {
     throw new Error("Media spend date range is invalid");

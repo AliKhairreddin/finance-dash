@@ -753,7 +753,7 @@ function CognitiveSpendView({
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "LemonMax import did not complete");
     } finally {
-      // Failed attempts also change source health and consume the daily allowance.
+      // Failed attempts also change source health.
       // Reload only saved data, including any successfully imported days.
       try {
         await loadData();

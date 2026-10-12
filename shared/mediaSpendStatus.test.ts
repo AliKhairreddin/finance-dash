@@ -26,10 +26,11 @@ test("saved zero-spend days count as present without requiring visible account r
   assert.equal(mediaSpendPeriodStatus({ ...saved, missingDates: ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06"] }).label, "0/6 days saved");
 });
 
-test("failed imports consume the same India-day allowance as successful imports", () => {
-  assert.match(mediaSpendReimportAvailability(saved, Date.parse("2026-10-08T18:29:00Z")).disabledReason!, /already been attempted/);
-  assert.equal(mediaSpendReimportAvailability(saved, Date.parse("2026-10-08T18:30:00Z")).disabledReason, null);
-  assert.match(mediaSpendReimportAvailability({ ...saved, sync: { status: "running" } }, Date.parse("2026-10-09T00:00:00Z")).disabledReason!, /already running/);
+test("same-day re-imports are available after failed and successful imports but not during one", () => {
+  const now = Date.parse("2026-10-08T10:00:00Z");
+  assert.equal(mediaSpendReimportAvailability(saved, now).disabledReason, null);
+  assert.equal(mediaSpendReimportAvailability({ ...saved, sync: { ...saved.sync, status: "healthy" } }, now).disabledReason, null);
+  assert.match(mediaSpendReimportAvailability({ ...saved, sync: { ...saved.sync, status: "running" } }, now).disabledReason!, /already running/);
 });
 
 test("manual reconciliation enforces the fourteen completed-day cap and excludes today", () => {
