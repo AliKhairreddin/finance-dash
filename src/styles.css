@@ -12955,3 +12955,4 @@ body {
 .contracts-filename { overflow-wrap: anywhere; }
 .contracts-panel .wrap { max-width: 300px; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .contracts-inbox { margin-left: 0; flex-wrap: wrap; } .contracts-toolbar { padding: 0 12px 12px; } }
+.contracts-panel .note-popover { position: static; display: inline-flex; vertical-align: middle; }
