@@ -7,7 +7,7 @@ const env = {
   LEMONMAX_AUTH_TOKEN: "auth", LEMONMAX_BEARER_TOKEN: "bearer",
   LEMONMAX_SPEND_CURRENCY: "USD", LEMONMAX_SYNC_START_DATE: "2026-10-04"
 } as never;
-const scheduled = { cron: "30 8 * * *", scheduledTime: Date.parse("2026-10-06T08:30:00Z"), noRetry() {} };
+const scheduled = { cron: "0 10 * * *", scheduledTime: Date.parse("2026-10-06T10:00:00Z"), noRetry() {} };
 const summary = {
   success: true, message: "OK", from_date: "2026-10-04", to_date: "2026-10-05",
   total_rows: 4, total_accounts: 3, total_spend: 19,

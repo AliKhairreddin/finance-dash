@@ -29,7 +29,7 @@ export function mediaSpendReimportAvailability(
   if (!data.configured) disabledReason = "LemonMax imports are not configured.";
   else if (data.sync.status === "running") disabledReason = "A LemonMax import is already running.";
   else if (data.sync.lastAttemptAt && mediaSpendPullDateInIndia(Date.parse(data.sync.lastAttemptAt)) === mediaSpendPullDateInIndia(now)) {
-    disabledReason = "Today's import has already been attempted (India time). The next automatic import is tomorrow at 2:00 PM India time.";
+    disabledReason = "Today's import has already been attempted (India time). The next automatic import is tomorrow at 3:30 PM India time.";
   } else if (data.fromDate > toDate) disabledReason = "Only completed days can be imported.";
   else if (mediaSpendDates(data.fromDate, toDate).length > mediaSpendMaximumSyncDays) {
     disabledReason = `Select at most ${mediaSpendMaximumSyncDays} completed days to re-import.`;

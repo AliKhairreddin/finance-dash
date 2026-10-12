@@ -79,7 +79,7 @@ export function MediaSpendDataStatus({ data, isLoading, isSyncing, onReimport }:
               <p>{period.complete ? "All days in your selected period are saved. A failed update does not remove them." : "Previously saved spend is preserved."}</p>
             </div>}
             <div className="media-spend-data-schedule">
-              <strong>Automatic import · daily at 2:00 PM India time</strong>
+              <strong>Automatic import · daily at 3:30 PM India time</strong>
               <p>Rechecks the latest 14 days for corrections and catches up missing history in batches. Older dates stay saved until deliberately re-imported.</p>
             </div>
             <details className="media-spend-data-reimport">

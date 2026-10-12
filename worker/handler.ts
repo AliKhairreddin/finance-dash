@@ -985,7 +985,7 @@ async function syncMediaSpend(
   if (acquired !== "started") {
     if (options.scheduled) return false;
     if (acquired === "busy") throw new ApiError(409, "Media spend is already syncing");
-    throw new ApiError(429, "LemonMax has already been requested today (India time). The next automatic pull is at 2:00 PM India time tomorrow.");
+    throw new ApiError(429, "LemonMax has already been requested today (India time). The next automatic pull is at 3:30 PM India time tomorrow.");
   }
 
   try {
@@ -9067,7 +9067,7 @@ export default {
         failures.push(error);
       }
     }
-    if (controller.cron === "30 8 * * *") {
+    if (controller.cron === "0 10 * * *") {
       const yesterday = mediaSpendYesterdayInIndia(controller.scheduledTime);
       try {
         const state = await getConvexClient(env).query(api.mediaSpend.getSyncState, {
