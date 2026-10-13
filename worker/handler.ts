@@ -9134,11 +9134,18 @@ export default {
     const shouldRunIncomeAutomation =
       isLebanonIncomeAutomationTime(controller.scheduledTime) ||
       (controller.cron === "17 * * * *" && canCatchUpLebanonIncomeAutomation(controller.scheduledTime));
-    if (shouldRunIncomeAutomation) {
+    if (shouldRunIncomeAutomation || (controller.cron === "*/5 * * * *" && canCatchUpLebanonIncomeAutomation(controller.scheduledTime))) {
       try {
         const state = await loadPersisted(env);
         await syncQuinStreetMonthly(getConvexClient(env), getConvexServiceToken(env), state.revenuePartners,
           (partner, period) => fetchRevenuePartnerRevenue(env, partner, period), new Date(controller.scheduledTime));
+      } catch (error) {
+        console.error(JSON.stringify({ event: "quinstreet_monthly_sync_failed", error: error instanceof Error ? error.message : String(error) }));
+        failures.push(error);
+      }
+    }
+    if (shouldRunIncomeAutomation) {
+      try {
         await runIncomeAutomation(env, new Date(controller.scheduledTime));
       } catch (error) {
         console.error(JSON.stringify({
