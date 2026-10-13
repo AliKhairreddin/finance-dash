@@ -21,6 +21,21 @@ import type {
 
 const dayMs = 24 * 60 * 60 * 1000;
 export const invoicePaymentAmountTolerance = 100;
+
+export function invoicePaymentDifferenceUsd(difference: number, currency: string, rates: FxRate[] = [], now = new Date()): number | null {
+  const cents = Math.round(difference * 100);
+  if (cents === 0) return 0;
+  const quote = rates.find(rate => rate.asset.toUpperCase() === currency.toUpperCase());
+  const fresh = quote && !quote.stale && Number.isFinite(Date.parse(quote.asOf)) && now.getTime() - Date.parse(quote.asOf) <= 48 * 60 * 60 * 1000;
+  const rate = currency.toUpperCase() === "USD" ? 1 : fresh ? quote.rateUsd : undefined;
+  return rate !== undefined && Number.isFinite(rate) && rate > 0 ? cents / 100 * rate : null;
+}
+
+export function withinInvoicePaymentTolerance(outstanding: number, received: number, currency: string, rates: FxRate[] = [], now = new Date()): boolean {
+  if (outstanding <= 0 || received <= 0) return false;
+  const usd = invoicePaymentDifferenceUsd(outstanding - received, currency, rates, now);
+  return usd !== null && Math.abs(usd) <= invoicePaymentAmountTolerance + 1e-9;
+}
 const weekdayByName: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -205,7 +220,9 @@ export function invoiceAllocatedAmount(invoiceId: string, allocations: PaymentAl
 }
 
 export function invoiceOutstanding(invoice: Invoice, allocations: PaymentAllocation[]): number {
-  return Math.max(0, Number((invoice.amount - invoiceAllocatedAmount(invoice.id, allocations)).toFixed(2)));
+  const adjustments = allocations.filter(allocation => allocation.invoiceId === invoice.id)
+    .reduce((total, allocation) => total + (allocation.settlementAdjustment ?? 0), 0);
+  return Math.max(0, Number((invoice.amount - invoiceAllocatedAmount(invoice.id, allocations) - adjustments).toFixed(2)));
 }
 
 export interface InvoiceSummaryTotals {
@@ -365,12 +382,16 @@ export function invoicePaymentAiCandidates({
   invoices,
   transactions,
   allocations,
-  providers
+  providers,
+  fxRates = [],
+  now = new Date()
 }: {
   invoices: Invoice[];
   transactions: Transaction[];
   allocations: PaymentAllocation[];
   providers: Provider[];
+  fxRates?: FxRate[];
+  now?: Date;
 }): InvoicePaymentMatchCandidateGroup[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   return transactions.flatMap((transaction): InvoicePaymentMatchCandidateGroup[] => {
@@ -393,7 +414,7 @@ export function invoicePaymentAiCandidates({
         || Boolean(invoice.entity && (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)) && invoice.entity !== (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)))
         || invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
         || transaction.date < invoice.issueDate
-        || Math.abs(invoiceOutstanding(invoice, allocations) - Math.abs(transaction.amount)) > invoicePaymentAmountTolerance
+        || !withinInvoicePaymentTolerance(invoiceOutstanding(invoice, allocations), Math.abs(transaction.amount), invoice.currency, fxRates, now)
       ) {
         return false;
       }
@@ -409,6 +430,7 @@ export function reconcileAiInvoicePayments({
   transactions,
   allocations,
   providers,
+  fxRates = [],
   matches,
   minimumConfidence = 0.9,
   now = new Date()
@@ -417,6 +439,7 @@ export function reconcileAiInvoicePayments({
   transactions: Transaction[];
   allocations: PaymentAllocation[];
   providers: Provider[];
+  fxRates?: FxRate[];
   matches: AiInvoicePaymentMatch[];
   minimumConfidence?: number;
   now?: Date;
@@ -424,7 +447,7 @@ export function reconcileAiInvoicePayments({
   let nextInvoices = [...invoices];
   const nextAllocations = [...allocations];
   const candidateIds = new Map(
-    invoicePaymentAiCandidates({ invoices, transactions, allocations, providers })
+    invoicePaymentAiCandidates({ invoices, transactions, allocations, providers, fxRates, now })
       .map((group) => [group.transaction.id, new Set(group.invoices.map((invoice) => invoice.id))])
   );
   const accepted = new Map<string, AiInvoicePaymentMatch>();
@@ -463,7 +486,7 @@ export function reconcileAiInvoicePayments({
     };
   });
 
-  const payments = recordExactLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now);
+  const payments = recordLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now, fxRates);
   return {
     invoices: payments.invoices,
     transactions: nextTransactions,
@@ -478,12 +501,14 @@ export function reconcileExactInvoicePayments({
   transactions,
   allocations,
   providers,
+  fxRates = [],
   now = new Date()
 }: {
   invoices: Invoice[];
   transactions: Transaction[];
   allocations: PaymentAllocation[];
   providers: Provider[];
+  fxRates?: FxRate[];
   now?: Date;
 }): { invoices: Invoice[]; transactions: Transaction[]; allocations: PaymentAllocation[]; matched: number; exactMatched: number; toleranceMatched: number; paid: number } {
   let nextInvoices = [...invoices];
@@ -518,12 +543,12 @@ export function reconcileExactInvoicePayments({
         invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
       ) return false;
       if (transaction.date < invoice.issueDate) return false;
-      if (Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) > invoicePaymentAmountTolerance) return false;
+      if (!withinInvoicePaymentTolerance(invoiceOutstanding(invoice, nextAllocations), Math.abs(transaction.amount), invoice.currency, fxRates, now)) return false;
       const provider = invoice.providerId ? providerById.get(invoice.providerId) : undefined;
       return invoicePaymentIdentityMatched(transaction, invoice, provider, false);
     });
     const exactCandidates = eligibleInvoices.filter(
-      (invoice) => Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) <= 0.01
+      (invoice) => Math.round(Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount)) * 100) === 0
     );
     for (const invoice of eligibleInvoices) eligibleCountByInvoice.set(invoice.id, (eligibleCountByInvoice.get(invoice.id) ?? 0) + 1);
     for (const invoice of exactCandidates) exactCountByInvoice.set(invoice.id, (exactCountByInvoice.get(invoice.id) ?? 0) + 1);
@@ -536,12 +561,12 @@ export function reconcileExactInvoicePayments({
 
     const invoice = candidates[0];
     const difference = Math.abs(invoiceOutstanding(invoice, nextAllocations) - Math.abs(transaction.amount));
-    const isExact = difference <= 0.01;
+    const isExact = Math.round(difference * 100) === 0;
     if (isExact ? exactCountByInvoice.get(invoice.id) !== 1
       : (exactCountByInvoice.get(invoice.id) ?? 0) > 0 || eligibleCountByInvoice.get(invoice.id) !== 1) return transaction;
     const matchReason = isExact
       ? "Exact amount, currency, and company or invoice reference"
-      : `Amount within $${invoicePaymentAmountTolerance} fee tolerance (${difference.toFixed(2)} difference), with matching currency and company or invoice reference`;
+      : `Amount within $${invoicePaymentAmountTolerance} settlement tolerance (${difference.toFixed(2)} difference), with matching currency and company or invoice reference`;
     const confidence = isExact ? 1 : 0.98;
     const createdAt = now.toISOString();
     nextInvoices = nextInvoices.map(item => item.id === invoice.id
@@ -560,12 +585,12 @@ export function reconcileExactInvoicePayments({
     };
   });
 
-  const payments = recordExactLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now);
+  const payments = recordLinkedInvoicePayments(nextInvoices, nextTransactions, nextAllocations, now, fxRates);
   return { invoices: payments.invoices, transactions: nextTransactions, allocations: payments.allocations, matched, exactMatched, toleranceMatched, paid: payments.paid };
 }
 
-function recordExactLinkedInvoicePayments(
-  invoices: Invoice[], transactions: Transaction[], allocations: PaymentAllocation[], now: Date
+function recordLinkedInvoicePayments(
+  invoices: Invoice[], transactions: Transaction[], allocations: PaymentAllocation[], now: Date, fxRates: FxRate[]
 ): { invoices: Invoice[]; allocations: PaymentAllocation[]; paid: number } {
   const nextAllocations = [...allocations];
   const transactionById = new Map(transactions.map(transaction => [transaction.id, transaction]));
@@ -586,6 +611,7 @@ function recordExactLinkedInvoicePayments(
     const entity = transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName);
     if (invoice.entity && entity && invoice.entity !== entity) return invoice;
     const trustedLink = transaction.invoiceMatchSource === "exact"
+      || transaction.invoiceMatchSource === "tolerance"
       || (transaction.invoiceMatchSource === "ai" && (transaction.invoiceMatchConfidence ?? 0) >= 0.9)
       || (transaction.invoiceMatchSource === "manual" && transaction.matchedInvoiceId === invoice.id);
     if (!trustedLink) return invoice;
@@ -593,15 +619,18 @@ function recordExactLinkedInvoicePayments(
     if (transactionAllocations.some(allocation => allocation.invoiceId !== invoice.id)) return invoice;
     const available = Math.abs(transaction.amount) - transactionAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
     const outstanding = invoiceOutstanding(invoice, nextAllocations);
-    // Compare currency cents: never write off a fee or record more than the bank actually received.
-    if (outstanding <= 0 || Math.round(outstanding * 100) !== Math.round(available * 100)) return invoice;
+    if (!withinInvoicePaymentTolerance(outstanding, available, invoice.currency, fxRates, now)) return invoice;
+    const adjustment = roundMoney(outstanding - available);
+    const adjustmentUsd = invoicePaymentDifferenceUsd(adjustment, invoice.currency, fxRates, now)!;
     const id = `payment-auto-${invoice.id}-${transaction.id}`;
     if (nextAllocations.some(allocation => allocation.id === id)) return invoice;
     nextAllocations.push({
-      id, invoiceId: invoice.id, transactionId: transaction.id, amount: roundMoney(outstanding),
+      id, invoiceId: invoice.id, transactionId: transaction.id, amount: roundMoney(available),
+      ...(adjustment !== 0 ? { settlementAdjustment: adjustment, settlementAdjustmentUsd: roundMoney(adjustmentUsd) } : {}),
       currency: invoice.currency, source: transaction.source, accountName: transaction.accountName,
       reference: transaction.id, mode: "automatic", confidence: transaction.invoiceMatchConfidence ?? 1,
-      matchReason: transaction.invoiceMatchSource === "ai" ? `AI: ${transaction.invoiceMatchReason ?? "Confirmed invoice match"}; exact amount and currency`
+      matchReason: adjustment !== 0 ? `Settlement tolerance (${Math.abs(adjustment).toFixed(2)} difference); ${Math.abs(adjustmentUsd).toFixed(2)} USD accepted difference`
+        : transaction.invoiceMatchSource === "ai" ? `AI: ${transaction.invoiceMatchReason ?? "Confirmed invoice match"}; exact amount and currency`
         : "Exact amount and currency with a confirmed invoice match",
       paidAt: transaction.date, createdAt
     });
@@ -789,6 +818,7 @@ export function paymentAllocationMatchLabel(allocation: PaymentAllocation): stri
 }
 
 export function paymentAllocationRecordedDifference(allocation: PaymentAllocation): number | null {
+  if (allocation.settlementAdjustment !== undefined) return allocation.settlementAdjustment;
   if (paymentAllocationMatchLabel(allocation) !== "Tolerance match") return null;
   const value = allocation.matchReason?.match(/\((\d+(?:\.\d+)?) difference\)/)?.[1];
   return value === undefined ? null : Number(value);

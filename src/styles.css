@@ -12511,6 +12511,25 @@ body {
   gap: 8px;
 }
 
+.invoice-heading {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.income-sync-control {
+  max-width: 240px;
+  min-width: 0;
+}
+
+.income-sync-control > .row-actions {
+  flex-wrap: wrap;
+}
+
+.income-sync-control > small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .invoice-heading h2 {
   margin: 0;
 }

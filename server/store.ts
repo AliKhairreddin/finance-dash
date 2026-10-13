@@ -560,6 +560,7 @@ function reconcileStoredPayments(now = new Date()): number {
     invoices: applyPaymentState(invoices, paymentAllocations),
     transactions: getKnownTransactions(),
     allocations: paymentAllocations,
+    fxRates,
     providers,
     now
   });
@@ -724,12 +725,14 @@ export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymen
     invoices: applyPaymentState(invoices, paymentAllocations),
     transactions: knownTransactions,
     allocations: paymentAllocations,
+    fxRates,
     providers
   });
   const eligibleForAi = invoicePaymentAiCandidates({
     invoices: exact.invoices,
     transactions: exact.transactions,
     allocations: exact.allocations,
+    fxRates,
     providers
   });
   const activeAiSettings = runtimeAiSettings();
@@ -740,13 +743,15 @@ export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymen
         exact.invoices,
         exact.allocations,
         providers,
-        process.env.PUBLIC_APP_URL
+        process.env.PUBLIC_APP_URL,
+        fxRates
       )
     : [];
   const ai = reconcileAiInvoicePayments({
     invoices: exact.invoices,
     transactions: exact.transactions,
     allocations: exact.allocations,
+    fxRates,
     providers,
     matches: aiMatches
   });
@@ -2639,19 +2644,66 @@ export async function syncRevenue(payload: SyncRevenuePayload = {}): Promise<Rev
   return { runs: nextRuns };
 }
 
+let meritSyncPromise: Promise<void> | undefined;
+let meritSyncLastAttempt = 0;
+let meritSyncLastSuccess: string | undefined;
+export function getMeritSyncStatus() {
+  return { lastSuccessAt: meritSyncLastSuccess, error: meritSyncIssue, running: Boolean(meritSyncPromise), retryAt: meritSyncLastAttempt + 300_000 };
+}
+export async function syncMeritActivity(): Promise<void> {
+  if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) throw new Error("Merit is not configured");
+  if (meritSyncPromise) return meritSyncPromise;
+  if (Date.now() < meritSyncLastAttempt + 300_000) return;
+  meritSyncLastAttempt = Date.now();
+  meritSyncPromise = (async () => {
+    const results = await Promise.allSettled([fetchMeritInvoices(invoices), fetchMeritTaxes(), fetchMeritCustomers(), fetchMeritVendors()]);
+    const failed = results.find(result => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    const [merit, liveMeritTaxes, meritCustomers, meritVendors] = results;
+    const meritConfigured = Boolean(process.env.MERIT_API_ID && process.env.MERIT_API_KEY);
+    if (meritConfigured && meritCustomers.status === "fulfilled") {
+      providers = reconcileMeritProviders(providers, meritCustomers.value, "customer");
+    }
+    if (meritConfigured && meritVendors.status === "fulfilled") {
+      providers = reconcileMeritProviders(providers, meritVendors.value, "vendor");
+    }
+    providers = mergeProviderDirectory(providers);
+    if (merit.status === "fulfilled") {
+      mergeMeritInvoiceState(
+        linkMeritInvoiceProviders(merit.value, providers),
+        meritConfigured
+      );
+      const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
+      paymentAllocations = paymentAllocations.filter((allocation) => invoiceIds.has(allocation.invoiceId));
+      const clearDeletedInvoiceMatch = (transaction: Transaction): Transaction => {
+        if (!transaction.matchedInvoiceId || invoiceIds.has(transaction.matchedInvoiceId)) return transaction;
+        const { matchedInvoiceId: _matchedInvoiceId, ...withoutDeletedInvoice } = transaction;
+        return withoutDeletedInvoice;
+      };
+      wiseStatementTransactions = wiseStatementTransactions.map(clearDeletedInvoiceMatch);
+      transactions = transactions.map(clearDeletedInvoiceMatch);
+      invoices = assignMeritStyleDraftNumbers(invoices, merit.value);
+    }
+    if (liveMeritTaxes.status === "fulfilled") {
+      meritTaxes = liveMeritTaxes.value;
+    }
+    meritSyncIssue = undefined;
+    reconcileStoredPayments();
+    await persist();
+    meritSyncLastSuccess = new Date().toISOString();
+  })().catch(error => { meritSyncIssue = meritConnectionIssue(error); throw error; }).finally(() => { meritSyncPromise = undefined; });
+  return meritSyncPromise;
+}
+
 export async function syncExternalActivity(
   slashDateRange?: SlashTransactionDateRange
 ): Promise<DashboardSnapshot> {
-  const [wise, revolut, slash, amex, mercury, merit, liveMeritTaxes, meritCustomers, meritVendors] = await Promise.allSettled([
+  const [wise, revolut, slash, amex, mercury] = await Promise.allSettled([
     fetchWiseActivity(),
     fetchRevolutActivity(),
     fetchSlashActivity(slashDateRange),
     fetchAmexActivity(),
-    fetchMercuryActivity(slashDateRange),
-    fetchMeritInvoices(invoices),
-    fetchMeritTaxes(),
-    fetchMeritCustomers(),
-    fetchMeritVendors()
+    fetchMercuryActivity(slashDateRange)
   ]);
   const liveTransactions: Transaction[] = [];
   const bankIssue = (label: string, error: unknown): string => {
@@ -2696,43 +2748,6 @@ export async function syncExternalActivity(
     accounts = [...accounts.filter(account => account.source !== "mercury"), ...mercury.value.accounts];
     liveTransactions.push(...mercury.value.transactions);
   }
-  const meritConfigured = Boolean(process.env.MERIT_API_ID && process.env.MERIT_API_KEY);
-  if (meritConfigured && meritCustomers.status === "fulfilled") {
-    providers = reconcileMeritProviders(providers, meritCustomers.value, "customer");
-  }
-  if (meritConfigured && meritVendors.status === "fulfilled") {
-    providers = reconcileMeritProviders(providers, meritVendors.value, "vendor");
-  }
-  providers = mergeProviderDirectory(providers);
-  if (merit.status === "fulfilled") {
-    mergeMeritInvoiceState(
-      linkMeritInvoiceProviders(merit.value, providers),
-      meritConfigured
-    );
-    const invoiceIds = new Set(invoices.map((invoice) => invoice.id));
-    paymentAllocations = paymentAllocations.filter((allocation) => invoiceIds.has(allocation.invoiceId));
-    const clearDeletedInvoiceMatch = (transaction: Transaction): Transaction => {
-      if (!transaction.matchedInvoiceId || invoiceIds.has(transaction.matchedInvoiceId)) return transaction;
-      const { matchedInvoiceId: _matchedInvoiceId, ...withoutDeletedInvoice } = transaction;
-      return withoutDeletedInvoice;
-    };
-    wiseStatementTransactions = wiseStatementTransactions.map(clearDeletedInvoiceMatch);
-    transactions = transactions.map(clearDeletedInvoiceMatch);
-    invoices = assignMeritStyleDraftNumbers(invoices, merit.value);
-  }
-  if (liveMeritTaxes.status === "fulfilled") {
-    meritTaxes = liveMeritTaxes.value;
-  }
-  meritSyncIssue =
-    merit.status === "rejected"
-      ? meritConnectionIssue(merit.reason)
-      : liveMeritTaxes.status === "rejected"
-        ? meritConnectionIssue(liveMeritTaxes.reason)
-        : meritCustomers.status === "rejected"
-          ? meritConnectionIssue(meritCustomers.reason)
-          : meritVendors.status === "rejected"
-            ? meritConnectionIssue(meritVendors.reason)
-            : undefined;
 
   if (liveTransactions.length > 0) {
     const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
@@ -2756,6 +2771,7 @@ export async function syncExternalActivity(
     ];
   }
 
+  if (process.env.MERIT_API_ID && process.env.MERIT_API_KEY) await syncMeritActivity();
   reconcileStoredPayments();
   await updateCurrentFxRates();
   lastSync = new Date().toISOString();

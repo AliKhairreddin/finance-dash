@@ -1,38 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
 
-type RecordRow = Record<string, any>;
-function database(seed: Record<string, RecordRow[]>) {
-  const tables = structuredClone(seed);
-  let serial = 0;
-  const find = (id: string) => Object.values(tables).flat().find((row) => row._id === id);
-  return { tables, db: {
-    query(table: string) {
-      let rows = tables[table] ?? [];
-      const index = {
-        eq(key: string, value: unknown) { rows = rows.filter((r) => r[key] === value); return index; },
-        lte(key: string, value: any) { rows = rows.filter((r) => r[key] <= value); return index; }
-      };
-      const query = {
-        withIndex(_name: string, filter?: (i: typeof index) => unknown) { filter?.(index); return query; },
-        order(_direction: string) { return query; },
-        async take(count: number) { return structuredClone(rows.slice(0, count)); },
-        async unique() { assert(rows.length <= 1); return structuredClone(rows[0] ?? null); },
-        async first() { return structuredClone(rows[0] ?? null); }
-      };
-      return query;
-    },
-    async get(id: string) { return structuredClone(find(id) ?? null); },
-    async insert(table: string, row: RecordRow) { const _id = `insert-${++serial}`; (tables[table] ??= []).push({ ...row, _id, _creationTime: 0 }); return _id; },
-    async patch(id: string, row: RecordRow) { Object.assign(find(id)!, row); },
-    async replace(id: string, row: RecordRow) { const current = find(id)!; for (const key of Object.keys(current)) if (!key.startsWith("_")) delete current[key]; Object.assign(current, row); },
-    async delete(id: string) { for (const table of Object.keys(tables)) tables[table] = tables[table].filter((row) => row._id !== id); }
-  } };
-}
-function call(fn: object, ctx: unknown, args: unknown): Promise<any> {
-  return Reflect.get(fn, "_handler")(ctx, args);
-}
+import { database, call } from "./convexTestDb";
 const date = "2026-09-14", serviceToken = "funding-test", updatedAt = "2026-09-24T00:00:00Z";
 function seed() {
   return {
@@ -140,4 +110,61 @@ test("spend assignment bootstrap returns only provider identities and assignment
     if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN;
     else process.env.CONVEX_SERVICE_TOKEN = previous;
   }
+});
+
+
+test("provider creation adds a supplier atomically and commissions feed cash-flow balance calculations", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    ctx.tables.dashboardState[0].updatedAt = updatedAt;
+    const before = structuredClone(ctx.tables.bankTransactions);
+    const id = await call(createProvider, ctx, { serviceToken, companyProviderId: "", newSupplierName: "New agency", defaultFeePercent: 2, openingBalance: 0, openingBalanceDate: "2026-01-01", createdAt: updatedAt });
+    const company = ctx.tables.dashboardState[0].providers.find((p: any) => p.name === "New agency");
+    assert.equal(company.type, "supplier");
+    assert.notEqual(ctx.tables.dashboardState[0].updatedAt, updatedAt);
+    assert.deepEqual(ctx.tables.bankTransactions, before);
+    const directory = await call(listSupplierCompanies, ctx, { serviceToken });
+    assert.equal(directory.some((p: any) => p.id === company.id), true);
+    assert.equal(directory.every((p: any) => !p.bankAccount && !p.email && !p.meritDetails), true);
+    ctx.tables.bankTransactions.push({ ...before[0], _id: "new-payment", id: "new-payment", matchedProviderId: company.id, amount: 100000 });
+    const totals = ctx.tables.mediaFundingProviderTotals.find(p => p.providerId === id)!;
+    totals.spend = 20000; totals.classifiedSpend = { provider_funded: 20000, own_card: 0, meta_credit_line: 0 };
+    let provider = (await call(listOverview, ctx, { serviceToken })).providers.find((p: any) => p.id === id);
+    assert.equal(provider.fees, 2000);
+    assert.equal(provider.netFunding, 98000);
+    assert.equal(provider.estimatedBalance, 78000);
+    // Commission edits reprice the included funding without modifying the bank ledger.
+    await call(updateProvider, ctx, { serviceToken, providerId: id, companyProviderId: company.id, defaultFeePercent: 3, openingBalance: 0, openingBalanceDate: "2026-01-01", updatedAt });
+    provider = (await call(listOverview, ctx, { serviceToken })).providers.find((p: any) => p.id === id);
+    assert.equal(provider.netFunding, 97000);
+    assert.equal(ctx.tables.bankTransactions[1].amount, 100000);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+test("unconverted provider funding blocks a misleading cash-flow balance", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed()); ctx.tables.bankTransactions[0].currency = "EUR";
+    const overview = await call(listOverview, ctx, { serviceToken });
+    assert.equal(overview.providers[0].excludedFundingCount, 1);
+    assert.equal(overview.providers[0].estimatedBalance, null);
+    assert.equal(overview.summary.estimatedBalance, null);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+test("Google, NewsBreak and TikTok account assignments deduct provider-funded spend", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    for (const platform of ["Google", "NewsBreak", "TikTok"]) {
+      const ctx = database(seed());
+      ctx.tables.mediaFundingAssignments = [{ ...ctx.tables.mediaFundingAssignments[0], platform,
+        targetKey: `ad_account:${platform}:1`, businessManagerKey: `${platform}:bm` }];
+      ctx.tables.mediaSpendDaily[0] = { ...ctx.tables.mediaSpendDaily[0], accountId: "1", platform };
+      await call(setPaymentMethods, ctx, { serviceToken, method: "provider_funded", providerId: "meta", targets: [{ platform, accountId: "1" }], effectiveFrom: date, updatedAt });
+      await call(rebuildDate, ctx, { serviceToken, date, updatedAt });
+      const provider = (await call(listOverview, ctx, { serviceToken })).providers[0];
+      assert.equal(provider.classifiedSpend.provider_funded, 25, platform);
+      assert.equal(provider.estimatedBalance, 75, platform);
+    }
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
 });

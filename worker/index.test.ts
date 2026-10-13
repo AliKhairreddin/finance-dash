@@ -1121,10 +1121,10 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
     const session = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "hetarth"), env);
     assert.deepEqual(await session.json(), { username: "Hetarth", role: "media-spend-reviewer" });
     for (const [method, path] of [
-      ["GET", "/api/dashboard"], ["GET", "/api/media-funding"], ["GET", "/api/transactions"],
+      ["GET", "/api/dashboard"], ["GET", "/api/transactions"],
       ["GET", "/api/analytics"], ["GET", "/api/documents"], ["GET", "/api/management-report"],
-      ["POST", "/api/providers"], ["POST", "/api/media-funding/providers"], ["POST", "/api/media-funding/entries"],
-      ["POST", "/api/sync"], ["DELETE", "/api/media-funding/assignments/a"]
+      ["POST", "/api/providers"], ["POST", "/api/media-funding/entries"],
+      ["POST", "/api/sync"]
     ]) {
       const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method }, "hetarth"), env);
       assert.equal(response.status, 403, `${method} ${path}`);
@@ -1134,7 +1134,11 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
     assert.equal(assignments.status, 200);
     assert.deepEqual(await assignments.json(), { providers: [{ id: "provider-1", name: "Provider One" }], assignments: [], paymentMethods: [] });
     assert.deepEqual(paths, ["mediaFunding:listSpendAssignments"]);
-    for (const path of ["/api/media-funding/assignments", "/api/media-funding/payment-methods"]) {
+    for (const path of ["/api/media-funding", "/api/media-funding/companies"]) {
+      const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "hetarth"), env);
+      assert.equal(response.status, 200);
+    }
+    for (const path of ["/api/media-funding/providers", "/api/media-funding/assignments", "/api/media-funding/payment-methods"]) {
       const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST", body: "null" }, "hetarth"), env);
       assert.equal(response.status, 400, `${path} reaches payload validation`);
     }

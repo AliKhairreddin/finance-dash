@@ -2163,7 +2163,9 @@ function App() {
           </div>
         </header>
         <div className="transaction-reviewer-content">
-          <MediaSpendView apiBase={apiBase} />
+          {activeTab === "media-funding"
+            ? <MediaFundingView apiBase={apiBase} restricted onOpenMediaSpend={() => setActiveTab("media-spend")} />
+            : <MediaSpendView apiBase={apiBase} onOpenProviderBalances={() => setActiveTab("media-funding")} />}
         </div>
       </main>
     );
@@ -2482,6 +2484,7 @@ function App() {
           onDeleteDrafts={deleteInvoiceDrafts}
           onUpdateDraft={updateInvoiceDraft}
           onSendInvoices={sendInvoices}
+          onSyncMerit={loadDashboard}
           onBulkRecordPayments={recordBulkInvoicePayments}
           onRecordPayment={recordInvoicePayment}
           onNotice={setNotice}

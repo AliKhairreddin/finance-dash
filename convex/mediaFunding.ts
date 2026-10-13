@@ -464,7 +464,7 @@ export const listOverview = query({
         bankFundingPaused: provider.bankFundingPaused === true,
         classifiedSpend,
         needsReviewSpend,
-        estimatedBalance: provider.bankFundingPaused || Math.abs(needsReviewSpend) > 0.005 ? null : calculateMediaFundingBalance({
+        estimatedBalance: provider.bankFundingPaused || funding.excluded > 0 || Math.abs(needsReviewSpend) > 0.005 ? null : calculateMediaFundingBalance({
           openingBalance: provider.openingBalance,
           netFunding,
           adjustments: totals.adjustments,
@@ -523,10 +523,21 @@ export const listOverview = query({
   }
 });
 
+export const listSupplierCompanies = query({
+  args: { serviceToken: v.string() },
+  returns: v.array(v.object({ id: v.string(), name: v.string(), type: v.literal("supplier"), tags: v.array(v.string()), aliases: v.array(v.string()) })),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    return (await companyDirectory(ctx)).filter(company => company.type === "supplier")
+      .map(company => ({ id: company.id, name: company.name, type: "supplier" as const, tags: [], aliases: [] }));
+  }
+});
+
 export const createProvider = mutation({
   args: {
     serviceToken: v.string(),
     companyProviderId: v.string(),
+    newSupplierName: v.optional(v.string()),
     defaultFeePercent: v.number(),
     openingBalance: v.number(),
     openingBalanceDate: v.string(),
@@ -535,7 +546,20 @@ export const createProvider = mutation({
   returns: v.id("mediaFundingProviders"),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
-    const company = await requireCompanyProvider(ctx, args.companyProviderId);
+    let company;
+    if (args.newSupplierName !== undefined) {
+      if (args.companyProviderId) throw fundingError("INVALID_MEDIA_FUNDING", "Choose an existing supplier or enter a new name");
+      const name = cleanLabel(args.newSupplierName);
+      if (!name) throw fundingError("INVALID_MEDIA_FUNDING", "Supplier name is required");
+      const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
+      if (!state) throw fundingError("MEDIA_FUNDING_NOT_FOUND", "Dashboard is not initialized");
+      if (state.providers.some(item => item.name.trim().toLowerCase() === name.toLowerCase())) {
+        throw fundingError("MEDIA_FUNDING_CONFLICT", "A company with this name already exists; select that supplier");
+      }
+      company = { id: `supplier-${crypto.randomUUID()}`, name, type: "supplier" as const, tags: [], aliases: [], source: "manual" as const, createdAt: args.createdAt };
+      await ctx.db.patch(state._id, { providers: [...state.providers, company],
+        updatedAt: new Date(Math.max(Date.now(), Date.parse(state.updatedAt) + 1)).toISOString() });
+    } else company = await requireCompanyProvider(ctx, args.companyProviderId);
     requireFeePercent(args.defaultFeePercent);
     requireNonNegativeMoney(args.openingBalance, "Opening balance");
     requireIsoDate(args.openingBalanceDate, "Opening balance date");

@@ -1,3 +1,4 @@
+import { MeritSyncButton, QuinStreetMonthlyReport } from "./IncomeSyncControls";
 import { PaymentTransactionPicker, paymentBankLabel } from "./PaymentTransactionPicker";
 import { DocumentCreateMenu } from "@/features/expenses/DocumentsView";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
@@ -432,6 +433,7 @@ export function RevenueView({
 
   return (
     <div className="income-page-stack">
+      <QuinStreetMonthlyReport />
       <section className="income-schedule-strip" aria-label="Revenue automation schedule">
         <div className="schedule-icon"><CalendarClock size={20} /></div>
         <div className="schedule-primary">
@@ -660,7 +662,8 @@ export function InvoicesView({
   onSendInvoices,
   onBulkRecordPayments,
   onRecordPayment,
-  onNotice
+  onNotice,
+  onSyncMerit
 }: {
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
@@ -672,6 +675,7 @@ export function InvoicesView({
   onBulkRecordPayments: (payload: BulkRecordInvoicePaymentsPayload) => Promise<void>;
   onRecordPayment: (invoiceId: string, payload: RecordInvoicePaymentPayload) => Promise<void>;
   onNotice: (message: string) => void;
+  onSyncMerit: () => Promise<void>;
 }) {
   const [tab, setTab] = useUrlState<InvoiceTab>("invoiceTab", "pending", {
     allowedValues: ["all", "pending", "paid"],
@@ -1061,6 +1065,7 @@ export function InvoicesView({
             <InfoPopover label="invoice payments">
               Select unpaid drafts or open invoices to record their outstanding balances as paid in this dashboard. Merit payment status stays separate and unchanged.
             </InfoPopover>
+            <MeritSyncButton onSynced={onSyncMerit} />
           </div>
           <NativeSelect className="invoice-view-select" aria-label="Invoice view" value={tab} onValueChange={(value) => selectInvoiceTab(value as InvoiceTab)}>
             <NativeSelectOption value="all">All {filteredRows.length}</NativeSelectOption>
@@ -1470,7 +1475,7 @@ export function InvoiceEditorDialog({
   const lastWeek = bankPeriodPresetRange("last-week", today);
   const defaultStart = invoice || initialDraft ? "" : lastWeek.fromDate;
   const [periodStart, setPeriodStart] = useState(invoice?.periodStart ?? initialDraft?.periodStart ?? defaultStart);
-  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? initialDraft?.periodEnd ?? (defaultStart ? addDays(defaultStart, 7) : ""));
+  const [periodEnd, setPeriodEnd] = useState(invoice?.periodEnd ?? initialDraft?.periodEnd ?? (defaultStart ? lastWeek.toDate : ""));
   const initialRule = initialProvider ? dashboard.revenuePartners.find((item) => item.providerId === initialProvider.id) : undefined;
   const [taxId, setTaxId] = useState(invoice?.taxId ?? initialDraft?.taxId ?? initialRule?.defaultMeritTaxId ?? initialProvider?.defaultMeritTaxId ?? "");
   const [description, setDescription] = useState(invoice?.description ?? initialDraft?.description ?? "");
@@ -1585,7 +1590,7 @@ export function InvoiceEditorDialog({
             <div className="invoice-field"><label htmlFor="invoice-due-date">Due date</label><Input id="invoice-due-date" type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></div>
           </div>
           <div className="invoice-form-grid">
-            <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start <Button className="text-link-button" type="button" onClick={() => { setPeriodStart(lastWeek.fromDate); setPeriodEnd(addDays(lastWeek.fromDate, 7)); }}>Last week</Button></label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); setPeriodEnd(event.target.value ? addDays(event.target.value, 7) : ""); }} /></div>
+            <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start <Button className="text-link-button" type="button" onClick={() => { setPeriodStart(lastWeek.fromDate); setPeriodEnd(lastWeek.toDate); }}>Last week</Button></label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); setPeriodEnd(event.target.value ? addDays(event.target.value, 6) : ""); }} /></div>
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
           </div>
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
@@ -2011,7 +2016,7 @@ export function MarkPaidDialog({ paymentAllocations, invoice, onClose, onSubmit 
           {selectedTransaction && <Button type="button" className="icon-text-button" onClick={() => { paymentEditedRef.current = true; selectTransaction("", candidateTransactions); }}>Clear selection</Button>}
           {candidatesError && !pickerOpen && <div className="inline-error">{candidatesError} <Button type="button" className="icon-text-button" onClick={() => setCandidateLoadAttempt(attempt => attempt + 1)}>Retry</Button></div>}
         </div>
-        {selectedSuggestion && <div className="row-actions payment-match-status"><span className="status-pill good">{selectedSuggestion.kind === "linked" ? "Matched to invoice" : selectedSuggestion.kind === "exact" ? "Exact match found" : "Review amount difference"}</span><InfoPopover label="Payment match details"><p>{selectedSuggestion.reason}</p><p>Confirming this payment adds it to the collection forecast history. Full exact matches are recorded as paid automatically. Amount differences need review.</p></InfoPopover></div>}
+        {selectedSuggestion && <div className="row-actions payment-match-status"><span className="status-pill good">{selectedSuggestion.kind === "linked" ? "Matched to invoice" : selectedSuggestion.kind === "exact" ? "Exact match found" : "Review amount difference"}</span><InfoPopover label="Payment match details"><p>{selectedSuggestion.reason}</p><p>Confirming this payment adds it to the collection forecast history. Confirmed bank payments within $100 of the remaining balance are recorded as paid automatically. Actual cash and the accepted difference are stored separately.</p></InfoPopover></div>}
         {!candidatesLoading && suggestions && !suggestions.searchComplete && <div className="inline-error">The automatic search could not cover all bank history. Review the match or load older transactions.</div>}
         {!candidatesLoading && suggestions && !suggestions.recommendedTransactionId && suggestions.suggestions.length > 0 && <div className="field-help" role="status">Review the possible matches before recording payment.</div>}
         <div className="form-grid"><label>Amount<Input type="number" min="0.01" max={maximumPayment || undefined} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Payment date<Input type="date" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} /></label></div>

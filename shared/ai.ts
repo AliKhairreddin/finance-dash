@@ -1,5 +1,6 @@
 import type {
   AiInvoicePaymentMatch,
+  FxRate,
   AiPromptPayload,
   AiPromptResult,
   AiSettings,
@@ -386,9 +387,10 @@ export async function runOpenRouterInvoicePaymentMatching(
   invoices: Invoice[],
   allocations: PaymentAllocation[],
   providers: Provider[],
-  referer?: string
+  referer?: string,
+  fxRates: FxRate[] = []
 ): Promise<AiInvoicePaymentMatch[]> {
-  const candidateGroups = invoicePaymentAiCandidates({ invoices, transactions, allocations, providers });
+  const candidateGroups = invoicePaymentAiCandidates({ invoices, transactions, allocations, providers, fxRates });
   if (candidateGroups.length === 0) return [];
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const allMatches: AiInvoicePaymentMatch[] = [];

@@ -422,6 +422,9 @@ export interface Invoice {
 }
 
 export interface PaymentAllocation {
+  /** Signed invoice settlement difference; never counted as cash received. */
+  settlementAdjustment?: number;
+  settlementAdjustmentUsd?: number;
   id: string;
   invoiceId: string;
   transactionId?: string;

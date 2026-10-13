@@ -1,3 +1,4 @@
+import { requireSyncLease } from "./integrationSync";
 import { evaluateCashFlowAmount } from "../shared/cashFlow";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -429,6 +430,8 @@ const revenueAccrual = v.object({
   updatedAt: v.string()
 });
 const paymentAllocation = v.object({
+  settlementAdjustment: v.optional(v.number()),
+  settlementAdjustmentUsd: v.optional(v.number()),
   id: v.string(),
   invoiceId: v.string(),
   transactionId: v.optional(v.string()),
@@ -1287,6 +1290,7 @@ export const deleteTransactionCategory = mutation({
 
 export const saveState = mutation({
   args: {
+    syncLease: v.optional(v.object({ key: v.string(), leaseId: v.string() })),
     providers: v.array(provider),
     invoices: v.array(invoice),
     expenses: v.array(expenseRecord),
@@ -1316,6 +1320,7 @@ export const saveState = mutation({
   returns: v.object({ updatedAt: v.string() }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
+    if (args.syncLease) await requireSyncLease(ctx, args.syncLease.key, args.syncLease.leaseId);
     const existing = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
     if ((existing?.updatedAt ?? null) !== args.expectedUpdatedAt) throw new ConvexError({ code: "STATE_CONFLICT" });
     if (args.transactionTeamAssignments !== undefined || args.wiseStatementTransactions !== undefined) {

@@ -123,17 +123,19 @@ export function FundingProviderBadge({ provider }: { provider: Pick<MediaFunding
 
 export function MediaFundingView({
   apiBase,
-  companies,
+  companies = [],
+  restricted = false,
   onOpenBankFunding,
-  onOpenCompanies,
   onOpenMediaSpend
 }: {
   apiBase: string;
-  companies: Provider[];
-  onOpenBankFunding: (companyName?: string, fromDate?: string) => void;
-  onOpenCompanies: () => void;
+  companies?: Provider[];
+  restricted?: boolean;
+  onOpenBankFunding?: (companyName?: string, fromDate?: string) => void;
+  onOpenCompanies?: () => void;
   onOpenMediaSpend: () => void;
 }) {
+  const [supplierCompanies, setSupplierCompanies] = useState<Provider[]>(companies);
   const [data, setData] = useState<MediaFundingApiResponse | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useUrlState("fundingProvider", "", { isValid: (value) => value.length <= 200 });
   const [sortKey, setSortKey] = useUrlState<ProviderSortKey>("fundingSort", "balance", { allowedValues: providerSortKeys });
@@ -151,6 +153,9 @@ export function MediaFundingView({
     const response = await fetch(`${apiBase}/media-funding`, { signal });
     if (!response.ok) throw new Error(await apiErrorMessage(response, "Provider balances could not be loaded"));
     const next = await response.json() as MediaFundingApiResponse;
+    const companyResponse = await fetch(`${apiBase}/media-funding/companies`, { signal });
+    if (!companyResponse.ok) throw new Error(await apiErrorMessage(companyResponse, "Supplier companies could not be loaded"));
+    setSupplierCompanies(await companyResponse.json() as Provider[]);
     setData(next);
     if (selectedProviderId && !next.providers.some((provider) => provider.id === selectedProviderId)) setSelectedProviderId("");
   }
@@ -269,7 +274,7 @@ export function MediaFundingView({
         <div className="media-funding-panel-header">
           <div><strong>Funding providers</strong><span>{data?.coveredThrough ? `LemonMax spend through ${dateLabel(data.coveredThrough)}` : "Awaiting LemonMax spend coverage"}</span></div>
           <div className="media-funding-detail-actions">
-            <Button className="secondary-button" onClick={() => onOpenBankFunding()} type="button"><ReceiptText size={15} /> Review bank funding</Button>
+            {onOpenBankFunding && <Button className="secondary-button" onClick={() => onOpenBankFunding()} type="button"><ReceiptText size={15} /> Review bank funding</Button>}
             <Button className="secondary-button" onClick={onOpenMediaSpend} type="button"><Landmark size={15} /> Assign BMs and accounts</Button>
           </div>
         </div>
@@ -312,8 +317,8 @@ export function MediaFundingView({
             <div className="media-funding-detail-actions">
               <Button aria-label={`Delete ${selectedProvider.name}`} className="icon-button danger" onClick={() => void removeProvider(selectedProvider)} type="button"><Trash2 size={14} /></Button>
               <Button className="secondary-button" onClick={() => setProviderDialog(selectedProvider)} type="button"><Pencil size={14} /> Edit</Button>
-              <Button className="secondary-button" onClick={() => setAdjustmentDialogOpen(true)} type="button"><Plus size={14} /> Adjustment</Button>
-              <Button className="primary-button" onClick={() => onOpenBankFunding(selectedProvider.name, shiftFinanceOperatingDate(selectedProvider.openingBalanceDate, 1))} type="button"><ReceiptText size={14} /> Review bank funding</Button>
+              {!restricted && <Button className="secondary-button" onClick={() => setAdjustmentDialogOpen(true)} type="button"><Plus size={14} /> Adjustment</Button>}
+              {onOpenBankFunding && <Button className="primary-button" onClick={() => onOpenBankFunding(selectedProvider.name, shiftFinanceOperatingDate(selectedProvider.openingBalanceDate, 1))} type="button"><ReceiptText size={14} /> Review bank funding</Button>}
             </div>
           </div>
           {selectedProvider.bankFundingPaused && (
@@ -371,7 +376,7 @@ export function MediaFundingView({
                       <td className="amount">—</td>
                       <td className={`amount ${activity.item.netAmount < 0 ? "negative" : ""}`}>{money(activity.item.netAmount, selectedProvider.currency)}</td>
                       <td>{activity.item.note ?? "—"}</td>
-                      <td><Button aria-label="Delete balance adjustment" className="icon-button danger" onClick={() => void removeEntry(activity.item)} type="button"><Trash2 size={14} /></Button></td>
+                      <td>{!restricted && <Button aria-label="Delete balance adjustment" className="icon-button danger" onClick={() => void removeEntry(activity.item)} type="button"><Trash2 size={14} /></Button>}</td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -412,12 +417,11 @@ export function MediaFundingView({
       {providerDialog && (
         <FundingProviderDialog
           apiBase={apiBase}
-          companies={companies}
+          companies={supplierCompanies}
           configuredCompanyIds={(data?.providers ?? []).map((item) => item.companyProviderId)}
           coveredThrough={data?.coveredThrough}
           provider={providerDialog === "new" ? undefined : providerDialog}
           onClose={() => setProviderDialog(null)}
-          onOpenCompanies={onOpenCompanies}
           onSaved={async (providerId) => {
             setProviderDialog(null);
             if (providerId) setSelectedProviderId(providerId);
@@ -447,7 +451,6 @@ function FundingProviderDialog({
   coveredThrough,
   provider,
   onClose,
-  onOpenCompanies,
   onSaved
 }: {
   apiBase: string;
@@ -456,13 +459,13 @@ function FundingProviderDialog({
   coveredThrough?: string;
   provider?: MediaFundingProvider;
   onClose: () => void;
-  onOpenCompanies: () => void;
   onSaved: (providerId?: string) => Promise<void>;
 }) {
   const supplierCompanies = useMemo(() => companies
     .filter((company) => company.type === "supplier" && (company.id === provider?.companyProviderId || !configuredCompanyIds.includes(company.id)))
     .sort((left, right) => left.name.localeCompare(right.name)), [companies, configuredCompanyIds, provider?.companyProviderId]);
   const [companyProviderId, setCompanyProviderId] = useState(provider?.companyProviderId ?? "");
+  const [newSupplierName, setNewSupplierName] = useState("");
   const [feePercent, setFeePercent] = useState(provider ? String(provider.defaultFeePercent) : "0");
   const [openingBalance, setOpeningBalance] = useState(provider ? String(provider.openingBalance) : "0");
   const [openingBalanceDate, setOpeningBalanceDate] = useState(provider?.openingBalanceDate ?? coveredThrough ?? shiftFinanceOperatingDate(financeOperatingDate(), -1));
@@ -470,7 +473,7 @@ function FundingProviderDialog({
   const [error, setError] = useState<string | null>(null);
   const parsedFee = Number(feePercent);
   const parsedOpening = Number(openingBalance);
-  const valid = Boolean(companyProviderId)
+  const valid = (companyProviderId === "new" ? Boolean(newSupplierName.trim()) : Boolean(companyProviderId))
     && Number.isFinite(parsedFee) && parsedFee >= 0 && parsedFee < 100
     && Number.isFinite(parsedOpening) && parsedOpening >= 0
     && Boolean(openingBalanceDate) && openingBalanceDate <= financeOperatingDate();
@@ -480,7 +483,7 @@ function FundingProviderDialog({
     if (!valid) return;
     setSubmitting(true);
     setError(null);
-    const payload: CreateMediaFundingProviderPayload = { companyProviderId, defaultFeePercent: parsedFee, openingBalance: parsedOpening, openingBalanceDate };
+    const payload: CreateMediaFundingProviderPayload = { companyProviderId: companyProviderId === "new" ? "" : companyProviderId, ...(companyProviderId === "new" ? { newSupplierName: newSupplierName.trim() } : {}), defaultFeePercent: parsedFee, openingBalance: parsedOpening, openingBalanceDate };
     try {
       if (provider) {
         await sendJson(`${apiBase}/media-funding/providers/${encodeURIComponent(provider.id)}`, "PATCH", payload);
@@ -500,11 +503,8 @@ function FundingProviderDialog({
       <form className="modal media-funding-modal" role="dialog" aria-modal="true" aria-labelledby="funding-provider-title" onSubmit={(event) => void submit(event)}>
         <div className="modal-header"><div><p className="eyebrow">Media funding</p><h2 id="funding-provider-title">{provider ? "Edit provider" : "Add funding provider"}</h2></div><Button aria-label="Close" className="icon-button" onClick={onClose} type="button"><X size={18} /></Button></div>
         {error && <div className="inline-error">{error}</div>}
-        {supplierCompanies.length === 0 ? (
-          <div className="empty-state compact"><CircleDollarSign size={20} /><strong>Add a supplier company first</strong><Button className="secondary-button" onClick={() => { onClose(); onOpenCompanies(); }} type="button">Open companies</Button></div>
-        ) : (
-          <label>Supplier company<NativeSelect value={companyProviderId} onValueChange={setCompanyProviderId}><NativeSelectOption value="">Choose supplier</NativeSelectOption>{supplierCompanies.map((company) => <NativeSelectOption key={company.id} value={company.id}>{company.name}</NativeSelectOption>)}</NativeSelect></label>
-        )}
+        <label>Supplier company<NativeSelect value={companyProviderId} onValueChange={setCompanyProviderId}><NativeSelectOption value="">Choose supplier</NativeSelectOption>{!provider && <NativeSelectOption value="new">Add new supplier</NativeSelectOption>}{supplierCompanies.map((company) => <NativeSelectOption key={company.id} value={company.id}>{company.name}</NativeSelectOption>)}</NativeSelect></label>
+        {companyProviderId === "new" && <label>Provider name<Input autoFocus maxLength={200} value={newSupplierName} onChange={event => setNewSupplierName(event.target.value)} /></label>}
         <div className="form-grid">
           <label>Default fee %<Input min="0" max="99.99" step="0.0001" type="number" value={feePercent} onChange={(event) => setFeePercent(event.target.value)} /></label>
           <label>Currency<Input disabled value="USD" /></label>
@@ -513,7 +513,7 @@ function FundingProviderDialog({
           <label>Opening balance<Input min="0" step="0.01" type="number" value={openingBalance} onChange={(event) => setOpeningBalance(event.target.value)} /></label>
           <label>Balance as of<CalendarDatePicker ariaLabel="Choose balance date" max={financeOperatingDate()} value={openingBalanceDate} onChange={setOpeningBalanceDate} /></label>
         </div>
-        <p className="field-help">The opening balance includes all payments, fees, and spend through this date. Starting the next day, matched bank funding and assigned LemonMax spend update the balance automatically. Changing the fee recalculates all included bank funding after the opening date.</p>
+        <InfoPopover label="provider balance calculation">The opening balance includes all payments, fees, and spend through this date. Starting the next day, matched bank funding and assigned LemonMax spend update the balance automatically. Changing the fee recalculates all included bank funding after the opening date.</InfoPopover>
         <div className="modal-actions"><Button className="secondary-button" disabled={submitting} onClick={onClose} type="button">Cancel</Button><Button className="primary-button" disabled={submitting || !valid} type="submit">{submitting ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Save provider</Button></div>
       </form>
     </div>,

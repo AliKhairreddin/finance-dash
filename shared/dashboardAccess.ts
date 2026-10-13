@@ -5,7 +5,7 @@ export const financeOperatorPages = ["banks", "documents", "analytics", "managem
 export function dashboardPageAllowed(role: DashboardAccessRole, page: string): boolean {
   if (role === "administrator") return true;
   if (role === "transaction-reviewer") return page === "banks";
-  if (role === "media-spend-reviewer") return page === "media-spend";
+  if (role === "media-spend-reviewer") return page === "media-spend" || page === "media-funding";
   return financeOperatorPages.some((allowed) => allowed === page);
 }
 
@@ -18,11 +18,13 @@ export function mediaSpendReviewerCanAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
   if (request.method === "GET") {
     return ["/api/session", "/api/media-spend", "/api/media-spend/assignments",
-      "/api/media-spend/wagner", "/api/media-spend/wagner/dimensions"].includes(path);
+      "/api/media-spend/wagner", "/api/media-spend/wagner/dimensions", "/api/media-funding", "/api/media-funding/companies"].includes(path);
   }
   if (request.method === "POST") {
-    return ["/api/media-spend/sync", "/api/media-funding/assignments", "/api/media-funding/payment-methods"].includes(path);
+    return ["/api/media-spend/sync", "/api/media-funding/assignments", "/api/media-funding/payment-methods", "/api/media-funding/providers"].includes(path);
   }
+  if (request.method === "PATCH") return /^\/api\/media-funding\/providers\/[^/]+$/u.test(path);
+  if (request.method === "DELETE") return /^\/api\/media-funding\/(?:providers|assignments)\/[^/]+$/u.test(path);
   return false;
 }
 

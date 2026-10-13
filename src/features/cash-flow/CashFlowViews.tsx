@@ -1,3 +1,5 @@
+import { providerCashFlowLines } from "../../../shared/providerCashFlow";
+import type { MediaFundingApiResponse } from "../../../shared/mediaFunding";
 import { openItemDeletionBlockReason } from "../../../shared/manualReceivables";
 import { Checkbox } from "@/components/ui/checkbox";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
@@ -112,7 +114,7 @@ function invoiceCashFlowLine(invoice: Invoice, dashboard: DashboardSnapshot): Ca
   );
 }
 
-function liveCashFlowDraft(dashboard: DashboardSnapshot): SaveCashFlowSnapshotPayload {
+function liveCashFlowDraft(dashboard: DashboardSnapshot, funding: MediaFundingApiResponse | null): SaveCashFlowSnapshotPayload {
   const groupedInvoiceReceivables = new Map<string, CashFlowLine & { invoiceCount: number }>();
   for (const invoice of dashboard.invoices) {
     const invoiceLine = invoiceCashFlowLine(invoice, dashboard);
@@ -152,7 +154,7 @@ function liveCashFlowDraft(dashboard: DashboardSnapshot): SaveCashFlowSnapshotPa
     asOfDate: financeOperatingDate(),
     cashAccounts,
     receivables: [...invoiceReceivables, ...manualReceivables],
-    openBalances: dashboard.openBalances.map((item) => line(item.id, item.name, item.balance, item.currency, item.notes, item.dueDate)),
+    openBalances: providerCashFlowLines(funding),
     payables: dashboard.payables.map((item) => line(`cash-flow-payable-${item.id}`, item.supplier, item.balance, item.currency, item.category)),
     investments: [
       ...dashboard.investments.map((item) => line(item.id, item.name, item.balance, item.currency, item.notes)),
@@ -258,6 +260,10 @@ function EditableCashFlowSection({
           <tbody>
             {visibleLines.length > 0 ? visibleLines.map((item) => (
               <tr key={item.id}>
+                {item.id.startsWith("provider-balance-") ? <>
+                  <td>{item.name}</td><td className="amount">{Number.isFinite(item.amount) ? money(item.amount, item.currency) : "Awaiting reconciliation"}</td>
+                  <td>{item.currency}</td><td>Yes</td><td>—</td><td>{item.notes}</td><td><InfoPopover label={`${item.name} balance source`}>Calculated from provider funding, commissions, and assigned spend. Update this provider in Provider balances.</InfoPopover></td>
+                </> : <>
                 <td><Input aria-label={`${title} name`} value={item.name} onChange={(event) => update(item.id, { name: event.target.value })} /></td>
                 <td className="amount"><CashFlowAmountInput item={item} title={title} onChange={(patch) => update(item.id, patch)} /></td>
                 <td><Input aria-label={`${item.name || title} currency`} maxLength={12} value={item.currency} onChange={(event) => update(item.id, { currency: event.target.value.toUpperCase() })} /></td>
@@ -265,6 +271,7 @@ function EditableCashFlowSection({
                 <td><Input aria-label={`${item.name || title} due date`} type="date" value={item.dueDate ?? ""} onChange={(event) => update(item.id, { dueDate: event.target.value || undefined })} /></td>
                 <td><Input aria-label={`${item.name || title} notes`} maxLength={256} value={item.notes ?? ""} onChange={(event) => update(item.id, { notes: event.target.value || undefined })} /></td>
                 <td><Button className="icon-button destructive-icon-button" type="button" aria-label={`Remove ${item.name || "row"}`} onClick={() => onChange(lines.filter((lineItem) => lineItem.id !== item.id))}><Trash2 size={14} /></Button></td>
+                </>}
               </tr>
             )) : <tr><td colSpan={7}>No rows</td></tr>}
           </tbody>
@@ -381,10 +388,33 @@ export function CashFlowPositionView({
   canShareUpdates: boolean;
   onSave: (payload: SaveCashFlowSnapshotPayload) => Promise<CashFlowSnapshot>;
 }) {
+  const [funding, setFunding] = useState<MediaFundingApiResponse | null>(null);
+  const [fundingLoading, setFundingLoading] = useState(true);
+  const [fundingError, setFundingError] = useState<string | null>(null);
+  async function loadFunding(signal?: AbortSignal) {
+    setFundingLoading(true);
+    try {
+      const response = await fetch(`${apiBase}/media-funding`, { signal });
+      if (!response.ok) throw new Error("Provider balances could not be loaded. Retry live values.");
+      const next = await response.json() as MediaFundingApiResponse;
+      setFunding(next);
+      setFundingError(null);
+      return next;
+    } catch (error) {
+      if (!signal?.aborted) setFundingError(error instanceof Error ? error.message : "Provider balances unavailable");
+    } finally {
+      if (!signal?.aborted) setFundingLoading(false);
+    }
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadFunding(controller.signal);
+    return () => controller.abort();
+  }, [dashboard.asOf]);
   const [selectedSnapshotId, setSelectedSnapshotId] = useUrlState("cashFlowSnapshot", "live");
   const [draft, setDraft] = useState<SaveCashFlowSnapshotPayload>(() => {
     const selected = dashboard.cashFlowSnapshots.find((item) => item.id === selectedSnapshotId);
-    return selected ? snapshotPayload(selected) : liveCashFlowDraft(dashboard);
+    return selected ? snapshotPayload(selected) : liveCashFlowDraft(dashboard, funding);
   });
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -399,14 +429,14 @@ export function CashFlowPositionView({
     if (loadedSnapshotId.current !== selectedSnapshotId) {
       loadedSnapshotId.current = selectedSnapshotId;
       dirtySections.current.clear();
-      setDraft(selectedSnapshot ? snapshotPayload(selectedSnapshot) : liveCashFlowDraft(dashboard));
+      setDraft(selectedSnapshot ? snapshotPayload(selectedSnapshot) : liveCashFlowDraft(dashboard, funding));
     } else if (selectedSnapshotId === "live") {
-      const live = liveCashFlowDraft(dashboard);
+      const live = liveCashFlowDraft(dashboard, funding);
       setDraft(current => ({ ...current, ...Object.fromEntries(sectionDefinitions
-        .filter(section => !dirtySections.current.has(section.key))
-        .map(section => [section.key, live[section.key]])) }));
+        .filter(section => section.key === "openBalances" || !dirtySections.current.has(section.key))
+        .map(section => [section.key, section.key === "openBalances" ? [...live.openBalances, ...current.openBalances.filter(item => !item.id.startsWith("provider-balance-"))] : live[section.key]])) }));
     }
-  }, [selectedSnapshotId, dashboard]);
+  }, [selectedSnapshotId, dashboard, funding]);
 
   const preview: CashFlowSnapshot = {
     ...draft,
@@ -414,7 +444,10 @@ export function CashFlowPositionView({
     createdAt: selectedSnapshot?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  const invalidAmounts = sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine));
+  const usesProviderBalances = selectedSnapshotId === "live" || dirtySections.current.has("openBalances");
+  const providerIssue = usesProviderBalances ? fundingError || (fundingLoading || !funding ? "Loading provider balances…"
+    : funding.providers.some(provider => provider.estimatedBalance === null) ? "Some provider balances await reconciliation. Review Provider balances before saving or exporting this snapshot." : null) : null;
+  const invalidAmounts = Boolean(providerIssue) || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine));
   const totals = invalidAmounts
     ? { cash: NaN, receivables: NaN, openBalances: NaN, payables: NaN, investments: NaN, approximateCash: NaN, profit: NaN, assets: NaN }
     : snapshotTotals(preview, dashboard.fxRates);
@@ -427,11 +460,12 @@ export function CashFlowPositionView({
   }
 
   async function save(section?: CashFlowSectionKey) {
+    if (providerIssue && (!selectedSnapshot || !section || section === "openBalances")) { setSaveError(providerIssue); return; }
     setSaving(true);
     setNotice(null);
     setSaveError(null);
     try {
-      const baseline = selectedSnapshot ? snapshotPayload(selectedSnapshot) : liveCashFlowDraft(dashboard);
+      const baseline = selectedSnapshot ? snapshotPayload(selectedSnapshot) : liveCashFlowDraft(dashboard, funding);
       const saved = await onSave(section ? { ...baseline, id: draft.id, asOfDate: draft.asOfDate, [section]: draft[section], section } : draft);
       if (section) {
         dirtySections.current.delete(section);
@@ -451,6 +485,7 @@ export function CashFlowPositionView({
   }
 
   async function exportPng() {
+    if (providerIssue) { setExportError(providerIssue); return; }
     setExporting(true);
     setExportError(null);
     try {
@@ -472,12 +507,13 @@ export function CashFlowPositionView({
             {dashboard.cashFlowSnapshots.map((snapshot) => <NativeSelectOption key={snapshot.id} value={snapshot.id}>{dateLabel(snapshot.asOfDate)}</NativeSelectOption>)}
           </NativeSelect>
           <Input disabled={saving} aria-label="Cash flow date" type="date" value={draft.asOfDate} max={financeOperatingDate()} onChange={(event) => setDraft((current) => ({ ...current, asOfDate: event.target.value }))} />
-          <Button className="icon-text-button" type="button" disabled={saving} onClick={() => { dirtySections.current.clear(); setSelectedSnapshotId("live"); setDraft(liveCashFlowDraft(dashboard)); }}><RefreshCw size={15} /> Use live values</Button>
-          <Button className="icon-text-button" type="button" title="Download portrait PNG" disabled={exporting || !draft.asOfDate || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNG</Button>
+          <Button className="icon-text-button" type="button" disabled={saving || fundingLoading} onClick={() => { void loadFunding(); dirtySections.current.clear(); setSelectedSnapshotId("live"); setDraft(liveCashFlowDraft(dashboard, funding)); }}><RefreshCw size={15} /> Use live values</Button>
+          <Button className="icon-text-button" type="button" title="Download portrait PNG" disabled={exporting || !draft.asOfDate || Boolean(providerIssue) || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void exportPng()}>{exporting ? <Loader2 className="spin" size={15} /> : <Download size={15} />} Export PNG</Button>
           {canShareUpdates && <SharePartnerUpdate />}
-          <Button className="primary-button" type="button" disabled={saving || !draft.asOfDate || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void save()}>{saving ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save all</Button>
+          <Button className="primary-button" type="button" disabled={saving || !draft.asOfDate || Boolean(providerIssue) || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine))} onClick={() => void save()}>{saving ? <Loader2 className="spin" size={15} /> : <Save size={15} />} Save all</Button>
         </div>
       </section>
+      {providerIssue && <div className="inline-error" role="status">{providerIssue}</div>}
       {notice && <div className="cash-flow-save-notice" role="status">{notice}</div>}
       {saveError && <div className="inline-error" role="alert">{saveError}</div>}
       {exportError && <div className="inline-error" role="alert">{exportError}</div>}
@@ -502,7 +538,12 @@ export function CashFlowPositionView({
       </section>
       <fieldset disabled={saving} className="cash-flow-editor-fieldset">
       <div className="cash-flow-editor-grid">
-        {sectionDefinitions.map((section) => <EditableCashFlowSection key={section.key} sectionKey={section.key} title={section.label} lines={draft[section.key]} rates={dashboard.fxRates} saving={saving} onSave={() => void save(section.key)} onLive={() => setSection(section.key, liveCashFlowDraft(dashboard)[section.key])} onChange={(lines) => setSection(section.key, lines)} />)}
+        {sectionDefinitions.map((section) => <EditableCashFlowSection key={section.key} sectionKey={section.key} title={section.label} lines={draft[section.key]} rates={dashboard.fxRates} saving={saving || (section.key === "openBalances" && fundingLoading)} onSave={() => void save(section.key)} onLive={() => {
+          if (section.key === "openBalances") {
+            setSection(section.key, draft.openBalances);
+            void loadFunding().then(next => { if (next) setSection("openBalances", providerCashFlowLines(next)); });
+          } else setSection(section.key, liveCashFlowDraft(dashboard, funding)[section.key]);
+        }} onChange={(lines) => setSection(section.key, lines)} />)}
       </div>
       </fieldset>
       {!invalidAmounts && <section className="cash-flow-chart-grid">

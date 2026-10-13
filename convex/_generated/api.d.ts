@@ -24,6 +24,7 @@ import type * as documentPurchases from "../documentPurchases.js";
 import type * as documentRecheck from "../documentRecheck.js";
 import type * as documentSchema from "../documentSchema.js";
 import type * as documents from "../documents.js";
+import type * as integrationSync from "../integrationSync.js";
 import type * as managementReport from "../managementReport.js";
 import type * as managementReportUpload from "../managementReportUpload.js";
 import type * as mediaFunding from "../mediaFunding.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   documentRecheck: typeof documentRecheck;
   documentSchema: typeof documentSchema;
   documents: typeof documents;
+  integrationSync: typeof integrationSync;
   managementReport: typeof managementReport;
   managementReportUpload: typeof managementReportUpload;
   mediaFunding: typeof mediaFunding;

@@ -465,6 +465,8 @@ const paymentSource = v.union(
 );
 
 const paymentAllocation = v.object({
+  settlementAdjustment: v.optional(v.number()),
+  settlementAdjustmentUsd: v.optional(v.number()),
   id: v.string(),
   invoiceId: v.string(),
   transactionId: v.optional(v.string()),
@@ -595,6 +597,15 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  integrationSyncJobs: defineTable({
+    key: v.string(), leaseId: v.string(), leaseExpiresAt: v.number(), nextAllowedAt: v.number(),
+    lastAttemptAt: v.string(), lastSuccessAt: v.optional(v.string()), error: v.optional(v.string())
+  }).index("by_key", ["key"]),
+  quinstreetMonthlyReports: defineTable({
+    partnerId: v.string(), partnerName: v.string(), periodStart: v.string(), periodEnd: v.string(), timezone: v.string(),
+    revenue: v.number(), currency: v.string(), fetchedAt: v.string()
+  }).index("by_partner_period", ["partnerId", "periodStart", "periodEnd"]),
+
   companyDocuments: defineTable(companyDocumentFields).index("by_content_hash", ["contentHash"]),
   redtrackAdvertiserLinks: defineTable({ sourceId: v.string(), url: v.string() }).index("by_source_id", ["sourceId"]),
   redtrackDays: defineTable({ date: v.string(), savedAt: v.number(), rowCount: v.number(), chunkCount: v.number() }).index("by_date", ["date"]),

@@ -120,6 +120,7 @@ export interface MediaFundingProviderSpendGroup {
 }
 
 export interface CreateMediaFundingProviderPayload {
+  newSupplierName?: string;
   companyProviderId: string;
   defaultFeePercent: number;
   openingBalance: number;

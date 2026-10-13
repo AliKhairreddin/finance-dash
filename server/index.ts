@@ -1,3 +1,4 @@
+import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleCompanyDocumentApi } from "../worker/companyDocuments";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
 import { handleRedTrackApi } from "../worker/redtrack";
@@ -111,6 +112,8 @@ import {
   saveProfitDistributionAdjustment,
   sendInvoices,
   syncExternalActivity,
+  syncMeritActivity,
+  getMeritSyncStatus,
   syncRevenue,
   updateTransactionCategory,
   updateTransactionCategoryDefinition,
@@ -352,6 +355,10 @@ app.get("/api/media-funding", async (_request, response, next) => {
   }
 });
 
+app.get("/api/media-funding/companies", async (_request, response, next) => {
+  try { response.json(await localConvexClient().query(api.mediaFunding.listSupplierCompanies, { serviceToken: localConvexServiceToken() })); } catch (error) { next(error); }
+});
+
 app.post("/api/media-funding/providers", async (request, response, next) => {
   try {
     const payload = request.body as CreateMediaFundingProviderPayload;
@@ -532,6 +539,20 @@ app.get("/api/management-report", async (_request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/merit/sync", (_request, response) => response.json(getMeritSyncStatus()));
+app.post("/api/merit/sync", async (_request, response, next) => {
+  try { await syncMeritActivity(); response.json(getMeritSyncStatus()); } catch (error) { next(error); }
+});
+app.get("/api/revenue/quinstreet-mtd", async (_request, response, next) => {
+  try { response.json(await readQuinStreetMonthly(localConvexClient(), localConvexServiceToken(), getSnapshot().revenuePartners)); } catch (error) { next(error); }
+});
+app.post("/api/revenue/quinstreet-mtd", async (_request, response, next) => {
+  try {
+    const { fetchRevenuePartnerRevenue } = await import("./integrations");
+    response.json(await syncQuinStreetMonthly(localConvexClient(), localConvexServiceToken(), getSnapshot().revenuePartners, fetchRevenuePartnerRevenue, new Date(), true));
+  } catch (error) { next(error); }
 });
 
 app.post("/api/sync", async (request, response, next) => {

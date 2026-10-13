@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reconcileAiInvoicePayments, reconcileExactInvoicePayments } from "./income";
+import { applyPaymentState, invoiceOutstanding, invoiceAllocatedAmount, reconcileAiInvoicePayments, reconcileExactInvoicePayments } from "./income";
 import type { Invoice, PaymentAllocation, Transaction } from "./types";
 
 const invoice: Invoice = {
@@ -68,7 +68,7 @@ test("the exact payment wins over a fee-different candidate regardless of transa
   }
 });
 
-test("fees, underpayments, overpayments, and even a cent difference never silently close an invoice", () => {
+test("foreign-currency differences stay open without a saved USD rate", () => {
   for (const amount of [925, 999.99, 1000.01, 1075]) {
     const result = reconcileExactInvoicePayments({ ...context, transactions: [{ ...payment, amount }] });
     assert.equal(result.paid, 0);
@@ -131,4 +131,41 @@ test("high-confidence AI matches settle exact amounts; non-exact or rejected AI 
     assert.equal(result.allocations.length, expectedPaid);
     if (expectedPaid) assert.match(result.allocations[0].matchReason ?? "", /^AI:/);
   }
+});
+
+
+test("USD tolerance closes both sides of the $100 boundary, preserving bank cash and signed adjustments", () => {
+  for (const difference of [-100.01, -100, -0.01, 0.01, 100, 100.01]) {
+    const amount = 1000 - difference;
+    const usdInvoice = { ...invoice, currency: "USD" };
+    const result = reconcileExactInvoicePayments({ ...context, invoices: [usdInvoice], transactions: [{ ...payment, currency: "USD", amount }] });
+    const accepted = Math.abs(difference) <= 100;
+    assert.equal(result.paid, accepted ? 1 : 0);
+    if (!accepted) { assert.deepEqual(result.allocations, []); continue; }
+    assert.equal(result.allocations[0].amount, amount);
+    assert.equal(result.allocations[0].settlementAdjustment, difference);
+    assert.equal(result.allocations[0].settlementAdjustmentUsd, difference);
+    assert.equal(invoiceAllocatedAmount(invoice.id, result.allocations), amount);
+    assert.equal(invoiceOutstanding(usdInvoice, result.allocations), 0);
+    assert.equal(applyPaymentState([usdInvoice], result.allocations)[0].status, "paid");
+    const again = reconcileExactInvoicePayments({ ...context, ...result });
+    assert.deepEqual(again.allocations, result.allocations);
+    assert.equal(again.paid, 0);
+  }
+});
+test("foreign-currency tolerance is capped in USD, including stale and missing quotes", () => {
+  const quote = { asset: "EUR", rateUsd: 2, provider: "yahoo" as const, asOf: context.now.toISOString() };
+  for (const [difference, rates, paid] of [[50, [quote], 1], [50.01, [quote], 0], [49, [{ ...quote, stale: true }], 0], [49, [{ ...quote, asOf: "2026-09-01T00:00:00Z" }], 0], [49, [], 0]] as const) {
+    const result = reconcileExactInvoicePayments({ ...context, fxRates: [...rates], transactions: [{ ...payment, amount: 1000 - difference }] });
+    assert.equal(result.paid, paid);
+    if (paid) assert.equal(result.allocations[0].settlementAdjustmentUsd, 100);
+  }
+});
+test("a final partial payment can settle its remaining $100 difference exactly once", () => {
+  const prior: PaymentAllocation = { id: "prior", invoiceId: invoice.id, amount: 400, currency: "USD", source: "cash", mode: "manual", paidAt: payment.date, createdAt: payment.date };
+  const result = reconcileExactInvoicePayments({ ...context, invoices: [{ ...invoice, currency: "USD" }], transactions: [{ ...payment, currency: "USD", amount: 550 }], allocations: [prior] });
+  assert.equal(result.paid, 1);
+  assert.equal(result.allocations[1].amount, 550);
+  assert.equal(result.allocations[1].settlementAdjustment, 50);
+  assert.equal(invoiceAllocatedAmount(invoice.id, result.allocations), 950);
 });

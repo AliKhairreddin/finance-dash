@@ -1,3 +1,4 @@
+import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleCompanyDocumentApi, receiveContractEmail, recognizeContract } from "./companyDocuments";
 import { contractsInbox } from "../shared/companyDocuments";
 import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
@@ -1114,6 +1115,7 @@ async function createMediaFundingProvider(
     const id = await getConvexClient(env).mutation(api.mediaFunding.createProvider, {
       serviceToken: getConvexServiceToken(env),
       companyProviderId: payload.companyProviderId,
+      newSupplierName: payload.newSupplierName,
       defaultFeePercent: payload.defaultFeePercent,
       openingBalance: payload.openingBalance,
       openingBalanceDate: payload.openingBalanceDate,
@@ -3010,7 +3012,7 @@ async function saveBankTransactionUpdates(
   }
 }
 
-async function savePersisted(env: Env, state: PersistedState): Promise<void> {
+async function savePersisted(env: Env, state: PersistedState, syncLease?: { key: string; leaseId: string }): Promise<void> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
   const {
@@ -3029,6 +3031,7 @@ async function savePersisted(env: Env, state: PersistedState): Promise<void> {
     const result = await convex.mutation(api.dashboard.saveState, {
       ...dashboardState,
       serviceToken,
+      ...(syncLease ? { syncLease } : {}),
       expectedUpdatedAt: revision
     });
     state.revision = result.updatedAt;
@@ -4316,36 +4319,46 @@ async function reconcilePendingBankTransactions(env: Env): Promise<void> {
   await processPendingBankBackfills(env);
 }
 
-async function syncMeritActivity(env: Env): Promise<void> {
+export async function syncMeritActivity(env: Env): Promise<void> {
   if (!env.MERIT_API_ID || !env.MERIT_API_KEY) return;
-  const state = await loadPersisted(env);
-  const results = await Promise.allSettled([
-    fetchMeritInvoices(env, state.invoices),
-    fetchMeritTaxes(env),
-    fetchMeritCustomers(env),
-    fetchMeritVendors(env)
-  ]);
-  const [invoiceResult, taxResult, customerResult, vendorResult] = results;
-  if (customerResult.status === "fulfilled") {
-    state.providers = reconcileMeritProviders(state.providers, customerResult.value, "customer");
-  }
-  if (vendorResult.status === "fulfilled") {
-    state.providers = reconcileMeritProviders(state.providers, vendorResult.value, "vendor");
-  }
-  state.providers = mergeProviderDirectory(state.providers);
-  if (invoiceResult.status === "fulfilled") {
-    const liveInvoices = linkMeritInvoiceProviders(invoiceResult.value, state.providers);
-    state.invoices = assignMeritStyleDraftNumbers(
-      mergeInvoices(liveInvoices, state.invoices, true),
-      liveInvoices
-    );
-  }
-  if (taxResult.status === "fulfilled") state.meritTaxes = taxResult.value;
-  await savePersisted(env, state);
+  const serviceToken = getConvexServiceToken(env);
+  const leaseId = crypto.randomUUID();
+  const lease = await getConvexClient(env).mutation(api.integrationSync.begin, { serviceToken, key: "merit", leaseId });
+  if (!lease.acquired) return;
+  try {
+    const initial = await loadPersisted(env);
+    const results = await Promise.allSettled([
+      fetchMeritInvoices(env, initial.invoices),
+      fetchMeritTaxes(env),
+      fetchMeritCustomers(env),
+      fetchMeritVendors(env)
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw new Error(meritConnectionIssue(failure.reason));
+    // Reload after network requests so edits made during the sync are preserved.
+    const state = await loadPersisted(env);
+    const [invoiceResult, taxResult, customerResult, vendorResult] = results;
+    if (customerResult.status === "fulfilled") {
+      state.providers = reconcileMeritProviders(state.providers, customerResult.value, "customer");
+    }
+    if (vendorResult.status === "fulfilled") {
+      state.providers = reconcileMeritProviders(state.providers, vendorResult.value, "vendor");
+    }
+    state.providers = mergeProviderDirectory(state.providers);
+    if (invoiceResult.status === "fulfilled") {
+      const liveInvoices = linkMeritInvoiceProviders(invoiceResult.value, state.providers);
+      state.invoices = assignMeritStyleDraftNumbers(
+        mergeInvoices(liveInvoices, state.invoices, true),
+        liveInvoices
+      );
+    }
+    if (taxResult.status === "fulfilled") state.meritTaxes = taxResult.value;
+    await savePersisted(env, state, { key: "merit", leaseId });
 
-  const failure = results.find((result) => result.status === "rejected");
-  if (failure?.status === "rejected") {
-    throw new Error(meritConnectionIssue(failure.reason));
+    await getConvexClient(env).mutation(api.integrationSync.finish, { serviceToken, key: "merit", leaseId });
+  } catch (error) {
+    await getConvexClient(env).mutation(api.integrationSync.finish, { serviceToken, key: "merit", leaseId, error: meritConnectionIssue(error) }).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -5030,6 +5043,7 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
     invoices: state.invoices,
     transactions: candidates,
     allocations: state.paymentAllocations,
+    fxRates: state.fxRates,
     providers: state.providers
   });
   state.invoices = exact.invoices;
@@ -5047,6 +5061,7 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
     invoices: exact.invoices,
     transactions: exact.transactions,
     allocations: exact.allocations,
+    fxRates: state.fxRates,
     providers: state.providers
   });
   const activeAiSettings = runtimeAiSettings(env, state.aiSettings);
@@ -5057,7 +5072,8 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
         exact.invoices,
         exact.allocations,
         state.providers,
-        env.PUBLIC_APP_URL
+        env.PUBLIC_APP_URL,
+        state.fxRates
       )
     : [];
   if (aiMatches.length === 0) {
@@ -5076,6 +5092,7 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
     invoices: currentState.invoices,
     transactions: currentTransactions,
     allocations: currentState.paymentAllocations,
+    fxRates: currentState.fxRates,
     providers: currentState.providers,
     matches: aiMatches
   });
@@ -7171,6 +7188,9 @@ async function handleApi(
       return json({ ok: true });
     }
 
+    if (url.pathname === "/api/media-funding/companies" && request.method === "GET") {
+      return json(await getConvexClient(env).query(api.mediaFunding.listSupplierCompanies, { serviceToken: getConvexServiceToken(env) }));
+    }
     if (url.pathname === "/api/media-funding" && request.method === "GET") {
       return json(await readMediaFunding(env));
     }
@@ -7470,6 +7490,23 @@ async function handleApi(
     if (url.pathname === "/api/admin/wise/reset" && request.method === "POST") {
       const payload = (await request.json()) as { confirmation?: string };
       return json(await resetWiseImports(env, payload.confirmation));
+    }
+
+    if (url.pathname === "/api/merit/sync" && (request.method === "GET" || request.method === "POST")) {
+      if (request.method === "POST") {
+        if (!env.MERIT_API_ID || !env.MERIT_API_KEY) throw new ApiError(503, "Merit is not configured");
+        await syncMeritActivity(env);
+        await runInvoicePaymentMatching(env, false);
+      }
+      return json(await getConvexClient(env).query(api.integrationSync.status, { serviceToken: getConvexServiceToken(env), key: "merit" }));
+    }
+    if (url.pathname === "/api/revenue/quinstreet-mtd" && (request.method === "GET" || request.method === "POST")) {
+      const state = await loadPersisted(env);
+      const rows = request.method === "POST"
+        ? await syncQuinStreetMonthly(getConvexClient(env), getConvexServiceToken(env), state.revenuePartners,
+            (partner, period) => fetchRevenuePartnerRevenue(env, partner, period), new Date(), true)
+        : await readQuinStreetMonthly(getConvexClient(env), getConvexServiceToken(env), state.revenuePartners);
+      return json(rows);
     }
 
     if (url.pathname === "/api/sync" && request.method === "POST") {
@@ -9099,6 +9136,9 @@ export default {
       (controller.cron === "17 * * * *" && canCatchUpLebanonIncomeAutomation(controller.scheduledTime));
     if (shouldRunIncomeAutomation) {
       try {
+        const state = await loadPersisted(env);
+        await syncQuinStreetMonthly(getConvexClient(env), getConvexServiceToken(env), state.revenuePartners,
+          (partner, period) => fetchRevenuePartnerRevenue(env, partner, period), new Date(controller.scheduledTime));
         await runIncomeAutomation(env, new Date(controller.scheduledTime));
       } catch (error) {
         console.error(JSON.stringify({
