@@ -7480,7 +7480,16 @@ async function handleApi(
       if (!document) throw new ApiError(404, "Expense document not found");
       const storageUrl = await expenseDocumentUrl(env, document.storageId);
       if (!storageUrl) throw new ApiError(404, "Expense document file not found");
-      return Response.redirect(storageUrl, 302);
+      const original = await fetch(storageUrl);
+      if (!original.ok) throw new ApiError(original.status === 404 ? 404 : 502, "Expense document file could not be loaded");
+      return new Response(original.body, {
+        headers: {
+          "Content-Type": document.contentType,
+          "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
     }
 
     if (url.pathname === "/api/admin/wise/reset-preview" && request.method === "GET") {

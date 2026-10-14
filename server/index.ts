@@ -1015,9 +1015,10 @@ app.get("/api/expense-documents/:documentId", async (request, response, next) =>
       return;
     }
     const bytes = await readLocalExpenseDocument(document.storageId);
-    const safeFileName = document.fileName.replaceAll(/[\r\n"]/g, "_");
     response.setHeader("Content-Type", document.contentType);
-    response.setHeader("Content-Disposition", `inline; filename="${safeFileName}"`);
+    response.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(document.fileName)}`);
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
     response.send(Buffer.from(bytes));
   } catch (error) {
     next(error);

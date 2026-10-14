@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ConvexHttpClient } from "convex/browser";
+import { getFunctionName } from "convex/server";
 import type { Invoice, Transaction } from "../shared/types";
 import { createAuthSessionToken } from "./auth";
 import worker, {
@@ -101,6 +103,52 @@ test("transaction reviewer sessions expose their role and deny non-review APIs",
 function authenticatedEnv(values: Record<string, unknown>): WorkerEnv {
   return { ...workerTestAuth, ...values } as never;
 }
+
+test("expense PDFs stream privately with their original filename after authentication", async t => {
+  const document = { id: "receipt-1", storageId: "stored-pdf", fileName: "Supplier reçu.pdf", contentType: "application/pdf" };
+  const env = authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service" });
+  let reads = 0;
+  t.mock.method(ConvexHttpClient.prototype, "query", async (fn: Parameters<typeof getFunctionName>[0], args: Record<string, unknown>) => {
+    reads++;
+    assert.equal(args.serviceToken, "test-service");
+    if (getFunctionName(fn) === "dashboard:getState") return { expenses: [{ documents: [document] }] };
+    assert.equal(getFunctionName(fn), "dashboard:getExpenseDocumentUrl");
+    assert.equal(args.storageId, document.storageId);
+    return "https://storage.example/original";
+  });
+  const file = new TextEncoder().encode("%PDF-1.7 original expense file");
+  t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    assert.equal(url, "https://storage.example/original");
+    return new Response(file);
+  });
+  const url = "https://finance.example/api/expense-documents/receipt-1";
+  assert.equal((await worker.fetch(new Request(url), env)).status, 401);
+  assert.equal(reads, 0, "unauthenticated requests cannot read storage");
+  const response = await worker.fetch(await authenticatedRequest(url), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Content-Type"), "application/pdf");
+  assert.equal(response.headers.get("Content-Disposition"), `inline; filename*=UTF-8''${encodeURIComponent(document.fileName)}`);
+  assert.equal(response.headers.get("Cache-Control"), "private, no-store");
+  assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
+  assert.equal(response.headers.get("Location"), null);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), file);
+});
+
+test("missing or unavailable expense PDFs return errors instead of a successful preview", async t => {
+  const env = authenticatedEnv({ CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service" });
+  const document = { id: "receipt-1", storageId: "stored-pdf", fileName: "receipt.pdf", contentType: "application/pdf" };
+  let fileStatus = 503;
+  t.mock.method(ConvexHttpClient.prototype, "query", async (fn: Parameters<typeof getFunctionName>[0]) => getFunctionName(fn) === "dashboard:getState"
+    ? { expenses: [{ documents: [document] }] } : "https://storage.example/original");
+  t.mock.method(globalThis, "fetch", async () => new Response("Storage error", { status: fileStatus }));
+  const send = async (id: string) => worker.fetch(await authenticatedRequest(`https://finance.example/api/expense-documents/${id}`), env);
+  assert.equal((await send("unknown")).status, 404);
+  const failed = await send("receipt-1");
+  assert.equal(failed.status, 502);
+  assert.deepEqual(await failed.json(), { message: "Expense document file could not be loaded" });
+  fileStatus = 404;
+  assert.equal((await send("receipt-1")).status, 404);
+});
 
 test("Meet's expanded session reaches the four page APIs and rejects administration", async () => {
   const env = authenticatedEnv({
