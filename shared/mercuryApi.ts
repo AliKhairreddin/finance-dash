@@ -127,6 +127,7 @@ export function normalizeMercuryTransaction(row: RecordValue, accountMap: Map<st
     id: bankProviderTransactionId("mercury", [providerAccountId, providerId]), source: "mercury",
     accountId: account.id, accountName: account.name,
     date: timestamp(row.postedAt ?? row.createdAt, "transaction date").slice(0, 10),
+    ...(optionalText(row.externalMemo, "memo") ? { reference: optionalText(row.externalMemo, "memo") } : {}),
     description, rawName: counterparty, counterparty,
     amount: Math.abs(signedAmount), currency: "USD", direction: signedAmount < 0 ? "out" : "in", status,
     category: movement ?? "Mercury",

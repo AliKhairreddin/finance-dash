@@ -13026,3 +13026,11 @@ body {
 .contracts-panel .wrap { max-width: 300px; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .contracts-inbox { margin-left: 0; flex-wrap: wrap; } .contracts-toolbar { padding: 0 12px 12px; } }
 .contracts-panel .note-popover { position: static; display: inline-flex; vertical-align: middle; }
+
+.transaction-reference-col { width: 150px; }
+.transaction-reference-cell { max-width: 200px; }
+.bank-overview-header.bank-manual-header { grid-template-columns: minmax(0, 1fr) auto auto; }
+@media (max-width: 640px) {
+  .bank-overview-header.bank-manual-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .bank-manual-header > .status-pill { display: none; }
+}

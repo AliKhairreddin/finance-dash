@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { companyDocumentFields } from "./companyDocumentSchema";
 import { financialDocumentFields } from "./documentSchema";
 import { amexStatementFields } from "./amexStatementSchema";
+import { manualBankFields, manualBankRecord } from "./manualBankSchema";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -248,6 +249,7 @@ const transaction = v.object({
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
+  reference: v.optional(v.string()),
   rawName: v.string(),
   counterparty: v.string(),
   cardHolderName: v.optional(v.string()),
@@ -597,6 +599,19 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  manualBankTransactions: defineTable({
+    ...manualBankRecord, intakeKey: v.string(), companySort: v.string(), sentAt: v.number()
+  }).index("by_intake_key", ["intakeKey"])
+    .index("by_source_date", ["source", "date"])
+    .index("by_source_company", ["source", "companySort"])
+    .index("by_source_amount", ["source", "amount"])
+    .index("by_source_currency", ["source", "currency"])
+    .index("by_source_direction", ["source", "direction"])
+    .index("by_source_creator", ["source", "createdBy"]),
+  manualBankTransactionEdits: defineTable({
+    transactionId: v.id("manualBankTransactions"), revision: v.number(),
+    before: v.object(manualBankFields), after: v.object(manualBankFields), updatedBy: v.string(), updatedAt: v.string()
+  }).index("by_transaction_id", ["transactionId"]),
   integrationSyncJobs: defineTable({
     key: v.string(), leaseId: v.string(), leaseExpiresAt: v.number(), nextAllowedAt: v.number(),
     lastAttemptAt: v.string(), lastSuccessAt: v.optional(v.string()), error: v.optional(v.string())

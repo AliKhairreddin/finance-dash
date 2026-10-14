@@ -564,6 +564,8 @@ export interface Transaction {
   accountName: string;
   date: string;
   description: string;
+  /** Payment reference or memo supplied by the source; not the provider transaction ID. */
+  reference?: string;
   rawName: string;
   counterparty: string;
   cardHolderName?: string;
@@ -611,6 +613,7 @@ export type TransactionSortKey =
   | "document"
   | "match"
   | "period"
+  | "reference"
   | "source"
   | "team";
 

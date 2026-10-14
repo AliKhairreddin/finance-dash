@@ -78,13 +78,14 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
     try {
       let prepared = await this.ctx.storage.get<StoredReply>(key);
       if (!prepared) {
-        const command = item.update.message?.text?.trim().split(/\s/)[0].replace(/^\//, "").split("@")[0];
+        const command = item.update.message?.text?.trim().split(/\s/)[0].replace(/^[\\/]/, "").split("@")[0].toLowerCase();
         const action = financeTelegramCommands.some(c => c.command === command && c.access === "action");
+        const idempotentAction = command === "kraken" || command === "trust";
         await this.serialize(async () => {
           const current = await this.ctx.storage.get<QueuedUpdate[]>("queue") ?? [];
           await this.ctx.storage.put("queue", current.map(row => row.update.updateId === item.update.updateId ? { ...row, started: true, attempts: row.attempts + 1 } : row));
         });
-        const result = item.started && action ? { chatId: item.update.message!.chatId, reply: "The previous action was interrupted. Please check its result in the dashboard before requesting it again." }
+        const result = item.started && action && !idempotentAction ? { chatId: item.update.message!.chatId, reply: "The previous action was interrupted. Please check its result in the dashboard before requesting it again." }
           : item.attempts >= 3 ? { chatId: item.update.message!.chatId, reply: "I couldn’t complete that request. Please try again." }
           : await prepareTelegramReply(this.env, item.update, { handleCommand: handleTelegramCommand, handleAttachment: ingestTelegramDocument });
         if (result) prepared = await this.saveReply(key, result);

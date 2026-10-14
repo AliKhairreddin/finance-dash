@@ -828,6 +828,7 @@ function normalizeRevolutTransaction(
       accountName: account.name || `Revolut ${account.currency}`,
       date: (activity.completed_at || activity.created_at).slice(0, 10),
       description: activity.reference || activity.type || counterparty,
+      ...(activity.reference ? { reference: activity.reference } : {}),
       rawName: counterparty,
       counterparty,
       amount: Math.abs(leg.amount),

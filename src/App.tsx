@@ -1,3 +1,5 @@
+import { ManualBankTransactions } from "@/features/banking/ManualBankTransactions";
+import { isManualBankSource, manualBankSources, type ManualBankSource } from "../shared/manualBankTransactions";
 import { ContractsView } from "@/features/contracts/ContractsView";
 import { useAmexStatementAccounts } from "./features/banking/useAmexStatementAccounts";
 import { AmexStatementImport } from "./features/banking/AmexStatementImport";
@@ -232,7 +234,7 @@ import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualA
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "contracts", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
-type BankTab = "all" | BankSource | "holdings";
+type BankTab = "all" | BankSource | ManualBankSource | "holdings";
 type ThemeMode = "light" | "dark";
 type SortDirection = "asc" | "desc";
 type BankTransactionDateRange = {
@@ -300,7 +302,7 @@ type DirectoryDeleteTarget =
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
-const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "mercury", "holdings"];
+const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "mercury", "kraken", "trust", "holdings"];
 const transactionSortKeys: readonly TransactionSortKey[] = [
   "account",
   "amount",
@@ -312,6 +314,7 @@ const transactionSortKeys: readonly TransactionSortKey[] = [
   "document",
   "match",
   "period",
+  "reference",
   "source",
   "team"
 ];
@@ -796,7 +799,8 @@ function App() {
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
     if (!session || session.role === "media-spend-reviewer") return null;
     if ((!isTransactionReviewer && activeTab !== "banks") || (!isTransactionReviewer && bankTab === "holdings")) return null;
-    const effectiveBankTab: Exclude<BankTab, "holdings"> = isTransactionReviewer || bankTab === "holdings"
+    if (isManualBankSource(bankTab) && !isTransactionReviewer) return null;
+    const effectiveBankTab: "all" | BankSource = isTransactionReviewer || bankTab === "holdings" || isManualBankSource(bankTab)
       ? "all"
       : bankTab;
     const source = effectiveBankTab === "all"
@@ -3852,7 +3856,7 @@ function BanksView({
       : activeSource.label
     : activeBank === "holdings"
       ? "Cash & wallet holdings"
-      : "All bank activity";
+      : isManualBankSource(activeBank) ? (activeBank === "kraken" ? "Kraken" : "Trust") : "All bank activity";
 
   useEffect(() => {
     setBankDetailsOpen(false);
@@ -4031,7 +4035,7 @@ function BanksView({
     <div className="banks-layout">
       {bankPeriodMetricsError && <div className="income-callout warning" role="alert"><span>{bankPeriodMetricsError}{periodSnapshot ? " Showing the previous calculation." : ""}</span><Button className="secondary-button" disabled={isLoadingBankPeriodMetrics} onClick={onRetryPeriodMetrics}>Retry totals</Button></div>}
       <section className="panel wide-panel bank-overview-bar">
-        <div className="panel-header bank-overview-header">
+        <div className={`panel-header bank-overview-header${isManualBankSource(activeBank) ? " bank-manual-header" : ""}`}>
           <div className="bank-overview-title">
             <p className="eyebrow">Banks</p>
             <h2>{activeBankLabel}</h2>
@@ -4041,7 +4045,7 @@ function BanksView({
               {headerMetrics}
             </div>
           )}
-          {activeBank === "amex" && !activeSourceStatus?.configured
+          {isManualBankSource(activeBank) ? <span className="status-pill">Manual ledger</span> : activeBank === "amex" && !activeSourceStatus?.configured
             ? <span className="status-pill">Statement imports</span>
             : <BankSyncStatus backgroundSync={backgroundSync} integrationStatuses={relevantIntegrationStatuses} />}
           <div className="bank-header-controls">
@@ -4066,13 +4070,13 @@ function BanksView({
                   className="searchable-select-control simple-select-control bank-navigation-trigger"
                 >
                   <span className="searchable-select-input simple-select-value">
-                    {activeBank === "all" ? "All" : activeSource?.label ?? "Cash & wallets"}
+                    {activeBank === "all" ? "All" : activeSource?.label ?? (isManualBankSource(activeBank) ? activeBankLabel : "Cash & wallets")}
                   </span>
                 </Menu.Trigger>
                 <Menu.Portal>
                   <Menu.Positioner align="start" sideOffset={5} className="searchable-select-positioner">
                     <Menu.Popup aria-label="Banks" className="searchable-select-popup bank-navigation-menu">
-                      {[{ id: "all", label: "All" }, ...bankSources, { id: "holdings", label: "Cash & wallets" }].map((source) => (
+                      {[{ id: "all", label: "All" }, ...bankSources, ...manualBankSources, { id: "holdings", label: "Cash & wallets" }].map((source) => (
                         <Menu.LinkItem
                           key={source.id}
                           className="searchable-select-option"
@@ -4092,6 +4096,7 @@ function BanksView({
         </div>
       </section>
 
+      {isManualBankSource(activeBank) && <ManualBankTransactions key={activeBank} source={activeBank} />}
       {activeBank === "all" && (
         <AllBankTransactionsView
             activityView={activityView}
@@ -6560,6 +6565,7 @@ function TransactionTable({
           <col className="transaction-date-col" />
           {source === "all" && <col className="transaction-source-col" />}
           <col className="transaction-counterparty-col" />
+          <col className="transaction-reference-col" />
           <col className="transaction-direction-col" />
           <col className="transaction-amount-col" />
           <col className="transaction-team-col" />
@@ -6575,6 +6581,7 @@ function TransactionTable({
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="source">Source</SortableTableHead>
             )}
             <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="counterparty">Counterparty</SortableTableHead>
+            <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={onSort} sortKey="reference" description="Payment reference or memo supplied by the bank. A dash means no reference is saved; older records can be reconciled using source sync.">Reference</SortableTableHead>
             <SortableTableHead
               activeSortKey={sortKey}
               description={source === "slash"
@@ -6687,6 +6694,7 @@ function TransactionTable({
                     </small>
                     {cashbackDetail && <small className="good-text">{cashbackDetail}</small>}
                   </td>
+                  <td className="transaction-reference-cell">{transaction.reference ? <span className="transaction-detail-line"><span className="transaction-detail-text">{transaction.reference}</span>{detailInfoButton(`${transaction.id}-reference`, "Payment reference", transaction.reference, `Show full reference for ${counterpartyLabel}`)}</span> : "—"}</td>
                   <td>
                     <span className={`direction-label ${internalTransfer ? "transfer" : transaction.direction}`}>
                       {transaction.direction === "in" ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
@@ -6791,7 +6799,7 @@ function TransactionTable({
             })
           ) : (
             <tr>
-              <td colSpan={7 + (source === "all" ? 1 : 0) + (reviewMode ? 0 : 2)}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td>
+              <td colSpan={8 + (source === "all" ? 1 : 0) + (reviewMode ? 0 : 2)}>{isLoading ? "Loading transactions…" : "No loaded transactions match these filters"}</td>
             </tr>
           )}
         </tbody>

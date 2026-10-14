@@ -1,4 +1,5 @@
 import type { ImportWiseStatementPayload, Transaction, WiseEntity } from "./types";
+import { wiseDescriptionReference } from "./bankReferences";
 import { wiseTransactionId } from "./wiseTransactionIdentity";
 import { fetchBankProvider, readBoundedResponseText, bankProviderOAuthFetchPolicy } from "./boundedHttp";
 
@@ -79,7 +80,7 @@ export function zohoWiseTransaction(value: unknown, mapping: ZohoWiseAccount): T
   if (typeof row.amount !== "number" || !Number.isFinite(row.amount) || row.amount < 0) throw new Error("Zoho statement amount is invalid");
   if (row.debit_or_credit !== "debit" && row.debit_or_credit !== "credit") throw new Error("Zoho statement direction is invalid");
   const description = text(row.description, "description");
-  const reference = text(row.reference_number, "reference");
+  const reference = text(row.reference_number, "reference") || wiseDescriptionReference(description);
   const fee = /^Wise Charges for:/i.test(description);
   const payee = text(row.payee, "payee");
   const merchant = description.match(/^Card transaction of .+? issued by (.+)$/i)?.[1]?.replace(/ \(fee:[^)]*\)$/, "");
@@ -91,7 +92,8 @@ export function zohoWiseTransaction(value: unknown, mapping: ZohoWiseAccount): T
     source: "wise", wiseEntity: mapping.entity,
     accountId: `wise-${mapping.profileId}-${mapping.balanceId}`,
     accountName: mapping.entity === "dn" ? "Digital Nudge OÜ" : "LOVEMEDO B.V.",
-    date: date(row.date), description: fullDescription, rawName: counterparty, counterparty,
+    date: date(row.date), description: fullDescription,
+    ...(reference ? { reference } : {}), rawName: counterparty, counterparty,
     amount: row.amount, currency: mapping.currency,
     // Zoho's bank statement debits are deposits, credits are withdrawals.
     direction: row.debit_or_credit === "debit" ? "in" : "out",

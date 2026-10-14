@@ -37,6 +37,7 @@ export function assertBankTransactionInput(transaction: Transaction): void {
   assertBoundedString(transaction.slashVirtualAccountId, "transaction.slashVirtualAccountId", 1_024);
   assertBoundedString(transaction.slashVirtualAccountName, "transaction.slashVirtualAccountName", 512);
   assertBoundedString(transaction.description, "transaction.description", 1_024, true);
+  assertBoundedString(transaction.reference, "transaction.reference", 1_024);
   assertBoundedString(transaction.rawName, "transaction.rawName", 1_024, true);
   assertBoundedString(transaction.counterparty, "transaction.counterparty", 1_024, true);
   assertBoundedString(transaction.cardHolderName, "transaction.cardHolderName", 512);

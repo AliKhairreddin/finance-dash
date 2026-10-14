@@ -35,6 +35,7 @@ interface TelegramApiEnvelope {
 
 export interface TelegramPrivateMessage {
   chatId: string;
+  sentAt?: number;
   firstName: string;
   telegramUsername?: string;
   text?: string;
@@ -87,7 +88,8 @@ export type TelegramCommandHandler = (
   env: WorkerEnv,
   user: TelegramAuthUser,
   role: TelegramCommandRole,
-  text: string
+  text: string,
+  context?: { updateId: number; sentAt?: number }
 ) => Promise<TelegramCommandReply>;
 
 interface TelegramOtpMessagePayload {
@@ -489,6 +491,7 @@ function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
     : undefined;
   return {
     chatId: String(chatIdValue),
+    ...(typeof message.date === "number" && Number.isSafeInteger(message.date) && message.date > 0 ? { sentAt: message.date } : {}),
     firstName: message.from.first_name.slice(0, 128),
     ...(attachment ? { attachment } : {}),
     ...(typeof message.caption === "string" ? { caption: message.caption.slice(0, 1024) } : {}),
@@ -586,8 +589,8 @@ export async function pollTelegramUpdates(
         ? telegramCommandRole(configuredUser, commandAdministratorNames, commandReadOnlyNames)
         : null;
       const text = update.message.text?.trim() ?? "";
-      const reply: TelegramCommandReply = configuredUser && role && text.startsWith("/") && dependencies.handleCommand
-        ? await dependencies.handleCommand(env, configuredUser, role, text)
+      const reply: TelegramCommandReply = configuredUser && role && /^[\\/]/u.test(text) && dependencies.handleCommand
+        ? await dependencies.handleCommand(env, configuredUser, role, text, { updateId: update.updateId, sentAt: update.message.sentAt })
         : configuredUser && !role && text.startsWith("/")
           ? "You do not have Telegram command access for Finance Dash."
           : onboardingReply(update.message, users);
@@ -668,7 +671,7 @@ export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdat
       : "Document uploads are available to Ali and Ali M only.";
   } else if (text) {
     await telegramApi(env, "sendChatAction", { chat_id: message.chatId, action: "typing" }).catch(() => undefined);
-    reply = await dependencies.handleCommand(env, account.user, account.role, text.startsWith("/") ? text : `/ask ${text}`);
+    reply = await dependencies.handleCommand(env, account.user, account.role, /^[\\/]/u.test(text) ? text : `/ask ${text}`, { updateId: update.updateId, sentAt: message.sentAt });
   } else reply = "Send a question, or attach a receipt or invoice as a PDF or image.";
   return { chatId: message.chatId, reply };
 }

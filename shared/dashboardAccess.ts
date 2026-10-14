@@ -31,7 +31,7 @@ export function mediaSpendReviewerCanAccess(request: Request): boolean {
 export function financeOperatorCanAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
   if (request.method === "GET") {
-    return ["/api/session", "/api/dashboard", "/api/analytics", "/api/analytics/category-companies",
+    return ["/api/session", "/api/dashboard", "/api/manual-bank-transactions", "/api/analytics", "/api/analytics/category-companies",
       "/api/transactions", "/api/transactions/lookup", "/api/transactions/summary", "/api/transactions/sync",
       "/api/management-report", "/api/documents", "/api/documents/config", "/api/documents/folders",
       "/api/amex/statements", "/api/amex/statements/accounts", "/api/invoice-payment-candidates"].includes(path)
@@ -52,6 +52,7 @@ export function financeOperatorCanAccess(request: Request): boolean {
       || /^\/api\/amex\/statements\/[^/]+\/import$/u.test(path)
       || /^\/api\/expenses\/[^/]+\/match-payment$/u.test(path);
   }
+  if (request.method === "PATCH") return /^\/api\/manual-bank-transactions\/[^/]+$/u.test(path);
   if (request.method === "PUT") {
     return path === "/api/documents/config" || /^\/api\/(?:holdings|invoices)\/[^/]+$/u.test(path);
   }

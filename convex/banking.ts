@@ -1,4 +1,5 @@
 import type { Doc } from "./_generated/dataModel";
+import { wiseDescriptionReference } from "../shared/bankReferences";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { ConvexError, v, type Infer } from "convex/values";
@@ -87,6 +88,7 @@ const transaction = v.object({
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
+  reference: v.optional(v.string()),
   rawName: v.string(),
   counterparty: v.string(),
   cardHolderName: v.optional(v.string()),
@@ -2798,6 +2800,30 @@ export const applyMerchantCategory = mutation({
       hasMore: !result.isDone,
       continueCursor: result.isDone ? null : result.continueCursor
     };
+  }
+});
+
+// One-time, resumable enrichment from already-saved explicit Wise payment notes.
+// No upstream pull and no changes to financial values or transaction identity.
+export const backfillWiseReferences = mutation({
+  args: { serviceToken: v.string(), dryRun: v.boolean(), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ scanned: v.number(), changed: v.number(), isDone: v.boolean(), continueCursor: v.string() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await assertBankLedgerReady(ctx);
+    const result = await ctx.db.query("bankTransactions").withIndex("by_source", q => q.eq("source", "wise"))
+      .paginate({ numItems: maximumMaintenanceBatchSize, cursor: args.cursor, maximumRowsRead: maximumMaintenanceBatchSize, maximumBytesRead: maximumActivityBytesRead });
+    let changed = 0;
+    const dates = new Set<string>();
+    for (const row of result.page) {
+      if (row.reference !== undefined) continue;
+      const reference = wiseDescriptionReference(row.description);
+      if (!reference) continue;
+      changed++;
+      if (!args.dryRun) { await ctx.db.patch(row._id, { reference }); dates.add(row.date); }
+    }
+    if (dates.size) await bumpLedgerRevision(ctx, dates);
+    return { scanned: result.page.length, changed, isDone: result.isDone, continueCursor: result.continueCursor };
   }
 });
 

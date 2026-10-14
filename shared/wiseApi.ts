@@ -55,6 +55,7 @@ interface WiseStatementActivity {
   type: string;
   details?: {
     description?: string;
+    paymentReference?: string;
     senderName?: string;
     recipientName?: string;
     referenceNumber?: string;
@@ -281,6 +282,7 @@ function parseWiseStatementActivities(value: unknown): WiseStatementActivity[] {
         ? {
             details: {
               description: wiseOptionalString(details.description, "details.description", 1_024, true),
+              paymentReference: wiseOptionalString(details.paymentReference, "details.paymentReference", 1_024, true),
               senderName: wiseOptionalString(details.senderName, "details.senderName", 512, true),
               recipientName: wiseOptionalString(details.recipientName, "details.recipientName", 512, true),
               referenceNumber: stableWiseIdentifier(details.referenceNumber, "details.referenceNumber")
@@ -494,6 +496,7 @@ function normalizeWiseStatementTransactions(
       accountName: accountName(profileName, balance.currency),
       date: activity.date.slice(0, 10),
       description: activity.details?.description ?? activity.type,
+      ...(activity.details?.paymentReference ? { reference: activity.details.paymentReference } : {}),
       rawName: counterparty,
       counterparty,
       amount: Math.abs(value),

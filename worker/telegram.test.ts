@@ -73,6 +73,23 @@ test("webhook replies preserve the bank totals copy button", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("backslash commands are routed with the original Telegram send date and update ID", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ ok: true, result: true });
+  try {
+    const value = telegramUpdate(88, 5518715264, "Ali", undefined, "\\Kraken Acme 500");
+    const update = parseTelegramUpdate({ ...value, message: { ...value.message, date: 1791945000 } });
+    await prepareTelegramReply(baseEnv, update, {
+      async handleCommand(_env, _user, _role, text, context) {
+        assert.equal(text, "\\Kraken Acme 500");
+        assert.deepEqual(context, { updateId: 88, sentAt: 1791945000 });
+        return "Recorded";
+      },
+      async handleAttachment() { throw new Error("Unexpected attachment"); }
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Telegram user mappings normalize login names, including internal spaces", () => {
   assert.deepEqual(parseTelegramAuthUsers(JSON.stringify({
     Ali: "5518715264",

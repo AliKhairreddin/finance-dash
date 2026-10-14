@@ -10,6 +10,7 @@ const transaction: Transaction = {
   accountName: "Operating USD",
   date: "2026-07-30",
   description: 'Subscription, "annual"',
+  reference: "=untrusted payment note",
   rawName: "=HYPERLINK(\"https://example.com\")",
   counterparty: "Example Software",
   amount: 1234.56,
@@ -46,6 +47,8 @@ test("buildTransactionCsv creates an Excel-compatible transaction export", () =>
   assert.ok(csv.startsWith("\uFEFF"));
   assert.match(csv, /^﻿"Date","Source","Wise entity","Account","Account side"/);
   assert.match(csv, /"Movement"/);
+  assert.match(csv, /"Reference"/);
+  assert.ok(csv.includes("\"'=untrusted payment note\""));
   assert.match(csv, /"wise","DN","Operating USD"/);
   assert.match(csv, /"Subscription, ""annual"""/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.com""\)"/);

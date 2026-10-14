@@ -17,6 +17,12 @@ const accountConfig = {
   currency: "USD"
 };
 
+test("Amex payment memos are retained separately from the merchant description", () => {
+  const [row] = normalizeAmexTransactions([transaction({ memo: "October subscription" })], accountConfig);
+  assert.equal(row.reference, "October subscription");
+  assert.equal(row.description, "Cloud hosting");
+});
+
 function transaction(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     transactionId: "txn/123",

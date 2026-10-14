@@ -245,6 +245,7 @@ const transaction = v.object({
   accountName: v.string(),
   date: v.string(),
   description: v.string(),
+  reference: v.optional(v.string()),
   rawName: v.string(),
   counterparty: v.string(),
   cardHolderName: v.optional(v.string()),

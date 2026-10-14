@@ -441,6 +441,7 @@ function transactionFromRow(row: CsvRow, fallbackCurrency?: string): Transaction
     accountName,
     date,
     description,
+    ...(reference ? { reference: requiredBoundedText(reference, "Wise CSV reference", 1_024) } : {}),
     rawName: counterparty,
     counterparty,
     amount: Math.abs(signedAmount),

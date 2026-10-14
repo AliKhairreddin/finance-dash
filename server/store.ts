@@ -2822,6 +2822,7 @@ function localTransactionPage(rows: Transaction[], options: LocalTransactionPage
           : transaction.merchantName ?? transaction.counterparty;
       }
       if (options.sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
+      if (options.sortKey === "reference") return transaction.reference;
       if (options.sortKey === "date") return transaction.date;
       if (options.sortKey === "direction") return transaction.direction;
       if (options.sortKey === "document") {
@@ -2867,6 +2868,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
         transaction.merchantName,
         transaction.counterparty,
         transaction.description,
+        transaction.reference,
         transaction.rawName,
         transaction.accountName,
         transaction.slashVirtualAccountName,

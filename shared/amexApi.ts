@@ -413,6 +413,7 @@ export function normalizeAmexTransactions(payload: unknown, config: AmexAccountC
       accountName,
       date: amexTransactionDate(dateValue, "transaction date"),
       description,
+      ...(optionalText([item.memo, item.reference], "transaction reference") ? { reference: optionalText([item.memo, item.reference], "transaction reference") } : {}),
       rawName: counterparty,
       counterparty,
       amount: Math.abs(rawAmount),

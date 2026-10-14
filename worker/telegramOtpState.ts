@@ -74,7 +74,7 @@ async function configurationFingerprints(
     crypto.subtle.digest(
       "SHA-256",
       textEncoder.encode([
-        "finance-telegram-webhook.v7-cash-groups",
+        "finance-telegram-webhook.v8-manual-bank-ledgers",
         env.TELEGRAM_AUTH_USERS_JSON,
         env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON ?? "",
         env.TELEGRAM_MEDIA_SPEND_USERS_JSON ?? "",

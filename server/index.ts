@@ -1,3 +1,4 @@
+import { handleManualBankApi } from "../worker/manualBankTransactions";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleCompanyDocumentApi } from "../worker/companyDocuments";
 import type { SetMediaPaymentMethodsPayload } from "../shared/mediaPaymentMethods";
@@ -245,6 +246,18 @@ app.use("/api/contracts", express.raw({ type: () => true, limit: "10mb" }), asyn
     if (!result) return next(); response.status(result.status); result.headers.forEach((value, key) => response.setHeader(key, value)); response.send(Buffer.from(await result.arrayBuffer()));
   } catch (error) { next(error); }
 });
+app.use("/api/manual-bank-transactions", async (request, response, next) => {
+  try {
+    const origin = `${request.protocol}://${request.get("host")}`;
+    const result = await handleManualBankApi(new Request(new URL(request.originalUrl, origin), {
+      method: request.method, headers: { "Content-Type": "application/json", "Origin": request.get("origin") ?? "" },
+      ...(request.method === "PATCH" ? { body: JSON.stringify(request.body) } : {})
+    }), { CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken() }, { username: "Local developer", role: "administrator" });
+    if (!result) return next();
+    response.status(result.status).json(await result.json());
+  } catch (error) { next(error); }
+});
+
 app.get("/api/transactions/lookup", async (request, response, next) => {
   try { response.json(await localConvexClient().query(api.banking.getTransaction, { serviceToken: localConvexServiceToken(), id: typeof request.query.id === "string" ? request.query.id : "" })); } catch (error) { next(error); }
 });
@@ -600,7 +613,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       throw new ClientRequestError("Transaction category status is invalid");
     }
     const sortKey = typeof request.query.sort === "string" ? request.query.sort : "date";
-    const sortKeys: readonly TransactionSortKey[] = ["account", "amount", "category", "company", "counterparty", "date", "direction", "document", "match", "period", "source", "team"];
+    const sortKeys: readonly TransactionSortKey[] = ["account", "amount", "category", "company", "counterparty", "date", "direction", "document", "match", "period", "reference", "source", "team"];
     if (!sortKeys.includes(sortKey as TransactionSortKey)) throw new ClientRequestError("Transaction sort is invalid");
     const search = typeof request.query.search === "string" ? request.query.search.trim() : "";
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";

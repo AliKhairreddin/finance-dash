@@ -27,6 +27,8 @@ import type * as documents from "../documents.js";
 import type * as integrationSync from "../integrationSync.js";
 import type * as managementReport from "../managementReport.js";
 import type * as managementReportUpload from "../managementReportUpload.js";
+import type * as manualBankSchema from "../manualBankSchema.js";
+import type * as manualBankTransactions from "../manualBankTransactions.js";
 import type * as mediaFunding from "../mediaFunding.js";
 import type * as mediaSpend from "../mediaSpend.js";
 import type * as redtrack from "../redtrack.js";
@@ -60,6 +62,8 @@ declare const fullApi: ApiFromModules<{
   integrationSync: typeof integrationSync;
   managementReport: typeof managementReport;
   managementReportUpload: typeof managementReportUpload;
+  manualBankSchema: typeof manualBankSchema;
+  manualBankTransactions: typeof manualBankTransactions;
   mediaFunding: typeof mediaFunding;
   mediaSpend: typeof mediaSpend;
   redtrack: typeof redtrack;

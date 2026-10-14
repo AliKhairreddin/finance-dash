@@ -1,4 +1,6 @@
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
+import { handleManualBankApi } from "./manualBankTransactions";
+import { isManualBankSource, parseManualBankCommand } from "../shared/manualBankTransactions";
 import { handleCompanyDocumentApi, receiveContractEmail, recognizeContract } from "./companyDocuments";
 import { contractsInbox } from "../shared/companyDocuments";
 import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
@@ -2396,6 +2398,7 @@ function activitySortValue(
       : transaction.merchantName ?? transaction.counterparty;
   }
   if (options.sortKey === "counterparty") return transaction.merchantName ?? transaction.counterparty;
+  if (options.sortKey === "reference") return transaction.reference;
   if (options.sortKey === "date") return transaction.date;
   if (options.sortKey === "direction") return transaction.direction;
   if (options.sortKey === "document") {
@@ -2443,6 +2446,7 @@ function filterAndSortActivity(
       transaction.merchantName,
       transaction.counterparty,
       transaction.description,
+      transaction.reference,
       transaction.rawName,
       transaction.accountName,
       transaction.slashVirtualAccountName,
@@ -7024,6 +7028,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     "document",
     "match",
     "period",
+    "reference",
     "source",
     "team"
   ];
@@ -7118,6 +7123,9 @@ async function handleApi(
   const url = new URL(request.url);
 
   try {
+    if (url.pathname.startsWith("/api/manual-bank-transactions")) {
+      return (await handleManualBankApi(request, env, await getDashboardSession(request, env)))!;
+    }
     if (url.pathname.startsWith("/api/partner-updates")) {
       const session = await getDashboardSession(request, env);
       if (!session || session.role !== "administrator" || !canSharePartnerUpdates(session.username)) throw new ApiError(403, "Partner sharing is available to Ali and Ali M only.");
@@ -8800,7 +8808,8 @@ export async function handleTelegramCommand(
   env: Env,
   user: TelegramAuthUser,
   role: TelegramCommandRole,
-  text: string
+  text: string,
+  context?: { updateId: number; sentAt?: number }
 ): Promise<TelegramCommandReply> {
   try {
     const configuredAdministrators = new Set(
@@ -8830,6 +8839,20 @@ export async function handleTelegramCommand(
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
       if (role !== "administrator") throw new ApiError(403, "This is an administrator action command");
+      if (isManualBankSource(command)) {
+        if (!["ali", "ali m"].includes(user.normalizedUsername)) throw new ApiError(403, "Access is limited to Ali and Ali M for these transactions.");
+        if (!args) return telegramMissingInput(definition);
+        if (!context || !Number.isSafeInteger(context.updateId) || context.updateId < 0) throw new ApiError(400, "Send this command as a new Telegram message.");
+        const fields = parseManualBankCommand(args, context.sentAt!);
+        const result = await getConvexClient(env).mutation(api.manualBankTransactions.createFromTelegram, {
+          serviceToken: getConvexServiceToken(env), source: command, ...fields,
+          intakeKey: `telegram:${user.chatId}:${context.updateId}`, sentAt: context.sentAt!, createdBy: user.normalizedUsername === "ali" ? "Ali" : "Ali M"
+        });
+        const label = command === "kraken" ? "Kraken" : "Trust";
+        return result.duplicate
+          ? `✅ This Telegram transaction is already recorded in ${label}.\n\n${new URL(`/?page=banks&bankView=${command}`, env.PUBLIC_APP_URL)}`
+          : `✅ Recorded in ${label}\n\n${fields.companyName}\nOut: ${fields.amount} ${fields.currency}\nDate: ${fields.date}\n\nEdit in Banks → ${label}:\n${new URL(`/?page=banks&bankView=${command}`, env.PUBLIC_APP_URL)}`;
+      }
       if (command === "amex") return "📥 Import Amex statements\n\nSend an Amex PDF or CSV here. Currency defaults to EUR; CSV dates are detected automatically, including Dutch Account Activity exports. For CSVs or unclear filenames, add a caption: /amex EUR 1234 (primary card’s last four digits). Use the same primary card on every upload. Add mdy or dmy to choose date order explicitly.\n\nClear statements import automatically; unclear PDF details are held for review in Banks → Amex. Originals are saved, existing classifications are kept, and duplicate rows are skipped.\n\n" + new URL("/?page=banks&bankView=amex&amexImport=open", env.PUBLIC_APP_URL);
       if (command === "share_updates") {
         if (args) throw new ApiError(400, "Use /share_updates to send cash flow and open invoices to Amin, Sani, Ben, Ali, and Ali M.");

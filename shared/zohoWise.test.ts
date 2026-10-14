@@ -46,6 +46,12 @@ test("stable IDs survive corrections and distinguish two real identical payments
   assert.throws(() => zohoWiseTransaction(row({ debit_or_credit: "unexpected" }), account), /direction/);
 });
 
+test("Wise reference notes stay separate from transaction IDs and descriptions", () => {
+  assert.equal(zohoWiseTransaction(row({ reference_number: "INV 123" }), account).reference, "INV 123");
+  assert.equal(zohoWiseTransaction(row({ description: "Sent money to Acme with reference October fees (fee: 1.13 USD)" }), account).reference, "October fees");
+  assert.equal(zohoWiseTransaction(row(), account).reference, undefined);
+});
+
 test("all pages are read; pre-cutover rows are excluded and late arrivals are retained", async () => {
   const result = await fetchZohoWiseActivity(credentials, { now, accounts: [account], fetcher: mock([
     page([row({ statement_id: "1", date: "2026-09-11" })], 1, true),
