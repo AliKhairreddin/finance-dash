@@ -1,3 +1,4 @@
+import { PdfPreviewButton } from "@/components/PdfPreview";
 import { Menu } from "@base-ui/react/menu";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { ChevronDown, ChevronRight, Search, Download, FilePlus2, FileText, Folder, Plus, Loader2, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
@@ -109,6 +110,7 @@ function ReviewDocument({ document, apiBase, onClose, onSaved }: { document: Fin
       <span className="document-file-download-name">{document.fileName}</span>
       <span className="document-file-download-action" aria-hidden="true"><span>Download</span><Download size={16} /></span>
     </a>
+    <DocumentPdfPreviewButton file={document} apiBase={apiBase} />
     <form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, transactionId: bank.selected?.id, confirmCurrencyConversion: bank.confirmed }) }); onSaved(); onClose(); window.dispatchEvent(new Event("finance:documents-changed")); } catch (err) { setError(err instanceof Error ? err.message : "Review failed"); } finally { setBusy(false); } }}>
       <div className="document-form-grid">
         <label>Company<NativeSelect aria-label="Company" value={draft.entity ?? ""} onValueChange={value => setDraft({ ...draft, entity: value as "dn" | "lmd" })}><NativeSelectOption value="">Choose company</NativeSelectOption><NativeSelectOption value="dn">Digital Nudge</NativeSelectOption><NativeSelectOption value="lmd">Love Me Do</NativeSelectOption></NativeSelect></label>
@@ -270,7 +272,7 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
       <div className="table-wrap"><table className="data-table document-table"><thead><tr><th className="document-select-cell"><Checkbox aria-label="Select all documents in this view" checked={allSelected} indeterminate={selected.length > 0 && !allSelected} disabled={!rows.length || loading || busy} onCheckedChange={selectAll} /></th>{head("file", "Document / company")}{head("date", "Date")}{head("kind", "Type")}{head("amount", "Amount")}{head("source", "Received via")}{head("status", "Status")}{head("match", "Bank match")}<th>Actions</th></tr></thead><tbody>
         {rows.map(doc => <tr key={doc._id} data-selected={selectedIds.has(doc._id) || undefined}>
           <td className="document-select-cell"><Checkbox aria-label={`Select ${doc.fileName}${doc.files.length > 1 ? ` and ${doc.files.length - 1} related ${doc.files.length === 2 ? "file" : "files"}` : ""}`} checked={selectedIds.has(doc._id)} disabled={busy} onCheckedChange={checked => setSelection(current => { const ids = new Set(current.scope === scope ? current.ids : []); if (checked) ids.add(doc._id); else ids.delete(doc._id); return { scope, ids }; })} /></td>
-          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><DocumentFiles document={doc} apiBase={apiBase} onReview={() => setPurchaseReview(doc)} onReferenceReview={setReferenceReview} /></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{[...new Set(doc.files.map(file => file.source))].sort().join(", ")}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.referenceError || doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.referenceError || doc.error || doc.matchReason || doc.extraction?.reviewReasons.join(". ")}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{!doc.deletedAt && ["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{!doc.deletedAt && doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{!doc.deletedAt && doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
+          <td className="document-name-cell"><strong>{doc.extraction?.counterparty || doc.fileName}</strong><small>{doc.entity ? wiseEntityLabel(doc.entity) : "Company needs review"}</small><DocumentFiles document={doc} apiBase={apiBase} onReview={() => setPurchaseReview(doc)} onReferenceReview={setReferenceReview} /></td><td>{doc.extraction?.issueDate ?? "—"}</td><td>{doc.kind === "unknown" ? "Unclassified" : doc.kind === "invoice" ? "Sales invoice" : "Expense"}</td><td className="amount">{doc.extraction?.amount !== null && doc.extraction?.amount !== undefined ? `${doc.extraction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${doc.extraction.currency ?? ""}` : "—"}</td><td>{[...new Set(doc.files.map(file => file.source))].sort().join(", ")}</td><td><span className={`status-pill ${doc.status === "matched" ? "good" : doc.status === "failed" ? "danger" : "warning"}`}>{labels[doc.status]}</span>{(doc.referenceError || doc.error || doc.extraction?.reviewReasons.length || doc.matchReason) && <InfoPopover label={`Details for ${doc.fileName}`}><p>{doc.referenceError || doc.error || doc.matchReason || doc.extraction?.reviewReasons.join(". ")}</p>{doc.processedAt && <p>Processed in {Math.max(0, Math.round((Date.parse(doc.processedAt) - Date.parse(doc.createdAt)) / 1000))} seconds.</p>}</InfoPopover>}</td><td>{doc.transactionId ? <a href={documentTransactionLink(doc.transactionId)}>View transaction</a> : "—"}</td><td><div className="row-actions"><DocumentPdfPreviewButton file={doc} apiBase={apiBase} /><a aria-label={`Download ${doc.fileName}`} href={`${apiBase}/documents/${doc._id}/file`}><Download size={15} /></a>{!doc.deletedAt && ["needs_review", "failed"].includes(doc.status) && <Button className="icon-text-button" onClick={() => setReview(doc)}>Review</Button>}{!doc.deletedAt && doc.status === "failed" && <Button className="icon-text-button" onClick={async () => { try { await request(`${apiBase}/documents/${doc._id}/retry`, { method: "POST" }); void refresh(); } catch (err) { setError(String(err)); } }}>Retry</Button>}{!doc.deletedAt && doc.status === "unmatched" && <Button className="icon-text-button" onClick={() => setMatchDocument(doc)}>Review match</Button>}</div></td></tr>)}
         {!rows.length && <tr><td colSpan={9}>{loading ? <span role="status"><Loader2 size={16} className="spin" /> Loading documents…</span> : "No documents in this view"}</td></tr>}
       </tbody></table></div>
     </section>
@@ -289,10 +291,19 @@ export function DocumentsView({ apiBase }: { apiBase: string }) {
 }
 
 
+function DocumentPdfPreviewButton({ file, apiBase }: { file: FinancialDocument; apiBase: string }) {
+  return file.contentType === "application/pdf"
+    ? <PdfPreviewButton fileName={file.fileName} sourceUrl={`${apiBase}/documents/${encodeURIComponent(file._id)}/file?inline=1`} />
+    : null;
+}
+
 function DocumentFiles({ document: doc, apiBase, onReview, onReferenceReview }: { document: DocumentGroup; apiBase: string; onReview: () => void; onReferenceReview: (file: FinancialDocument) => void }) {
   const roles = new Set(doc.files.map(documentFileRole));
   const title = roles.has("invoice") && roles.has("receipt") ? "Invoice + receipt" : `${doc.files.length} files`;
-  const links = doc.files.map(file => <a className="document-original-link" key={file._id} href={`${apiBase}/documents/${file._id}/file`}><span>{documentFileRole(file) === "unknown" ? "Original" : documentFileRole(file)}</span> · {file.fileName}</a>);
+  const links = doc.files.map(file => <div className="document-original-file" key={file._id}>
+    <a className="document-original-link" href={`${apiBase}/documents/${file._id}/file`}><span>{documentFileRole(file) === "unknown" ? "Original" : documentFileRole(file)}</span> · {file.fileName}</a>
+    {doc.files.length > 1 && <DocumentPdfPreviewButton file={file} apiBase={apiBase} />}
+  </div>);
   return <>
     {doc.files.length > 1 ? <details className="document-purchase-files"><summary>{title}</summary>{links}</details> : links}
     {doc.files.filter(file => !file.deletedAt && file.referenceError).map(file => <Button key={file._id} variant="ghost" className="document-purchase-review" aria-label={`Review references for ${file.fileName}`} title={file.fileName} onClick={() => onReferenceReview(file)}>Review references</Button>)}
@@ -332,6 +343,7 @@ function PurchaseFileSummary({ file, apiBase }: { file: FinancialDocument; apiBa
   const e = file.extraction;
   return <article className="document-purchase-card">
     <a className="document-original-link" href={`${apiBase}/documents/${file._id}/file`}>{file.fileName}</a>
+    <DocumentPdfPreviewButton file={file} apiBase={apiBase} />
     <p><strong>{e?.counterparty}</strong> · {e?.amount?.toFixed(2)} {e?.currency} · {e?.issueDate}</p>
     <p>{file.entity ? wiseEntityLabel(file.entity) : "Company needs review"}{file.expenseId ? " · Expense recorded" : " · Not recorded"}</p>
     {e?.identity?.invoiceNumber && <p>Invoice: {e.identity.invoiceNumber}</p>}
@@ -411,6 +423,7 @@ function MatchDocument({ document, apiBase, onClose, onSaved }: { document: Fina
     <div className="document-match-main">
     <div className="panel-header"><DialogTitle>Match {document.extraction?.documentNumber || document.fileName}</DialogTitle><Button className="icon-button" aria-label="Close document match" disabled={busy} onClick={onClose}><X size={18} /></Button></div>
     <p>{document.extraction?.counterparty} · {document.extraction?.amount?.toFixed(2)} {document.extraction?.currency} · {document.extraction?.issueDate}</p>
+    <DocumentPdfPreviewButton file={document} apiBase={apiBase} />
     <DocumentBankPicker bank={bank} extraction={document.extraction} disabled={busy} />
     {error && <p className="inline-error" role="alert">{error}</p>}
     <div className="row-actions"><Button className="primary-button" disabled={!bank.selected || busy || !bank.canConfirm} onClick={async () => { setBusy(true); setError(""); try { await request(`${apiBase}/documents/${document._id}/match`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transactionId: bank.selected?.id, confirmCurrencyConversion: bank.confirmed }) }); onSaved(); window.dispatchEvent(new Event("finance:documents-changed")); onClose(); } catch (err) { setError(String(err)); } finally { setBusy(false); } }}>Confirm match</Button><InfoPopover label="Confirming a match"><p>Links the original document to this transaction. Payment status stays unchanged. Foreign-currency suggestions use merchant and nearby dates; verify the actual conversion before confirming.</p></InfoPopover></div>

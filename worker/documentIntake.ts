@@ -165,7 +165,12 @@ export async function handleDocumentApi(request: Request, env: DocumentEnv): Pro
       if (match[2] !== "file") return Response.json(stored.document);
       if (!stored.url) return Response.json({ message: "Original document is unavailable" }, { status: 404 });
       const response = await fetch(stored.url);
-      return new Response(response.body, { status: response.status, headers: { "Content-Type": stored.document.contentType, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(stored.document.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
+      if (!response.ok) {
+        await response.body?.cancel();
+        return Response.json({ message: "Original document could not be loaded" }, { status: response.status === 404 ? 404 : 502 });
+      }
+      const disposition = url.searchParams.get("inline") === "1" ? "inline" : "attachment";
+      return new Response(response.body, { status: response.status, headers: { "Content-Type": stored.document.contentType, "Content-Disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(stored.document.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
     } else return Response.json({ message: "Method not allowed" }, { status: 405 });
     return Response.json({ ok: true });
   } catch (error) { return Response.json({ message: error instanceof Error ? error.message : "Document request failed" }, { status: 400 }); }

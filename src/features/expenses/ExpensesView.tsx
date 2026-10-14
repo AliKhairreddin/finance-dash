@@ -1,12 +1,11 @@
 import { DocumentCreateMenu } from "./DocumentsView";
-import { ExpensePdfPreview } from "./ExpensePdfPreview";
+import { PdfPreviewButton } from "@/components/PdfPreview";
 import { useUrlState } from "@/lib/url-state";
 import { SortableTableHead, compareTableValues, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { documentTransactionLink } from "../../../shared/financialDocuments";
 import {
   Check,
   CircleAlert,
-  Eye,
   Folder,
   Loader2,
   Paperclip,
@@ -27,7 +26,6 @@ import { Textarea } from "@/components/ui/textarea";
 import type {
   CreateExpensePayload,
   DashboardSnapshot,
-  ExpenseDocument,
   ExpenseDocumentKind,
   ExpenseRecord,
   ExpenseVatTreatment,
@@ -144,8 +142,6 @@ export function ExpensesView({
   onMatchPayment: (expenseId: string, transactionId: string) => Promise<void>;
 }) {
   const [editorOpen, setEditorOpen] = useState(false);
-  const [previewDocument, setPreviewDocument] = useState<ExpenseDocument | null>(null);
-  const previewTrigger = useRef<HTMLButtonElement | null>(null);
   const [filter, setFilter] = useUrlState<"all" | "unpaid" | "paid" | "missing" | "matched">("expenseFilter", "all", { allowedValues: ["all", "unpaid", "paid", "missing", "matched"] });
   type ExpenseSortKey = "supplier" | "document" | "description" | "vat" | "status" | "amount";
   const [sort, setSort] = useUrlState<ExpenseSortKey>("expenseSort", "supplier", { allowedValues: ["supplier", "document", "description", "vat", "status", "amount"] });
@@ -242,9 +238,7 @@ export function ExpensesView({
                     <div className="expense-document-links">
                       {expense.documents.map((document) => (
                         document.contentType === "application/pdf" ? <div key={document.id} className="expense-pdf-attachment">
-                          <Button variant="link" size="sm" className="expense-pdf-trigger" title={document.fileName} aria-label={`View PDF: ${document.fileName}`} onClick={event => { previewTrigger.current = event.currentTarget; setPreviewDocument(document); }}>
-                            <Eye size={14} /> View PDF
-                          </Button>
+                          <PdfPreviewButton fileName={document.fileName} sourceUrl={`${apiBase}/expense-documents/${encodeURIComponent(document.id)}`} />
                           <small>{documentKindLabel(document.kind)}</small>
                         </div> : <a key={document.id} href={`${apiBase}/expense-documents/${encodeURIComponent(document.id)}`} target="_blank" rel="noreferrer" title={document.fileName}>
                           <Paperclip size={13} /> {documentKindLabel(document.kind)}
@@ -262,8 +256,6 @@ export function ExpensesView({
           </table>
         </div>
       </section>
-
-      {previewDocument && <ExpensePdfPreview key={previewDocument.id} document={previewDocument} apiBase={apiBase} onClose={() => setPreviewDocument(null)} finalFocus={previewTrigger} />}
 
       {editorOpen && (
         <ExpenseEditorDialog
