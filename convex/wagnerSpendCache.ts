@@ -1,9 +1,10 @@
 import { ConvexError, v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { internalMutation, mutation } from "./_generated/server";
 
 const leaseMs = 60_000;
 const maxPayloadBytes = 4 * 1024 * 1024;
 const maxChunks = 50;
+const cooldownKey = "wagner:v1:source-cooldown";
 
 function authorize(serviceToken: string) {
   if (!process.env.CONVEX_SERVICE_TOKEN || serviceToken !== process.env.CONVEX_SERVICE_TOKEN) {
@@ -17,7 +18,8 @@ export const acquire = mutation({
   returns: v.union(
     v.object({ status: v.literal("cached"), payload: v.string(), savedAt: v.number(), refreshAfter: v.union(v.number(), v.null()) }),
     v.object({ status: v.literal("claimed") }),
-    v.object({ status: v.literal("busy") })
+    v.object({ status: v.literal("busy") }),
+    v.object({ status: v.literal("throttled"), retryAfter: v.number() })
   ),
   handler: async (ctx, args) => {
     authorize(args.serviceToken);
@@ -32,6 +34,8 @@ export const acquire = mutation({
       return { status: "cached" as const, payload: chunks.map(chunk => chunk.text).join(""), savedAt: existing.savedAt, refreshAfter: existing.refreshAfter };
     }
     if (existing && (existing.leaseExpiresAt ?? 0) > Date.now()) return { status: "busy" as const };
+    const cooldown = await ctx.db.query("wagnerSpendCache").withIndex("by_key", q => q.eq("key", cooldownKey)).unique();
+    if (cooldown?.retryAfter && cooldown.retryAfter > Date.now()) return { status: "throttled" as const, retryAfter: cooldown.retryAfter };
     const claim = { attemptId: args.attemptId, leaseExpiresAt: Date.now() + leaseMs };
     if (existing) await ctx.db.patch(existing._id, claim);
     else await ctx.db.insert("wagnerSpendCache", { key: args.key, ...claim });
@@ -69,12 +73,32 @@ export const save = mutation({
 });
 
 export const release = mutation({
-  args: { serviceToken: v.string(), key: v.string(), attemptId: v.string() },
+  args: { serviceToken: v.string(), key: v.string(), attemptId: v.string(), retryAfter: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     authorize(args.serviceToken);
     const existing = await ctx.db.query("wagnerSpendCache").withIndex("by_key", q => q.eq("key", args.key)).unique();
     if (existing?.attemptId === args.attemptId) await ctx.db.patch(existing._id, { attemptId: undefined, leaseExpiresAt: undefined });
+    if (args.retryAfter !== undefined && Number.isFinite(args.retryAfter) && args.retryAfter > Date.now()) {
+      const cooldown = await ctx.db.query("wagnerSpendCache").withIndex("by_key", q => q.eq("key", cooldownKey)).unique();
+      if (!cooldown) await ctx.db.insert("wagnerSpendCache", { key: cooldownKey, retryAfter: args.retryAfter });
+      else if ((cooldown.retryAfter ?? 0) < args.retryAfter) await ctx.db.patch(cooldown._id, { retryAfter: args.retryAfter });
+    }
+    return null;
+  }
+});
+
+/** Operator-only reconciliation for late CRM corrections; keeps the last validated snapshot. */
+export const requestReconciliation = internalMutation({
+  args: { key: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const report = await ctx.db.query("wagnerSpendCache").withIndex("by_key", q => q.eq("key", args.key)).unique();
+    if (report?.savedAt === undefined) throw new ConvexError({ code: "WAGNER_REPORT_NOT_SAVED" });
+    if ((report.leaseExpiresAt ?? 0) > Date.now() || report.savedAt + 3_600_000 > Date.now()) {
+      throw new ConvexError({ code: "WAGNER_RECONCILIATION_COOLDOWN" });
+    }
+    await ctx.db.patch(report._id, { refreshAfter: Date.now() });
     return null;
   }
 });

@@ -1,17 +1,17 @@
-export const wagnerBreakdowns = ["agency", "ad_account", "buyer", "team", "source", "vertical", "category", "date"] as const;
+export const wagnerBreakdowns = ["agency", "ad_account", "buyer", "team", "source", "vertical", "category", "rt_campaign", "date"] as const;
 export type WagnerBreakdown = typeof wagnerBreakdowns[number];
-export const wagnerFilters = ["agency", "ad_account", "buyer", "team", "source", "vertical", "category"] as const;
+export const wagnerFilters = ["agency", "ad_account", "buyer", "team", "source", "vertical", "category", "rt_campaign"] as const;
 export type WagnerFilter = typeof wagnerFilters[number];
 export const wagnerLabels: Record<WagnerBreakdown, string> = {
   agency: "Agency", ad_account: "Ad account", buyer: "Media buyer", team: "Subteam",
-  source: "Platform", vertical: "Vertical", category: "Category", date: "Date"
+  source: "Platform", vertical: "Vertical", category: "Category", rt_campaign: "RedTrack campaign", date: "Date"
 };
 export const wagnerValueLabels: Record<string, string> = {
   facebook: "Meta", newsbreak: "NewsBreak", bigo: "Bigo Ads", vsl: "VSL",
   home_improvement: "Home improvement", insurance: "Insurance", unknown: "Unknown"
 };
 export type WagnerSpendRow = {
-  key: string; label: string; accountId: string | null; spend: number; commission: number; total: number;
+  key: string; label: string; accountId: string | null; campaignId: string | null; spend: number; commission: number; total: number;
 };
 export type WagnerSpendResponse = {
   fromDate: string; toDate: string; groupBy: WagnerBreakdown; currency: "USD";
@@ -40,9 +40,10 @@ export function validateWagnerDateRange(fromDate: string, toDate: string): void 
 
 export function wagnerSpendCsv(data: WagnerSpendResponse, rows = data.rows): string {
   const account = data.groupBy === "ad_account";
+  const campaign = data.groupBy === "rt_campaign";
   const values = [
-    [wagnerLabels[data.groupBy], ...(account ? ["Account ID"] : []), "Spend (USD)", "Commission (USD)", "Total cost (USD)"],
-    ...rows.map(row => [row.label, ...(account ? [row.accountId ?? ""] : []), row.spend.toFixed(2), row.commission.toFixed(2), row.total.toFixed(2)])
+    [wagnerLabels[data.groupBy], ...(account ? ["Account ID"] : []), ...(campaign ? ["Campaign ID"] : []), "Spend (USD)", "Commission (USD)", "Total cost (USD)"],
+    ...rows.map(row => [row.label, ...(account ? [row.accountId ?? ""] : []), ...(campaign ? [row.campaignId ?? ""] : []), row.spend.toFixed(2), row.commission.toFixed(2), row.total.toFixed(2)])
   ];
   return "\uFEFF" + values.map(row => row.map(value => {
     const safe = /^[=+\-@\t\r]/.test(value.trimStart()) ? `'${value}` : value;

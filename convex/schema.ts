@@ -985,6 +985,7 @@ export default defineSchema({
     .index("by_import_segment_date", ["importId", "segment", "date"]),
   wagnerSpendCache: defineTable({
     key: v.string(),
+    retryAfter: v.optional(v.number()),
     attemptId: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     savedAt: v.optional(v.number()),

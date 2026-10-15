@@ -6,9 +6,9 @@ import {
 
 export type WagnerCacheEntry = { payload: string; savedAt: number; refreshAfter: number | null };
 export type WagnerSpendCache = {
-  acquire(key: string, attemptId: string): Promise<({ status: "cached" } & WagnerCacheEntry) | { status: "claimed" | "busy" }>;
+  acquire(key: string, attemptId: string): Promise<({ status: "cached" } & WagnerCacheEntry) | { status: "claimed" | "busy" } | { status: "throttled"; retryAfter: number }>;
   save(key: string, attemptId: string, entry: WagnerCacheEntry): Promise<void>;
-  release(key: string, attemptId: string): Promise<void>;
+  release(key: string, attemptId: string, retryAfter?: number): Promise<void>;
 };
 
 class WagnerApiError extends Error {
@@ -45,7 +45,7 @@ export function parseWagnerSpend(value: unknown, fromDate: string, toDate: strin
   const keys = new Set<string>();
   const rows: WagnerSpendRow[] = data.rows.map(value => {
     const row = record(value);
-    const named = ["agency", "ad_account", "buyer", "team"].includes(groupBy);
+    const named = ["agency", "ad_account", "buyer", "team", "rt_campaign"].includes(groupBy);
     const id = nullableText(row[named ? `${groupBy}_id` : groupBy]);
     const name = named ? nullableText(row[`${groupBy}_name`]) : id;
     if (groupBy === "date" && (isoDate(id) < fromDate || isoDate(id) > toDate)) return invalid();
@@ -54,8 +54,9 @@ export function parseWagnerSpend(value: unknown, fromDate: string, toDate: strin
     keys.add(key);
     const spend = amount(row.spend_usd), commission = amount(row.commission_usd);
     return {
-      key, label: name ? (wagnerValueLabels[name] ?? name) : "Unassigned",
+      key, label: name ? (named ? name : wagnerValueLabels[name] ?? name) : "Unassigned",
       accountId: groupBy === "ad_account" ? nullableText(row.meta_act_id) ?? id : null,
+      campaignId: groupBy === "rt_campaign" ? id : null,
       spend, commission, total: totalCost(spend, commission)
     };
   });
@@ -74,13 +75,13 @@ export function parseWagnerSpend(value: unknown, fromDate: string, toDate: strin
 
 export function parseWagnerDimensions(value: unknown): WagnerDimensions {
   const data = record(value);
-  const fields = { agency: "agencies", ad_account: "ad_accounts", buyer: "buyers", team: "teams", source: "sources", vertical: "verticals", category: "categories" } as const;
+  const fields = { agency: "agencies", ad_account: "ad_accounts", buyer: "buyers", team: "teams", source: "sources", vertical: "verticals", category: "categories", rt_campaign: "rt_campaigns" } as const;
   const entries = wagnerFilters.map(filter => {
     const items = data[fields[filter]];
     if (!Array.isArray(items) || items.length > 10_000) return invalid();
     return [filter, items.map(item => {
       const row = record(item), id = nullableText(row.id), name = nullableText(row.name);
-      return { value: id ?? "none", label: name ? (wagnerValueLabels[name] ?? name) : "Unassigned" };
+      return { value: id ?? "none", label: name ? (["source", "vertical", "category"].includes(filter) ? wagnerValueLabels[name] ?? name : name) : "Unassigned" };
     }).sort((a, b) => a.label.localeCompare(b.label))];
   });
   return Object.fromEntries(entries) as WagnerDimensions;
@@ -90,6 +91,8 @@ export function parseWagnerDimensions(value: unknown): WagnerDimensions {
 export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined, cache: WagnerSpendCache): Promise<Response> {
   const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
   let claimedKey: string | undefined;
+  let retryAfter: number | undefined;
+  let sourceRequested = false;
   const attemptId = crypto.randomUUID();
   try {
     const dimensions = url.pathname.endsWith("/dimensions");
@@ -113,13 +116,19 @@ export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined,
         upstream.searchParams.set(filter, value.split(",").map(item => item.trim().toLowerCase()).filter(Boolean).sort().join(","));
       }
     }
-    const key = `wagner:v1:${upstream.pathname}?${upstream.searchParams}`;
+    // Refresh the dimensions contract once so older snapshots cannot hide the new campaign list.
+    // Existing spend reports retain their identities and saved financial data.
+    const key = `wagner:v1:${upstream.pathname}?${dimensions ? "schema=rt_campaign" : upstream.searchParams}`;
     let cached = await cache.acquire(key, attemptId);
     for (let wait = 0; cached.status === "busy" && wait < 8; wait++) {
       await new Promise(resolve => setTimeout(resolve, 250));
       cached = await cache.acquire(key, attemptId);
     }
     if (cached.status === "busy") throw new WagnerApiError(409, "This Wagner report is being saved. Please retry shortly.");
+    if (cached.status === "throttled") {
+      retryAfter = cached.retryAfter;
+      throw new WagnerApiError(429, `Wagner source requests are paused until ${new Date(retryAfter).toISOString()}. Saved reports remain available.`);
+    }
     const parse = (value: unknown) => dimensions ? parseWagnerDimensions(value) : parseWagnerSpend(value, fromDate, toDate, groupBy);
     const result = (data: ReturnType<typeof parse>, entry: WagnerCacheEntry) => dimensions ? data : {
       ...data, savedAt: new Date(entry.savedAt).toISOString(), refreshAfter: entry.refreshAfter === null ? null : new Date(entry.refreshAfter).toISOString()
@@ -127,14 +136,18 @@ export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined,
     if (cached.status === "cached") return reply(result(parse(JSON.parse(cached.payload)), cached));
     claimedKey = key;
     if (!apiKey?.trim()) throw new WagnerApiError(503, "Wagner spend is not configured.");
+    sourceRequested = true;
     const response = await fetch(upstream, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
       // Workers supports manual/follow only. Reject 3xx below without forwarding credentials.
       redirect: "manual", signal: AbortSignal.timeout(30_000)
     });
     if (!response.ok) {
+      const retry = response.headers.get("Retry-After");
+      const requestedRetry = retry === null ? NaN : /^\d+$/.test(retry.trim()) ? Date.now() + Number(retry) * 1_000 : Date.parse(retry);
+      retryAfter = Math.max(Date.now() + 60_000, Number.isFinite(requestedRetry) ? requestedRetry : 0);
       await response.body?.cancel();
-      throw new WagnerApiError(502, response.status === 401 || response.status === 403
+      throw new WagnerApiError(response.status === 429 ? 429 : 502, response.status === 401 || response.status === 403
         ? "Wagner rejected the API credentials. Ask an administrator to update the connection."
         : response.status === 429 ? "Wagner is rate limiting requests. Please retry shortly."
         : "Wagner spend is unavailable. Please retry shortly.");
@@ -150,7 +163,10 @@ export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined,
     claimedKey = undefined;
     return reply(result(parsed, entry));
   } catch (error) {
-    if (claimedKey) await cache.release(claimedKey, attemptId).catch(() => undefined);
-    return reply({ message: error instanceof WagnerApiError ? error.message : "Wagner spend could not be loaded. Please retry." }, error instanceof WagnerApiError ? error.status : 502);
+    if (sourceRequested) retryAfter ??= Date.now() + 60_000;
+    if (claimedKey) await cache.release(claimedKey, attemptId, retryAfter).catch(() => undefined);
+    const response = reply({ message: error instanceof WagnerApiError ? error.message : "Wagner spend could not be loaded. Please retry." }, error instanceof WagnerApiError ? error.status : 502);
+    if (retryAfter !== undefined) response.headers.set("Retry-After", String(Math.max(1, Math.ceil((retryAfter - Date.now()) / 1_000))));
+    return response;
   }
 }

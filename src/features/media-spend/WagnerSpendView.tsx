@@ -14,8 +14,8 @@ import {
   type WagnerBreakdown, type WagnerDimensions, type WagnerFilter, type WagnerStoredSpendResponse, type WagnerSpendRow
 } from "../../../shared/wagnerSpend";
 
-type SortKey = "label" | "accountId" | "spend" | "commission" | "total";
-const sortKeys: SortKey[] = ["label", "accountId", "spend", "commission", "total"];
+type SortKey = "label" | "accountId" | "campaignId" | "spend" | "commission" | "total";
+const sortKeys: SortKey[] = ["label", "accountId", "campaignId", "spend", "commission", "total"];
 const pageSize = 100;
 const money = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 
@@ -47,7 +47,8 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
   const [direction, setDirection] = useUrlState<TableSortDirection>("wagnerOrder", "desc", { allowedValues: ["asc", "desc"] });
   const filterStates = {
     agency: useWagnerFilter("agency"), ad_account: useWagnerFilter("ad_account"), buyer: useWagnerFilter("buyer"),
-    team: useWagnerFilter("team"), source: useWagnerFilter("source"), vertical: useWagnerFilter("vertical"), category: useWagnerFilter("category")
+    team: useWagnerFilter("team"), source: useWagnerFilter("source"), vertical: useWagnerFilter("vertical"), category: useWagnerFilter("category"),
+    rt_campaign: useWagnerFilter("rt_campaign")
   };
   const params = new URLSearchParams({ ...dateRange, groupBy });
   for (const filter of wagnerFilters) if (filterStates[filter][0]) params.set(filter, filterStates[filter][0]);
@@ -84,8 +85,9 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
     return () => controller.abort();
   }, [apiBase, refresh]);
 
-  // Account IDs are only a column in the account breakdown.
-  const activeSortKey = sortKey === "accountId" && groupBy !== "ad_account" ? "label" : sortKey;
+  // Identifier columns are only sortable while their breakdown is visible.
+  const activeSortKey = (sortKey === "accountId" && groupBy !== "ad_account")
+    || (sortKey === "campaignId" && groupBy !== "rt_campaign") ? "label" : sortKey;
   const rows = useMemo(() => [...(data?.rows ?? [])].sort((a, b) =>
     compareTableValues(a[activeSortKey], b[activeSortKey], direction) || a.key.localeCompare(b.key)
   ), [data, activeSortKey, direction]);
@@ -133,6 +135,7 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
             <span>Wagner ad delivery from Inchops, in USD. Commission is shown separately from media spend. These figures are excluded from official accounting and cash-flow calculations.</span>
             <span>Each date range, breakdown, and filter combination is saved in Convex on first use. Refresh reuses saved reports. Recent periods refresh at most hourly; reports fetched more than 14 days after their end date are retained without automatic re-fetching.</span>
             <span>Today is still pending. Subteams are the groups within Wagner. Summary totals come directly from the API; rounded rows may differ by a few cents.</span>
+            <span>RedTrack campaigns use the CRM's campaign attribution. Unassigned includes spend that could not be matched to a RedTrack campaign.</span>
           </InfoPopover>
           {teamPicker}
         </div>
@@ -186,6 +189,7 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
           <thead><tr>
             <SortableTableHead {...sortProps} sortKey="label">{wagnerLabels[groupBy]}</SortableTableHead>
             {groupBy === "ad_account" && <SortableTableHead {...sortProps} sortKey="accountId">Account ID</SortableTableHead>}
+            {groupBy === "rt_campaign" && <SortableTableHead {...sortProps} sortKey="campaignId">Campaign ID</SortableTableHead>}
             <SortableTableHead {...sortProps} className="amount" sortKey="spend">Spend</SortableTableHead>
             <SortableTableHead {...sortProps} className="amount" sortKey="commission">Commission</SortableTableHead>
             <SortableTableHead {...sortProps} className="amount" sortKey="total">Total cost</SortableTableHead>
@@ -194,6 +198,7 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
             <td>{groupBy === "date" ? <strong>{row.label}{row.label >= today && <Badge variant="outline">Pending</Badge>}</strong>
               : <button type="button" className="bank-group-drilldown" onClick={() => drillDown(row)} aria-label={`View daily spend for ${row.label}`}><strong>{row.label}</strong><ChevronRight size={14} /></button>}</td>
             {groupBy === "ad_account" && <td>{row.accountId ?? "—"}</td>}
+            {groupBy === "rt_campaign" && <td>{row.campaignId ?? "—"}</td>}
             <td className="amount media-spend-amount">{money(row.spend)}</td><td className="amount">{money(row.commission)}</td><td className="amount">{money(row.total)}</td>
           </tr>)}</tbody>
         </table></div>}

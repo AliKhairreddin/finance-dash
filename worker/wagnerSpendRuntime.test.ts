@@ -42,12 +42,13 @@ test("Wagner loads and caches reports in workerd and never follows source redire
             assert.equal(request.headers.get("Authorization"), "Bearer test-source-key");
             sourceCalls++;
             if (redirect) return new Response(null, { status: 307, headers: { Location: "https://unexpected.example/" } });
-            if (url.pathname.endsWith("/dimensions")) return Response.json({ agencies: [], ad_accounts: [], buyers: [], teams: [], sources: [], verticals: [], categories: [] });
+            if (url.pathname.endsWith("/dimensions")) return Response.json({ agencies: [], ad_accounts: [], buyers: [], teams: [], sources: [], verticals: [], categories: [], rt_campaigns: [{ id: "rt-1", name: "Campaign" }] });
+            const campaign = url.searchParams.get("group_by") === "rt_campaign";
             return Response.json({
-              from: url.searchParams.get("from"), to: url.searchParams.get("to"), currency: "USD", group_by: ["agency"],
+              from: url.searchParams.get("from"), to: url.searchParams.get("to"), currency: "USD", group_by: [campaign ? "rt_campaign" : "agency"],
               data_through: "2026-10-08", generated_at: "2026-10-08T12:00:00Z",
               totals: { spend_usd: 5, commission_usd: 0.15, rows: 1 },
-              rows: [{ agency_id: "agency", agency_name: "Agency", spend_usd: 5, commission_usd: 0.15 }]
+              rows: [{ ...(campaign ? { rt_campaign_id: "rt-1", rt_campaign_name: "Campaign" } : { agency_id: "agency", agency_name: "Agency" }), spend_usd: 5, commission_usd: 0.15 }]
             });
           }
         }
@@ -55,10 +56,11 @@ test("Wagner loads and caches reports in workerd and never follows source redire
     }]
   });
   try {
-    const url = "https://finance.example/api/media-spend/wagner?fromDate=2026-09-01&toDate=2026-09-07";
+    const url = "https://finance.example/api/media-spend/wagner?fromDate=2026-09-01&toDate=2026-09-07&groupBy=rt_campaign";
     const first = await runtime.dispatchFetch(url);
     assert.equal(first.status, 200, await first.clone().text());
-    const report = await first.json();
+    const report = await first.json() as { rows: { campaignId: string }[] };
+    assert.equal(report.rows[0].campaignId, "rt-1");
     const cached = await runtime.dispatchFetch(url);
     assert.equal(cached.status, 200);
     assert.deepEqual(await cached.json(), report);

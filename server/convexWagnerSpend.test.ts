@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acquire, save, release } from "../convex/wagnerSpendCache";
+import { acquire, save, release, requestReconciliation } from "../convex/wagnerSpendCache";
 
 function handler(fn: object): (ctx: unknown, args: unknown) => Promise<unknown> {
   return Reflect.get(fn, "_handler");
@@ -55,4 +55,46 @@ test("expired Wagner reservations can be reclaimed without allowing the former o
   assert.deepEqual(await handler(acquire)(ctx, args), { status: "claimed" });
   await handler(release)(ctx, { ...args, attemptId: "old" });
   assert.equal(report.attemptId, "new");
+});
+
+test("Wagner reconciliation preserves snapshots and shares durable provider cooldowns across reports", async t => {
+  const original = process.env.CONVEX_SERVICE_TOKEN;
+  process.env.CONVEX_SERVICE_TOKEN = "wagner-test";
+  t.after(() => { if (original === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = original; });
+  let now = Date.parse("2026-10-08T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  type Row = { _id: string; key: string; savedAt?: number; refreshAfter?: number | null; chunkCount?: number; attemptId?: string; leaseExpiresAt?: number; retryAfter?: number };
+  const reports = new Map<string, Row>();
+  const key = "wagner:v1:report";
+  reports.set(key, { _id: key, key, savedAt: now, refreshAfter: null, chunkCount: 1 });
+  const ctx = { db: {
+    query: () => ({ withIndex: (_name: string, filter: (q: unknown) => void) => {
+      let lookup = "";
+      filter({ eq: (_field: string, value: string) => { lookup = value; } });
+      return { unique: async () => reports.get(lookup) ?? null, take: async () => [{ part: 0, text: "saved snapshot" }] };
+    } }),
+    patch: async (id: string, values: Partial<Row>) => { reports.set(id, { ...reports.get(id)!, ...values }); },
+    insert: async (_table: string, row: Row) => { reports.set(row.key, { ...row, _id: row.key }); return row.key; }
+  } };
+  const args = { serviceToken: "wagner-test", key, attemptId: "refresh" };
+  await assert.rejects(handler(requestReconciliation)(ctx, { key: "missing" }), /NOT_SAVED/);
+  await assert.rejects(handler(requestReconciliation)(ctx, { key }), /COOLDOWN/);
+  now += 3_600_001;
+  await handler(requestReconciliation)(ctx, { key });
+  assert.equal(reports.get(key)?.refreshAfter, now);
+  assert.equal(reports.get(key)?.chunkCount, 1);
+  assert.deepEqual(await handler(acquire)(ctx, args), { status: "claimed" });
+  await assert.rejects(handler(requestReconciliation)(ctx, { key }), /COOLDOWN/);
+  const retryAfter = now + 120_000;
+  await handler(release)(ctx, { ...args, retryAfter });
+  assert.equal(reports.get(key)?.chunkCount, 1);
+  assert.deepEqual(await handler(acquire)(ctx, args), { status: "throttled", retryAfter });
+  assert.deepEqual(await handler(acquire)(ctx, { ...args, key: "wagner:v1:other" }), { status: "throttled", retryAfter });
+  // A shorter subsequent delay must never shorten the provider's cooldown.
+  await handler(release)(ctx, { ...args, retryAfter: now + 60_000 });
+  assert.deepEqual(await handler(acquire)(ctx, args), { status: "throttled", retryAfter });
+  reports.set("wagner:v1:saved", { _id: "saved", key: "wagner:v1:saved", savedAt: now, refreshAfter: null, chunkCount: 1 });
+  assert.deepEqual(await handler(acquire)(ctx, { ...args, key: "wagner:v1:saved" }), { status: "cached", payload: "saved snapshot", savedAt: now, refreshAfter: null });
+  now = retryAfter + 1;
+  assert.deepEqual(await handler(acquire)(ctx, args), { status: "claimed" });
 });
