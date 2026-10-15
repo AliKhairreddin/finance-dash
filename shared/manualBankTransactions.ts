@@ -29,6 +29,11 @@ export function isManualBankSource(value: unknown): value is ManualBankSource {
   return value === "kraken" || value === "trust";
 }
 
+export function validateManualBankRequestId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value)) throw new Error("A valid transaction request ID is required.");
+  return value;
+}
+
 export function validateManualBankFields(input: ManualBankFields): ManualBankFields {
   const companyName = typeof input.companyName === "string" ? input.companyName.trim().replace(/\s+/gu, " ") : "";
   if (!companyName || companyName.length > 200 || /[\u0000-\u001f]/u.test(companyName)) throw new Error("Enter a company name of 1–200 characters.");

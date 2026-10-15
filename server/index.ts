@@ -251,7 +251,7 @@ app.use("/api/manual-bank-transactions", async (request, response, next) => {
     const origin = `${request.protocol}://${request.get("host")}`;
     const result = await handleManualBankApi(new Request(new URL(request.originalUrl, origin), {
       method: request.method, headers: { "Content-Type": "application/json", "Origin": request.get("origin") ?? "" },
-      ...(request.method === "PATCH" ? { body: JSON.stringify(request.body) } : {})
+      ...(["POST", "PATCH", "DELETE"].includes(request.method) ? { body: JSON.stringify(request.body) } : {})
     }), { CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken() }, { username: "Local developer", role: "administrator" });
     if (!result) return next();
     response.status(result.status).json(await result.json());

@@ -42,7 +42,7 @@ export function financeOperatorCanAccess(request: Request): boolean {
       || /^\/api\/invoices\/[^/]+\/payment-suggestions$/u.test(path);
   }
   if (request.method === "POST") {
-    return ["/api/sync", "/api/transactions/sync", "/api/transactions/slash-metadata-repair",
+    return ["/api/manual-bank-transactions", "/api/sync", "/api/transactions/sync", "/api/transactions/slash-metadata-repair",
       "/api/transactions/auto-categorize", "/api/matches", "/api/invoices/auto-match-payments",
       "/api/wise/import-statement", "/api/holdings", "/api/fx/refresh", "/api/management-report/upload",
       "/api/documents/upload", "/api/documents/trash", "/api/documents/restore", "/api/amex/statements/upload",
@@ -57,7 +57,7 @@ export function financeOperatorCanAccess(request: Request): boolean {
     return path === "/api/documents/config" || /^\/api\/(?:holdings|invoices)\/[^/]+$/u.test(path);
   }
   if (request.method === "DELETE") {
-    return /^\/api\/(?:holdings|documents)\/[^/]+$/u.test(path)
+    return /^\/api\/(?:holdings|documents|manual-bank-transactions)\/[^/]+$/u.test(path)
       || /^\/api\/amex\/statements\/[^/]+$/u.test(path);
   }
   return false;

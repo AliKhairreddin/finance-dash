@@ -1,7 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
-import { isManualBankSource, manualBankSortKeys, validateManualBankFields, type ManualBankFields, type ManualBankSortKey } from "../shared/manualBankTransactions";
+import { isManualBankSource, manualBankSortKeys, validateManualBankFields, validateManualBankRequestId, type ManualBankFields, type ManualBankSortKey } from "../shared/manualBankTransactions";
 import type { DashboardSession } from "../shared/types";
 
 export async function handleManualBankApi(request: Request, env: Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN">, session: DashboardSession | null): Promise<Response | null> {
@@ -16,14 +16,27 @@ export async function handleManualBankApi(request: Request, env: Pick<WorkerEnv,
       return Response.json(await convex.query(api.manualBankTransactions.list, { serviceToken, source, sortKey: sortKey as ManualBankSortKey, order: order as "asc" | "desc", paginationOpts: { numItems: 50, cursor: url.searchParams.get("cursor") || null } }));
     }
     const match = url.pathname.match(/^\/api\/manual-bank-transactions\/([a-z0-9]+)$/u);
-    if (request.method === "PATCH" && match) {
+    const creating = request.method === "POST" && url.pathname === "/api/manual-bank-transactions";
+    if (creating || ((request.method === "PATCH" || request.method === "DELETE") && match)) {
       if (request.headers.get("Origin") !== url.origin) return Response.json({ message: "Open this editor from the dashboard." }, { status: 403 });
       const text = await request.text();
-      if (text.length > 4096) throw new Error("Transaction update is too large.");
-      const input = JSON.parse(text) as ManualBankFields & { expectedRevision: number };
-      const fields = validateManualBankFields(input);
+      if (text.length > 4096) throw new Error("Transaction request is too large.");
+      const input = JSON.parse(text) as ManualBankFields & { expectedRevision: number; source: unknown; requestId: unknown };
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid transaction request.");
+      if (creating) {
+        if (!isManualBankSource(input.source)) throw new Error("Invalid ledger.");
+        const fields = validateManualBankFields(input), requestId = validateManualBankRequestId(input.requestId);
+        const result = await convex.mutation(api.manualBankTransactions.createFromDashboard, { serviceToken, ...fields, source: input.source, requestId, createdBy: session.username });
+        return Response.json(result, { status: result.duplicate ? 200 : 201 });
+      }
       if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("Transaction revision is required.");
-      await convex.mutation(api.manualBankTransactions.update, { serviceToken, id: match[1] as Id<"manualBankTransactions">, ...fields, expectedRevision: input.expectedRevision, updatedBy: session.username });
+      const id = match![1] as Id<"manualBankTransactions">;
+      if (request.method === "DELETE") {
+        await convex.mutation(api.manualBankTransactions.remove, { serviceToken, id, expectedRevision: input.expectedRevision, deletedBy: session.username });
+      } else {
+        const fields = validateManualBankFields(input);
+        await convex.mutation(api.manualBankTransactions.update, { serviceToken, id, ...fields, expectedRevision: input.expectedRevision, updatedBy: session.username });
+      }
       return Response.json({ ok: true });
     }
     return Response.json({ message: "Method not allowed." }, { status: 405 });

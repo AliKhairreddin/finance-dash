@@ -600,14 +600,15 @@ const profitDistributionSnapshot = v.object({
 
 export default defineSchema({
   manualBankTransactions: defineTable({
-    ...manualBankRecord, intakeKey: v.string(), companySort: v.string(), sentAt: v.number()
+    ...manualBankRecord, intakeKey: v.string(), companySort: v.string(), sentAt: v.optional(v.number()),
+    deletedAt: v.optional(v.string()), deletedBy: v.optional(v.string())
   }).index("by_intake_key", ["intakeKey"])
-    .index("by_source_date", ["source", "date"])
-    .index("by_source_company", ["source", "companySort"])
-    .index("by_source_amount", ["source", "amount"])
-    .index("by_source_currency", ["source", "currency"])
-    .index("by_source_direction", ["source", "direction"])
-    .index("by_source_creator", ["source", "createdBy"]),
+    .index("by_source_date", ["source", "deletedAt", "date"])
+    .index("by_source_company", ["source", "deletedAt", "companySort"])
+    .index("by_source_amount", ["source", "deletedAt", "amount"])
+    .index("by_source_currency", ["source", "deletedAt", "currency"])
+    .index("by_source_direction", ["source", "deletedAt", "direction"])
+    .index("by_source_creator", ["source", "deletedAt", "createdBy"]),
   manualBankTransactionEdits: defineTable({
     transactionId: v.id("manualBankTransactions"), revision: v.number(),
     before: v.object(manualBankFields), after: v.object(manualBankFields), updatedBy: v.string(), updatedAt: v.string()
