@@ -6,6 +6,7 @@ export const mediaFundingBankCategory = "Ad account funding" as const;
 
 export type MediaFundingAssignmentScope = "business_manager" | "ad_account";
 export type MediaFundingBillingType = "card" | "credit_line";
+export const mediaFundingDefaultEffectiveFrom = "2026-01-01";
 export const mediaFundingBillingTypeLabels: Record<MediaFundingBillingType, string> = {
   card: "Card",
   credit_line: "Credit line"

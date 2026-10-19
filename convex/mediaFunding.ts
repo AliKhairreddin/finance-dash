@@ -362,6 +362,67 @@ export const prepareBillingRebuild = mutation({
   }
 });
 
+// Audited maintenance: extend equivalent assignment history without inventing a billing type.
+export const backdateAssignmentHistory = mutation({
+  args: {
+    serviceToken: v.string(),
+    effectiveFrom: v.string(),
+    updatedAt: v.string(),
+    expectedAssignments: v.array(v.object({ id: v.id("mediaFundingAssignments"), updatedAt: v.string() }))
+  },
+  returns: v.object({
+    updatedAssignments: v.number(), consolidatedRows: v.number(),
+    rebuildFrom: v.optional(v.string()), rebuildTo: v.optional(v.string()),
+    billingRevisions: v.optional(v.array(billingRevisionResult))
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    requireIsoDate(args.effectiveFrom, "Assignment effective date");
+    const assignments = await requireBoundedRows(ctx.db.query("mediaFundingAssignments").take(maximumAssignments + 1), maximumAssignments, "There are too many funding assignments");
+    const expected = new Map(args.expectedAssignments.map((item) => [item.id, item.updatedAt]));
+    if (expected.size !== args.expectedAssignments.length || expected.size !== assignments.length
+      || assignments.some((item) => expected.get(item._id) !== item.updatedAt)) {
+      throw fundingError("MEDIA_FUNDING_CONFLICT", "Assignment history changed since the backup; refresh the backup before backdating");
+    }
+    const groups = new Map<string, Doc<"mediaFundingAssignments">[]>();
+    for (const assignment of assignments) {
+      const group = groups.get(assignment.targetKey) ?? [];
+      group.push(assignment);
+      groups.set(assignment.targetKey, group);
+    }
+    const changes: { current: Doc<"mediaFundingAssignments">; history: Doc<"mediaFundingAssignments">[] }[] = [];
+    const currentAssignments: Doc<"mediaFundingAssignments">[] = [];
+    for (const history of groups.values()) {
+      const current = history.filter((item) => !item.effectiveTo);
+      if (current.length !== 1 || history.some((item) => item.providerId !== current[0].providerId || item.billingType !== current[0].billingType)) {
+        throw fundingError("MEDIA_FUNDING_CONFLICT", "Backdating would erase a provider or billing-type change; review this account's history first");
+      }
+      if (history.some((item) => item.effectiveFrom < args.effectiveFrom)) {
+        throw fundingError("INVALID_MEDIA_FUNDING", "Backdating cannot remove earlier assignment coverage");
+      }
+      currentAssignments.push(current[0]);
+      if (history.length > 1 || current[0].effectiveFrom !== args.effectiveFrom) changes.push({ current: current[0], history });
+    }
+    const assignedBms = new Set(currentAssignments.filter((item) => item.scope === "business_manager").map((item) => item.businessManagerKey));
+    if (currentAssignments.some((item) => item.scope === "ad_account" && assignedBms.has(item.businessManagerKey))) {
+      throw fundingError("MEDIA_FUNDING_CONFLICT", "Backdating would overlap business-manager and account assignments");
+    }
+    let consolidatedRows = 0;
+    for (const { current, history } of changes) {
+      for (const old of history) if (old._id !== current._id) {
+        await ctx.db.delete(old._id);
+        consolidatedRows += 1;
+      }
+      await ctx.db.patch(current._id, {
+        effectiveFrom: args.effectiveFrom, updatedAt: args.updatedAt,
+        ...(history.some((item) => !item.autoPattern) ? { autoPattern: undefined } : {})
+      });
+    }
+    const range = changes.length ? await requestBillingRebuild(ctx, new Set(changes.map(({ current }) => current.providerId)), args.effectiveFrom, args.updatedAt) : {};
+    return { ...range, updatedAssignments: changes.length, consolidatedRows };
+  }
+});
+
 export const completeBillingRebuild = mutation({
   args: { serviceToken: v.string(), providerId: v.id("mediaFundingProviders"), revision: v.number(), updatedAt: v.string() },
   returns: v.boolean(),

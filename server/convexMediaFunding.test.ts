@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { billingRebuildStatus, prepareBillingRebuild, completeBillingRebuild, assignTargets, createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { backdateAssignmentHistory, billingRebuildStatus, prepareBillingRebuild, completeBillingRebuild, assignTargets, createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
 import { emptyMediaFundingBillingSpend, resolveMediaFundingAssignment } from "../shared/mediaFunding";
 
 import { mediaSpendDates } from "../shared/mediaSpend";
@@ -24,6 +24,57 @@ async function finishRebuild(ctx: ReturnType<typeof database>, range: { rebuildF
   }
   for (const revision of range.billingRevisions ?? []) await call(completeBillingRebuild, ctx, { serviceToken, ...revision, updatedAt });
 }
+
+test("backdating consolidates equivalent history, keeps billing choices and financial sources, and rebuilds earlier spend", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    ctx.tables.mediaFundingAssignments[0].effectiveTo = "2026-09-20";
+    ctx.tables.mediaFundingAssignments.push({ ...ctx.tables.mediaFundingAssignments[0], _id: "current-1", effectiveFrom: "2026-09-21", effectiveTo: undefined, autoPattern: "lmd #" });
+    ctx.tables.mediaFundingAssignments[1].billingType = "card";
+    ctx.tables.mediaFundingAssignments.push({ ...ctx.tables.mediaFundingAssignments[1], _id: "current-3", targetKey: "ad_account:Facebook:3", accountId: "3", accountName: "LMD02_3", billingType: "credit_line", effectiveFrom: "2026-09-21" });
+    const bank = structuredClone(ctx.tables.bankTransactions), spend = structuredClone(ctx.tables.mediaSpendDaily);
+    const expected = () => ctx.tables.mediaFundingAssignments.map((item: any) => ({ id: item._id, updatedAt: item.updatedAt }));
+    const args = { serviceToken, effectiveFrom: "2026-01-01", updatedAt, expectedAssignments: expected() };
+    const result = await call(backdateAssignmentHistory, ctx, args);
+    assert.equal(result.updatedAssignments, 3);
+    assert.equal(result.consolidatedRows, 1);
+    assert.equal(ctx.tables.mediaFundingAssignments.length, 3);
+    assert(ctx.tables.mediaFundingAssignments.every((item: any) => item.effectiveFrom === args.effectiveFrom && !item.effectiveTo));
+    const unknown = ctx.tables.mediaFundingAssignments.find((item: any) => item._id === "current-1");
+    const card = ctx.tables.mediaFundingAssignments.find((item: any) => item._id === "assignment-2");
+    assert(unknown && card);
+    assert.equal(unknown.billingType, undefined);
+    assert.equal(unknown.autoPattern, undefined);
+    assert.equal(card.billingType, "card");
+    assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, null);
+    await finishRebuild(ctx, result);
+    assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, 75);
+    assert.deepEqual(ctx.tables.bankTransactions, bank);
+    assert.deepEqual(ctx.tables.mediaSpendDaily, spend);
+    assert.deepEqual(await call(backdateAssignmentHistory, ctx, { ...args, expectedAssignments: expected() }), { updatedAssignments: 0, consolidatedRows: 0 });
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+test("backdating rejects stale backups, real history changes, earlier coverage and BM overlaps before writing", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    for (const scenario of ["provider", "billing", "earlier", "bm", "stale", "auth"]) {
+      const ctx = database(seed());
+      if (scenario === "provider" || scenario === "billing") {
+        ctx.tables.mediaFundingAssignments[0].effectiveTo = "2026-09-20";
+        ctx.tables.mediaFundingAssignments.push({ ...ctx.tables.mediaFundingAssignments[0], _id: "changed", effectiveFrom: "2026-09-21", effectiveTo: undefined,
+          ...(scenario === "provider" ? { providerId: "other" } : { billingType: "card" }) });
+      }
+      if (scenario === "earlier") ctx.tables.mediaFundingAssignments[0].effectiveFrom = "2025-12-01";
+      if (scenario === "bm") ctx.tables.mediaFundingAssignments.push({ ...ctx.tables.mediaFundingAssignments[0], _id: "bm-parent", scope: "business_manager", targetKey: "business_manager:Facebook:bm", effectiveFrom: "2026-09-21" });
+      const snapshot = structuredClone(ctx.tables);
+      const expectedAssignments = ctx.tables.mediaFundingAssignments.map((item: any) => ({ id: item._id, updatedAt: scenario === "stale" ? "old" : item.updatedAt }));
+      await assert.rejects(call(backdateAssignmentHistory, ctx, { serviceToken: scenario === "auth" ? "wrong" : serviceToken, effectiveFrom: "2026-01-01", updatedAt, expectedAssignments }));
+      assert.deepEqual(ctx.tables, snapshot, scenario);
+    }
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
 
 test("bulk provider assignment saves individual billing types and preserves dated history and financial records", async () => {
   const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
