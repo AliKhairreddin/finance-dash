@@ -39,14 +39,14 @@ import {
 } from "../../../shared/mediaFunding";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
-type ProviderSortKey = "assignments" | "balance" | "fee" | "funded" | "opening" | "provider" | "spend";
+type ProviderSortKey = "assignments" | "balance" | "fee" | "funded" | "opening" | "provider" | "creditLineSpend";
 type ActivitySortKey = "date" | "fee" | "net" | "note" | "payment" | "type";
 type AssignmentSortKey = "from" | "scope" | "target" | "to";
 type FundingActivity =
   | { kind: "bank"; item: MediaFundingBankFunding }
   | { kind: "adjustment"; item: MediaFundingEntry };
 
-const providerSortKeys: readonly ProviderSortKey[] = ["assignments", "balance", "fee", "funded", "opening", "provider", "spend"];
+const providerSortKeys: readonly ProviderSortKey[] = ["assignments", "balance", "fee", "funded", "opening", "provider", "creditLineSpend"];
 const activitySortKeys: readonly ActivitySortKey[] = ["date", "fee", "net", "note", "payment", "type"];
 const assignmentSortKeys: readonly AssignmentSortKey[] = ["from", "scope", "target", "to"];
 
@@ -80,7 +80,7 @@ function providerSortValue(provider: MediaFundingProvider, key: ProviderSortKey)
   if (key === "fee") return provider.defaultFeePercent;
   if (key === "funded") return provider.netFunding;
   if (key === "opening") return provider.openingBalance;
-  if (key === "spend") return provider.spend;
+  if (key === "creditLineSpend") return provider.billingSpend?.credit_line;
   return provider.name;
 }
 
@@ -253,7 +253,7 @@ export function MediaFundingView({
             <h2>Provider balances</h2>
             <InfoPopover label="provider balances">
               <span>Posted or settled outgoing bank transactions categorized as Ad account funding and matched to the linked supplier become funding credits automatically.</span>
-              <span>Available balance equals opening balance plus fee-adjusted bank funding and adjustments, minus confirmed provider-funded spend. Account ownership and payment method are separate. Balances remain unavailable while funding needs review.</span>
+              <span>Available balance equals opening balance plus fee-adjusted bank funding and adjustments, minus spend on accounts marked Credit line for each spend date. Card spend does not reduce the balance. Balances remain unavailable during recalculation or while account billing types or funding need review.</span>
               <span>This derived balance does not create or duplicate cash transactions in official bank or analytics totals.</span>
             </InfoPopover>
           </div>
@@ -290,7 +290,7 @@ export function MediaFundingView({
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="fee">Fee</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="opening">Opening</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="funded">Net funded</SortableTableHead>
-                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="spend">Account spend</SortableTableHead>
+                <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="creditLineSpend" description="Only credit-line account spend reduces the provider balance. Card spend is excluded.">Credit-line spend</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="balance">Balance</SortableTableHead>
                 <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="assignments">Assignments</SortableTableHead>
               </tr></thead>
@@ -300,7 +300,7 @@ export function MediaFundingView({
                   <td className="amount">{provider.defaultFeePercent.toLocaleString(undefined, { maximumFractionDigits: 4 })}%</td>
                   <td className="amount">{money(provider.openingBalance, provider.currency)}</td>
                   <td className="amount">{money(provider.netFunding, provider.currency)}</td>
-                  <td className="amount">{money(provider.spend, provider.currency)}</td>
+                  <td className="amount">{money(provider.billingSpend?.credit_line ?? null, provider.currency)}</td>
                   <td className={`amount media-funding-balance ${(provider.estimatedBalance ?? 0) < 0 ? "negative" : ""}`}>{money(provider.estimatedBalance, provider.currency)}</td>
                   <td className="amount">{provider.assignmentCount.toLocaleString()}</td>
                 </tr>
@@ -324,8 +324,11 @@ export function MediaFundingView({
           {selectedProvider.bankFundingPaused && (
             <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>Bank-payment matching is paused pending account-level reconciliation. Payments are excluded and the balance is unavailable.</span></div>
           )}
-          {Math.abs(selectedProvider.needsReviewSpend) > 0.005 && (
-            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>{money(selectedProvider.needsReviewSpend, selectedProvider.currency)} of account spend needs a payment method. <Button className="text-button" onClick={onOpenMediaSpend} type="button">Review accounts</Button></span></div>
+          {selectedProvider.billingRebuildPending && (
+            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>Provider balance recalculation is pending.</span></div>
+          )}
+          {(selectedProvider.billingSpend?.unclassifiedRows ?? 0) > 0 && (
+            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>{money(selectedProvider.needsReviewSpend, selectedProvider.currency)} of account spend needs a Card or Credit line choice. <Button className="text-button" onClick={onOpenMediaSpend} type="button">Review accounts</Button></span></div>
           )}
           {selectedProvider.excludedFundingCount > 0 && (
             <div className="income-callout warning media-spend-alert" role="alert"><CircleAlert size={17} /><span>{selectedProvider.excludedFundingCount.toLocaleString()} matched funding transaction(s) use a non-USD currency and are excluded until converted or corrected.</span></div>
@@ -338,10 +341,10 @@ export function MediaFundingView({
           </div>
 
           <div className="media-funding-detail-metrics">
-            <div><span>Provider funded</span><strong>{money(selectedProvider.classifiedSpend.provider_funded, selectedProvider.currency)}</strong></div>
-            <div><span>Our card</span><strong>{money(selectedProvider.classifiedSpend.own_card, selectedProvider.currency)}</strong></div>
-            <div><span>Meta credit line</span><strong>{money(selectedProvider.classifiedSpend.meta_credit_line, selectedProvider.currency)}</strong></div>
-            <div><span>Needs review</span><strong>{money(selectedProvider.needsReviewSpend, selectedProvider.currency)}</strong></div>
+            <div><span>Total account spend</span><strong>{money(selectedProvider.spend, selectedProvider.currency)}</strong></div>
+            <div><span>Credit-line spend</span><strong>{money(selectedProvider.billingSpend?.credit_line ?? null, selectedProvider.currency)}</strong></div>
+            <div><span>Card spend</span><strong>{money(selectedProvider.billingSpend?.card ?? null, selectedProvider.currency)}</strong></div>
+            <div><span>Needs review</span><strong>{money(selectedProvider.billingSpend?.unclassified ?? null, selectedProvider.currency)}</strong></div>
           </div>
 
           <div className="media-funding-detail-section">

@@ -1107,6 +1107,11 @@ async function rebuildMediaFundingRange(
       updatedAt
     });
   }
+  for (const { providerId, revision } of range.billingRevisions ?? []) {
+    await convex.mutation(api.mediaFunding.completeBillingRebuild, {
+      serviceToken, providerId: providerId as Id<"mediaFundingProviders">, revision, updatedAt
+    });
+  }
 }
 
 async function createMediaFundingProvider(

@@ -33,7 +33,7 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): void {
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed (${result.status}).`);
 }
 
-function verify(env: NodeJS.ProcessEnv): void {
+export function productionServiceEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const selection = env.CONVEX_DEPLOY_KEY ? [] : ["--deployment", "famous-oyster-878"];
   const result = spawnSync("npx", ["convex", "env", "get", "CONVEX_SERVICE_TOKEN", ...selection], {
     env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"]
@@ -41,7 +41,11 @@ function verify(env: NodeJS.ProcessEnv): void {
   if (result.error || result.status !== 0 || !result.stdout.trim()) {
     throw new Error("Could not read the production Convex service token. Check production access and environment configuration.");
   }
-  run("npm", ["run", "ledger:verify"], { ...env, CONVEX_SERVICE_TOKEN: result.stdout.trim() });
+  return { ...env, CONVEX_SERVICE_TOKEN: result.stdout.trim() };
+}
+
+function verify(env: NodeJS.ProcessEnv): void {
+  run("npm", ["run", "ledger:verify"], productionServiceEnvironment(env));
 }
 
 function main(): void {
@@ -60,6 +64,7 @@ function main(): void {
   console.log(`Production target: ${productionUrl}`);
   if (mode === "all" || mode === "cloudflare") run("npm", ["run", "build"], env);
   if (mode === "all" || mode === "convex") run("npx", ["convex", "deploy", "--env-file", ".env.production"], env);
+  if (mode !== "verify") run("npm", ["run", "media-funding:reconcile"], env);
   if (mode !== "convex") verify(env);
   if (mode === "all" || mode === "cloudflare") {
     run("npx", ["wrangler", "deploy"], env);

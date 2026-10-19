@@ -1166,7 +1166,7 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
     paths.push(body.path);
     if (body.path === "mediaFunding:assignTargets") {
       assignmentWrites.push(body.args[0]);
-      return Response.json({ status: "success", value: {} });
+      return Response.json({ status: "success", value: { rebuildFrom: "2026-10-18", rebuildTo: "2026-10-18", billingRevisions: [{ providerId: "provider-1", revision: 1 }] } });
     }
     return Response.json({ status: "success", value: { providers: [{ id: "provider-1", name: "Provider One" }], assignments: [], paymentMethods: [] } });
   };
@@ -1201,6 +1201,7 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
       body: JSON.stringify({ providerId: "provider-1", effectiveFrom: "2026-10-18", targets })
     }, "hetarth"), env);
     assert.equal(saved.status, 200);
+    assert.deepEqual(paths.slice(-3), ["mediaFunding:assignTargets", "mediaFunding:rebuildDate", "mediaFunding:completeBillingRebuild"]);
     assert.equal(assignmentWrites.length, 1);
     assert.deepEqual((assignmentWrites[0] as { targets: unknown }).targets, targets);
   } finally { globalThis.fetch = originalFetch; }

@@ -204,6 +204,9 @@ async function rebuildLocalMediaFunding(range: MediaFundingMutationResult): Prom
   for (let date = range.rebuildFrom; date <= range.rebuildTo; date = localIsoDateShift(date, 1)) {
     await convex.mutation(api.mediaFunding.rebuildDate, { serviceToken, date, updatedAt });
   }
+  for (const { providerId, revision } of range.billingRevisions ?? []) {
+    await convex.mutation(api.mediaFunding.completeBillingRebuild, { serviceToken, providerId: providerId as Id<"mediaFundingProviders">, revision, updatedAt });
+  }
 }
 
 app.use(cors());

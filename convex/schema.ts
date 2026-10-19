@@ -30,6 +30,7 @@ const providerType = v.union(v.literal("client"), v.literal("supplier"));
 const invoiceStatus = v.union(v.literal("draft"), v.literal("open"), v.literal("paid"));
 const invoiceDocumentType = v.union(v.literal("sales_invoice"), v.literal("supplier_bill"));
 const billingCadence = v.union(v.literal("weekly"), v.literal("monthly"));
+const mediaFundingBillingSpend = v.object({ card: v.number(), credit_line: v.number(), unclassified: v.number(), unclassifiedRows: v.number() });
 const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 
 const ledgerItem = v.object({
@@ -1098,6 +1099,8 @@ export default defineSchema({
     date: v.string(),
     currency: v.string(),
     spend: v.number(),
+    billingSpend: v.optional(mediaFundingBillingSpend),
+    billingRevision: v.optional(v.number()),
     classifiedSpend: v.optional(v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() })),
     accountCount: v.number(),
     businessManagerCount: v.number(),
@@ -1111,6 +1114,9 @@ export default defineSchema({
     currency: v.string(),
     adjustments: v.number(),
     spend: v.number(),
+    billingSpend: v.optional(mediaFundingBillingSpend),
+    billingRevision: v.optional(v.number()),
+    billingRebuildFrom: v.optional(v.string()),
     classifiedSpend: v.optional(v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() })),
     updatedAt: v.string()
   }).index("by_provider", ["providerId"])

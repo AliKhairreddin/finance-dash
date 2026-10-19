@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import {
   calculateMediaFundingBalance,
+  emptyMediaFundingBillingSpend,
   calculateMediaFundingBankTransactionCredit,
   mediaFundingBankCategory,
   mediaFundingAccountKey,
@@ -11,7 +12,8 @@ import {
   mediaFundingCurrency,
   mediaFundingTargetKey,
   roundMediaFundingMoney,
-  resolveMediaFundingAssignment
+  resolveMediaFundingAssignment,
+  type MediaFundingBillingSpend
 } from "../shared/mediaFunding";
 import { financeOperatingDate } from "../shared/operatingDate";
 import { inferMediaFundingAssignments } from "../shared/mediaFundingAutomation";
@@ -20,6 +22,9 @@ import { emptyMediaClassifiedSpend, resolveMediaPaymentMethod, type MediaClassif
 
 const paymentMethod = v.union(v.literal("needs_review"), v.literal("provider_funded"), v.literal("own_card"), v.literal("meta_credit_line"));
 const classifiedSpendValidator = v.object({ provider_funded: v.number(), own_card: v.number(), meta_credit_line: v.number() });
+const billingSpendValidator = v.object({ card: v.number(), credit_line: v.number(), unclassified: v.number(), unclassifiedRows: v.number() });
+const billingSpendKeys = ["card", "credit_line", "unclassified", "unclassifiedRows"] as const;
+const billingRevisionResult = v.object({ providerId: v.id("mediaFundingProviders"), revision: v.number() });
 const paymentMethodResult = v.object({ providerId: v.optional(v.id("mediaFundingProviders")), id: v.id("mediaAccountPaymentMethods"), platform: v.string(), accountId: v.string(), method: paymentMethod, reference: v.optional(v.string()), effectiveFrom: v.string(), effectiveTo: v.optional(v.string()) });
 const entryType = v.literal("adjustment");
 const assignmentScope = v.union(v.literal("business_manager"), v.literal("ad_account"));
@@ -50,6 +55,8 @@ const providerResult = v.object({
   estimatedBalance: v.union(v.number(), v.null()),
   bankFundingPaused: v.boolean(),
   classifiedSpend: classifiedSpendValidator,
+  billingSpend: v.union(billingSpendValidator, v.null()),
+  billingRebuildPending: v.boolean(),
   needsReviewSpend: v.number(),
   assignmentCount: v.number(),
   bankFundingCount: v.number(),
@@ -106,7 +113,8 @@ const assignmentResult = v.object({
 
 const mutationResult = v.object({
   rebuildFrom: v.optional(v.string()),
-  rebuildTo: v.optional(v.string())
+  rebuildTo: v.optional(v.string()),
+  billingRevisions: v.optional(v.array(billingRevisionResult))
 });
 
 const assignmentTarget = v.object({
@@ -190,6 +198,8 @@ function zeroTotals(providerId: Id<"mediaFundingProviders">, updatedAt: string) 
     currency: mediaFundingCurrency,
     adjustments: 0,
     spend: 0,
+    billingSpend: emptyMediaFundingBillingSpend(),
+    billingRevision: 0,
     classifiedSpend: emptyMediaClassifiedSpend(),
     updatedAt
   };
@@ -287,14 +297,90 @@ async function recalculateProviderTotals(
   }
   for (const day of days) {
     for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) next.classifiedSpend[method] += day.classifiedSpend?.[method] ?? 0;
+    if (day.billingSpend) for (const key of billingSpendKeys) next.billingSpend[key] += day.billingSpend[key];
   }
   next.spend = days.reduce((total, day) => total + day.spend, 0);
   next.adjustments = roundMediaFundingMoney(next.adjustments);
   next.spend = roundMediaFundingMoney(next.spend);
   const existing = await totalsForProvider(ctx, provider._id);
-  if (existing) await ctx.db.replace(existing._id, next);
-  else await ctx.db.insert("mediaFundingProviderTotals", next);
+  const recalculated = {
+    ...next,
+    billingSpend: days.every((day) => day.billingSpend !== undefined) ? roundBillingSpend(next.billingSpend) : undefined,
+    billingRevision: existing?.billingRevision ?? 0,
+    ...(existing?.billingRebuildFrom ? { billingRebuildFrom: existing.billingRebuildFrom } : {})
+  };
+  if (existing) await ctx.db.replace(existing._id, recalculated);
+  else await ctx.db.insert("mediaFundingProviderTotals", recalculated);
 }
+
+function roundBillingSpend(spend: MediaFundingBillingSpend): MediaFundingBillingSpend {
+  return { card: roundMediaFundingMoney(spend.card), credit_line: roundMediaFundingMoney(spend.credit_line), unclassified: roundMediaFundingMoney(spend.unclassified), unclassifiedRows: spend.unclassifiedRows };
+}
+
+async function requestBillingRebuild(ctx: MutationCtx, providerIds: Set<Id<"mediaFundingProviders">>, from: string, updatedAt: string) {
+  const totals = await Promise.all([...providerIds].map(async (providerId) => {
+    const total = await totalsForProvider(ctx, providerId);
+    if (!total) throw fundingError("MEDIA_FUNDING_STATE", "Funding provider totals are missing");
+    return total;
+  }));
+  for (const total of totals) if (total.billingRebuildFrom && total.billingRebuildFrom < from) from = total.billingRebuildFrom;
+  const range = await rebuildRange(ctx, from);
+  const billingRevisions = [];
+  for (const total of totals) {
+    if (!range.rebuildFrom) {
+      if (total.billingRebuildFrom || (!total.billingSpend && total.spend !== 0)) {
+        throw fundingError("MEDIA_FUNDING_STATE", "Saved media history is unavailable for provider balance recalculation");
+      }
+      if (!total.billingSpend) await recalculateProviderTotals(ctx, await requireProvider(ctx, total.providerId), updatedAt);
+      continue;
+    }
+    const revision = (total.billingRevision ?? 0) + 1;
+    await ctx.db.patch(total._id, { billingRevision: revision, billingRebuildFrom: range.rebuildFrom, updatedAt });
+    billingRevisions.push({ providerId: total.providerId, revision });
+  }
+  return { ...range, billingRevisions };
+}
+
+export const billingRebuildStatus = query({
+  args: { serviceToken: v.string() },
+  returns: v.object({ pendingProviders: v.number() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const totals = await requireBoundedRows(ctx.db.query("mediaFundingProviderTotals").take(maximumProviders + 1), maximumProviders, "There are too many provider totals");
+    return { pendingProviders: totals.filter((total) => !total.billingSpend || total.billingRebuildFrom).length };
+  }
+});
+
+// Reconcile stored reporting data; never calls the upstream media API.
+export const prepareBillingRebuild = mutation({
+  args: { serviceToken: v.string(), updatedAt: v.string() },
+  returns: mutationResult,
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const providers = await requireBoundedRows(ctx.db.query("mediaFundingProviders").take(maximumProviders + 1), maximumProviders, "There are too many funding providers");
+    return requestBillingRebuild(ctx, new Set(providers.map((provider) => provider._id)), "1970-01-01", args.updatedAt);
+  }
+});
+
+export const completeBillingRebuild = mutation({
+  args: { serviceToken: v.string(), providerId: v.id("mediaFundingProviders"), revision: v.number(), updatedAt: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const totals = await totalsForProvider(ctx, args.providerId);
+    if (!totals || totals.billingRevision !== args.revision || !totals.billingRebuildFrom) return false;
+    const provider = await requireProvider(ctx, args.providerId);
+    const days = await requireBoundedRows(ctx.db.query("mediaFundingSpendDaily")
+      .withIndex("by_provider_and_date", (q) => q.eq("providerId", args.providerId).gt("date", provider.openingBalanceDate))
+      .take(maximumProviderDays + 1), maximumProviderDays, "Too many provider spend days");
+    if (days.some((day) => !day.billingSpend || (day.date >= totals.billingRebuildFrom! && day.billingRevision !== args.revision))) {
+      throw fundingError("MEDIA_FUNDING_STATE", "Provider balance recalculation is incomplete; retry the saved-data reconciliation");
+    }
+    await recalculateProviderTotals(ctx, provider, args.updatedAt);
+    await ctx.db.patch(totals._id, { billingRebuildFrom: undefined });
+    return true;
+  }
+});
 
 // Spend review needs provider identities and assignment history, not bank funding or balances.
 export const listSpendAssignments = query({
@@ -440,7 +526,8 @@ export const listOverview = query({
       });
     }
     const publicProviders = await Promise.all(providers.map(async (provider) => {
-      const totals = await totalsForProvider(ctx, provider._id) ?? zeroTotals(provider._id, provider.updatedAt);
+      const totals = await totalsForProvider(ctx, provider._id);
+      if (!totals) throw fundingError("MEDIA_FUNDING_STATE", "Funding provider totals are missing");
       const company = companiesById.get(provider.companyProviderId);
       if (!company || company.type !== "supplier") {
         throw fundingError("MEDIA_FUNDING_STATE", "A funding provider is no longer linked to a supplier company");
@@ -450,7 +537,9 @@ export const listOverview = query({
       const fees = roundMediaFundingMoney(funding.fees);
       const netFunding = roundMediaFundingMoney(funding.net);
       const classifiedSpend = totals.classifiedSpend ?? emptyMediaClassifiedSpend();
-      const needsReviewSpend = roundMediaFundingMoney(totals.spend - classifiedSpend.provider_funded - classifiedSpend.own_card - classifiedSpend.meta_credit_line);
+      const billingRebuildPending = !totals.billingSpend || Boolean(totals.billingRebuildFrom);
+      const billingSpend = billingRebuildPending ? null : totals.billingSpend!;
+      const needsReviewSpend = billingSpend?.unclassified ?? 0;
       return {
         id: provider._id,
         companyProviderId: provider.companyProviderId,
@@ -466,12 +555,14 @@ export const listOverview = query({
         spend: totals.spend,
         bankFundingPaused: provider.bankFundingPaused === true,
         classifiedSpend,
+        billingSpend,
+        billingRebuildPending,
         needsReviewSpend,
-        estimatedBalance: provider.bankFundingPaused || funding.excluded > 0 || Math.abs(needsReviewSpend) > 0.005 ? null : calculateMediaFundingBalance({
+        estimatedBalance: provider.bankFundingPaused || funding.excluded > 0 || !billingSpend || billingSpend.unclassifiedRows > 0 ? null : calculateMediaFundingBalance({
           openingBalance: provider.openingBalance,
           netFunding,
           adjustments: totals.adjustments,
-          spend: classifiedSpend.provider_funded
+          spend: billingSpend.credit_line
         }),
         assignmentCount: activeAssignmentCounts.get(String(provider._id)) ?? 0,
         bankFundingCount: funding.count,
@@ -798,6 +889,7 @@ export const assignTargets = mutation({
       throw fundingError("INVALID_MEDIA_FUNDING", "Choose Card or Credit line for every selected target");
     }
     const targetKeys = new Set<string>();
+    const affectedProviders = new Set<Id<"mediaFundingProviders">>([args.providerId]);
     for (const rawTarget of args.targets) {
       const platform = requireExternalId(rawTarget.platform, "Platform");
       const businessManagerId = requireExternalId(rawTarget.businessManagerId, "Business manager ID");
@@ -870,6 +962,7 @@ export const assignTargets = mutation({
       );
       for (const existing of existingTargetAssignments) {
         if (!assignmentOverlapsFrom(existing, args.effectiveFrom)) continue;
+        affectedProviders.add(existing.providerId);
         if (existing.effectiveFrom >= args.effectiveFrom) {
           await ctx.db.delete(existing._id);
         } else {
@@ -895,7 +988,7 @@ export const assignTargets = mutation({
         updatedAt: args.updatedAt
       });
     }
-    return rebuildRange(ctx, args.effectiveFrom);
+    return requestBillingRebuild(ctx, affectedProviders, args.effectiveFrom, args.updatedAt);
   }
 });
 
@@ -916,7 +1009,7 @@ export const deleteAssignment = mutation({
       createdAt: new Date().toISOString()
     });
     await ctx.db.delete(assignment._id);
-    return rebuildRange(ctx, assignment.effectiveFrom);
+    return requestBillingRebuild(ctx, new Set([assignment.providerId]), assignment.effectiveFrom, new Date().toISOString());
   }
 });
 
@@ -992,11 +1085,13 @@ export const rebuildDate = mutation({
       currency: string;
       spend: number;
       classifiedSpend: MediaClassifiedSpend;
+      billingSpend: MediaFundingBillingSpend;
       accountIds: Set<string>;
       businessManagerIds: Set<string>;
     };
     const allocations = new Map<string, Allocation>();
     const providerCache = new Map<string, Doc<"mediaFundingProviders">>();
+    const providerTotalsCache = new Map<string, Doc<"mediaFundingProviderTotals">>();
     for (const row of spendRows) {
       const accountTargetKey = `ad_account:${mediaFundingAccountKey(row.platform, row.accountId)}`;
       const businessManagerTargetKey = `business_manager:${mediaFundingBusinessManagerKey(row.platform, row.businessManagerId)}`;
@@ -1006,6 +1101,9 @@ export const rebuildDate = mutation({
       if (!provider) {
         provider = await requireProvider(ctx, assignment.providerId);
         providerCache.set(String(provider._id), provider);
+        const totals = await totalsForProvider(ctx, provider._id);
+        if (!totals) throw fundingError("MEDIA_FUNDING_STATE", "Funding provider totals are missing");
+        providerTotalsCache.set(String(provider._id), totals);
       }
       if (provider.currency !== row.currency) {
         throw fundingError(
@@ -1019,10 +1117,16 @@ export const rebuildDate = mutation({
         currency: row.currency,
         spend: 0,
         classifiedSpend: emptyMediaClassifiedSpend(),
+        billingSpend: emptyMediaFundingBillingSpend(),
         accountIds: new Set<string>(),
         businessManagerIds: new Set<string>()
       };
       allocation.spend += row.spend;
+      if (assignment.billingType) allocation.billingSpend[assignment.billingType] += row.spend;
+      else {
+        allocation.billingSpend.unclassified += row.spend;
+        if (row.spend !== 0) allocation.billingSpend.unclassifiedRows += 1;
+      }
       const payment = resolveMediaPaymentMethod(paymentMethods, row);
       const method = payment?.method;
       if (method && method !== "needs_review" && (method !== "provider_funded" || payment?.providerId === assignment.providerId)) allocation.classifiedSpend[method] += row.spend;
@@ -1047,6 +1151,8 @@ export const rebuildDate = mutation({
         date: args.date,
         currency: allocation.currency,
         spend: roundMediaFundingMoney(allocation.spend),
+        billingSpend: roundBillingSpend(allocation.billingSpend),
+        billingRevision: providerTotalsCache.get(String(allocation.providerId))!.billingRevision ?? 0,
         classifiedSpend: Object.fromEntries(Object.entries(allocation.classifiedSpend).map(([method, spend]) => [method, roundMediaFundingMoney(spend)])) as unknown as MediaClassifiedSpend,
         accountCount: allocation.accountIds.size,
         businessManagerCount: allocation.businessManagerIds.size,
@@ -1054,11 +1160,15 @@ export const rebuildDate = mutation({
       }] as const;
     }));
     const classificationDeltas = new Map<string, MediaClassifiedSpend>();
+    const billingDeltas = new Map<string, MediaFundingBillingSpend>();
     for (const [sign, rows] of [[-1, existingRows], [1, [...nextRows.values()]]] as const) {
       for (const row of rows) {
         const delta = classificationDeltas.get(String(row.providerId)) ?? emptyMediaClassifiedSpend();
         for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) delta[method] += sign * (row.classifiedSpend?.[method] ?? 0);
         classificationDeltas.set(String(row.providerId), delta);
+        const billingDelta = billingDeltas.get(String(row.providerId)) ?? emptyMediaFundingBillingSpend();
+        for (const key of billingSpendKeys) billingDelta[key] += sign * (row.billingSpend?.[key] ?? 0);
+        billingDeltas.set(String(row.providerId), billingDelta);
       }
     }
     const spendDeltas = new Map<string, { providerId: Id<"mediaFundingProviders">; delta: number }>();
@@ -1082,16 +1192,20 @@ export const rebuildDate = mutation({
     }
     for (const { providerId, delta } of spendDeltas.values()) {
       const classificationDelta = classificationDeltas.get(String(providerId)) ?? emptyMediaClassifiedSpend();
-      if (Math.abs(delta) < 0.000001 && Object.values(classificationDelta).every((value) => Math.abs(value) < 0.000001)) continue;
+      const billingDelta = billingDeltas.get(String(providerId)) ?? emptyMediaFundingBillingSpend();
+      if (Math.abs(delta) < 0.000001 && [...Object.values(classificationDelta), ...Object.values(billingDelta)].every((value) => Math.abs(value) < 0.000001)) continue;
       const provider = await requireProvider(ctx, providerId);
       if (args.date <= provider.openingBalanceDate) continue;
       const totals = await totalsForProvider(ctx, providerId);
       if (!totals) throw fundingError("MEDIA_FUNDING_STATE", "Funding provider totals are missing");
       const classifiedSpend = { ...(totals.classifiedSpend ?? emptyMediaClassifiedSpend()) };
       for (const method of ["provider_funded", "own_card", "meta_credit_line"] as const) classifiedSpend[method] = roundMediaFundingMoney(classifiedSpend[method] + classificationDelta[method]);
+      const billingSpend = totals.billingSpend ? { ...totals.billingSpend } : undefined;
+      if (billingSpend) for (const key of billingSpendKeys) billingSpend[key] += billingDelta[key];
       await ctx.db.patch(totals._id, {
         spend: roundMediaFundingMoney(totals.spend + delta),
         classifiedSpend,
+        ...(billingSpend ? { billingSpend: roundBillingSpend(billingSpend) } : {}),
         updatedAt: args.updatedAt
       });
     }

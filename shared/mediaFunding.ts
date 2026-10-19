@@ -10,6 +10,15 @@ export const mediaFundingBillingTypeLabels: Record<MediaFundingBillingType, stri
   card: "Card",
   credit_line: "Credit line"
 };
+export interface MediaFundingBillingSpend {
+  card: number;
+  credit_line: number;
+  unclassified: number;
+  unclassifiedRows: number;
+}
+export function emptyMediaFundingBillingSpend(): MediaFundingBillingSpend {
+  return { card: 0, credit_line: 0, unclassified: 0, unclassifiedRows: 0 };
+}
 export type MediaFundingEntryType = "adjustment";
 
 export interface MediaFundingProvider {
@@ -28,6 +37,8 @@ export interface MediaFundingProvider {
   estimatedBalance: number | null;
   bankFundingPaused?: boolean;
   classifiedSpend: MediaClassifiedSpend;
+  billingSpend: MediaFundingBillingSpend | null;
+  billingRebuildPending: boolean;
   needsReviewSpend: number;
   assignmentCount: number;
   bankFundingCount: number;
@@ -161,6 +172,7 @@ export interface AssignMediaFundingTargetsPayload {
 export interface MediaFundingMutationResult {
   rebuildFrom?: string;
   rebuildTo?: string;
+  billingRevisions?: { providerId: string; revision: number }[];
 }
 
 export function roundMediaFundingMoney(value: number): number {
