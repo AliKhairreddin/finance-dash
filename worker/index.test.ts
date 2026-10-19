@@ -1159,10 +1159,15 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
     CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service"
   });
   const paths: string[] = [];
+  const assignmentWrites: unknown[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body));
     paths.push(body.path);
+    if (body.path === "mediaFunding:assignTargets") {
+      assignmentWrites.push(body.args[0]);
+      return Response.json({ status: "success", value: {} });
+    }
     return Response.json({ status: "success", value: { providers: [{ id: "provider-1", name: "Provider One" }], assignments: [], paymentMethods: [] } });
   };
   try {
@@ -1190,6 +1195,14 @@ test("Hetarth's Worker session enforces Media Spend access before any financial 
       const response = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST", body: "null" }, "hetarth"), env);
       assert.equal(response.status, 400, `${path} reaches payload validation`);
     }
+    const targets = ["card", "credit_line"].map((billingType, index) => ({ scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: String(index + 1), billingType }));
+    const saved = await worker.fetch(await authenticatedRequest("https://finance.example/api/media-funding/assignments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "provider-1", effectiveFrom: "2026-10-18", targets })
+    }, "hetarth"), env);
+    assert.equal(saved.status, 200);
+    assert.equal(assignmentWrites.length, 1);
+    assert.deepEqual((assignmentWrites[0] as { targets: unknown }).targets, targets);
   } finally { globalThis.fetch = originalFetch; }
 });
 

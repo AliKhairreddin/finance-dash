@@ -1063,6 +1063,7 @@ export default defineSchema({
     businessManagerName: v.optional(v.string()),
     accountId: v.optional(v.string()),
     accountName: v.optional(v.string()),
+    billingType: v.optional(v.union(v.literal("card"), v.literal("credit_line"))),
     effectiveFrom: v.string(),
     effectiveTo: v.optional(v.string()),
     autoPattern: v.optional(v.string()),

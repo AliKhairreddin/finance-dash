@@ -5,6 +5,11 @@ export const mediaFundingCurrency = "USD" as const;
 export const mediaFundingBankCategory = "Ad account funding" as const;
 
 export type MediaFundingAssignmentScope = "business_manager" | "ad_account";
+export type MediaFundingBillingType = "card" | "credit_line";
+export const mediaFundingBillingTypeLabels: Record<MediaFundingBillingType, string> = {
+  card: "Card",
+  credit_line: "Credit line"
+};
 export type MediaFundingEntryType = "adjustment";
 
 export interface MediaFundingProvider {
@@ -69,6 +74,7 @@ export interface MediaFundingAssignment {
   businessManagerName?: string;
   accountId?: string;
   accountName?: string;
+  billingType?: MediaFundingBillingType;
   effectiveFrom: string;
   effectiveTo?: string;
   autoPattern?: string;
@@ -149,7 +155,7 @@ export interface MediaFundingAssignmentTarget {
 export interface AssignMediaFundingTargetsPayload {
   providerId: string;
   effectiveFrom: string;
-  targets: MediaFundingAssignmentTarget[];
+  targets: (MediaFundingAssignmentTarget & { billingType: MediaFundingBillingType })[];
 }
 
 export interface MediaFundingMutationResult {

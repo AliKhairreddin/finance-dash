@@ -902,6 +902,73 @@
   margin-top: 16px;
 }
 
+.modal.media-funding-assignment-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 30px));
+}
+
+.media-funding-assignment-modal > * {
+  flex-shrink: 0;
+}
+
+.media-funding-billing-toolbar,
+.media-funding-billing-toolbar > span,
+.media-funding-billing-actions,
+.media-funding-billing-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.media-funding-billing-toolbar {
+  justify-content: space-between;
+  margin: 14px 0 8px;
+}
+
+.media-funding-billing-table-wrap {
+  flex: 1 1 auto;
+  min-height: 100px;
+  max-height: 38vh;
+  overflow: auto;
+}
+
+.modal .data-table.media-funding-billing-table {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.media-funding-billing-actions > .secondary-button {
+  width: auto;
+}
+
+.media-funding-billing-table td:first-child {
+  max-width: 300px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.media-funding-billing-options {
+  gap: 12px 20px;
+}
+
+.modal label.media-funding-billing-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.media-funding-billing-counts {
+  margin-top: 8px;
+  color: var(--app-muted);
+  font-size: 0.78rem;
+}
+
 .media-funding-credit-preview {
   justify-content: space-between;
   gap: 12px;

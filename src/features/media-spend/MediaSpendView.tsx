@@ -42,6 +42,8 @@ import { useUrlDateRangeState, useUrlState } from "@/lib/url-state";
 import { FundingProviderBadge } from "@/features/media-funding/MediaFundingView";
 import {
   mediaFundingAccountKey,
+  mediaFundingBillingTypeLabels,
+  mediaFundingTargetKey,
   mediaFundingAssignmentIsActive,
   mediaFundingBusinessManagerKey,
   groupMediaSpendByFundingProvider,
@@ -49,6 +51,8 @@ import {
   type AssignMediaFundingTargetsPayload,
   type MediaSpendAssignmentsResponse,
   type MediaFundingAssignmentTarget,
+  type MediaFundingAssignment,
+  type MediaFundingBillingType,
   type MediaSpendProvider,
   type MediaFundingProviderSpendGroup
 } from "../../../shared/mediaFunding";
@@ -62,9 +66,9 @@ import {
 } from "../../../shared/mediaSpend";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
-type AccountSpendSortKey = "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
-type DailySpendSortKey = "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
-type BusinessManagerSortKey = "accounts" | "businessManager" | "platform" | "provider" | "spend" | "workspace";
+type AccountSpendSortKey = "billingType" | "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
+type DailySpendSortKey = "billingType" | "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
+type BusinessManagerSortKey = "billingType" | "accounts" | "businessManager" | "platform" | "provider" | "spend" | "workspace";
 type ProviderSpendSortKey = "accounts" | "businessManagers" | "days" | "platforms" | "provider" | "spend" | "workspaces";
 type MediaSpendViewMode = "accounts" | "businessManagers" | "providers";
 type ZeroSpendVisibility = "hide" | "include";
@@ -83,6 +87,7 @@ type BusinessManagerSpendGroup = {
 };
 
 const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
+  "billingType",
   "paymentMethod",
   "account",
   "businessManager",
@@ -93,6 +98,7 @@ const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
   "workspace"
 ];
 const dailySpendSortKeys: readonly DailySpendSortKey[] = [
+  "billingType",
   "paymentMethod",
   "businessManager",
   "date",
@@ -102,6 +108,7 @@ const dailySpendSortKeys: readonly DailySpendSortKey[] = [
   "workspace"
 ];
 const businessManagerSortKeys: readonly BusinessManagerSortKey[] = [
+  "billingType",
   "accounts",
   "businessManager",
   "platform",
@@ -440,6 +447,14 @@ function CognitiveSpendView({
     return { childAssignments: children.length };
   }
 
+  function billingTypeLabel(rows: readonly MediaSpendRow[]): string {
+    const labels = new Set(rows.map((row) => {
+      const type = rowFunding(row).assignment?.billingType;
+      return type ? mediaFundingBillingTypeLabels[type] : "Not set";
+    }));
+    return labels.size === 1 ? [...labels][0] : "Mixed";
+  }
+
   function paymentMethodForRow(row: MediaSpendRow): MediaPaymentMethod {
     const payment = resolveMediaPaymentMethod(funding?.paymentMethods ?? [], row);
     return payment?.method === "provider_funded" && payment.providerId !== rowFunding(row).provider?.id ? "needs_review" : payment?.method ?? "needs_review";
@@ -479,10 +494,10 @@ function CognitiveSpendView({
       : groups;
     return filtered.sort((left, right) =>
       compareTableValues(
-        accountSortKey === "paymentMethod" ? paymentLabel(left.rows) : accountSortKey === "provider"
+        accountSortKey === "billingType" ? billingTypeLabel(left.rows) : accountSortKey === "paymentMethod" ? paymentLabel(left.rows) : accountSortKey === "provider"
           ? accountFunding(left).provider?.name
           : accountSpendSortValue(left, accountSortKey),
-        accountSortKey === "paymentMethod" ? paymentLabel(right.rows) : accountSortKey === "provider"
+        accountSortKey === "billingType" ? billingTypeLabel(right.rows) : accountSortKey === "paymentMethod" ? paymentLabel(right.rows) : accountSortKey === "provider"
           ? accountFunding(right).provider?.name
           : accountSpendSortValue(right, accountSortKey),
         accountSortDirection
@@ -506,8 +521,8 @@ function CognitiveSpendView({
       : [...scopedSpendRows];
     return filtered.sort((left, right) =>
       compareTableValues(
-        dailySortKey === "paymentMethod" ? paymentLabel([left]) : dailySortKey === "provider" ? rowFunding(left).provider?.name : dailySpendSortValue(left, dailySortKey),
-        dailySortKey === "paymentMethod" ? paymentLabel([right]) : dailySortKey === "provider" ? rowFunding(right).provider?.name : dailySpendSortValue(right, dailySortKey),
+        dailySortKey === "billingType" ? billingTypeLabel([left]) : dailySortKey === "paymentMethod" ? paymentLabel([left]) : dailySortKey === "provider" ? rowFunding(left).provider?.name : dailySpendSortValue(left, dailySortKey),
+        dailySortKey === "billingType" ? billingTypeLabel([right]) : dailySortKey === "paymentMethod" ? paymentLabel([right]) : dailySortKey === "provider" ? rowFunding(right).provider?.name : dailySpendSortValue(right, dailySortKey),
         dailySortDirection
       ) || left.key.localeCompare(right.key)
     );
@@ -522,10 +537,10 @@ function CognitiveSpendView({
       : [...businessManagerGroups];
     return filtered.sort((left, right) =>
       compareTableValues(
-        businessManagerSortKey === "provider"
+        businessManagerSortKey === "billingType" ? billingTypeLabel(left.rows) : businessManagerSortKey === "provider"
           ? businessManagerFunding(left).provider?.name
           : businessManagerSortValue(left, businessManagerSortKey),
-        businessManagerSortKey === "provider"
+        businessManagerSortKey === "billingType" ? billingTypeLabel(right.rows) : businessManagerSortKey === "provider"
           ? businessManagerFunding(right).provider?.name
           : businessManagerSortValue(right, businessManagerSortKey),
         businessManagerSortDirection
@@ -720,17 +735,17 @@ function CognitiveSpendView({
       headers = ["Provider", "Platforms", "Workspaces", "BMs", "Ad accounts", "Reported days", "Spend", "Currency"];
       rows = visibleProviders.map((group) => [group.provider?.name ?? "Unassigned provider", group.platforms.join(", "), group.workspaces.join(", "), group.businessManagerCount, group.accountCount, group.dayCount, group.spend.toFixed(2), group.currency]);
     } else if (viewMode === "businessManagers") {
-      headers = ["Business manager", "BM ID", "Platform", "Workspaces", "Ad accounts", "Account provider", "Spend", "Currency"];
+      headers = ["Business manager", "BM ID", "Platform", "Workspaces", "Ad accounts", "Account provider", "Billing type", "Spend", "Currency"];
       rows = visibleBusinessManagers.map((group) => {
         const state = businessManagerFunding(group);
-        return [group.businessManagerName, group.businessManagerId, group.platform, group.workspaces.join(", "), group.accountCount, state.provider?.name ?? (state.childAssignments ? `${state.childAssignments} account assignments` : "Unassigned"), group.spend.toFixed(2), group.currency];
+        return [group.businessManagerName, group.businessManagerId, group.platform, group.workspaces.join(", "), group.accountCount, state.provider?.name ?? (state.childAssignments ? `${state.childAssignments} account assignments` : "Unassigned"), billingTypeLabel(group.rows), group.spend.toFixed(2), group.currency];
       });
     } else if (showingAccountDetail) {
-      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Payment method", "Spend", "Currency"];
-      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, rowFunding(row).provider?.name ?? "Unassigned", paymentLabel([row]), row.spend.toFixed(2), row.currency]);
+      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Billing type", "Payment method", "Spend", "Currency"];
+      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, rowFunding(row).provider?.name ?? "Unassigned", billingTypeLabel([row]), paymentLabel([row]), row.spend.toFixed(2), row.currency]);
     } else {
-      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Payment method", "Reported days", "Spend", "Currency"];
-      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, accountFunding(group).provider?.name ?? "Unassigned", paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
+      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Billing type", "Payment method", "Reported days", "Spend", "Currency"];
+      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, accountFunding(group).provider?.name ?? "Unassigned", billingTypeLabel(group.rows), paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
     }
     const csv = [headers, ...rows].map((row) => row.map((value) => {
       const text = String(value ?? "");
@@ -1024,6 +1039,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="provider">Account provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="paymentMethod">Payment method</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} className="amount" direction={dailySortDirection} onSort={requestDailySort} sortKey="spend">Daily spend</SortableTableHead>
                 </tr>
@@ -1039,6 +1055,7 @@ function CognitiveSpendView({
                       <td>{row.workspace}</td>
                       <td><strong>{row.businessManagerName ?? "—"}</strong><small>{row.businessManagerId}</small></td>
                       <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
+                      <td>{billingTypeLabel([row])}</td>
                       <td>{paymentCell([row])}</td>
                       <td className="amount media-spend-amount">{money(row.spend, row.currency)}</td>
                     </tr>
@@ -1058,6 +1075,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="account">Ad account</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="provider">Account provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="paymentMethod">Payment method</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} className="amount" direction={accountSortDirection} onSort={requestAccountSort} sortKey="days">Reported days</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} className="amount" direction={accountSortDirection} onSort={requestAccountSort} sortKey="spend">Spend</SortableTableHead>
@@ -1086,6 +1104,7 @@ function CognitiveSpendView({
                       </button>
                     </td>
                     <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
+                    <td>{billingTypeLabel(group.rows)}</td>
                     <td>{paymentCell(group.rows)}</td>
                     <td className="amount">{group.dayCount.toLocaleString()}</td>
                     <td className="amount media-spend-amount">{money(group.spend, group.currency)}</td>
@@ -1106,6 +1125,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="accounts">Ad accounts</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="provider">Account provider</SortableTableHead>
+                  <SortableTableHead activeSortKey={businessManagerSortKey} direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={businessManagerSortKey} className="amount" direction={businessManagerSortDirection} onSort={requestBusinessManagerSort} sortKey="spend">Spend</SortableTableHead>
                 </tr>
               </thead>
@@ -1127,6 +1147,7 @@ function CognitiveSpendView({
                     <td>{group.workspaces.join(", ")}</td>
                     <td>{group.accountCount.toLocaleString()}</td>
                     <td>{fundingState.provider ? <FundingProviderBadge provider={fundingState.provider} /> : hasChildren ? <span className="source-pill warning">{fundingState.childAssignments} account assignment{fundingState.childAssignments === 1 ? "" : "s"}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
+                    <td>{billingTypeLabel(group.rows)}</td>
                     <td className="amount media-spend-amount">{money(group.spend, group.currency)}</td>
                   </tr>
                   );
@@ -1194,6 +1215,7 @@ function CognitiveSpendView({
           apiBase={apiBase}
           effectiveFrom={dateRange.fromDate}
           providers={funding.providers}
+          assignments={funding.assignments}
           targets={selectedAssignmentTargets}
           onClose={() => setAssignmentDialogOpen(false)}
           onOpenProviderBalances={onOpenProviderBalances}
@@ -1212,6 +1234,7 @@ function MediaFundingAssignmentDialog({
   apiBase,
   effectiveFrom: initialEffectiveFrom,
   providers,
+  assignments,
   targets,
   onClose,
   onOpenProviderBalances,
@@ -1220,23 +1243,62 @@ function MediaFundingAssignmentDialog({
   apiBase: string;
   effectiveFrom: string;
   providers: MediaSpendProvider[];
+  assignments: MediaFundingAssignment[];
   targets: MediaFundingAssignmentTarget[];
   onClose: () => void;
   onOpenProviderBalances?: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
+  const [providerId, setProviderId] = useState(() => {
+    const currentProviders = new Set(targets.map((target) => assignments.find((assignment) =>
+      assignment.targetKey === mediaFundingTargetKey(target) && mediaFundingAssignmentIsActive(assignment, initialEffectiveFrom)
+    )?.providerId));
+    const [currentProvider] = currentProviders;
+    return currentProviders.size === 1 && currentProvider ? currentProvider : providers[0]?.id ?? "";
+  });
   const [effectiveFrom, setEffectiveFrom] = useState(initialEffectiveFrom);
+  const [billingTypes, setBillingTypes] = useState<Record<string, MediaFundingBillingType | "">>({});
+  const [sortKey, setSortKey] = useUrlState<"target" | "billingType">("mediaAssignmentSort", "target", { allowedValues: ["target", "billingType"] });
+  const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("mediaAssignmentDirection", "asc", { allowedValues: ["asc", "desc"] });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targetType = targets[0]?.scope === "business_manager" ? "business managers" : "ad accounts";
+  const selections = targets.map((target) => {
+    const key = mediaFundingTargetKey(target);
+    const existing = assignments.find((assignment) => assignment.targetKey === key && mediaFundingAssignmentIsActive(assignment, effectiveFrom));
+    return { target, key, billingType: billingTypes[key] ?? existing?.billingType ?? "" };
+  });
+  const missingTypes = selections.filter((item) => !item.billingType).length;
+  const cardCount = selections.filter((item) => item.billingType === "card").length;
+  const creditLineCount = selections.filter((item) => item.billingType === "credit_line").length;
+  const targetLabel = (target: MediaFundingAssignmentTarget) => target.scope === "ad_account"
+    ? target.accountName ?? target.accountId ?? "Ad account"
+    : target.businessManagerName ?? target.businessManagerId;
+  const sortedSelections = [...selections].sort((left, right) => compareTableValues(
+    sortKey === "billingType" ? left.billingType && mediaFundingBillingTypeLabels[left.billingType] : targetLabel(left.target),
+    sortKey === "billingType" ? right.billingType && mediaFundingBillingTypeLabels[right.billingType] : targetLabel(right.target),
+    sortDirection
+  ) || left.key.localeCompare(right.key));
+
+  function requestSort(key: "target" | "billingType") {
+    setSortDirection(sortKey === key && sortDirection === "asc" ? "desc" : "asc");
+    setSortKey(key);
+  }
+
+  function applyBillingType(type: MediaFundingBillingType) {
+    setBillingTypes(Object.fromEntries(selections.map(({ key }) => [key, type])));
+  }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!providerId || targets.length === 0 || !effectiveFrom) return;
+    if (!providerId || targets.length === 0 || !effectiveFrom || missingTypes > 0) return;
     setSubmitting(true);
     setError(null);
-    const payload: AssignMediaFundingTargetsPayload = { providerId, effectiveFrom, targets };
+    const payload: AssignMediaFundingTargetsPayload = {
+      providerId,
+      effectiveFrom,
+      targets: selections.map(({ target, billingType }) => ({ ...target, billingType: billingType as MediaFundingBillingType }))
+    };
     try {
       const response = await fetch(`${apiBase}/media-funding/assignments`, {
         method: "POST",
@@ -1253,10 +1315,10 @@ function MediaFundingAssignmentDialog({
 
   return createPortal(
     <div className="modal-backdrop" role="presentation">
-      <form className="modal media-funding-modal" role="dialog" aria-modal="true" aria-labelledby="media-funding-assignment-title" onSubmit={(event) => void submit(event)}>
+      <form className="modal media-funding-modal media-funding-assignment-modal" role="dialog" aria-modal="true" aria-labelledby="media-funding-assignment-title" onSubmit={(event) => void submit(event)}>
         <div className="modal-header">
           <div><p className="eyebrow">Media spend</p><h2 id="media-funding-assignment-title">Assign account provider</h2></div>
-          <Button aria-label="Close" className="icon-button" onClick={onClose} type="button"><X size={18} /></Button>
+          <Button aria-label="Close" className="icon-button" disabled={submitting} onClick={onClose} type="button"><X size={18} /></Button>
         </div>
         {error && <div className="inline-error">{error}</div>}
         <div className="media-funding-assignment-summary"><strong>{targets.length.toLocaleString()}</strong><span>{targetType} selected</span></div>
@@ -1264,12 +1326,36 @@ function MediaFundingAssignmentDialog({
           <div className="empty-state compact"><strong>{onOpenProviderBalances ? "Add a funding provider before assigning inventory" : "Ask an administrator to add a provider first."}</strong>{onOpenProviderBalances && <Button className="primary-button" onClick={onOpenProviderBalances} type="button">Open provider balances</Button>}</div>
         ) : (
           <>
-            <label>Account provider<NativeSelect searchable value={providerId} onValueChange={setProviderId}>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
-            <label>Effective from<Input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /></label>
-            <p className="field-help">Changing an existing assignment closes the old provider on the previous day. BM assignments block account-level assignments inside that BM.</p>
+            <label>Account provider<NativeSelect searchable disabled={submitting} value={providerId} onValueChange={setProviderId}>{providers.map((provider) => <NativeSelectOption key={provider.id} value={provider.id}>{provider.name}</NativeSelectOption>)}</NativeSelect></label>
+            <label>Effective from<Input type="date" disabled={submitting} value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} required /></label>
+            <div className="media-funding-billing-toolbar">
+              <span>Billing type <InfoPopover label="assignment billing types">Choose how each selected account is billed. This records the type for future balance calculations. Changing an assignment closes its previous history the day before the effective date. A business manager's choice applies to all its accounts; select individual ad accounts instead when they use different types.</InfoPopover></span>
+              {targets.length > 1 && <div className="media-funding-billing-actions">
+                <Button className="secondary-button" disabled={submitting} onClick={() => applyBillingType("card")} type="button">All card</Button>
+                <Button className="secondary-button" disabled={submitting} onClick={() => applyBillingType("credit_line")} type="button">All credit line</Button>
+              </div>}
+            </div>
+            <div className="table-wrap media-funding-billing-table-wrap">
+              <table className="data-table dense media-funding-billing-table">
+                <thead><tr>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="target">{targets[0]?.scope === "business_manager" ? "Business manager" : "Ad account"}</SortableTableHead>
+                  <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="billingType">Billing type</SortableTableHead>
+                </tr></thead>
+                <tbody>{sortedSelections.map(({ target, key, billingType }) => <tr key={key}>
+                  <td><strong>{targetLabel(target)}</strong><small>{target.platform} · {target.scope === "ad_account" ? target.accountId : target.businessManagerId}</small></td>
+                  <td><div className="media-funding-billing-options" role="group" aria-label={`Billing type for ${targetLabel(target)}`}>
+                    {(["card", "credit_line"] as const).map((type) => <label key={type} className="media-funding-billing-option">
+                      <Checkbox aria-label={`${mediaFundingBillingTypeLabels[type]} for ${targetLabel(target)}`} checked={billingType === type} disabled={submitting} onCheckedChange={(checked) => setBillingTypes((current) => ({ ...current, [key]: checked ? type : "" }))} />
+                      {mediaFundingBillingTypeLabels[type]}
+                    </label>)}
+                  </div></td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+            <div className="media-funding-billing-counts" role="status">{cardCount} card · {creditLineCount} credit line{missingTypes > 0 ? ` · ${missingTypes} need a choice` : ""}</div>
           </>
         )}
-        <div className="modal-actions"><Button className="secondary-button" disabled={submitting} onClick={onClose} type="button">Cancel</Button><Button className="primary-button" disabled={submitting || !providerId || targets.length === 0 || !effectiveFrom} type="submit">{submitting ? <Loader2 className="spin" size={15} /> : <Link2 size={15} />} Assign provider</Button></div>
+        <div className="modal-actions"><Button className="secondary-button" disabled={submitting} onClick={onClose} type="button">Cancel</Button><Button className="primary-button" disabled={submitting || !providerId || targets.length === 0 || !effectiveFrom || missingTypes > 0} type="submit">{submitting ? <Loader2 className="spin" size={15} /> : <Link2 size={15} />} Assign provider</Button></div>
       </form>
     </div>,
     document.body

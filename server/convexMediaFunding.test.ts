@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { assignTargets, createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { resolveMediaFundingAssignment } from "../shared/mediaFunding";
 
 import { database, call } from "./convexTestDb";
 const date = "2026-09-14", serviceToken = "funding-test", updatedAt = "2026-09-24T00:00:00Z";
@@ -15,6 +16,70 @@ function seed() {
     bankTransactions: [{ _id: "bank", id: "payment", matchedProviderId: "company", category: "Ad account funding", amount: 100, currency: "USD", date, direction: "out", status: "posted", source: "slash", accountName: "Card", counterparty: "Facebook", description: "FACEBK other ad account" }]
   };
 }
+
+test("bulk provider assignment saves individual billing types and preserves dated history and financial records", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    const bankRecords = structuredClone(ctx.tables.bankTransactions);
+    const spendRecords = structuredClone(ctx.tables.mediaSpendDaily);
+    await call(setPaymentMethods, ctx, { serviceToken, targets: [{ platform: "Facebook", accountId: "1" }], method: "own_card", effectiveFrom: date, updatedAt });
+    const paymentMethods = structuredClone(ctx.tables.mediaAccountPaymentMethods);
+    const targets = ["card", "credit_line"].map((billingType, index) => ({ scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: String(index + 1), billingType }));
+    const args = { serviceToken, providerId: "meta", effectiveFrom: "2026-09-15", targets, updatedAt };
+    await call(assignTargets, ctx, args);
+    let result = await call(listSpendAssignments, ctx, { serviceToken });
+    for (const target of targets) {
+      const oldAssignment = resolveMediaFundingAssignment(result.assignments, { ...target, date });
+      const newAssignment = resolveMediaFundingAssignment(result.assignments, { ...target, date: args.effectiveFrom });
+      assert.equal(oldAssignment?.billingType, undefined);
+      assert.equal(oldAssignment?.effectiveTo, date);
+      assert.equal(newAssignment?.billingType, target.billingType);
+    }
+    // Repeating a submission must not duplicate active assignments.
+    await call(assignTargets, ctx, args);
+    assert.equal(ctx.tables.mediaFundingAssignments.length, 4);
+    await call(assignTargets, ctx, { ...args, effectiveFrom: "2026-09-16", targets: [{ ...targets[0], billingType: "credit_line" }] });
+    result = await call(listOverview, ctx, { serviceToken });
+    assert.equal(resolveMediaFundingAssignment(result.assignments, { ...targets[0], date: "2026-09-15" })?.billingType, "card");
+    assert.equal(resolveMediaFundingAssignment(result.assignments, { ...targets[0], date: "2026-09-16" })?.billingType, "credit_line");
+    assert.equal(resolveMediaFundingAssignment(result.assignments, { ...targets[1], date: "2026-09-16" })?.billingType, "credit_line");
+    assert.deepEqual(ctx.tables.bankTransactions, bankRecords);
+    assert.deepEqual(ctx.tables.mediaSpendDaily, spendRecords);
+    assert.deepEqual(ctx.tables.mediaAccountPaymentMethods, paymentMethods);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+test("business manager billing type is inherited by its accounts without inferring payment funding", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    ctx.tables.mediaFundingAssignments = [];
+    await call(assignTargets, ctx, { serviceToken, providerId: "meta", effectiveFrom: date, updatedAt, targets: [{ scope: "business_manager", platform: "Facebook", businessManagerId: "bm", billingType: "credit_line" }] });
+    await call(rebuildDate, ctx, { serviceToken, date, updatedAt });
+    const overview = await call(listOverview, ctx, { serviceToken });
+    assert.equal(resolveMediaFundingAssignment(overview.assignments, { platform: "Facebook", businessManagerId: "bm", accountId: "3", date })?.billingType, "credit_line");
+    assert.equal(overview.providers[0].spend, 25);
+    assert.equal(overview.providers[0].needsReviewSpend, 25);
+    assert.equal(overview.providers[0].estimatedBalance, null);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+test("assignment rejects missing or invalid billing choices before writing and still requires authorization", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    const before = structuredClone(ctx.tables);
+    const target = { scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: "1" };
+    const args = { serviceToken, providerId: "meta", effectiveFrom: date, updatedAt };
+    for (const billingType of [undefined, "cash", ""]) {
+      await assert.rejects(call(assignTargets, ctx, { ...args, targets: [{ ...target, billingType: "card" }, { ...target, accountId: "2", billingType }] }), /Choose Card or Credit line/);
+      assert.deepEqual(ctx.tables, before);
+    }
+    await assert.rejects(call(assignTargets, ctx, { ...args, serviceToken: "wrong", targets: [{ ...target, billingType: "card" }] }), /unauthorized/);
+    assert.deepEqual(ctx.tables, before);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
 test("automatic assignment is stored with its pattern, allocates spend once and respects removal", async () => {
   const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
   try {

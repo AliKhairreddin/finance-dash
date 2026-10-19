@@ -23,6 +23,7 @@ const classifiedSpendValidator = v.object({ provider_funded: v.number(), own_car
 const paymentMethodResult = v.object({ providerId: v.optional(v.id("mediaFundingProviders")), id: v.id("mediaAccountPaymentMethods"), platform: v.string(), accountId: v.string(), method: paymentMethod, reference: v.optional(v.string()), effectiveFrom: v.string(), effectiveTo: v.optional(v.string()) });
 const entryType = v.literal("adjustment");
 const assignmentScope = v.union(v.literal("business_manager"), v.literal("ad_account"));
+const billingType = v.union(v.literal("card"), v.literal("credit_line"));
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 const maximumProviders = 200;
 const maximumEntries = 4_000;
@@ -95,6 +96,7 @@ const assignmentResult = v.object({
   businessManagerName: v.optional(v.string()),
   accountId: v.optional(v.string()),
   accountName: v.optional(v.string()),
+  billingType: v.optional(billingType),
   effectiveFrom: v.string(),
   effectiveTo: v.optional(v.string()),
   autoPattern: v.optional(v.string()),
@@ -109,6 +111,7 @@ const mutationResult = v.object({
 
 const assignmentTarget = v.object({
   scope: assignmentScope,
+  billingType,
   platform: v.string(),
   businessManagerId: v.string(),
   businessManagerName: v.optional(v.string()),
@@ -505,6 +508,7 @@ export const listOverview = query({
         ...(assignment.businessManagerName ? { businessManagerName: assignment.businessManagerName } : {}),
         ...(assignment.accountId ? { accountId: assignment.accountId } : {}),
         ...(assignment.accountName ? { accountName: assignment.accountName } : {}),
+        ...(assignment.billingType ? { billingType: assignment.billingType } : {}),
         effectiveFrom: assignment.effectiveFrom,
         ...(assignment.effectiveTo ? { effectiveTo: assignment.effectiveTo } : {}),
         ...(assignment.autoPattern ? { autoPattern: assignment.autoPattern } : {}),
@@ -790,6 +794,9 @@ export const assignTargets = mutation({
     if (args.targets.length === 0 || args.targets.length > 200) {
       throw fundingError("INVALID_MEDIA_FUNDING", "Select between 1 and 200 funding targets");
     }
+    if (args.targets.some((target) => target.billingType !== "card" && target.billingType !== "credit_line")) {
+      throw fundingError("INVALID_MEDIA_FUNDING", "Choose Card or Credit line for every selected target");
+    }
     const targetKeys = new Set<string>();
     for (const rawTarget of args.targets) {
       const platform = requireExternalId(rawTarget.platform, "Platform");
@@ -874,6 +881,7 @@ export const assignTargets = mutation({
       }
       await ctx.db.insert("mediaFundingAssignments", {
         providerId: args.providerId,
+        billingType: rawTarget.billingType,
         scope: target.scope,
         targetKey,
         businessManagerKey,
