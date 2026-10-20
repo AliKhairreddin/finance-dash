@@ -299,13 +299,14 @@ export function reconcileMeritInvoices(
   authoritative: boolean
 ): Invoice[] {
   const invoiceKey = (invoice: Invoice): string => invoice.externalId ? `external:${invoice.externalId}` : `id:${invoice.id}`;
-  const map = new Map(liveInvoices.map((invoice) => [invoiceKey(invoice), invoice]));
+  const pendingNumbers = new Set(persistedInvoices.filter(i => i.meritReplacementId).map(i => i.invoiceNumber));
+  const map = new Map(liveInvoices.filter(i => !pendingNumbers.has(i.invoiceNumber)).map((invoice) => [invoiceKey(invoice), invoice]));
   for (const invoice of persistedInvoices) {
     const key = invoiceKey(invoice);
     const live = map.get(key);
     if (live) {
       map.set(key, { ...live, ...invoice, meritStatus: live.meritStatus });
-    } else if (!authoritative || invoice.source !== "merit" || !invoice.externalId) {
+    } else if (invoice.meritReplacementId || !authoritative || invoice.source !== "merit" || !invoice.externalId) {
       map.set(key, invoice);
     }
   }

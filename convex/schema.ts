@@ -1,3 +1,4 @@
+import { replacementFields } from "./meritReplacementSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { redtrackRow, redtrackSource } from "./redtrackSchema";
 import { v } from "convex/values";
@@ -126,6 +127,9 @@ const invoice = v.object({
   meritDeliveryError: v.optional(v.string()),
   sendError: v.optional(v.string()),
   meritCreationReservedAt: v.optional(v.string()),
+  meritReplacementId: v.optional(v.string()),
+  meritBackupId: v.optional(v.string()),
+  meritPdfStorageId: v.optional(v.id("_storage")),
   invoiceNumber: v.string(),
   issueDate: v.string(),
   dueDate: v.string(),
@@ -600,6 +604,7 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  meritInvoiceReplacements: defineTable(replacementFields).index("by_operation_id", ["id"]).index("by_invoice_id", ["invoiceId"]),
   manualBankTransactions: defineTable({
     ...manualBankRecord, intakeKey: v.string(), companySort: v.string(), sentAt: v.optional(v.number()),
     deletedAt: v.optional(v.string()), deletedBy: v.optional(v.string())

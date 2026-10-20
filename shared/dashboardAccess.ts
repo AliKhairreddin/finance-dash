@@ -38,7 +38,7 @@ export function financeOperatorCanAccess(request: Request): boolean {
       || /^\/api\/documents\/[^/]+(?:\/(?:file|candidates))?$/u.test(path)
       || /^\/api\/amex\/statements\/[^/]+(?:\/file)?$/u.test(path)
       || /^\/api\/expense-documents\/[^/]+$/u.test(path)
-      || /^\/api\/invoices\/[^/]+\/pdf$/u.test(path)
+      || /^\/api\/invoices\/[^/]+\/(?:pdf|backup)$/u.test(path)
       || /^\/api\/invoices\/[^/]+\/payment-suggestions$/u.test(path);
   }
   if (request.method === "POST") {
@@ -50,7 +50,8 @@ export function financeOperatorCanAccess(request: Request): boolean {
       || /^\/api\/transactions\/[^/]+\/(?:category|company|team|invoice-match)$/u.test(path)
       || /^\/api\/documents\/[^/]+\/(?:review|retry|match|candidates)$/u.test(path)
       || /^\/api\/amex\/statements\/[^/]+\/import$/u.test(path)
-      || /^\/api\/expenses\/[^/]+\/match-payment$/u.test(path);
+      || /^\/api\/expenses\/[^/]+\/match-payment$/u.test(path)
+      || /^\/api\/invoices\/[^/]+\/replacement$/u.test(path);
   }
   if (request.method === "PATCH") return /^\/api\/manual-bank-transactions\/[^/]+$/u.test(path);
   if (request.method === "PUT") {

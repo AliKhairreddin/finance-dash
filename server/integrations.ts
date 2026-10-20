@@ -1,3 +1,4 @@
+import { replacementRequest } from "../shared/meritReplacementRequest";
 import { fetchMercuryActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
 import crypto from "node:crypto";
 import type {
@@ -440,7 +441,7 @@ function meritResponseDate(value: unknown, defaultDate: string): string {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : defaultDate;
 }
 
-function meritUrl(path: string, body: string): string {
+export function meritUrl(path: string, body: string): string {
   const apiId = process.env.MERIT_API_ID;
   const apiKey = process.env.MERIT_API_KEY;
   if (!apiId || !apiKey) {
@@ -900,3 +901,5 @@ export async function fetchMercuryActivity(dateRange?: { fromDate: string; toDat
   if (!process.env.MERCURY_API_TOKEN) return { accounts: [], transactions: [] };
   return fetchMercuryApiActivity({ apiToken: process.env.MERCURY_API_TOKEN, dateRange });
 }
+
+export const requestMeritReplacement = (path: string, payload: unknown) => replacementRequest(meritUrl, path, payload);

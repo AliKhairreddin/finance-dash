@@ -1910,11 +1910,12 @@ function App() {
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      await loadDashboard();
       throw new Error(body?.message || "Invoice could not be updated");
     }
     const invoice = (await response.json()) as Invoice;
     await loadDashboard();
-    setNotice(invoice.status === "open" ? "Open invoice changes saved in the dashboard." : "Invoice draft saved. Choose whether to send it to Merit.");
+    setNotice(invoice.externalId ? "Invoice changes saved in Merit and the dashboard." : "Invoice draft saved. Choose whether to send it to Merit.");
     return invoice;
   }
 

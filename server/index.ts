@@ -1,3 +1,4 @@
+import { recoverInvoiceReplacement, downloadInvoiceBackup } from "./store";
 import { handleManualBankApi } from "../worker/manualBankTransactions";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleCompanyDocumentApi } from "../worker/companyDocuments";
@@ -1104,6 +1105,17 @@ app.post("/api/cash-flow/snapshots", async (request, response, next) => {
   }
 });
 
+app.post("/api/invoices/:invoiceId/replacement", async (request, response, next) => {
+  try { response.json(await recoverInvoiceReplacement(request.params.invoiceId)); } catch (error) { next(error); }
+});
+app.get("/api/invoices/:invoiceId/backup", async (request, response, next) => {
+  try {
+    const json = request.query.format === "json";
+    response.setHeader("Content-Type", json ? "application/json" : "application/pdf");
+    response.setHeader("Content-Disposition", `attachment; filename="original-invoice.${json ? "json" : "pdf"}"`);
+    response.send(await downloadInvoiceBackup(request.params.invoiceId, json));
+  } catch (error) { next(error); }
+});
 app.put("/api/invoices/:invoiceId", async (request, response, next) => {
   try {
     response.json(await updateInvoice(request.params.invoiceId, request.body as UpdateInvoicePayload));

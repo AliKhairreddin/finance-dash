@@ -1,3 +1,5 @@
+import { replaceLocalMeritInvoice, localInvoiceBackup, localReplacementRunning } from "./meritReplacement";
+import { assertUnpaidInvoice } from "../shared/meritReplacement";
 import { rejectZohoWiseCsvOverlap } from "../shared/zohoWise";
 import type { AnalyticsResponse } from "../shared/analyticsRequest";
 import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
@@ -1755,7 +1757,8 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
 export async function previewInvoiceDuplicate(invoiceId: string): Promise<CreateInvoicePayload> {
   const source = invoices.find((invoice) => invoice.id === invoiceId);
   if (!source) throw new Error("Invoice not found");
-  const copySource = source.origin === "merit"
+  if (source.meritReplacementId) throw new Error("Invoice replacement pending; check its status on the Invoices page");
+  const copySource = source.externalId && source.documentType === "sales_invoice"
     ? { ...source, ...(await fetchMeritInvoiceCopyDetails(source)) }
     : source;
   return invoiceCopyPayload(copySource);
@@ -1815,9 +1818,38 @@ export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePay
     meritCreationReservedAt: undefined,
     updatedAt: new Date().toISOString()
   };
+  if (existing.externalId) {
+    assertMeritWriteConfiguration();
+    assertUnpaidInvoice(existing, paymentAllocations);
+    const taxes = await fetchMeritTaxes();
+    if (meritSyncPromise) throw new Error("Merit sync is running; save after it finishes");
+    return replaceLocalMeritInvoice(existing, updated, providers, taxes, saveLocalReplacement);
+  }
   invoices = invoices.map((invoice) => (invoice.id === invoiceId ? updated : invoice));
   await persist();
   return updated;
+}
+
+async function saveLocalReplacement(invoice: Invoice) {
+  const current = invoices.find(i => i.id === invoice.id);
+  if (current?.meritReplacementId && !invoice.meritReplacementId && current.externalId !== invoice.externalId) assertUnpaidInvoice(current, paymentAllocations);
+  invoices = invoices.map(i => i.id === invoice.id ? invoice : i);
+  revenueRuns = revenueRuns.map(r => invoice.revenueRunIds.includes(r.id) || r.invoiceId === invoice.id ? { ...r, externalInvoiceId: invoice.externalId } : r);
+  await persist();
+}
+export async function recoverInvoiceReplacement(invoiceId: string) {
+  assertMeritWriteConfiguration();
+  const invoice = invoices.find(i => i.id === invoiceId);
+  if (!invoice?.meritReplacementId) throw new Error("No pending invoice replacement");
+  const taxes = await fetchMeritTaxes();
+  if (meritSyncPromise) throw new Error("Merit sync is running; check replacement after it finishes");
+  return replaceLocalMeritInvoice(invoice, undefined, providers, taxes, saveLocalReplacement);
+}
+export async function downloadInvoiceBackup(invoiceId: string, json: boolean) {
+  const invoice = invoices.find(i => i.id === invoiceId);
+  const id = invoice?.meritReplacementId ?? invoice?.meritBackupId;
+  if (!id) throw new Error("Original backup unavailable");
+  return localInvoiceBackup(id, json);
 }
 
 export async function downloadInvoicePdf(invoiceId: string): Promise<{
@@ -1826,6 +1858,7 @@ export async function downloadInvoicePdf(invoiceId: string): Promise<{
 }> {
   const invoice = invoices.find((item) => item.id === invoiceId);
   if (!invoice || invoice.documentType !== "sales_invoice") throw new Error("Sales invoice not found");
+  if (invoice.meritReplacementId) throw new Error("Invoice replacement pending; check its status first");
   if (!invoice.externalId) throw new Error("Save this invoice in Merit before downloading its PDF");
   return {
     bytes: await fetchMeritInvoicePdf(invoice.externalId),
@@ -1861,6 +1894,7 @@ export async function recordBulkInvoicePayments(
   const selected = invoiceIds.map((invoiceId) => {
     const invoice = invoices.find((item) => item.id === invoiceId);
     if (!invoice) throw new Error(`Invoice ${invoiceId} was not found`);
+    if (invoice.meritReplacementId) throw new Error("Invoice replacement pending; payments cannot be recorded yet");
     const allocationId = bulkPaymentAllocationId(payload.operationId, invoiceId);
     const existingAllocation = paymentAllocations.find((allocation) => allocation.id === allocationId);
     if (existingAllocation) return { invoice, allocationId, outstanding: 0, alreadyRecorded: true };
@@ -1916,6 +1950,7 @@ export async function matchInvoicePayment(
   ) {
     throw new Error("Only posted or settled incoming bank transactions can be matched to invoices");
   }
+  if (invoices.some(i => i.meritReplacementId && (i.id === payload.invoiceId || paymentAllocations.some(a => a.invoiceId === i.id && a.transactionId === transaction.id)))) throw new Error("Invoice replacement pending; payments cannot be changed yet");
   const removedInvoiceIds = new Set(
     paymentAllocations
       .filter((allocation) => allocation.transactionId === transaction.id)
@@ -1984,6 +2019,7 @@ export async function recordInvoicePayment(
 ): Promise<DashboardSnapshot> {
   const invoice = invoices.find((item) => item.id === invoiceId);
   if (!invoice) throw new Error("Invoice not found");
+  if (invoice.meritReplacementId) throw new Error("Invoice replacement pending; payments cannot be recorded yet");
   const outstanding = invoiceOutstanding(invoice, paymentAllocations);
   const amount = validateInvoiceAmount(payload.amount);
   if (amount - outstanding > 0.01) throw new Error("Payment allocation exceeds the invoice outstanding amount");
@@ -2474,6 +2510,7 @@ export async function sendInvoices(payload: SendInvoicesPayload): Promise<SendIn
       outcomes.push({ invoiceId, status: "failed", message: "Only sales invoices can be sent to Merit" });
       continue;
     }
+    if (invoice.meritReplacementId) { outcomes.push({ invoiceId, status: "failed", message: "Invoice replacement pending" }); continue; }
     if (invoice.status === "paid") {
       outcomes.push({ invoiceId, status: "failed", message: "Paid invoices cannot be sent again" });
       continue;
@@ -2651,6 +2688,7 @@ export function getMeritSyncStatus() {
   return { lastSuccessAt: meritSyncLastSuccess, error: meritSyncIssue, running: Boolean(meritSyncPromise), retryAt: meritSyncLastAttempt + 300_000 };
 }
 export async function syncMeritActivity(): Promise<void> {
+  if (localReplacementRunning() || invoices.some(i => i.meritReplacementId)) throw new Error("Invoice replacement pending; check its status before syncing Merit");
   if (!process.env.MERIT_API_ID || !process.env.MERIT_API_KEY) throw new Error("Merit is not configured");
   if (meritSyncPromise) return meritSyncPromise;
   if (Date.now() < meritSyncLastAttempt + 300_000) return;

@@ -68,7 +68,8 @@ test("finance operator APIs allow complete banking, document and workbook workfl
     ["PUT", "/api/documents/config"], ["GET", "/api/invoices/i/payment-suggestions"],
     ["POST", "/api/invoices"], ["PUT", "/api/invoices/i"], ["POST", "/api/expenses"],
     ["POST", "/api/expenses/e/match-payment"], ["POST", "/api/expense-documents/upload"],
-    ["GET", "/api/expense-documents/d"], ["GET", "/api/invoices/i/pdf"]
+    ["GET", "/api/expense-documents/d"], ["GET", "/api/invoices/i/pdf"],
+    ["GET", "/api/invoices/i/backup"], ["POST", "/api/invoices/i/replacement"]
   ]) {
     assert.equal(financeOperatorCanAccess(new Request(`https://finance.example${path}`, { method })), true, `${method} ${path}`);
   }

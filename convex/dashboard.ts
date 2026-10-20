@@ -1,3 +1,4 @@
+import { canonical } from "../shared/meritReplacement";
 import { requireSyncLease } from "./integrationSync";
 import { evaluateCashFlowAmount } from "../shared/cashFlow";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -117,7 +118,7 @@ const provider = v.object({
   createdAt: v.string()
 });
 
-const invoice = v.object({
+export const invoice = v.object({
   id: v.string(),
   entity: v.optional(wiseEntity),
   providerId: v.optional(v.string()),
@@ -137,6 +138,9 @@ const invoice = v.object({
   meritDeliveryError: v.optional(v.string()),
   sendError: v.optional(v.string()),
   meritCreationReservedAt: v.optional(v.string()),
+  meritReplacementId: v.optional(v.string()),
+  meritBackupId: v.optional(v.string()),
+  meritPdfStorageId: v.optional(v.id("_storage")),
   invoiceNumber: v.string(),
   issueDate: v.string(),
   dueDate: v.string(),
@@ -1324,6 +1328,13 @@ export const saveState = mutation({
     if (args.syncLease) await requireSyncLease(ctx, args.syncLease.key, args.syncLease.leaseId);
     const existing = await ctx.db.query("dashboardState").withIndex("by_key", (q) => q.eq("key", "default")).unique();
     if ((existing?.updatedAt ?? null) !== args.expectedUpdatedAt) throw new ConvexError({ code: "STATE_CONFLICT" });
+    for (const locked of existing?.invoices.filter(i => i.meritReplacementId) ?? []) {
+      if (canonical(args.invoices.find(i => i.id === locked.id)) !== canonical(locked)
+        || args.invoices.some(i => i.id !== locked.id && i.invoiceNumber === locked.invoiceNumber && i.externalId)
+        || canonical(args.paymentAllocations.filter(a => a.invoiceId === locked.id)) !== canonical(existing!.paymentAllocations.filter(a => a.invoiceId === locked.id))) {
+        throw new ConvexError("An invoice replacement is pending; check its status before changing this invoice or its payments");
+      }
+    }
     if (args.transactionTeamAssignments !== undefined || args.wiseStatementTransactions !== undefined) {
       throw new ConvexError({ code: "LEDGER_MIGRATION_IN_PROGRESS" });
     }
@@ -1601,6 +1612,7 @@ export const finalizeInvoiceCreation = mutation({
     if (!state) throw new ConvexError({ code: "STATE_NOT_FOUND" });
     const current = state.invoices.find((item) => item.id === args.invoice.id);
     if (!current) throw new ConvexError({ code: "INVOICE_NOT_FOUND" });
+    if (current.meritReplacementId) throw new ConvexError("Invoice replacement pending");
     if (current.externalId && current.externalId !== args.invoice.externalId) {
       throw new ConvexError({ code: "INVOICE_CREATION_CONFLICT" });
     }

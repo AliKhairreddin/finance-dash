@@ -288,6 +288,7 @@ export function openInvoiceReceivables(invoices: Invoice[], allocations: Payment
 
 export function applyPaymentState(invoices: Invoice[], allocations: PaymentAllocation[]): Invoice[] {
   return invoices.map((invoice) => {
+    if (invoice.meritReplacementId) return invoice;
     const invoiceAllocations = allocations.filter((allocation) => allocation.invoiceId === invoice.id);
     if (invoice.status === "draft" && invoiceAllocations.length === 0) return invoice;
     const outstanding = invoiceOutstanding(invoice, allocations);
@@ -409,6 +410,7 @@ export function invoicePaymentAiCandidates({
     const candidates = invoices.filter((invoice) => {
       if (
         invoice.documentType !== "sales_invoice"
+        || Boolean(invoice.meritReplacementId)
         || invoice.status !== "open"
         || Boolean(invoice.transactionId)
         || Boolean(invoice.entity && (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)) && invoice.entity !== (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)))
@@ -470,7 +472,7 @@ export function reconcileAiInvoicePayments({
     const match = accepted.get(transaction.id);
     if (!match) return transaction;
     const invoice = nextInvoices.find((item) => item.id === match.invoiceId);
-    if (!invoice) return transaction;
+    if (!invoice || invoice.meritReplacementId) return transaction;
     const amount = invoiceOutstanding(invoice, nextAllocations);
     if (amount <= 0) return transaction;
     nextInvoices = nextInvoices.map(item => item.id === invoice.id
@@ -538,6 +540,7 @@ export function reconcileExactInvoicePayments({
       if (
         invoice.documentType !== "sales_invoice" ||
         invoice.status !== "open" ||
+        Boolean(invoice.meritReplacementId) ||
         Boolean(invoice.transactionId) ||
         Boolean(invoice.entity && (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName)) && invoice.entity !== (transaction.wiseEntity ?? wiseEntityFromAccountName(transaction.accountName))) ||
         invoice.currency.toUpperCase() !== transaction.currency.toUpperCase()
@@ -597,7 +600,7 @@ function recordLinkedInvoicePayments(
   const paidIds = new Set<string>();
   const createdAt = now.toISOString();
   const nextInvoices = invoices.map(invoice => {
-    if (invoice.documentType !== "sales_invoice" || invoice.status !== "open") return invoice;
+    if (invoice.meritReplacementId || invoice.documentType !== "sales_invoice" || invoice.status !== "open") return invoice;
     const linkedTransactions = transactions.filter(transaction => transaction.matchedInvoiceId === invoice.id);
     const transaction = invoice.transactionId ? transactionById.get(invoice.transactionId)
       : linkedTransactions.length === 1 ? linkedTransactions[0] : undefined;

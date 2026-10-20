@@ -31,6 +31,8 @@ import type * as manualBankSchema from "../manualBankSchema.js";
 import type * as manualBankTransactions from "../manualBankTransactions.js";
 import type * as mediaFunding from "../mediaFunding.js";
 import type * as mediaSpend from "../mediaSpend.js";
+import type * as meritReplacements from "../meritReplacements.js";
+import type * as meritReplacementSchema from "../meritReplacementSchema.js";
 import type * as redtrack from "../redtrack.js";
 import type * as redtrackCache from "../redtrackCache.js";
 import type * as redtrackSchema from "../redtrackSchema.js";
@@ -66,6 +68,8 @@ declare const fullApi: ApiFromModules<{
   manualBankTransactions: typeof manualBankTransactions;
   mediaFunding: typeof mediaFunding;
   mediaSpend: typeof mediaSpend;
+  meritReplacements: typeof meritReplacements;
+  meritReplacementSchema: typeof meritReplacementSchema;
   redtrack: typeof redtrack;
   redtrackCache: typeof redtrackCache;
   redtrackSchema: typeof redtrackSchema;

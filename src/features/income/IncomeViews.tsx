@@ -240,6 +240,7 @@ function invoiceCanBeDelivered(invoice: Invoice): boolean {
     invoice.documentType === "sales_invoice" &&
     invoice.status === "open" &&
     Boolean(invoice.externalId) &&
+    !invoice.meritReplacementId &&
     (invoice.meritDeliveryStatus === "saved" || invoice.meritDeliveryStatus === "delivery-failed")
   );
 }
@@ -894,11 +895,26 @@ export function InvoicesView({
     }
   }
 
+  async function recoverReplacement(invoice: Invoice) {
+    setEditingId(invoice.id);
+    setInvoiceActionError(null);
+    try {
+      const response = await fetch(`${apiBase}/invoices/${encodeURIComponent(invoice.id)}/replacement`, { method: "POST" });
+      if (!response.ok) {
+        const body = await response.json() as { message?: string };
+        throw new Error(body.message || "Replacement could not be completed");
+      }
+      onNotice("Invoice replacement completed in Merit.");
+    } catch (error) {
+      setInvoiceActionError(error instanceof Error ? error.message : "Replacement could not be completed");
+    } finally { await onSyncMerit(); setEditingId(null); }
+  }
+
   async function editInvoice(invoice: Invoice) {
     setEditingId(invoice.id);
     setInvoiceActionError(null);
     try {
-      if (invoice.status === "open" && invoice.origin === "merit") {
+      if (invoice.status === "open" && invoice.externalId) {
         const details = await onPrepareDuplicate(invoice.id);
         setEditorRequest({
           mode: "edit",
@@ -1301,7 +1317,7 @@ export function InvoicesView({
                       <div className="invoice-status-stack">
                         {matchId(invoice) && <a href={documentTransactionLink(matchId(invoice)!)}>Matched transaction</a>}
                         <span><span className={`status-pill invoice-status-${invoice.status}`}>{invoice.status}</span><small>Dashboard</small></span>
-                        {invoice.meritStatus && <small>Merit: {invoice.meritStatus}</small>}
+                        {invoice.meritReplacementId ? <small className="danger-text">Merit replacement pending</small> : invoice.meritStatus && <small>Merit: {invoice.meritStatus}</small>}
                         {invoice.meritDeliveryStatus !== "not-sent" && (
                           <small className={invoice.meritDeliveryStatus === "delivery-failed" ? "danger-text" : undefined}>
                             {invoice.meritDeliveryStatus === "delivered"
@@ -1316,13 +1332,15 @@ export function InvoicesView({
                     </td>
                     <td><PaymentForecast invoice={invoice} prediction={prediction} /></td>
                     <td><div className="row-actions invoice-row-actions">
-                      {(invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(invoice)}>{editingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>}
+                      {!invoice.meritReplacementId && (invoice.status === "draft" || (invoice.status === "open" && invoice.meritStatus !== "paid" && allocations.length === 0)) && <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(invoice)}>{editingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>}
+                      {invoice.meritReplacementId && <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void recoverReplacement(invoice)}>{editingId === invoice.id && <Loader2 className="spin" size={14} />} Check replacement</Button>}
+                      {(invoice.meritReplacementId || invoice.meritBackupId) && <InfoPopover label={`original backup for ${invoice.invoiceNumber}`}><a href={`${apiBase}/invoices/${encodeURIComponent(invoice.id)}/backup`}>Original PDF</a><a href={`${apiBase}/invoices/${encodeURIComponent(invoice.id)}/backup?format=json`}>Original details</a></InfoPopover>}
                       {invoice.id.startsWith("document-invoice-") && <a className="icon-text-button" href={`${apiBase}/documents/${encodeURIComponent(invoice.id.slice("document-invoice-".length))}/file`}><Download size={14} /> Original</a>}
-                      {invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(invoice)}>{downloadingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}
+                      {invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null || Boolean(invoice.meritReplacementId)} onClick={() => void downloadInvoice(invoice)}>{downloadingId === invoice.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}
                       <Button
                         className="icon-text-button"
                         type="button"
-                        disabled={duplicatingId !== null}
+                        disabled={duplicatingId !== null || Boolean(invoice.meritReplacementId)}
                         title="Review an unsaved copy of this invoice"
                         onClick={async () => {
                           setDuplicatingId(invoice.id);
@@ -1355,7 +1373,7 @@ export function InvoicesView({
                       )}
                       {invoice.status === "draft" && <Button className="icon-text-button" type="button" disabled={!ready || !meritWriteEnabled} title={ready ? "Choose how Merit should handle this invoice" : sendBlockReason} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Send size={14} /> Send</Button>}
                       {canDeliverExisting && <Button className="icon-text-button" type="button" disabled={!meritWriteEnabled} title={invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery using the existing Merit invoice" : "Ask Merit to deliver the existing invoice"} onClick={() => setSendRequest({ invoiceIds: [invoice.id] })}><Mail size={14} /> {invoice.meritDeliveryStatus === "delivery-failed" ? "Retry delivery" : "Deliver"}</Button>}
-                      {(invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
+                      {!invoice.meritReplacementId && (invoice.status === "draft" || invoice.status === "open") && <Button className="icon-text-button" type="button" onClick={() => setPaymentInvoice(invoice)}><Check size={14} /> Mark paid</Button>}
                       {invoice.status === "paid" && (
                         <div className="paid-allocation-list">
                           {allocations.length > 0 ? allocations.map((allocation) => (
@@ -1594,9 +1612,9 @@ export function InvoiceEditorDialog({
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
           </div>
           <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
-          <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : invoice?.status === "open" ? "These changes update the dashboard record only. Merit does not support updating an existing sales invoice through its API." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>
+          {invoice?.externalId ? <div className="row-actions"><span>Save to Merit</span><InfoPopover label="saving invoice edits">Only unpaid invoices can be replaced. The original details and PDF are backed up first. The invoice number and dashboard links stay the same. Saving does not email the replacement.</InfoPopover></div> : <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>}
         </div>
-        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
+        <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice?.externalId ? "Save to Merit" : invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
       </form>
       </DialogContent>
     </Dialog>

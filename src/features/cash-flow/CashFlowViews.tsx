@@ -674,7 +674,7 @@ export function CashFlowOpenInvoicesView({
     setEditingId(invoice.id);
     setEditError(null);
     try {
-      if (invoice.status === "open" && invoice.origin === "merit") {
+      if (invoice.status === "open" && invoice.externalId) {
         const details = await onPrepareInvoiceEdit(invoice.id);
         setEditingInvoice({
           ...invoice,

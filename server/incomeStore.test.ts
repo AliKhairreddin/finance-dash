@@ -214,19 +214,11 @@ test("revenue rules stay client-owned, survive normally, and do not resurrect af
 
     const store = await import("./store");
     await store.initializeStore();
-    const editedOpenInvoice = await store.updateInvoice("invoice-open-1", {
-      providerId: "client-1",
-      customerName: "Acme",
-      amount: 250,
-      currency: "USD",
-      issueDate: "2026-07-01",
-      dueDate: "2026-08-15",
-      description: "Updated dashboard description"
-    });
-    assert.equal(editedOpenInvoice.status, "open");
-    assert.equal(editedOpenInvoice.externalId, "merit-acme-1");
-    assert.equal(editedOpenInvoice.dueDate, "2026-08-15");
-    assert.equal(editedOpenInvoice.description, "Updated dashboard description");
+    await assert.rejects(store.updateInvoice("invoice-open-1", {
+      providerId: "client-1", customerName: "Acme", amount: 250, currency: "USD",
+      issueDate: "2026-07-01", dueDate: "2026-08-15", description: "Updated description"
+    }), /disabled|credentials|missing/i);
+    assert.equal(store.getSnapshot().invoices.find(i => i.id === "invoice-open-1")?.dueDate, "2026-07-31");
     const rulePayload = {
       name: "Acme weekly",
       providerId: "client-1",

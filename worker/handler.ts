@@ -1,3 +1,4 @@
+import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleManualBankApi } from "./manualBankTransactions";
 import { isManualBankSource, parseManualBankCommand } from "../shared/manualBankTransactions";
@@ -5798,7 +5799,8 @@ async function previewInvoiceDuplicate(env: Env, invoiceId: string): Promise<Cre
   const state = await loadPersisted(env);
   const source = state.invoices.find((invoice) => invoice.id === invoiceId);
   if (!source) throw new ApiError(404, "Invoice not found");
-  const copySource = source.origin === "merit"
+  if (source.meritReplacementId) throw new Error("Invoice replacement pending; check its status on the Invoices page");
+  const copySource = source.externalId && source.documentType === "sales_invoice"
     ? { ...source, ...(await fetchMeritInvoiceCopyDetails(env, source)) }
     : source;
   return invoiceCopyPayload(copySource);
@@ -5982,6 +5984,10 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
     periodEnd: cleanOptional(payload.periodEnd),
     updatedAt: new Date().toISOString()
   };
+  if (invoice.externalId) {
+    assertMeritWriteConfiguration(env);
+    return replaceMeritInvoice(getConvexClient(env), getConvexServiceToken(env), (path, body) => replacementRequest((p, b) => meritUrl(env, p, b), path, body), invoice, updated, state.providers, await fetchMeritTaxes(env));
+  }
   state.invoices = state.invoices.map((item) => item.id === invoiceId ? updated : item);
   await savePersisted(env, state);
   return updated;
@@ -5991,6 +5997,13 @@ async function downloadInvoicePdf(env: Env, invoiceId: string): Promise<Response
   const state = await loadPersisted(env);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice || invoice.documentType !== "sales_invoice") throw new ApiError(404, "Sales invoice not found");
+  if (invoice.meritReplacementId) throw new ApiError(409, "Invoice replacement pending. Check its status; the original backup is available.");
+  if (invoice.meritPdfStorageId) {
+    const files = await getConvexClient(env).query(api.meritReplacements.files, { serviceToken: getConvexServiceToken(env), invoiceId });
+    if (!files.current) throw new ApiError(503, "Saved replacement PDF is unavailable");
+    const response = await fetch(files.current, { signal: AbortSignal.timeout(30_000) });
+    return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(invoicePdfFileName(invoice))}`, "Cache-Control": "private, no-store" } });
+  }
   const archived = await getConvexClient(env).query(api.documents.forInvoice, { serviceToken: getConvexServiceToken(env), invoiceId });
   if (archived?.url && archived.contentType === "application/pdf") {
     const original = await fetch(archived.url, { signal: AbortSignal.timeout(30_000) });
@@ -6168,6 +6181,10 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
     let current = state.invoices.find((invoice) => invoice.id === invoiceId);
     if (!current) {
       outcomes.push({ invoiceId, status: "failed", message: "Invoice not found" });
+      continue;
+    }
+    if (current.meritReplacementId) {
+      outcomes.push({ invoiceId, status: "failed", message: "Invoice replacement pending; check its status first" });
       continue;
     }
     if (current.documentType !== "sales_invoice") {
@@ -7716,6 +7733,23 @@ async function handleApi(
       return json(await previewInvoiceDuplicate(env, decodeURIComponent(invoiceDuplicatePreviewMatch[1])));
     }
 
+    const replacementMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/replacement$/);
+    if (replacementMatch && request.method === "POST") {
+      assertMeritWriteConfiguration(env);
+      const state = await loadPersisted(env);
+      const invoice = state.invoices.find(i => i.id === decodeURIComponent(replacementMatch[1]));
+      if (!invoice?.meritReplacementId) throw new ApiError(409, "No pending replacement");
+      return json(await replaceMeritInvoice(getConvexClient(env), getConvexServiceToken(env), (path, body) => replacementRequest((p, b) => meritUrl(env, p, b), path, body), invoice, undefined, state.providers, await fetchMeritTaxes(env)));
+    }
+    const invoiceBackupMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/backup$/);
+    if (invoiceBackupMatch && request.method === "GET") {
+      const files = await getConvexClient(env).query(api.meritReplacements.files, { serviceToken: getConvexServiceToken(env), invoiceId: decodeURIComponent(invoiceBackupMatch[1]) });
+      const isJson = url.searchParams.get("format") === "json";
+      const file = isJson ? files.original : files.pdf;
+      if (!file) throw new ApiError(404, "Original backup is not available yet");
+      const response = await fetch(file, { signal: AbortSignal.timeout(30_000) });
+      return new Response(response.body, { status: response.status, headers: { "Content-Type": isJson ? "application/json" : "application/pdf", "Content-Disposition": `attachment; filename="original-invoice.${isJson ? "json" : "pdf"}"`, "Cache-Control": "private, no-store" } });
+    }
     const invoicePdfMatch = url.pathname.match(/^\/api\/invoices\/([^/]+)\/pdf$/);
     if (invoicePdfMatch && request.method === "GET") {
       return downloadInvoicePdf(env, decodeURIComponent(invoicePdfMatch[1]));

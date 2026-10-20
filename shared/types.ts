@@ -1,3 +1,4 @@
+import type { Id } from "../convex/_generated/dataModel";
 export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "merit" | "manual" | "tune" | "quinstreet";
 
 export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury">;
@@ -403,6 +404,9 @@ export interface Invoice {
   meritDeliveryError?: string;
   sendError?: string;
   meritCreationReservedAt?: string;
+  meritReplacementId?: string;
+  meritBackupId?: string;
+  meritPdfStorageId?: Id<"_storage">;
   invoiceNumber: string;
   issueDate: string;
   dueDate: string;
