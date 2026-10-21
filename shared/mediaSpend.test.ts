@@ -97,6 +97,17 @@ test("keeps spend rows when LemonMax omits display names", () => {
   assert.equal(rows[0].spend, 3119.71);
 });
 
+test("normalizes source display-name whitespace without changing IDs or spend", () => {
+  const rows = parseLemonMaxSpendSummary({ ...response, data: [{ ...response.data[0],
+    "BM Name": "Allison\tChandler", "Account Name": " Account\n Name ", "Agency Name": " Hustle\r\n Blink "
+  }, response.data[1]] }, "2026-08-01", "USD", "2026-08-02T08:30:00Z");
+  assert.equal(rows[0].businessManagerName, "Allison Chandler");
+  assert.equal(rows[0].accountName, "Account Name");
+  assert.equal(rows[0].agencyName, "Hustle Blink");
+  assert.equal(rows[0].accountId, response.data[0]["Account ID"]);
+  assert.equal(rows[0].spend, response.data[0].Spend);
+});
+
 test("groups daily spend into one row per platform ad account", () => {
   const rows = parseLemonMaxSpendSummaryRange({
     ...response,
@@ -139,7 +150,7 @@ test("uses the latest source agency without inferring one for unassigned account
 test("rejects malformed or missing agency fields before replacing financial data", () => {
   for (const change of [
     { "Agency ID": "11" }, { "Agency ID": -1 }, { "Agency ID": 1.5 },
-    { "Agency Name": 11 }, { "Agency Name": "Agency\nName" }
+    { "Agency Name": 11 }, { "Agency Name": "Agency\u0000Name" }
   ]) {
     assert.throws(() => parseLemonMaxSpendSummary({ ...response, data: [{ ...response.data[0], ...change }, response.data[1]] },
       "2026-08-01", "USD", "2026-08-02T08:30:00Z"), /invalid Agency/);

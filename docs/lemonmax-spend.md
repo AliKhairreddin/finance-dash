@@ -1,6 +1,6 @@
 # Cognitive spend and LemonMax agencies
 
-The unfiltered `/api/v1/account-spend/summary` response supplies daily spend for all platforms and accounts, including zero-spend accounts. Each row now includes `Agency ID` (a nonnegative integer or null) and `Agency Name` (a display string or null). Missing fields, malformed values, duplicate rows, incomplete account/row counts, mismatched date ranges, and unreconciled spend totals reject the response before saved data is replaced.
+The unfiltered `/api/v1/account-spend/summary` response supplies daily spend for all platforms and accounts, including zero-spend accounts. Each row now includes `Agency ID` (a nonnegative integer or null) and `Agency Name` (a display string or null). Display names normalize whitespace, including source tabs and line breaks, to spaces. Missing fields, malformed values, duplicate rows, incomplete account/row counts, mismatched date ranges, and unreconciled spend totals reject the response before saved data is replaced.
 
 Agency IDs and names are saved with the account's daily spend in production Convex. Account groups display the agency from their latest date in the selected period; daily details retain the dated agency. Agency sorting is preserved in the URL, and search and CSV export include both fields. A missing source agency is displayed as a dash. Source agencies are distinct from the dashboard's financial funding assignments and billing classifications; importing an agency does not infer or overwrite those assignments.
 

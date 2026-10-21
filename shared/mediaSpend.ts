@@ -118,7 +118,7 @@ function optionalDisplayString(
   if (typeof value !== "string") {
     throw new Error(`LemonMax row ${rowNumber} has an invalid ${field}`);
   }
-  const normalized = value.trim();
+  const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) return undefined;
   if (normalized.length > maximumLength || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
     throw new Error(`LemonMax row ${rowNumber} has an invalid ${field}`);
