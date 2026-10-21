@@ -12,10 +12,10 @@ const summary = {
   success: true, message: "OK", from_date: "2026-10-04", to_date: "2026-10-05",
   total_rows: 4, total_accounts: 3, total_spend: 19,
   data: [
-    { Workspace: 1, Date: "2026-10-04", Platform: "Facebook", "BM ID": "bm1", "Account ID": "meta", Spend: 5 },
-    { Workspace: 1, Date: "2026-10-05", Platform: "Facebook", "BM ID": "bm1", "Account ID": "meta", Spend: 6 },
-    { Workspace: 2, Date: "2026-10-05", Platform: "Google", "BM ID": "bm2", "Account ID": "google", Spend: 8 },
-    { Workspace: 3, Date: "2026-10-05", Platform: "TikTok", "BM ID": "bm3", "Account ID": "tiktok", Spend: 0 }
+    { Workspace: 1, Date: "2026-10-04", Platform: "Facebook", "BM ID": "bm1", "Account ID": "meta", "Agency ID": 11, "Agency Name": "Hustle Blink", Spend: 5 },
+    { Workspace: 1, Date: "2026-10-05", Platform: "Facebook", "BM ID": "bm1", "Account ID": "meta", "Agency ID": 11, "Agency Name": "Hustle Blink", Spend: 6 },
+    { Workspace: 2, Date: "2026-10-05", Platform: "Google", "BM ID": "bm2", "Account ID": "google", "Agency ID": null, "Agency Name": null, Spend: 8 },
+    { Workspace: 3, Date: "2026-10-05", Platform: "TikTok", "BM ID": "bm3", "Account ID": "tiktok", "Agency ID": 22, "Agency Name": "Other Agency", Spend: 0 }
   ]
 };
 
@@ -40,10 +40,14 @@ test("daily schedule imports every platform with exactly one unfiltered range re
   assert.equal(sourceCalls, 1);
   const saves = mutations.filter((m) => m.path === "mediaSpend:replaceDate");
   assert.deepEqual(saves.map((m) => m.args.date), ["2026-10-04", "2026-10-05"]);
-  const latest = saves[1].args.rows as { platform: string; spend: number; workspace: number }[];
+  const latest = saves[1].args.rows as { platform: string; spend: number; workspace: number; agencyId?: number; agencyName?: string }[];
   assert.deepEqual(latest.map((r) => r.platform), ["Facebook", "Google", "TikTok"]);
   assert.equal(latest[2].spend, 0);
   assert.equal(latest[2].workspace, 3);
+  assert.equal(latest[0].agencyId, 11);
+  assert.equal(latest[0].agencyName, "Hustle Blink");
+  assert.equal(latest[1].agencyName, undefined);
+  assert.equal(latest[2].agencyName, "Other Agency");
   assert.equal(typeof saves[1].args.attemptId, "string");
   assert.equal(mutations.at(-1)?.path, "mediaSpend:completeSync");
 });

@@ -67,8 +67,8 @@ import {
 } from "../../../shared/mediaSpend";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
-type AccountSpendSortKey = "billingType" | "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
-type DailySpendSortKey = "billingType" | "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
+type AccountSpendSortKey = "agency" | "billingType" | "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
+type DailySpendSortKey = "agency" | "billingType" | "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
 type BusinessManagerSortKey = "billingType" | "accounts" | "businessManager" | "platform" | "provider" | "spend" | "workspace";
 type ProviderSpendSortKey = "accounts" | "businessManagers" | "days" | "platforms" | "provider" | "spend" | "workspaces";
 type MediaSpendViewMode = "accounts" | "businessManagers" | "providers";
@@ -88,6 +88,7 @@ type BusinessManagerSpendGroup = {
 };
 
 const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
+  "agency",
   "billingType",
   "paymentMethod",
   "account",
@@ -99,6 +100,7 @@ const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
   "workspace"
 ];
 const dailySpendSortKeys: readonly DailySpendSortKey[] = [
+  "agency",
   "billingType",
   "paymentMethod",
   "businessManager",
@@ -155,6 +157,7 @@ function accountSpendSortValue(
   group: MediaSpendAccountGroup,
   sortKey: AccountSpendSortKey
 ): number | string | undefined {
+  if (sortKey === "agency") return group.agencyName;
   if (sortKey === "account") return group.accountName ?? group.accountId;
   if (sortKey === "businessManager") return group.businessManagerName ?? group.businessManagerId;
   if (sortKey === "days") return group.dayCount;
@@ -165,6 +168,7 @@ function accountSpendSortValue(
 }
 
 function dailySpendSortValue(row: MediaSpendRow, sortKey: DailySpendSortKey): number | string | undefined {
+  if (sortKey === "agency") return row.agencyName;
   if (sortKey === "businessManager") return row.businessManagerName;
   if (sortKey === "date") return row.date;
   if (sortKey === "platform") return row.platform;
@@ -517,6 +521,8 @@ function CognitiveSpendView({
       ? scopedSpendRows.filter((row) => [
           row.accountId,
           row.accountName,
+          row.agencyName,
+          row.agencyId?.toString(),
           row.businessManagerId,
           row.businessManagerName,
           row.date,
@@ -748,11 +754,11 @@ function CognitiveSpendView({
         return [group.businessManagerName, group.businessManagerId, group.platform, group.workspaces.join(", "), group.accountCount, state.provider?.name ?? (state.childAssignments ? `${state.childAssignments} account assignments` : "Unassigned"), billingTypeLabel(group.rows), group.spend.toFixed(2), group.currency];
       });
     } else if (showingAccountDetail) {
-      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Billing type", "Payment method", "Spend", "Currency"];
-      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, rowFunding(row).provider?.name ?? "Unassigned", billingTypeLabel([row]), paymentLabel([row]), row.spend.toFixed(2), row.currency]);
+      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "Account provider", "Billing type", "Payment method", "Spend", "Currency"];
+      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, row.agencyName, row.agencyId, rowFunding(row).provider?.name ?? "Unassigned", billingTypeLabel([row]), paymentLabel([row]), row.spend.toFixed(2), row.currency]);
     } else {
-      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Account provider", "Billing type", "Payment method", "Reported days", "Spend", "Currency"];
-      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, accountFunding(group).provider?.name ?? "Unassigned", billingTypeLabel(group.rows), paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
+      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "Account provider", "Billing type", "Payment method", "Reported days", "Spend", "Currency"];
+      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, group.agencyName, group.agencyId, accountFunding(group).provider?.name ?? "Unassigned", billingTypeLabel(group.rows), paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
     }
     const csv = [headers, ...rows].map((row) => row.map((value) => {
       const text = String(value ?? "");
@@ -1055,6 +1061,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="platform">Platform</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="businessManager">Business manager</SortableTableHead>
+                  <SortableTableHead activeSortKey={dailySortKey} description="Reported by LemonMax for this account and date. A dash means no agency was supplied. Funding assignments are managed separately." direction={dailySortDirection} onSort={requestDailySort} sortKey="agency">Agency</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="provider">Account provider</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="paymentMethod">Payment method</SortableTableHead>
@@ -1071,6 +1078,7 @@ function CognitiveSpendView({
                       <td><span className="source-pill media-spend-platform">{row.platform}</span></td>
                       <td>{row.workspace}</td>
                       <td><strong>{row.businessManagerName ?? "—"}</strong><small>{row.businessManagerId}</small></td>
+                      <td>{row.agencyName ?? "—"}</td>
                       <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
                       <td>{billingTypeLabel([row])}</td>
                       <td>{paymentCell([row])}</td>
@@ -1091,6 +1099,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="workspace">Workspaces</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="account">Ad account</SortableTableHead>
+                  <SortableTableHead activeSortKey={accountSortKey} description="Reported by LemonMax for the account's latest date in this period. A dash means no agency was supplied. Funding assignments are managed separately." direction={accountSortDirection} onSort={requestAccountSort} sortKey="agency">Agency</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="provider">Account provider</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="paymentMethod">Payment method</SortableTableHead>
@@ -1120,6 +1129,7 @@ function CognitiveSpendView({
                         <ChevronRight aria-hidden="true" size={15} />
                       </button>
                     </td>
+                    <td>{group.agencyName ?? "—"}</td>
                     <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
                     <td>{billingTypeLabel(group.rows)}</td>
                     <td>{paymentCell(group.rows)}</td>

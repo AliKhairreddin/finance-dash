@@ -15,6 +15,8 @@ export interface MediaSpendRow {
   businessManagerName?: string;
   accountId: string;
   accountName?: string;
+  agencyId?: number;
+  agencyName?: string;
   spend: number;
   currency: string;
   syncedAt: string;
@@ -23,6 +25,8 @@ export interface MediaSpendRow {
 export interface MediaSpendAccountGroup {
   accountId: string;
   accountName?: string;
+  agencyId?: number;
+  agencyName?: string;
   businessManagerId: string;
   businessManagerName?: string;
   currency: string;
@@ -191,6 +195,14 @@ export function parseLemonMaxSpendSummaryRange(
 
     const businessManagerName = optionalDisplayString(item, "BM Name", rowNumber);
     const accountName = optionalDisplayString(item, "Account Name", rowNumber);
+    if (!Object.hasOwn(item, "Agency ID") || !Object.hasOwn(item, "Agency Name")) {
+      throw new Error(`LemonMax row ${rowNumber} is missing agency information`);
+    }
+    const agencyId = item["Agency ID"];
+    if (agencyId !== null && (!Number.isSafeInteger(agencyId) || Number(agencyId) < 0)) {
+      throw new Error(`LemonMax row ${rowNumber} has an invalid Agency ID`);
+    }
+    const agencyName = optionalDisplayString(item, "Agency Name", rowNumber);
     const parsed: MediaSpendRow = {
       key: "",
       source: mediaSpendSource,
@@ -201,6 +213,8 @@ export function parseLemonMaxSpendSummaryRange(
       ...(businessManagerName ? { businessManagerName } : {}),
       accountId: requiredString(item, "Account ID", rowNumber, 160),
       ...(accountName ? { accountName } : {}),
+      ...(agencyId !== null ? { agencyId: Number(agencyId) } : {}),
+      ...(agencyName ? { agencyName } : {}),
       spend,
       currency,
       syncedAt
@@ -308,6 +322,8 @@ export function groupMediaSpendByAccount(rows: readonly MediaSpendRow[]): MediaS
     for (const row of accountRows) {
       searchTerms.add(row.accountId);
       if (row.accountName) searchTerms.add(row.accountName);
+      if (row.agencyName) searchTerms.add(row.agencyName);
+      if (row.agencyId !== undefined) searchTerms.add(String(row.agencyId));
       searchTerms.add(row.businessManagerId);
       if (row.businessManagerName) searchTerms.add(row.businessManagerName);
       searchTerms.add(row.platform);
@@ -318,6 +334,8 @@ export function groupMediaSpendByAccount(rows: readonly MediaSpendRow[]): MediaS
     return {
       accountId: latestRow.accountId,
       ...(latestRow.accountName ? { accountName: latestRow.accountName } : {}),
+      ...(latestRow.agencyId !== undefined ? { agencyId: latestRow.agencyId } : {}),
+      ...(latestRow.agencyName ? { agencyName: latestRow.agencyName } : {}),
       businessManagerId: latestRow.businessManagerId,
       ...(latestRow.businessManagerName ? { businessManagerName: latestRow.businessManagerName } : {}),
       currency: latestRow.currency,

@@ -1012,6 +1012,8 @@ export default defineSchema({
     businessManagerName: v.optional(v.string()),
     accountId: v.string(),
     accountName: v.optional(v.string()),
+    agencyId: v.optional(v.number()),
+    agencyName: v.optional(v.string()),
     spend: v.number(),
     currency: v.string(),
     syncedAt: v.string()

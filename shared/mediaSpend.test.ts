@@ -29,6 +29,8 @@ const response = {
       "BM Name": "Hustle Digital",
       "Account ID": "1328654684466184",
       "Account Name": "Hustle 483 LB x M x HD x USD",
+      "Agency ID": 11,
+      "Agency Name": "Hustle Blink",
       Spend: 3119.71
     },
     {
@@ -39,6 +41,8 @@ const response = {
       "BM Name": "SMX Global 30",
       "Account ID": "4151872621726075",
       "Account Name": "1331 - 70163 - SeanX Meta 19",
+      "Agency ID": null,
+      "Agency Name": null,
       Spend: 2392.19
     }
   ]
@@ -53,6 +57,10 @@ test("parses the exact LemonMax account spend contract", () => {
   );
   assert.equal(rows.length, 2);
   assert.equal(rows[0].businessManagerName, "Hustle Digital");
+  assert.equal(rows[0].agencyId, 11);
+  assert.equal(rows[0].agencyName, "Hustle Blink");
+  assert.equal(rows[1].agencyId, undefined);
+  assert.equal(rows[1].agencyName, undefined);
   assert.equal(rows[0].spend, 3119.71);
   assert.match(rows[0].key, /^2026-08-01:/);
   assert.deepEqual(summarizeMediaSpend(rows), {
@@ -115,6 +123,33 @@ test("groups daily spend into one row per platform ad account", () => {
   assert.equal(groupedAccount.rows.length, 2);
   assert.equal(groupedAccount.spend, 4000);
   assert.deepEqual(groupedAccount.workspaces, [1, 2]);
+  assert.equal(groupedAccount.agencyId, 11);
+  assert.equal(groupedAccount.agencyName, "Hustle Blink");
+  assert.ok(groupedAccount.searchText.includes("hustle blink"));
+});
+
+test("uses the latest source agency without inferring one for unassigned accounts", () => {
+  const first = parseLemonMaxSpendSummary(response, "2026-08-01", "USD", "2026-08-03T08:30:00Z")[0];
+  const groups = groupMediaSpendByAccount([first, { ...first, key: "later", date: "2026-08-02", agencyId: undefined, agencyName: undefined }]);
+  assert.equal(groups[0].agencyId, undefined);
+  assert.equal(groups[0].agencyName, undefined);
+  assert.equal(groups[0].spend, first.spend * 2);
+});
+
+test("rejects malformed or missing agency fields before replacing financial data", () => {
+  for (const change of [
+    { "Agency ID": "11" }, { "Agency ID": -1 }, { "Agency ID": 1.5 },
+    { "Agency Name": 11 }, { "Agency Name": "Agency\nName" }
+  ]) {
+    assert.throws(() => parseLemonMaxSpendSummary({ ...response, data: [{ ...response.data[0], ...change }, response.data[1]] },
+      "2026-08-01", "USD", "2026-08-02T08:30:00Z"), /invalid Agency/);
+  }
+  for (const field of ["Agency ID", "Agency Name"]) {
+    const incomplete: Record<string, unknown> = { ...response.data[0] };
+    delete incomplete[field];
+    assert.throws(() => parseLemonMaxSpendSummary({ ...response, data: [incomplete, response.data[1]] },
+      "2026-08-01", "USD", "2026-08-02T08:30:00Z"), /missing agency information/);
+  }
 });
 
 test("imports every account including zero spend, unrelated names, and multiple workspaces", () => {

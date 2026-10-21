@@ -25,6 +25,7 @@
     "verify:production": "tsx scripts/deploy-production.ts verify",
     "media-funding:reconcile": "tsx scripts/reconcile-media-funding.ts",
     "media-funding:backdate": "tsx scripts/backdate-media-funding.ts",
+    "media-spend:reconcile": "tsx scripts/reconcile-lemonmax-spend.ts",
     "slash:configure:card-alerts": "tsx scripts/configure-slash-card-alerts.ts",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "tsc -b --pretty false",

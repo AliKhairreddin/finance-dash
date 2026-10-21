@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { completeSync, replaceDate, startSync, failSync, getSyncState } from "../convex/mediaSpend";
+import { completeSync, replaceDate, startSync, failSync, getSyncState, listDate } from "../convex/mediaSpend";
+import { database } from "./convexTestDb";
 
 function handlerOf(registered: object): (ctx: unknown, args: unknown) => Promise<unknown> {
   const handler: unknown = Reflect.get(registered, "_handler");
@@ -109,6 +110,33 @@ test("reconciliation preserves unchanged document IDs and imports new platforms 
   assert.deepEqual(inserted, incoming.slice(1));
 });
 
+
+test("agency reconciliation enriches, changes and clears metadata without changing document IDs or spend", async (t) => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN;
+  process.env.CONVEX_SERVICE_TOKEN = "media-test";
+  t.after(() => { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; });
+  const base = { source: "lemonmax", workspace: 1, date: "2026-08-01", platform: "Facebook", businessManagerId: "bm", currency: "USD", syncedAt: "2026-08-02T08:30:00Z" };
+  const { db, tables } = database({
+    mediaSpendSyncState: [{ _id: "state", key: "lemonmax", status: "running", attemptId: "attempt", leaseExpiresAt: Date.now() + 120_000 }],
+    mediaSpendDaily: [
+      { ...base, _id: "original-1", key: "one", accountId: "one", spend: 5 },
+      { ...base, _id: "original-2", key: "two", accountId: "two", spend: 0, agencyId: 10, agencyName: "Old" },
+      { ...base, _id: "original-3", key: "three", accountId: "three", spend: 8, agencyId: 11, agencyName: "Removed" }
+    ]
+  });
+  const rows = [
+    { ...base, key: "one", accountId: "one", spend: 5, agencyId: 11, agencyName: "Hustle Blink" },
+    { ...base, key: "two", accountId: "two", spend: 0, agencyId: 15, agencyName: "FALKYN" },
+    { ...base, key: "three", accountId: "three", spend: 8 }
+  ];
+  assert.deepEqual(await handlerOf(replaceDate)({ db }, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows }),
+    { inserted: 0, replaced: 3, deleted: 0, unchanged: 0 });
+  assert.deepEqual(tables.mediaSpendDaily.map(row => row._id), ["original-1", "original-2", "original-3"]);
+  const saved = await handlerOf(listDate)({ db }, { serviceToken: "media-test", date: base.date, includeZeroSpend: true });
+  assert.deepEqual(saved, { rows, storedRowCount: 3 });
+  assert.deepEqual(await handlerOf(replaceDate)({ db }, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows }),
+    { inserted: 0, replaced: 0, deleted: 0, unchanged: 3 });
+});
 
 test("an expired import is visibly failed instead of appearing to run forever", async () => {
   const previous = process.env.CONVEX_SERVICE_TOKEN;

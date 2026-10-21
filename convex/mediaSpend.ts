@@ -16,6 +16,8 @@ const mediaSpendRow = v.object({
   businessManagerName: v.optional(v.string()),
   accountId: v.string(),
   accountName: v.optional(v.string()),
+  agencyId: v.optional(v.number()),
+  agencyName: v.optional(v.string()),
   spend: v.number(),
   currency: v.string(),
   syncedAt: v.string()
@@ -93,6 +95,8 @@ export const listDate = query({
         ...(row.businessManagerName ? { businessManagerName: row.businessManagerName } : {}),
         accountId: row.accountId,
         ...(row.accountName ? { accountName: row.accountName } : {}),
+        ...(row.agencyId !== undefined ? { agencyId: row.agencyId } : {}),
+        ...(row.agencyName ? { agencyName: row.agencyName } : {}),
         spend: row.spend,
         currency: row.currency,
         syncedAt: row.syncedAt
@@ -277,7 +281,8 @@ export const replaceDate = mutation({
       if (stored) {
         const changed = (Object.keys(row) as (keyof typeof row)[])
           .filter((key) => key !== "syncedAt").some((key) => stored[key] !== row[key])
-          || stored.accountName !== row.accountName || stored.businessManagerName !== row.businessManagerName;
+          || stored.accountName !== row.accountName || stored.businessManagerName !== row.businessManagerName
+          || stored.agencyId !== row.agencyId || stored.agencyName !== row.agencyName;
         if (changed) {
           await ctx.db.replace(stored._id, row);
           replaced += 1;

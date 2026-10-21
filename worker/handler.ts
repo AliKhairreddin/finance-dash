@@ -968,12 +968,12 @@ async function readMediaSpend(
   };
 }
 
-async function syncMediaSpend(
+export async function syncMediaSpend(
   env: Env,
   fromDate: string,
   toDate: string,
   options: { scheduled?: boolean } = {}
-): Promise<boolean> {
+): Promise<{ rowCount: number; totalSpend: number } | false> {
   const dates = mediaSpendDates(fromDate, toDate);
   if (dates.length > mediaSpendMaximumSyncDays) throw new ApiError(400, `Choose at most ${mediaSpendMaximumSyncDays} days per LemonMax import`);
   const credentials = requireLemonMaxCredentials(env);
@@ -1051,7 +1051,7 @@ async function syncMediaSpend(
       toDate,
       rows: rowCount
     }));
-    return true;
+    return { rowCount, totalSpend };
   } catch (error) {
     const message = cleanLemonMaxError(error, credentials);
     await convex.mutation(api.mediaSpend.failSync, {
