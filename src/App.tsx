@@ -1,3 +1,4 @@
+import { TopUpsView, useTopUpSummary } from "@/features/top-ups/TopUpsView";
 import { ManualBankTransactions } from "@/features/banking/ManualBankTransactions";
 import { isManualBankSource, manualBankSources, type ManualBankSource } from "../shared/manualBankTransactions";
 import { ContractsView } from "@/features/contracts/ContractsView";
@@ -232,7 +233,7 @@ import { RedTrackView } from "@/features/redtrack/RedTrackView";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "contracts", "providers", "settings"] as const;
+const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "top-ups", "contracts", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | ManualBankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -986,7 +987,7 @@ function App() {
       return;
     }
     setTransactionReview(null);
-    if (nextSession.role === "media-spend-reviewer") {
+    if (nextSession.role === "media-spend-reviewer" || nextSession.role === "top-up-reviewer") {
       setDashboard(null);
       return;
     }
@@ -1033,7 +1034,7 @@ function App() {
   }, [analyticsDataRevision, dashboard?.asOf, ensureAnalyticsSnapshot]);
 
   useEffect(() => {
-    if (!session || session.role === "transaction-reviewer" || !["expenses", "invoices", "documents", "cash-flow-invoices"].includes(activeTab)) return;
+    if (!session || session.role === "transaction-reviewer" || session.role === "top-up-reviewer" || !["expenses", "invoices", "documents", "cash-flow-invoices"].includes(activeTab)) return;
     let pending = false;
     const refresh = async () => {
       if (pending || document.visibilityState !== "visible") return;
@@ -1356,6 +1357,7 @@ function App() {
     () => latestIncomeAutomationTimestamp(dashboard?.automationRuns ?? []),
     [dashboard?.automationRuns]
   );
+  const topUpPendingCount = useTopUpSummary(apiBase, session?.role === "administrator" || session?.role === "top-up-reviewer");
   const incomeAutomationUnreadCount = useMemo(
     () => unreadIncomeAutomationCount(dashboard?.automationRuns ?? [], incomeAutomationReadAt),
     [dashboard?.automationRuns, incomeAutomationReadAt]
@@ -2156,6 +2158,12 @@ function App() {
     );
   }
 
+  if (session?.role === "top-up-reviewer") {
+    return <main className="app-shell"><Sidebar activeTab={activeTab} role={session.role} incomeAutomationUnreadCount={0} topUpPendingCount={topUpPendingCount} themeMode={themeMode} onToggleTheme={toggleThemeMode} onSync={async () => {}} isSyncing={false} /><div className="main-column"><div className="route-stage" key={activeTab}>
+      {activeTab === "documents" ? <DocumentsView apiBase={apiBase} /> : <TopUpsView apiBase={apiBase} />}
+    </div></div></main>;
+  }
+
   if (session?.role === "media-spend-reviewer") {
     return (
       <main className="transaction-reviewer-shell">
@@ -2228,6 +2236,7 @@ function App() {
         activeTab={activeTab}
         role={session.role}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
+        topUpPendingCount={topUpPendingCount}
         themeMode={themeMode}
         onToggleTheme={toggleThemeMode}
         onSync={syncNow}
@@ -2330,6 +2339,7 @@ function App() {
         </>
       )}
 
+      {activeTab === "top-ups" && <TopUpsView apiBase={apiBase} administrator={session.role === "administrator"} />}
       {activeTab === "documents" && <DocumentsView apiBase={apiBase} />}
       {activeTab === "contracts" && <ContractsView apiBase={apiBase} providers={dashboard.providers} />}
 
@@ -2926,8 +2936,10 @@ function SidebarActions({
   onToggleTheme,
   onSync,
   isSyncing,
-  mobile = false
+  mobile = false,
+  canSync = true
 }: {
+  canSync?: boolean;
   id: string;
   open: boolean;
   themeMode: ThemeMode;
@@ -2965,7 +2977,7 @@ function SidebarActions({
             {themeMode === "dark" ? <Sun aria-hidden="true" size={15} /> : <Moon aria-hidden="true" size={15} />}
             <span>{nextTheme === "dark" ? "Dark mode" : "Light mode"}</span>
           </Button>
-          <Button
+          {canSync && <Button
             aria-label="Refresh and sync dashboard data"
             className="sidebar-action-item"
             disabled={isSyncing}
@@ -2975,7 +2987,7 @@ function SidebarActions({
           >
             {isSyncing ? <Loader2 aria-hidden="true" className="spin" size={15} /> : <RefreshCw aria-hidden="true" size={15} />}
             <span>{isSyncing ? "Syncing" : "Sync data"}</span>
-          </Button>
+          </Button>}
           <a className="sidebar-action-item sidebar-logout-action" href="/logout">
             <LogOut aria-hidden="true" size={15} />
             <span>Log out</span>
@@ -2990,6 +3002,7 @@ function Sidebar({
   activeTab,
   role,
   incomeAutomationUnreadCount,
+  topUpPendingCount,
   themeMode,
   onToggleTheme,
   onSync,
@@ -2998,6 +3011,7 @@ function Sidebar({
   activeTab: ActiveTab;
   role: DashboardSession["role"];
   incomeAutomationUnreadCount: number;
+  topUpPendingCount: number | null;
   themeMode: ThemeMode;
   onToggleTheme: () => void;
   onSync: () => Promise<void>;
@@ -3022,6 +3036,7 @@ function Sidebar({
     { id: "redtrack", label: "RedTrack", icon: <TrendingUp size={17} /> },
     { id: "invoices", label: "Invoices", icon: <FileText size={17} /> },
     { id: "expenses", label: "Expenses", icon: <ReceiptText size={17} /> },
+    { id: "top-ups", label: "Top-up requests", icon: <CircleDollarSign size={17} /> },
     { id: "documents", label: "Documents", icon: <FileText size={17} /> }
   ];
   const cashFlowItems: SidebarItem[] = [
@@ -3069,14 +3084,14 @@ function Sidebar({
 
   function navigationLink(item: SidebarItem, nested = false, mobile = false) {
     if (!dashboardPageAllowed(role, item.id)) return null;
-    const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : 0;
+    const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : item.id === "top-ups" ? topUpPendingCount ?? 0 : 0;
     return (
       <UrlStateLink
         key={item.id}
         stateKey="page"
         value={item.id}
         defaultValue="overview"
-        aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} unread automation ${unreadCount === 1 ? "update" : "updates"}` : item.label}
+        aria-label={unreadCount > 0 ? `${item.label}, ${unreadCount} ${item.id === "top-ups" ? "requests awaiting action" : `unread automation ${unreadCount === 1 ? "update" : "updates"}`}` : item.label}
         className={`${buttonVariants()} ${activeTab === item.id ? "active" : ""} ${nested ? "nested" : ""} ${unreadCount > 0 ? "has-meta" : ""}`}
         onNavigate={closeNavigationMenus}
         aria-current={activeTab === item.id ? "page" : undefined}
@@ -3120,17 +3135,18 @@ function Sidebar({
               {accountingItems.map((item) => navigationLink(item, false, true))}
               {role === "administrator" && <div className="mobile-nav-group-label">Cash Flow</div>}
               {cashFlowItems.map((item) => navigationLink(item, false, true))}
-              <div className="mobile-nav-group-label has-badge">
+              {operationsItems.some(item => dashboardPageAllowed(role, item.id)) && <><div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
               </div>
-              {operationsItems.map((item) => navigationLink(item, false, true))}
+              {operationsItems.map((item) => navigationLink(item, false, true))}</>}
               {role === "administrator" && <div className="mobile-nav-group-label">Workspace</div>}
               {workspaceItems.map((item) => navigationLink(item, false, true))}
             </div>
           )}
         </div>
         <SidebarActions
+              canSync={role !== "top-up-reviewer"}
           id="mobile-account-actions"
           isSyncing={isSyncing}
           mobile
@@ -3158,13 +3174,13 @@ function Sidebar({
         <div className="sidebar-income-group">
           {cashFlowItems.map((item) => navigationLink(item, true))}
         </div></>}
-        <div className="sidebar-section-label has-badge">
+        {operationsItems.some(item => dashboardPageAllowed(role, item.id)) && <><div className="sidebar-section-label has-badge">
           <span>Operations</span>
           <span className="sidebar-beta-badge">Beta</span>
         </div>
         <div className="sidebar-income-group">
           {operationsItems.map((item) => navigationLink(item, true))}
-        </div>
+        </div></>}
         {role === "administrator" && <><div className="sidebar-section-label">Workspace</div>
         <div className="sidebar-income-group">
           {workspaceItems.map((item) => navigationLink(item, true))}
@@ -3173,6 +3189,7 @@ function Sidebar({
       <div className="sidebar-footer">
         {activeTab === "management" && <p>Live operations · report imported separately</p>}
         <SidebarActions
+              canSync={role !== "top-up-reviewer"}
           id="desktop-account-actions"
           isSyncing={isSyncing}
           onSync={onSync}

@@ -732,3 +732,24 @@ test("Revolut rejects transaction rows with invented-prone money, date, status, 
     );
   }
 });
+
+test("draft consent grants READ and WRITE but never PAY", async () => {
+  const { revolutDraftConsentUrl } = await import("./revolutApi");
+  const url = new URL(revolutDraftConsentUrl({ clientId: "test-client", redirectUri: "https://finance.test" }));
+  assert.equal(url.searchParams.get("scope"), "READ,WRITE");
+  assert.ok(!url.searchParams.get("scope")!.split(",").includes("PAY"));
+});
+test("Revolut draft creation sends only an unscheduled unsent draft and never retries POST", async () => {
+  const { revolutDraftApi } = await import("./revolutApi"); const { privateKeyPem } = await rsaKeyMaterial(); const calls: { url: string; body: any }[] = [];
+  const fetcher: typeof fetch = async (url, init) => { const raw = String(url); calls.push({ url: raw, body: raw.endsWith("/auth/token") ? null : JSON.parse(String(init?.body)) });
+    if (raw.endsWith("/auth/token")) return Response.json({ access_token: "test-access" });
+    if (raw.endsWith("/payment-drafts")) return Response.json({ id: "draft-1" }, { status: 201 }); throw new Error(`Unexpected endpoint ${raw}`);
+  };
+  const bank = await revolutDraftApi({ clientId: "client", issuer: "finance.test", privateKeyPem, refreshToken: "refresh", fetcher });
+  await bank.create({ title: "Top-up #1", accountId: "source", counterpartyId: "recipient", recipientAccountId: "recipient-account", amount: 200, currency: "USD", reference: "INV-1" });
+  assert.equal(calls.length, 2); assert.equal(calls[1].url, "https://b2b.revolut.com/api/1.0/payment-drafts");
+  assert.deepEqual(calls[1].body, { title: "Top-up #1", payments: [{ account_id: "source", receiver: { counterparty_id: "recipient", account_id: "recipient-account" }, amount: 200, currency: "USD", reference: "INV-1" }] });
+  let writes = 0;
+  const failureBank = await revolutDraftApi({ clientId: "client", issuer: "finance.test", privateKeyPem, refreshToken: "refresh", fetcher: async url => { if (String(url).endsWith("/auth/token")) return Response.json({ access_token: "test-access" }); writes++; return new Response("", { status: 503 }); } });
+  await assert.rejects(failureBank.create({ title: "Top-up #1", accountId: "source", counterpartyId: "recipient", recipientAccountId: "recipient-account", amount: 200, currency: "USD", reference: "INV-1" }), /503/); assert.equal(writes, 1);
+});

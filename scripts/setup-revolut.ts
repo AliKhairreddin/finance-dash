@@ -2,7 +2,7 @@ import { chmod, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { exchangeRevolutAuthorizationCode, revolutReadConsentUrl } from "../shared/revolutApi";
+import { exchangeRevolutAuthorizationCode, revolutReadConsentUrl, revolutDraftConsentUrl } from "../shared/revolutApi";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -25,10 +25,11 @@ if (redirectUrl.protocol !== "https:" || redirectUrl.hostname !== issuer) {
 }
 
 const privateKeyPem = await readFile(privateKeyFile, "utf8");
-const consentUrl = revolutReadConsentUrl({ environment, clientId, redirectUri });
+const drafts = process.argv.includes("--drafts");
+const consentUrl = (drafts ? revolutDraftConsentUrl : revolutReadConsentUrl)({ environment, clientId, redirectUri });
 const prompt = createInterface({ input: stdin, output: stdout });
 
-console.log("\nOpen this read-only Revolut consent URL and approve access:\n");
+console.log(`\nOpen this Revolut consent URL and approve ${drafts ? "READ,WRITE access for unsent payment drafts (PAY is excluded)" : "read-only access"}:\n`);
 console.log(consentUrl);
 console.log("\nThe authorization code is valid for only two minutes.");
 const authorizationCode = await prompt.question("Paste the code query parameter from the redirect URL: ");

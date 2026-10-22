@@ -11,6 +11,7 @@ export type SearchableSelectOption = {
 
 type SearchableSelectProps = {
   id?: string;
+  onSearchChange?: (value: string) => void;
   value: string;
   options: SearchableSelectOption[];
   onValueChange: (value: string) => void;
@@ -27,6 +28,7 @@ type SearchableSelectProps = {
 
 export function SearchableSelect({
   id,
+  onSearchChange,
   value,
   options,
   onValueChange,
@@ -93,6 +95,8 @@ export function SearchableSelect({
     <div className={cn("searchable-select", className)} data-size={size} data-disabled={disabled ? "" : undefined}>
       <Combobox.Root
         items={options}
+        filter={onSearchChange ? null : undefined}
+        onInputValueChange={onSearchChange}
         value={selectedOption}
         onValueChange={(option) => onValueChange(option?.value ?? "")}
         itemToStringLabel={(option) => option.label}

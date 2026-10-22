@@ -1,0 +1,10 @@
+import { readFileSync } from "node:fs";
+import { parse } from "dotenv";
+import { productionEnvironment, productionServiceEnvironment } from "./deploy-production";
+const local = parse(readFileSync(".env.local"));
+const env = productionServiceEnvironment(productionEnvironment({ ...local, ...process.env }));
+const response = await fetch("https://finance.thatcanadian.dev/api/internal/top-ups/setup", { method: "POST", headers: { Authorization: `Bearer ${env.CONVEX_SERVICE_TOKEN}` }, signal: AbortSignal.timeout(60_000) });
+if (!response.ok) throw new Error(`Top-up configuration check returned ${response.status}`);
+const result = await response.json() as { ready: boolean; botUsername: string; groupTitle?: string; groupId: string; recipients: string[]; alaaConfigured: boolean; message?: string };
+console.log(JSON.stringify(result, null, 2));
+if (!result.ready) console.log(`Action required: ${result.message ?? `add @${result.botUsername} to Telegram group ${result.groupId} and allow it to send messages.`}`);

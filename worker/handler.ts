@@ -1,3 +1,6 @@
+import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, sendTopUpNotification, topUpSetup } from "./topUps";
+import { prepareTopUpDraft } from "./topUpDrafts";
+import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
 import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleManualBankApi } from "./manualBankTransactions";
@@ -24,7 +27,7 @@ import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
-import { telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
+import { configureTelegramWebhook, telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
 import { handleDocumentApi, extractDocument, DocumentExtractionError, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
 type Env = WorkerEnv;
 import type {
@@ -8947,7 +8950,7 @@ export default {
     if (new URL(request.url).pathname === "/api/telegram/webhook") {
       if (request.method !== "POST" || !await secureHeaderMatches(request.headers.get("X-Telegram-Bot-Api-Secret-Token"), await telegramWebhookSecret(env))) return json({ message: "Unauthorized" }, { status: 401 });
       if (Number(request.headers.get("Content-Length")) > 1024 * 1024) return json({ message: "Update too large" }, { status: 413 });
-      try { const value = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 1024 * 1024))); const update = telegramUpdate(value); if (update.message) await env.TELEGRAM_INBOX.getByName(`chat:${update.message.chatId}`).receive(value); return json({ ok: true }); }
+      try { const value = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 1024 * 1024))); if (await handleTopUpTelegram(value, env)) return json({ ok: true }); const update = telegramUpdate(value); if (update.message) await env.TELEGRAM_INBOX.getByName(`chat:${update.message.chatId}`).receive(value); return json({ ok: true }); }
       catch { return json({ message: "Update could not be accepted" }, { status: 503 }); }
     }
     if (new URL(request.url).pathname === "/api/internal/telegram") {
@@ -8981,6 +8984,22 @@ export default {
       try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
       catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: error instanceof DocumentExtractionError && error.status === 429 ? 429 : 502, ...(error instanceof DocumentExtractionError && error.retryAfterSeconds ? { headers: { "Retry-After": String(error.retryAfterSeconds) } } : {}) }); }
     }
+    const publicTopUpResponse = await handlePublicTopUps(request, env);
+    if (publicTopUpResponse) return publicTopUpResponse;
+    if (new URL(request.url).pathname === "/api/internal/top-ups/setup") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try { if (request.method === "POST") await configureTelegramWebhook(env); return json(await topUpSetup(env)); } catch { return json({ message: "Top-up configuration could not be checked" }, { status: 502 }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/top-ups/process") {
+      if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      try {
+        const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { id: import("../convex/_generated/dataModel").Id<"topUpRequests">; version: number; job: string };
+        if (body.job === "notification") await sendTopUpNotification(env, body.id, body.version);
+        else if (body.job === "draft") await prepareTopUpDraft(env, body.id);
+        else return json({ message: "Unknown job" }, { status: 400 });
+        return json({ ok: true });
+      } catch { return json({ message: "Top-up processing failed" }, { status: 502 }); }
+    }
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;
 
@@ -8989,6 +9008,9 @@ export default {
       const session = await getDashboardSession(request, env);
       if (!session) {
         return json({ message: "Authentication required" }, { status: 401 });
+      }
+      if (session.role === "top-up-reviewer" && !topUpReviewerCanAccess(request)) {
+        return json({ message: "This account can access Top-up requests and Documents only" }, { status: 403 });
       }
       if (session.role === "transaction-reviewer" && !transactionReviewerCanAccess(request)) {
         return json({ message: "This account can access bank transaction review only" }, { status: 403 });
@@ -9005,7 +9027,12 @@ export default {
       if (url.pathname === "/api/transaction-review" && request.method === "GET") {
         return json(transactionReviewBootstrap(await getSnapshot(env)));
       }
+      const topUpResponse = await handleTopUpApi(request, env);
+      if (topUpResponse) return topUpResponse;
       return handleApi(request, env, executionContext);
+    }
+    if (["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname)) {
+      return env.ASSETS.fetch(new Request(new URL("/top-up.html", url), request));
     }
     return env.ASSETS.fetch(request);
   },

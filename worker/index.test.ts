@@ -1229,3 +1229,17 @@ test("manual media sync rejects overlapping imports and oversized ranges before 
   assert.equal(tooLarge.status, 400);
   assert.deepEqual(calls, ["mediaSpend:startSync"]);
 });
+
+test("public top-up routes serve their isolated entry while dashboard assets remain protected", async () => {
+  const paths: string[] = [];
+  const env = authenticatedEnv({ ASSETS: { async fetch(request: Request) { paths.push(new URL(request.url).pathname); return new Response("public form"); } } });
+  for (const path of ["/top-up", "/payments"]) { const r = await worker.fetch(new Request(`https://finance.example${path}`), env); assert.equal(r.status, 200); }
+  assert.deepEqual(paths, ["/top-up.html", "/top-up.html"]);
+  assert.equal((await worker.fetch(new Request("https://finance.example/top-up.html"), env)).status, 303);
+});
+test("Alaa's restricted role cannot reach dashboard, bank, settings or top-up action APIs", async () => {
+  const env = authenticatedEnv({ TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "8710954543" }) });
+  const session = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "alaa"), env); assert.deepEqual(await session.json(), { username: "Alaa", role: "top-up-reviewer" });
+  for (const path of ["/api/dashboard", "/api/transactions", "/api/settings", "/api/top-ups/abc/draft-options"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "alaa"), env)).status, 403, path);
+  for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/reconcile-draft", "/api/sync"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST" }, "alaa"), env)).status, 403, path);
+});

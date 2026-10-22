@@ -70,6 +70,7 @@ function main(): void {
     run("npx", ["wrangler", "deploy"], env);
     run("npm", ["run", "slash:configure:card-alerts"], env);
     run("npm", ["run", "contracts:configure-inbox"], env);
+    run("npm", ["run", "top-ups:configure"], env);
   }
 }
 

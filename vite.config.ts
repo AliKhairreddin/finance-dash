@@ -4,7 +4,7 @@ import path from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), { name: "public-top-up-route", configureServer(server) { server.middlewares.use((req, _res, next) => { if (/^\/(top-up|payments)\/?(?:\?|$)/.test(req.url ?? "")) req.url = "/top-up.html"; next(); }); } }],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src")

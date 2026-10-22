@@ -31,6 +31,7 @@ type AuthEnv = Pick<
   | "TELEGRAM_OTP_STATE"
   | "TELEGRAM_PASSWORDLESS_USERS_JSON"
 > & {
+  TELEGRAM_TOPUP_USERS_JSON?: string;
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
   TELEGRAM_MEDIA_SPEND_USERS_JSON?: string;
   DASHBOARD_MEDIA_SPEND_USERS?: string;
@@ -40,6 +41,7 @@ type AuthEnv = Pick<
 interface TelegramAuthConfig {
   users: TelegramAuthUser[];
   passwordlessUsernames: Set<string>;
+  topUpUsernames: Set<string>;
   transactionReviewerUsernames: Set<string>;
   mediaSpendUsernames: Set<string>;
   sessionSecret: string;
@@ -92,12 +94,13 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   const sessionSecret = env.AUTH_SESSION_SECRET?.trim();
   const botToken = env.TELEGRAM_BOT_TOKEN?.trim();
   const administratorUsers = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  const topUpUsers = parseOptionalTelegramUsers(env.TELEGRAM_TOPUP_USERS_JSON);
   const transactionReviewerUsers = parseOptionalTelegramUsers(env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON);
   const mediaSpendUsers = parseOptionalTelegramUsers(env.TELEGRAM_MEDIA_SPEND_USERS_JSON);
   const mediaSpendUsernames = new Set((env.DASHBOARD_MEDIA_SPEND_USERS ?? "").split(",").map(normalizeFinanceUsername).filter(Boolean));
-  if (!sessionSecret || !botToken || !administratorUsers || !transactionReviewerUsers || !mediaSpendUsers || !env.TELEGRAM_OTP_STATE) return null;
+  if (!sessionSecret || !botToken || !administratorUsers || !topUpUsers || !transactionReviewerUsers || !mediaSpendUsers || !env.TELEGRAM_OTP_STATE) return null;
   if (mediaSpendUsers.some((user) => !mediaSpendUsernames.has(user.normalizedUsername))) return null;
-  const users = [...administratorUsers, ...transactionReviewerUsers, ...mediaSpendUsers];
+  const users = [...topUpUsers, ...administratorUsers, ...transactionReviewerUsers, ...mediaSpendUsers];
   const normalizedUsernames = new Set<string>();
   const chatIds = new Set<string>();
   for (const user of users) {
@@ -112,6 +115,7 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   if ([...mediaSpendUsernames].some((username) => passwordlessUsernames.has(username))) return null;
   return {
     users,
+    topUpUsernames: new Set(topUpUsers.map(user => user.normalizedUsername)),
     passwordlessUsernames,
     transactionReviewerUsernames,
     mediaSpendUsernames,
@@ -823,7 +827,7 @@ export async function enforceSiteAuthentication(
   dependencies: AuthDependencies = {}
 ): Promise<Response | null> {
   const url = new URL(request.url);
-  if ((request.method === "GET" || request.method === "HEAD") && PUBLIC_APP_ASSET_PATHS.has(url.pathname)) {
+  if ((request.method === "GET" || request.method === "HEAD") && (PUBLIC_APP_ASSET_PATHS.has(url.pathname) || ["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname) || url.pathname.startsWith("/top-up-assets/"))) {
     return null;
   }
   return enforceTelegramAuth(request, env, url, dependencies);
@@ -842,7 +846,7 @@ export async function getDashboardSession(
   if (!user) return null;
   return {
     username: user.username,
-    role: config.mediaSpendUsernames.has(normalizedUsername)
+    role: config.topUpUsernames.has(normalizedUsername) ? "top-up-reviewer" : config.mediaSpendUsernames.has(normalizedUsername)
       ? "media-spend-reviewer"
       : env.DASHBOARD_FINANCE_OPERATOR_USERS?.split(",").some((username) => normalizeFinanceUsername(username) === normalizedUsername)
       ? "finance-operator"

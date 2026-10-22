@@ -553,3 +553,15 @@ test("media users cannot bypass OTP or be activated without their reserved role"
   const bypass = await createAuthSessionToken(testSessionSecret, "finance.example", "passwordless:hetarth");
   assert.equal(await getDashboardSession(new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${bypass}` } }), base as never), null);
 });
+
+test("public top-up pages and assets require no sign-in while dashboard routes remain protected", async () => {
+  const env = telegramEnv();
+  for (const path of ["/top-up", "/payments", "/top-up-assets/example.js"]) assert.equal(await enforceSiteAuthentication(new Request(`https://finance.thatcanadian.dev${path}`), env), null);
+  for (const path of ["/", "/?page=top-ups"]) assert.equal((await enforceSiteAuthentication(new Request(`https://finance.thatcanadian.dev${path}`), env))?.status, 303);
+});
+test("Alaa receives a restricted session from the separate Telegram user registry", async () => {
+  const env = { ...(telegramEnv() as WorkerEnv), TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "444444" }) };
+  const token = await createAuthSessionToken(testSessionSecret, "finance.thatcanadian.dev", "alaa");
+  const session = await getDashboardSession(new Request("https://finance.thatcanadian.dev", { headers: { Cookie: `__Host-finance_session=${token}` } }), env);
+  assert.deepEqual(session, { username: "Alaa", role: "top-up-reviewer" });
+});

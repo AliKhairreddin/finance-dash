@@ -1,6 +1,6 @@
 # Revolut Business API setup
 
-This dashboard requests only the Revolut Business API `READ` scope. It generates a fresh RS256 client assertion inside the Worker whenever it refreshes the 40-minute access token.
+The standard banking setup requests the Revolut Business API `READ` scope. Top-up payment drafts require `READ,WRITE`; the setup helper supports `npm run revolut:setup -- --drafts`. Neither mode requests `PAY`. It generates a fresh RS256 client assertion inside the Worker whenever it refreshes the 40-minute access token.
 
 ## 1. Generate the certificate
 
@@ -58,3 +58,9 @@ rm "$REVOLUT_SETUP_DIR/revolut-refresh-token.txt"
 ```
 
 Do not enable Revolut production IP whitelisting for this Worker. Cloudflare Workers do not have a stable dedicated egress IP unless a separate fixed-egress architecture is configured. The `READ_SENSITIVE_CARD_DATA` scope is neither requested nor needed.
+
+## Top-up draft permission
+
+Reuse the existing registered certificate/private key and client ID. Run the setup helper with `--drafts`, approve the `READ,WRITE` consent in Revolut, and replace only `REVOLUT_REFRESH_TOKEN` using the protected output file as in step 4. Never add `PAY`. Existing read-only tokens cannot create drafts. This consent must be completed by the Revolut account administrator.
+
+Funding accounts must be reviewed per request in the dashboard. Automatic drafting can use `TOPUP_REVOLUT_DN_ACCOUNT_ID` or `TOPUP_REVOLUT_LMD_ACCOUNT_ID` only after verifying which legal entity owns the account. Do not configure both to the same account merely to make automation run.

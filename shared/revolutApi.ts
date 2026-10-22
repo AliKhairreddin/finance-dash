@@ -615,6 +615,12 @@ export function revolutReadConsentUrl({
   return url.toString();
 }
 
+export function revolutDraftConsentUrl(options: { environment?: string; clientId: string; redirectUri: string }): string {
+  const url = new URL(revolutReadConsentUrl(options));
+  url.searchParams.set("scope", "READ,WRITE");
+  return url.toString();
+}
+
 async function boundedErrorText(response: Response): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader();
@@ -1079,4 +1085,29 @@ export async function fetchRevolutActivity({
   });
 
   return { accounts, transactions };
+}
+
+export class RevolutDraftRejectedError extends Error {}
+
+// Deliberately exposes only read operations and draft creation. No payment endpoint.
+export async function revolutDraftApi(options: RevolutActivityBatchOptions) {
+  const token = await fetchRevolutAccessToken({ ...options, fetcher: options.fetcher ?? fetch, now: options.now ?? Date.now() });
+  const fetcher = options.fetcher ?? fetch;
+  const base = revolutBaseUrl(options.environment);
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  return {
+    draft: (id: string) => fetchRevolutJson<{ id: string; title: string; payments: Array<{ amount: number; currency: string }> }>(fetcher, `${base}/payment-drafts/${encodeURIComponent(id)}`, { headers }),
+    accounts: () => fetchRevolutJson<Array<{ id: string; name: string; currency: string; state: string }>>(fetcher, `${base}/accounts`, { headers }),
+    counterparties: async (iban: string) => {
+      const rows = await fetchRevolutJson<Array<{ id: string; name: string; state: string; accounts?: Array<{ id: string; iban?: string; currency: string }> }>>(fetcher, `${base}/counterparties?${new URLSearchParams({ iban, limit: "1000" })}`, { headers });
+      if (!Array.isArray(rows) || rows.length >= 1000) throw new Error("Counterparty results are incomplete. Review in Revolut."); return rows;
+    },
+    create: async (input: { title: string; accountId: string; counterpartyId: string; recipientAccountId: string; amount: number; currency: string; reference: string }) => {
+      // POST is never retried: an interrupted response needs reconciliation in Revolut.
+      const response = await fetcher(`${base}/payment-drafts`, { method: "POST", headers, signal: AbortSignal.timeout(25_000), body: JSON.stringify({ title: input.title, payments: [{ account_id: input.accountId, receiver: { counterparty_id: input.counterpartyId, account_id: input.recipientAccountId }, amount: input.amount, currency: input.currency, reference: input.reference }] }) });
+      if (!response.ok) { await response.body?.cancel(); throw new (response.status >= 400 && response.status < 500 ? RevolutDraftRejectedError : Error)(`Revolut draft creation returned ${response.status}. Check WRITE permission and the draft list before retrying.`); }
+      const result = await readBoundedResponseJson<{ id: string }>(response, "Revolut draft");
+      if (!result.id) throw new Error("Revolut did not return a draft ID. Check drafts in Revolut."); return result;
+    }
+  };
 }

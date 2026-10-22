@@ -1,3 +1,4 @@
+import { topUpFields } from "./topUpSchema";
 import { replacementFields } from "./meritReplacementSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { redtrackRow, redtrackSource } from "./redtrackSchema";
@@ -604,6 +605,10 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  topUpRequests: defineTable(topUpFields).index("by_submission", ["submissionId"]).index("by_document", ["documentId"]).index("by_status", ["status"]).index("by_adjust_prompt", ["adjustPromptId"]),
+  topUpSettings: defineTable({ key: v.string(), sequence: v.number() }).index("by_key", ["key"]),
+  topUpRateLimits: defineTable({ key: v.string(), count: v.number(), expiresAt: v.number() }).index("by_key", ["key"]).index("by_expiry", ["expiresAt"]),
+  topUpDeliveries: defineTable({ requestId: v.id("topUpRequests"), version: v.number(), state: v.string(), attempts: v.number(), token: v.optional(v.string()), error: v.optional(v.string()), messageId: v.optional(v.number()) }).index("by_request_version", ["requestId", "version"]),
   meritInvoiceReplacements: defineTable(replacementFields).index("by_operation_id", ["id"]).index("by_invoice_id", ["invoiceId"]),
   manualBankTransactions: defineTable({
     ...manualBankRecord, intakeKey: v.string(), companySort: v.string(), sentAt: v.optional(v.number()),

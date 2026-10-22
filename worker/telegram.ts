@@ -199,7 +199,7 @@ async function readBoundedResponseJson(response: Response): Promise<unknown> {
   return JSON.parse(new TextDecoder().decode(body));
 }
 
-async function telegramApi(
+export async function telegramApi(
   env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">,
   method: string,
   payload: Record<string, unknown>
@@ -469,7 +469,7 @@ async function getTelegramUpdates(
     offset,
     limit: TELEGRAM_UPDATE_LIMIT,
     timeout: 0,
-    allowed_updates: ["message"]
+    allowed_updates: ["message", "callback_query"]
   });
   if (!Array.isArray(result) || result.length > TELEGRAM_UPDATE_LIMIT) {
     throw new Error("Telegram getUpdates response was invalid");
@@ -632,7 +632,7 @@ export async function telegramWebhookSecret(env: Pick<WorkerEnv, "TELEGRAM_BOT_T
 }
 
 export async function configureTelegramWebhook(env: WorkerEnv): Promise<void> {
-  await telegramApi(env, "setWebhook", { url: new URL("/api/telegram/webhook", env.PUBLIC_APP_URL).toString(), secret_token: await telegramWebhookSecret(env), allowed_updates: ["message"], max_connections: 20, drop_pending_updates: false });
+  await telegramApi(env, "setWebhook", { url: new URL("/api/telegram/webhook", env.PUBLIC_APP_URL).toString(), secret_token: await telegramWebhookSecret(env), allowed_updates: ["message", "callback_query"], max_connections: 20, drop_pending_updates: false });
 }
 
 export async function getTelegramWebhookInfo(env: WorkerEnv): Promise<unknown> {

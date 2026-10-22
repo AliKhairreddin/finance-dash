@@ -83,6 +83,10 @@ interface ExportedHandler<Env> {
 	scheduled?(controller: ScheduledController, env: Env, ctx: ExecutionContext): void | Promise<void>;
 }
 interface __BaseEnv_WorkerEnv {
+  TOPUP_TELEGRAM_CHAT_ID: string;
+  TELEGRAM_TOPUP_USERS_JSON?: string;
+  TOPUP_REVOLUT_DN_ACCOUNT_ID?: string;
+  TOPUP_REVOLUT_LMD_ACCOUNT_ID?: string;
   SLASH_CARD_ALERTS: DurableObjectNamespace<import("./worker/index").SlashCardAlerts>;
   PARTNER_UPDATES: DurableObjectNamespace<import("./worker/index").PartnerUpdates>;
   DOCUMENT_AI_MODEL: string;

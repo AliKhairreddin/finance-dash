@@ -3,13 +3,15 @@ import type { DashboardAccessRole } from "./types";
 export const financeOperatorPages = ["banks", "documents", "analytics", "management"] as const;
 
 export function dashboardPageAllowed(role: DashboardAccessRole, page: string): boolean {
+  if (role === "top-up-reviewer") return page === "top-ups" || page === "documents";
   if (role === "administrator") return true;
   if (role === "transaction-reviewer") return page === "banks";
   if (role === "media-spend-reviewer") return page === "media-spend" || page === "media-funding";
   return financeOperatorPages.some((allowed) => allowed === page);
 }
 
-export function dashboardHomePage(role: DashboardAccessRole): "overview" | "banks" | "media-spend" {
+export function dashboardHomePage(role: DashboardAccessRole): "overview" | "banks" | "media-spend" | "top-ups" {
+  if (role === "top-up-reviewer") return "top-ups";
   if (role === "administrator") return "overview";
   return role === "media-spend-reviewer" ? "media-spend" : "banks";
 }
@@ -61,5 +63,15 @@ export function financeOperatorCanAccess(request: Request): boolean {
     return /^\/api\/(?:holdings|documents|manual-bank-transactions)\/[^/]+$/u.test(path)
       || /^\/api\/amex\/statements\/[^/]+$/u.test(path);
   }
+  return false;
+}
+
+export function topUpReviewerCanAccess(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET") return ["/api/session", "/api/top-ups", "/api/top-ups/summary", "/api/documents", "/api/documents/folders", "/api/documents/recheck"].includes(path)
+    || /^\/api\/top-ups\/[^/]+(?:\/invoice)?$/u.test(path)
+    || /^\/api\/documents\/[^/]+(?:\/(?:file|candidates))?$/u.test(path);
+  if (request.method === "POST") return ["/api/documents/upload", "/api/documents/trash", "/api/documents/restore", "/api/documents/recheck"].includes(path)
+    || /^\/api\/documents\/[^/]+\/(?:review|retry|match|candidates|purchase|references)$/u.test(path);
   return false;
 }

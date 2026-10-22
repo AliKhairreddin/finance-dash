@@ -36,6 +36,9 @@ import type * as meritReplacements from "../meritReplacements.js";
 import type * as redtrack from "../redtrack.js";
 import type * as redtrackCache from "../redtrackCache.js";
 import type * as redtrackSchema from "../redtrackSchema.js";
+import type * as topUpProcessing from "../topUpProcessing.js";
+import type * as topUpSchema from "../topUpSchema.js";
+import type * as topUps from "../topUps.js";
 import type * as wagnerSpendCache from "../wagnerSpendCache.js";
 
 import type {
@@ -73,6 +76,9 @@ declare const fullApi: ApiFromModules<{
   redtrack: typeof redtrack;
   redtrackCache: typeof redtrackCache;
   redtrackSchema: typeof redtrackSchema;
+  topUpProcessing: typeof topUpProcessing;
+  topUpSchema: typeof topUpSchema;
+  topUps: typeof topUps;
   wagnerSpendCache: typeof wagnerSpendCache;
 }>;
 
