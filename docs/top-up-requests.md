@@ -1,14 +1,14 @@
 # Top-up requests
 
-Public form: https://finance.thatcanadian.dev/top-up (also `/payments`). The dashboard stays authenticated at `/?page=top-ups`. The form preserves the source form's fields and required rules, adds required last-three-days and expected-next-three-days spend in USD, and permits negative open balances. Request amount/balance retain the original currency selector.
+Public form: https://finance.thatcanadian.dev/top-up (also `/payments`). The dashboard stays authenticated at `/?page=top-ups`. The form requires last-three-days and expected-next-three-days spend in USD, with a minimum expected spend of 1,000 USD, and permits negative open balances. Request amount/balance retain the original currency selector.
 
 Requests, original invoices and processing state are saved in production Convex. Ordinary refreshes read saved data only. Public company search returns only IDs and names for up to 25 matching companies; aliases and legal names participate in matching. New company proposals are added as suppliers when approved. Anonymous submissions cannot directly modify the provider directory. Invoice uploads reuse Documents intake and its existing PDF viewer, extraction, retention and access rules. Request status never creates a bank transaction or marks an accounting invoice paid.
 
 ## Telegram
 
-Group ID: `-5336756761`. Add the existing finance bot to this group with permission to send messages; add Amin and Ali M as group members yourself (Telegram bots cannot add arbitrary users). `npm run top-ups:configure` configures callback updates and verifies the bot's group access without posting test messages.
+Group ID: `-5336756761`. Add the existing finance bot to this group with permission to send messages; add Amin, Ali M and Ali as group members yourself (Telegram bots cannot add arbitrary users). `npm run top-ups:configure` configures callback updates and verifies the bot's group access without posting test messages.
 
-Pending messages mention Amin, with Approve and Adjust amount buttons. Adjustment uses a group reply prompt valid for ten minutes. Only the numeric Telegram ID mapped to Amin can approve/adjust. Approval posts a new message mentioning the ID mapped to Ali M, with a Paid button restricted to that ID. Previous message buttons are cleared and every action checks the current request version. Dashboard administrators can also act, with an audit trail. Alaa's role can read requests but cannot approve, adjust, mark paid or create drafts.
+Pending messages mention Amin, with Approve and Adjust amount buttons. Past and expected spend have separate icons and a blank line between them. Adjustment uses a group reply prompt valid for ten minutes. The numeric Telegram IDs mapped to Amin, Ali M and Ali can approve or adjust. Each amount prompt belongs to the user who opened it, and the audit trail records that user for the adjustment. Approval posts a new message mentioning the ID mapped to Ali M, with a Paid button restricted to that ID. Previous message buttons are cleared and every action checks the current request version. Dashboard administrators can also act, with an audit trail. Alaa's role can read requests but cannot approve, adjust, mark paid or create drafts.
 
 Invoice links in group messages are signed bearer links expiring after 30 days. Group members can view the invoice without dashboard sign-in; avoid sharing those links outside the group. Permanent dashboard file access requires authentication.
 

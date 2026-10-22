@@ -1,4 +1,5 @@
 export const topUpCurrencies = ["USD", "EUR", "GBP", "AED", "LBP"] as const;
+export const topUpMinimumExpectedThreeDaysSpend = 1000;
 export type TopUpStatus = "pending" | "approved" | "paid";
 export interface TopUpInput {
   submissionId: string; entity: "dn" | "lmd"; priority: "Normal" | "Urgent";
@@ -43,9 +44,11 @@ export function validateTopUpInput(value: unknown): TopUpInput {
   const wiseLink = text("wiseLink", 1000);
   if (wiseLink) { const url = new URL(wiseLink); if (url.protocol !== "https:" || !/^(?:[a-z0-9-]+\.)?wise\.com$/i.test(url.hostname) || url.username || url.password) throw new Error("Enter an HTTPS Wise link"); }
   const amount = money("amount"); if (amount <= 0) throw new Error("Top-up amount must be greater than zero");
+  const expectedThreeDaysSpend = money("expectedThreeDaysSpend");
+  if (expectedThreeDaysSpend < topUpMinimumExpectedThreeDaysSpend) throw new Error(`Expected next three days spend must be at least ${topUpMinimumExpectedThreeDaysSpend.toLocaleString("en-US")} USD`);
   return { submissionId, entity: v.entity, priority: v.priority, companyName: text("companyName", 200, true),
     ...(v.providerId ? { providerId: text("providerId", 200, true) } : {}), commission: text("commission", 100, true), team: text("team", 120, true), member: text("member", 120, true),
-    amount, currency, openBalance: money("openBalance", true), lastThreeDaysSpend: money("lastThreeDaysSpend"), expectedThreeDaysSpend: money("expectedThreeDaysSpend"), paymentMethod, wiseLink, notes: text("notes", 4000), bmNames: names("bmNames"), accountNames: names("accountNames") };
+    amount, currency, openBalance: money("openBalance", true), lastThreeDaysSpend: money("lastThreeDaysSpend"), expectedThreeDaysSpend, paymentMethod, wiseLink, notes: text("notes", 4000), bmNames: names("bmNames"), accountNames: names("accountNames") };
 }
 export function topUpTransition(status: TopUpStatus, action: "approve" | "adjust" | "paid", draftStatus: string): TopUpStatus {
   if (action === "paid" && status === "approved" && !["creating", "uncertain"].includes(draftStatus)) return "paid";
@@ -59,7 +62,7 @@ export function topUpMessage(r: TopUpRequest, invoiceUrl: string, approver: stri
   return [`💸 ${r.events?.at(-1)?.action === "restored" ? "Restored Topup Request" : r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : "Paid Topup Request"} #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"} | 🏦 ${r.entity === "dn" ? "Digital Nudge OU" : "LoveMeDo BV"}`, "",
     `🏢 Company: ${r.companyName} | 👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, `💳 Open Balance: ${money(r.openBalance)}`,
-    `Last 3 days spend: ${money(r.lastThreeDaysSpend, "USD")}`, `Expected next 3 days spend: ${money(r.expectedThreeDaysSpend, "USD")}`,
+    "", `📉 Last 3 days spend: ${money(r.lastThreeDaysSpend, "USD")}`, "", `📈 Expected next 3 days spend: ${money(r.expectedThreeDaysSpend, "USD")}`, "",
     `🏦 Payment: ${r.paymentMethod || "Not specified"}`, `Commission: ${r.commission}`, "", `📎 View Invoice: ${invoiceUrl}`, "",
     `📅 ${new Date(r.createdAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`, `📊 Status: ${r.status[0].toUpperCase() + r.status.slice(1)}`, approver].join("\n");
 }

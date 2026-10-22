@@ -51,11 +51,13 @@ function database(initial: Record<string, Row[]> = {}) {
 const input = () => ({ submissionId: "12345678-1234-1234-1234-123456789abc", entity: "dn", priority: "Urgent", companyName: "Example Supplier", commission: "3%", team: "Cognitive", member: "Example member", amount: 20800, currency: "USD", openBalance: -11111.38, lastThreeDaysSpend: 1500, expectedThreeDaysSpend: 2000, paymentMethod: "Bank Transfer", wiseLink: "", notes: "", bmNames: ["BM"], accountNames: ["Account"] });
 const auth = { serviceToken: "topup-test-token" };
 function setup() { process.env.CONVEX_SERVICE_TOKEN = auth.serviceToken; return database({ dashboardState: [{ _id: "state", key: "default", providers: [], teams: [], expenses: [], invoices: [], paymentAllocations: [] }], financialDocuments: [{ _id: "doc", fileName: "invoice.pdf", contentType: "application/pdf" }] }); }
-test("both spend forecasts are required numeric USD amounts; signed balances and zero spend remain valid", () => {
+test("both spend forecasts are required USD amounts; expected spend has a 1,000 USD minimum", () => {
   const valid = validateTopUpInput(input()); assert.equal(valid.openBalance, -11111.38);
-  assert.equal(validateTopUpInput({ ...input(), lastThreeDaysSpend: 0, expectedThreeDaysSpend: 0 }).lastThreeDaysSpend, 0);
+  assert.equal(validateTopUpInput({ ...input(), lastThreeDaysSpend: 0, expectedThreeDaysSpend: 1000 }).lastThreeDaysSpend, 0);
   for (const field of ["lastThreeDaysSpend", "expectedThreeDaysSpend", "commission", "team", "member", "companyName"]) { const bad: any = input(); delete bad[field]; assert.throws(() => validateTopUpInput(bad)); }
   for (const value of [null, "", -1, Infinity, 1.001]) assert.throws(() => validateTopUpInput({ ...input(), expectedThreeDaysSpend: value }));
+  for (const value of [0, 0.01, 999, 999.99]) assert.throws(() => validateTopUpInput({ ...input(), expectedThreeDaysSpend: value }), /at least 1,000 USD/);
+  for (const value of [1000, 1000.01]) assert.equal(validateTopUpInput({ ...input(), expectedThreeDaysSpend: value }).expectedThreeDaysSpend, value);
   for (const wiseLink of ["javascript:alert(1)", "https://wise.com.evil.test/pay", "https://user:pass@wise.com/pay"]) assert.throws(() => validateTopUpInput({ ...input(), wiseLink }));
 });
 test("request creation deduplicates submissions and leaves providers and financial ledgers untouched", async () => {
@@ -107,6 +109,7 @@ test("Alaa's role exposes only Top-up requests and Documents and blocks bank dat
 test("Telegram message includes both USD spend fields, signed balance, and status", () => {
   const text = topUpMessage({ ...input(), number: 352, status: "pending", createdAt: "2026-10-17T20:09:40Z" } as any, "https://finance.test/invoice", "@AminGhossein");
   for (const expected of ["New Topup Request #352", "-11,111.38 USD", "Last 3 days spend: 1,500 USD", "Expected next 3 days spend: 2,000 USD", "Status: Pending", "@AminGhossein"]) assert.ok(text.includes(expected), expected);
+  assert.match(text, /📉 Last 3 days spend: 1,500 USD\n\n📈 Expected next 3 days spend: 2,000 USD/);
   assert.throws(() => topUpTransition("pending", "paid", "queued"));
 });
 
@@ -148,4 +151,10 @@ test("deletion and draft claims exclude one another; existing drafts are retaine
   const removed = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 4, deleted: true, actor: "Ali" });
   assert.equal(removed.draftId, "existing-draft"); assert.match(topUpMessage(removed, "", ""), /remains in Revolut/);
   await assert.rejects(db.run(topUps.setDeleted, { ...auth, serviceToken: "wrong", id: r._id, version: 5, deleted: false, actor: "Ali" }), /Unauthorized/);
+});
+
+test("direct request creation rejects expected spend below 1,000 USD before saving anything", async () => {
+  const db = setup();
+  await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), expectedThreeDaysSpend: 999.99 }, documentId: "doc" }), /at least 1,000 USD/);
+  assert.equal(db.tables.get("topUpRequests"), undefined); assert.equal(db.tables.get("topUpDeliveries"), undefined); assert.equal(db.scheduled.length, 0);
 });

@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import { documentMaximumBytes } from "../../../shared/financialDocuments";
-import { topUpCurrencies, validateTopUpInput } from "../../../shared/topUps";
+import { topUpCurrencies, topUpMinimumExpectedThreeDaysSpend, validateTopUpInput } from "../../../shared/topUps";
 import "./publicTopUp.css";
 export default function PublicTopUpForm() {
   const [search, setSearch] = useState(""); const [company, setCompany] = useState<{ id: string; name: string } | null>(null);
@@ -49,7 +49,7 @@ export default function PublicTopUpForm() {
           <label className="topup-full">Topup Amount + Currency <b>*</b><div className="topup-amount"><Input name="amount" type="number" min="0.01" step="0.01" max="1000000000" placeholder="e.g. 1000" required /><select name="currency" aria-label="Topup currency" required defaultValue=""><option value="" disabled>Currency</option>{topUpCurrencies.map(c => <option key={c}>{c}</option>)}</select></div></label>
           <label className="topup-balance topup-full">💰 Open Balance <b>*</b><Input name="openBalance" type="number" step="0.01" placeholder="Current balance before topup" required /></label>
           <label>Last three days spend (USD) <b>*</b><Input name="lastThreeDaysSpend" type="number" min="0" max="1000000000" step="0.01" placeholder="0.00" required /></label>
-          <label>Expected spend — next three days (USD) <b>*</b><Input name="expectedThreeDaysSpend" type="number" min="0" max="1000000000" step="0.01" placeholder="0.00" required /></label>
+          <label>Expected spend — next three days (USD) <b>*</b><Input name="expectedThreeDaysSpend" type="number" min={topUpMinimumExpectedThreeDaysSpend} max="1000000000" step="0.01" placeholder="1000.00" required /></label>
           <fieldset className="topup-full"><legend>Payment Method <small>optional</small></legend><div className="topup-choices">{["Wise", "Bank Transfer", "Card", "Crypto"].map(p => <label key={p}><input name="paymentMethod" type="radio" value={p} /><span>{p}</span></label>)}</div></fieldset>
           <label className="topup-full">Wise Link <small>optional</small><Input name="wiseLink" type="url" placeholder="https://wise.com/…" maxLength={1000} /></label>
         </div>

@@ -10,6 +10,11 @@ import { draftApi, prepareTopUpDraft } from "./topUpDrafts";
 const client = (env: WorkerEnv) => new ConvexHttpClient(env.CONVEX_URL);
 const auth = (env: WorkerEnv) => ({ serviceToken: env.CONVEX_SERVICE_TOKEN });
 const group = (env: WorkerEnv) => env.TOPUP_TELEGRAM_CHAT_ID;
+const topUpApproverNames = ["Amin", "Ali M", "Ali"] as const;
+function telegramTopUpApprover(env: WorkerEnv, userId: string) {
+  return parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(user =>
+    user.chatId === userId && topUpApproverNames.some(name => user.normalizedUsername === name.toLowerCase()));
+}
 function telegramPerson(env: WorkerEnv, name: string) { const user = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(u => u.normalizedUsername === name.toLowerCase()); if (!user) throw new Error(`${name} is not configured for Telegram`); return user; }
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 async function signature(env: WorkerEnv, id: string, expires: string): Promise<string> { if (!env.AUTH_SESSION_SECRET?.trim()) throw new Error("Invoice link signing is not configured"); const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`topup-invoice:${id}:${expires}`))); return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""); }
@@ -61,12 +66,13 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
     try {
       if (String(cb.message?.chat.id) !== group(env)) throw new Error("Use the Top-Up Request group");
       const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid"].includes(action)) throw new Error("Invalid action");
-      const person = telegramPerson(env, action === "paid" ? "Ali M" : "Amin"); if (String(cb.from.id) !== person.chatId) throw new Error(`Only ${person.username} can ${action === "paid" ? "confirm payment" : "approve or adjust"} this request`);
+      const person = action === "paid" ? telegramPerson(env, "Ali M") : telegramTopUpApprover(env, String(cb.from.id));
+      if (!person || String(cb.from.id) !== person.chatId) throw new Error(action === "paid" ? "Only Ali M can confirm payment for this request" : "Only Amin, Ali M or Ali can approve or adjust this request");
       const id = rawId as Id<"topUpRequests">, version = Number(rawVersion), convex = client(env); const r = await convex.query(api.topUps.get, { ...auth(env), id });
       if (!r || r.deletedAt || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
       if (action === "adjust") {
         if (r.status !== "pending") throw new Error("Only pending requests can be adjusted");
-        const prompt = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `Amin: reply to this message with the new amount for top-up #${r.number} in ${r.currency} (for example 20800.50). Expires in 10 minutes.`, reply_markup: { force_reply: true, input_field_placeholder: `Amount in ${r.currency}` } }) as { message_id: number };
+        const prompt = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `${person.username}: reply to this message with the new amount for top-up #${r.number} in ${r.currency} (for example 20800.50). Expires in 10 minutes.`, reply_markup: { force_reply: true, input_field_placeholder: `Amount in ${r.currency}` } }) as { message_id: number };
         await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id, version, promptId: prompt.message_id, userId: person.chatId }); message = "Reply to the amount prompt";
       } else { await convex.mutation(api.topUps.transition, { ...auth(env), id, version, action: action as "approve" | "paid", actor: person.username }); message = action === "paid" ? "Marked paid in the dashboard" : "Approved. Ali M will receive the paid button."; }
     } catch (e) { message = e instanceof Error ? e.message.slice(0, 190) : "Could not update this request"; }
@@ -74,9 +80,10 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
   }
   const m = update?.message;
   if (m && String(m.chat?.id) === group(env) && m.reply_to_message && m.from) {
-    const convex = client(env); const r = await convex.query(api.topUps.findAdjustment, { ...auth(env), promptId: m.reply_to_message.message_id, userId: String(m.from.id) }); if (!r) return true;
+    const person = telegramTopUpApprover(env, String(m.from.id)); if (!person) return true;
+    const convex = client(env); const r = await convex.query(api.topUps.findAdjustment, { ...auth(env), promptId: m.reply_to_message.message_id, userId: person.chatId }); if (!r) return true;
     const raw = m.text?.trim() ?? ""; if (!/^\d+(?:\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) { await telegramApi(env, "sendMessage", { chat_id: group(env), text: "Reply with a positive amount only, with up to two decimals (for example 20800.50)." }); return true; }
-    await convex.mutation(api.topUps.transition, { ...auth(env), id: r._id, version: r.version, action: "adjust", actor: "Amin", amount: Number(raw) }); return true;
+    await convex.mutation(api.topUps.transition, { ...auth(env), id: r._id, version: r.version, action: "adjust", actor: person.username, amount: Number(raw) }); return true;
   }
   return false;
 }
@@ -113,12 +120,12 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
 }
 export async function topUpSetup(env: WorkerEnv): Promise<unknown> {
   const bot = await telegramApi(env, "getMe", {}) as { id: number; username: string };
-  const recipients = ["Amin", "Ali M"].map(name => telegramPerson(env, name).username);
+  const recipients = topUpApproverNames.map(name => telegramPerson(env, name).username);
   try {
     const chat = await telegramApi(env, "getChat", { chat_id: group(env) }) as { title: string };
     const member = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: bot.id }) as { status: string };
     const membership = await Promise.all(recipients.map(async name => { try { const person = telegramPerson(env, name); const info = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: Number(person.chatId) }) as { status: string }; return { username: name, status: info.status }; } catch { return { username: name, status: "unknown" }; } }));
     const ready = !["left", "kicked"].includes(member.status) && membership.every(m => !["left", "kicked", "unknown"].includes(m.status));
-    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready, recipients, membership, ...(ready ? {} : { message: "Ensure Amin and Ali M are members of the Top-Up Request group and the bot can send messages" }), alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
+    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready, recipients, membership, ...(ready ? {} : { message: "Ensure Amin, Ali M and Ali are members of the Top-Up Request group and the bot can send messages" }), alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
   } catch { return { botUsername: bot.username, groupId: group(env), ready: false, message: "Add this bot to the Top-Up Request group and allow it to send messages", recipients, alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON }; }
 }
