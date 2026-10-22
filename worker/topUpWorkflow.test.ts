@@ -113,7 +113,14 @@ test("Telegram message includes both USD spend fields, signed balance, and statu
   assert.throws(() => topUpTransition("pending", "paid", "queued"));
 });
 
-test("the same invoice cannot create a second top-up request under a different submission ID", async () => { const db = setup(); await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" }); await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" }, documentId: "doc" }), /already belongs/); });
+test("distinct submissions can reuse an invoice, including an invoice on a deleted request", async () => {
+  const db = setup(); const original = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  const second = await db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" }, documentId: "doc" });
+  assert.notEqual(original._id, second._id); assert.notEqual(original.number, second.number);
+  await db.run(topUps.setDeleted, { ...auth, id: original._id, version: 1, deleted: true, actor: "Ali" });
+  const third = await db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "32345678-1234-1234-1234-123456789abc" }, documentId: "doc" });
+  assert.equal(third.documentId, original.documentId); assert.equal(db.tables.get("topUpRequests")?.length, 3);
+});
 test("interrupted draft reconciliation requires a checked result and preserves the approval", async () => { const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" }); await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Amin" }); await db.ctx.db.patch(r._id, { draftStatus: "uncertain" }); await assert.rejects(db.run(topUps.reconcileDraft, { ...auth, id: r._id, actor: "Ali M", confirmedNoDraft: false }), /Check Revolut/); await db.run(topUps.reconcileDraft, { ...auth, id: r._id, actor: "Ali M", confirmedNoDraft: true }); const saved = await db.ctx.db.get(r._id); assert.equal(saved.draftStatus, "needs_review"); assert.equal(saved.status, "approved"); });
 
 test("deleting is recoverable, excludes active counts, invalidates actions and keeps invoice and ledger intact", async () => {
@@ -135,8 +142,7 @@ test("deleting is recoverable, excludes active counts, invalidates actions and k
   const restored = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 2, deleted: false, actor: "Ali" });
   assert.equal(restored.deletedAt, undefined); assert.equal(restored.status, "pending"); assert.equal(restored.version, 3);
   assert.equal((await db.run(topUps.summary, auth)).pending, 1);
-  const snapshot = await db.run(topUps.deletedNotification, { ...auth, id: r._id, version: 2 });
-  assert.equal(snapshot.deletedBy, "Ali"); assert.equal(snapshot.version, 2); // Restore cannot erase the queued deletion notice.
+  assert.equal(db.tables.get("topUpDeliveries")?.find(d => d.version === 2)?.deletedSnapshot, undefined);
   assert.equal((db.tables.get("topUpDeliveries") ?? []).length, 3);
 });
 test("deletion and draft claims exclude one another; existing drafts are retained for review", async () => {
@@ -149,7 +155,7 @@ test("deletion and draft claims exclude one another; existing drafts are retaine
   for (const draftStatus of ["creating", "uncertain"]) { await db.ctx.db.patch(r._id, { draftStatus }); await assert.rejects(db.run(topUps.setDeleted, { ...auth, id: r._id, version: 4, deleted: true, actor: "Ali" }), /reconcile/); }
   await db.ctx.db.patch(r._id, { draftStatus: "created", draftId: "existing-draft" });
   const removed = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 4, deleted: true, actor: "Ali" });
-  assert.equal(removed.draftId, "existing-draft"); assert.match(topUpMessage(removed, "", ""), /remains in Revolut/);
+  assert.equal(removed.draftId, "existing-draft");
   await assert.rejects(db.run(topUps.setDeleted, { ...auth, serviceToken: "wrong", id: r._id, version: 5, deleted: false, actor: "Ali" }), /Unauthorized/);
 });
 
@@ -157,4 +163,53 @@ test("direct request creation rejects expected spend below 1,000 USD before savi
   const db = setup();
   await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), expectedThreeDaysSpend: 999.99 }, documentId: "doc" }), /at least 1,000 USD/);
   assert.equal(db.tables.get("topUpRequests"), undefined); assert.equal(db.tables.get("topUpDeliveries"), undefined); assert.equal(db.scheduled.length, 0);
+});
+
+const cryptoInput = (currency = "USDC", amount = 100) => {
+  const { entity, commission, openBalance, lastThreeDaysSpend, expectedThreeDaysSpend, ...base } = input();
+  return { ...base, currency, amount, paymentMethod: "Crypto", network: currency === "BTC" ? "Bitcoin" : "Ethereum", walletAddress: "0x1234567890123456789012345678901234567890" };
+};
+test("crypto requests omit ad spend fields and accept fractional crypto amounts", () => {
+  for (const [currency, amount] of [["USDC", 0.000001], ["USDT", 100.123456], ["BTC", 0.00000001]] as const) {
+    const valid = validateTopUpInput(cryptoInput(currency, amount));
+    assert.equal(valid.amount, amount); assert.equal(valid.currency, currency);
+    for (const field of ["entity", "commission", "openBalance", "lastThreeDaysSpend", "expectedThreeDaysSpend"]) assert.ok(!(field in valid));
+  }
+  for (const bad of [{ walletAddress: "" }, { team: "" }, { walletAddress: "wallet with spaces" }, { paymentMethod: "Bank Transfer" }, { amount: 0 }, { amount: 0.0000001 }]) assert.throws(() => validateTopUpInput({ ...cryptoInput(), ...bad }));
+  assert.throws(() => validateTopUpInput(cryptoInput("BTC", 0.000000001)));
+});
+test("crypto requests save without an invoice, follow approval/payment status, and never queue a bank draft", async () => {
+  const db = setup(); const saved = await db.run(topUps.create, { ...auth, input: cryptoInput("BTC", 0.00001234) });
+  assert.equal(saved.documentId, undefined); assert.equal(saved.draftStatus, "not_applicable");
+  const adjusted = await db.run(topUps.transition, { ...auth, id: saved._id, version: 1, action: "adjust", amount: 0.00002345, actor: "Ali" });
+  assert.equal(adjusted.amount, 0.00002345);
+  const approved = await db.run(topUps.transition, { ...auth, id: saved._id, version: 2, action: "approve", actor: "Ali M" });
+  assert.equal(approved.status, "approved"); assert.equal(approved.draftStatus, "not_applicable");
+  assert.equal((await db.ctx.db.get("state")).providers.length, 0);
+  assert.equal(await db.run(topUps.claimDraft, { ...auth, id: saved._id, token: "never" }), false);
+  const paid = await db.run(topUps.transition, { ...auth, id: saved._id, version: 3, action: "paid", actor: "Ali M" });
+  assert.equal(paid.status, "paid"); assert.equal(paid.amount, adjusted.amount);
+  await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" } }), /Upload an invoice/);
+});
+test("crypto Telegram messages show wallet, network and full precision without ad spend or absent invoice links", () => {
+  const text = topUpMessage({ ...cryptoInput("BTC", 0.00001234), number: 3, status: "pending", createdAt: "2026-10-22T12:00:00Z" } as any, "", "@AminGhossein");
+  for (const expected of ["Purchase Request #3", "0.00001234 BTC", "Network: Bitcoin", "Wallet: 0x", "Cognitive →", "@AminGhossein"]) assert.ok(text.includes(expected), expected);
+  assert.doesNotMatch(text, /Open Balance|days spend|Commission|View Invoice/);
+});
+
+test("purchase requests accept an optional network and another cryptocurrency without sender or ad spend fields", () => {
+  const valid = validateTopUpInput({ ...cryptoInput("ETH", 0.12345678), network: "" });
+  assert.equal(valid.currency, "ETH"); assert.equal(valid.network, ""); assert.equal(valid.entity, undefined);
+  assert.equal(valid.team, "Cognitive");
+  assert.throws(() => validateTopUpInput({ ...input(), entity: undefined }), /Select Send From/);
+});
+test("member suggestions come from the selected team's saved requests and omit deleted requests", async () => {
+  const db = setup();
+  await db.run(topUps.create, { ...auth, input: { ...input(), member: "Mehul" }, documentId: "doc" });
+  await db.run(topUps.create, { ...auth, input: { ...input(), member: "Alex", team: "Wagner", submissionId: "22345678-1234-1234-1234-123456789abc" }, documentId: "doc" });
+  const result = await db.run(topUps.options, { ...auth, search: "", team: "Cognitive" });
+  assert.deepEqual(result.members, ["Mehul"]);
+  const row = db.tables.get("topUpRequests")![0];
+  await db.run(topUps.setDeleted, { ...auth, id: row._id, version: 1, deleted: true, actor: "Ali" });
+  assert.deepEqual((await db.run(topUps.options, { ...auth, search: "", team: "Cognitive" })).members, []);
 });

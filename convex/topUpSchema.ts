@@ -1,13 +1,14 @@
 import { v } from "convex/values";
 export const topUpInputFields = {
-  submissionId: v.string(), entity: v.union(v.literal("dn"), v.literal("lmd")), priority: v.union(v.literal("Normal"), v.literal("Urgent")),
-  companyName: v.string(), providerId: v.optional(v.string()), commission: v.string(), team: v.string(), member: v.string(),
-  amount: v.number(), currency: v.string(), openBalance: v.number(), lastThreeDaysSpend: v.number(), expectedThreeDaysSpend: v.number(),
+  submissionId: v.string(), entity: v.optional(v.union(v.literal("dn"), v.literal("lmd"))), priority: v.union(v.literal("Normal"), v.literal("Urgent")),
+  companyName: v.string(), providerId: v.optional(v.string()), commission: v.optional(v.string()), team: v.string(), member: v.string(),
+  amount: v.number(), currency: v.string(), openBalance: v.optional(v.number()), lastThreeDaysSpend: v.optional(v.number()), expectedThreeDaysSpend: v.optional(v.number()),
+  walletAddress: v.optional(v.string()), network: v.optional(v.string()),
   paymentMethod: v.string(), wiseLink: v.string(), notes: v.string(), bmNames: v.array(v.string()), accountNames: v.array(v.string())
 };
 export const paymentDetails = v.object({ payerEntity: v.union(v.literal("dn"), v.literal("lmd"), v.literal("")), beneficiary: v.string(), iban: v.string(), bic: v.string(), reference: v.string(), amount: v.union(v.number(), v.null()), currency: v.string(), notes: v.string() });
 export const topUpFields = { ...topUpInputFields,
-  number: v.number(), documentId: v.id("financialDocuments"), fileName: v.string(), contentType: v.string(),
+  number: v.number(), documentId: v.optional(v.id("financialDocuments")), fileName: v.optional(v.string()), contentType: v.optional(v.string()),
   status: v.union(v.literal("pending"), v.literal("approved"), v.literal("paid")), version: v.number(), originalAmount: v.number(),
   createdAt: v.string(), updatedAt: v.string(), deletedAt: v.optional(v.string()), deletedBy: v.optional(v.string()), approvedBy: v.optional(v.string()), paidBy: v.optional(v.string()),
   events: v.array(v.object({ at: v.string(), actor: v.string(), action: v.string(), amount: v.number() })),

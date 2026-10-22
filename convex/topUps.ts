@@ -3,14 +3,15 @@ import { paginationOptsValidator } from "convex/server";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { topUpInputFields, topUpRecord, paymentDetails } from "./topUpSchema";
-import { validateTopUpInput, topUpTransition } from "../shared/topUps";
+import { validateTopUpInput, validateTopUpAmount, isCryptoTopUp, topUpTransition } from "../shared/topUps";
 function authorize(token: string) { if (!process.env.CONVEX_SERVICE_TOKEN || token !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized"); }
 const now = () => new Date().toISOString();
 export const options = query({
-  args: { serviceToken: v.string(), search: v.string() }, returns: v.object({ providers: v.array(v.object({ id: v.string(), name: v.string() })), teams: v.array(v.string()) }),
+  args: { serviceToken: v.string(), search: v.string(), team: v.optional(v.string()) }, returns: v.object({ providers: v.array(v.object({ id: v.string(), name: v.string() })), teams: v.array(v.string()), members: v.array(v.string()) }),
   handler: async (ctx, a) => { authorize(a.serviceToken); const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     const term = a.search.trim().toLowerCase().slice(0, 200);
-    return { providers: term.length < 2 ? [] : (state?.providers ?? []).filter(p => [p.name, p.legalName ?? "", ...p.aliases].some(n => n.toLowerCase().includes(term))).slice(0, 25).map(({ id, name }) => ({ id, name })), teams: [...new Set(["Cognitive", "Wagner", "Atlantic", ...(state?.teams ?? []).map(t => t.name)])] };
+    const recent = a.team ? await ctx.db.query("topUpRequests").withIndex("by_team", q => q.eq("team", a.team!)).order("desc").take(100) : [];
+    return { providers: term.length < 2 ? [] : (state?.providers ?? []).filter(p => [p.name, p.legalName ?? "", ...p.aliases].some(n => n.toLowerCase().includes(term))).slice(0, 25).map(({ id, name }) => ({ id, name })), teams: [...new Set(["Cognitive", "Wagner", "Atlantic", ...(state?.teams ?? []).map(t => t.name)])], members: [...new Set(recent.filter(r => !r.deletedAt).map(r => r.member))].sort() };
   }
 });
 export const rateLimit = mutation({
@@ -24,18 +25,19 @@ export const rateLimit = mutation({
 });
 export const bySubmission = query({ args: { serviceToken: v.string(), submissionId: v.string() }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => { authorize(a.serviceToken); return ctx.db.query("topUpRequests").withIndex("by_submission", q => q.eq("submissionId", a.submissionId)).unique(); } });
 export const create = mutation({
-  args: { serviceToken: v.string(), input: v.object(topUpInputFields), documentId: v.id("financialDocuments") }, returns: topUpRecord,
+  args: { serviceToken: v.string(), input: v.object(topUpInputFields), documentId: v.optional(v.id("financialDocuments")) }, returns: topUpRecord,
   handler: async (ctx, a) => {
     authorize(a.serviceToken); const input = validateTopUpInput(a.input);
     const existing = await ctx.db.query("topUpRequests").withIndex("by_submission", q => q.eq("submissionId", input.submissionId)).unique(); if (existing) return existing;
-    const sameInvoice = await ctx.db.query("topUpRequests").withIndex("by_document", q => q.eq("documentId", a.documentId)).first(); if (sameInvoice) throw new ConvexError(`This invoice already belongs to top-up request #${sameInvoice.number}`);
-    const document = await ctx.db.get(a.documentId); if (!document || document.deletedAt) throw new ConvexError("Invoice is unavailable");
+    const document = a.documentId ? await ctx.db.get(a.documentId) : null;
+    if (a.documentId && (!document || document.deletedAt)) throw new ConvexError("Invoice is unavailable. Restore it from Documents or upload another file.");
+    if (!document && !isCryptoTopUp(input.currency)) throw new ConvexError("Upload an invoice for an ad spend request");
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     const provider = state?.providers.find(p => p.id === input.providerId);
     if (input.providerId && !provider) throw new ConvexError("Company no longer exists. Search again.");
     const counter = await ctx.db.query("topUpSettings").withIndex("by_key", q => q.eq("key", "sequence")).unique(); const number = (counter?.sequence ?? 0) + 1;
     if (counter) await ctx.db.patch(counter._id, { sequence: number }); else await ctx.db.insert("topUpSettings", { key: "sequence", sequence: number });
-    const at = now(); const id = await ctx.db.insert("topUpRequests", { ...input, companyName: provider?.name ?? input.companyName, documentId: a.documentId, fileName: document.fileName, contentType: document.contentType, number, status: "pending", version: 1, originalAmount: input.amount, createdAt: at, updatedAt: at, events: [{ at, actor: input.member, action: "submitted", amount: input.amount }], draftStatus: "awaiting_approval" });
+    const at = now(); const id = await ctx.db.insert("topUpRequests", { ...input, companyName: provider?.name ?? input.companyName, ...(document ? { documentId: document._id, fileName: document.fileName, contentType: document.contentType } : {}), number, status: "pending", version: 1, originalAmount: input.amount, createdAt: at, updatedAt: at, events: [{ at, actor: input.member, action: "submitted", amount: input.amount }], draftStatus: isCryptoTopUp(input.currency) ? "not_applicable" : "awaiting_approval" });
     await ctx.db.insert("topUpDeliveries", { requestId: id, version: 1, state: "pending", attempts: 0 });
     await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id, version: 1 }); return (await ctx.db.get(id))!;
   }
@@ -54,9 +56,10 @@ export const transition = mutation({
   args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), action: v.union(v.literal("approve"), v.literal("adjust"), v.literal("paid")), actor: v.string(), amount: v.optional(v.number()) }, returns: topUpRecord,
   handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.version !== a.version) throw new ConvexError("This request has changed. Refresh before acting.");
     const status = topUpTransition(r.status, a.action, r.draftStatus); const amount = a.action === "adjust" ? a.amount : r.amount;
-    if (amount === undefined || !Number.isFinite(amount) || amount <= 0 || amount > 1e9 || Math.abs(amount * 100 - Math.round(amount * 100)) > 0.0001) throw new ConvexError("Enter a positive amount with at most two decimals");
+    try { validateTopUpAmount(amount, r.currency); } catch (error) { throw new ConvexError((error as Error).message); }
+    if (amount === undefined) throw new ConvexError("Enter an amount");
     let providerId = r.providerId;
-    if (a.action === "approve" && !providerId) {
+    if (a.action === "approve" && !providerId && !isCryptoTopUp(r.currency)) {
       const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique(); if (!state) throw new ConvexError("Dashboard is unavailable");
       const normalized = r.companyName.trim().toLowerCase(); const existing = state.providers.find(p => [p.name, ...p.aliases].some(n => n.trim().toLowerCase() === normalized));
       providerId = existing?.id ?? `topup-provider-${r._id}`;
@@ -64,10 +67,10 @@ export const transition = mutation({
     }
     const at = now(); const version = r.version + 1;
     await ctx.db.patch(r._id, { status, amount, providerId, version, updatedAt: at, adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined,
-      ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: r.paymentMethod === "Bank Transfer" || r.paymentMethod === "" ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
+      ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: !isCryptoTopUp(r.currency) && (r.paymentMethod === "Bank Transfer" || r.paymentMethod === "") ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
       events: [...r.events, { at, actor: a.actor, action: a.action, amount }].slice(-200), notificationError: undefined });
     await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
-    if (a.action === "approve" && (r.paymentMethod === "Bank Transfer" || !r.paymentMethod)) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
+    if (a.action === "approve" && !isCryptoTopUp(r.currency) && (r.paymentMethod === "Bank Transfer" || !r.paymentMethod)) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
     return (await ctx.db.get(r._id))!;
   }
 });
@@ -111,15 +114,9 @@ export const setDeleted = mutation({
     await ctx.db.patch(r._id, { deletedAt: a.deleted ? at : undefined, deletedBy: a.deleted ? a.actor : undefined, version, updatedAt: at,
       adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, notificationError: undefined,
       events: [...r.events, { at, actor: a.actor, action: a.deleted ? "deleted" : "restored", amount: r.amount }].slice(-200) });
-    await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0, ...(a.deleted ? { deletedSnapshot: (await ctx.db.get(r._id))! } : {}) });
+    await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 });
     await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
     if (!a.deleted && r.status === "approved" && r.draftStatus === "queued") await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
     return (await ctx.db.get(r._id))!;
   }
 });
-
-export const deletedNotification = query({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number() }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => {
-  authorize(a.serviceToken);
-  const delivery = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
-  return delivery?.deletedSnapshot ?? null;
-} });

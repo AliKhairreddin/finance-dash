@@ -1,7 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
-import type { TopUpPaymentDetails, TopUpRequest } from "../shared/topUps";
+import { isCryptoTopUp, type TopUpPaymentDetails, type TopUpRequest } from "../shared/topUps";
 import { revolutDraftApi, RevolutDraftRejectedError } from "../shared/revolutApi";
 import { boundedBytes } from "./documentIntake";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
@@ -16,6 +16,7 @@ export function validatePaymentDetails(input: unknown): TopUpPaymentDetails {
 }
 async function extract(env: WorkerEnv, request: TopUpRequest): Promise<TopUpPaymentDetails> {
   if (!env.OPENROUTER_API_KEY) throw new Error("Invoice extraction is not configured");
+  if (!request.documentId) throw new Error("Invoice file is unavailable");
   const convex = new ConvexHttpClient(env.CONVEX_URL);
   const doc = await convex.query(api.documents.get, { serviceToken: env.CONVEX_SERVICE_TOKEN, id: request.documentId as Id<"financialDocuments"> });
   if (!doc?.url) throw new Error("Invoice file is unavailable");
@@ -30,6 +31,7 @@ async function extract(env: WorkerEnv, request: TopUpRequest): Promise<TopUpPaym
 export async function prepareTopUpDraft(env: WorkerEnv, id: Id<"topUpRequests">, review?: { details: unknown; sourceAccountId: string; reviewed: boolean }): Promise<void> {
   const convex = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN }; const r = await convex.query(api.topUps.get, { ...auth, id });
   if (!r || r.deletedAt || r.status !== "approved") throw new Error("Approve the request before preparing a draft");
+  if (isCryptoTopUp(r.currency)) throw new Error("Crypto requests are paid manually; Revolut bank drafts do not apply");
   const token = crypto.randomUUID(); if (!await convex.mutation(api.topUps.claimDraft, { ...auth, id, token })) throw new Error("A draft already exists, is running, or needs reconciliation in Revolut");
   let details: TopUpPaymentDetails | undefined, writing = false;
   try {

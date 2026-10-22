@@ -4,7 +4,7 @@ import { handleTopUpTelegram, handlePublicTopUps, sendTopUpNotification, topUpSe
 import { validatePaymentDetails } from "./topUpDrafts";
 const id = "request-abc";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
-const pending = { _id: id, version: 1, telegramMessageId: 7, status: "pending", number: 10, entity: "dn", priority: "Urgent", companyName: "Example", team: "Cognitive", member: "Member", amount: 100, currency: "USD", openBalance: -20, lastThreeDaysSpend: 10, expectedThreeDaysSpend: 20, paymentMethod: "Bank Transfer", commission: "3%", createdAt: "2026-10-22T12:00:00Z", contentType: "application/pdf" };
+const pending = { _id: id, version: 1, telegramMessageId: 7, status: "pending", number: 10, entity: "dn", priority: "Urgent", companyName: "Example", team: "Cognitive", member: "Member", amount: 100, currency: "USD", openBalance: -20, lastThreeDaysSpend: 10, expectedThreeDaysSpend: 20, paymentMethod: "Bank Transfer", commission: "3%", createdAt: "2026-10-22T12:00:00Z", contentType: "application/pdf", documentId: "document", fileName: "invoice.pdf" };
 function callback(user: number, action = "approve", version = 1, chat = -5336756761) { return { callback_query: { id: "callback-1", data: `tu:${action}:${id}:${version}`, from: { id: user }, message: { message_id: 7, chat: { id: chat } } } }; }
 async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null) {
   const original = globalThis.fetch; const calls: { path: string; body: any }[] = [];
@@ -96,22 +96,20 @@ test("invoice payment extraction rejects missing or nonfinite fields and normali
   assert.equal(validatePaymentDetails(details).iban, "BE68539007547034"); assert.throws(() => validatePaymentDetails({ ...details, amount: Infinity })); assert.throws(() => validatePaymentDetails({ ...details, iban: null }));
 });
 
-test("deleted requests notify the group, remove buttons, escape actors and reject callback actions", async () => {
+test("deleting a request silently removes buttons and rejects callback actions", async () => {
   const removed = { ...pending, deletedAt: "2026-10-22T14:00:00Z", deletedBy: "Ali <admin>", version: 2 };
   await mocked(async calls => {
     await sendTopUpNotification(env, id as never, 2);
-    const sent = calls.find(c => c.path === "sendMessage")!.body;
-    assert.match(sent.text, /Deleted Topup Request #10/); assert.match(sent.text, /Ali &lt;admin&gt;/); assert.match(sent.text, /100 USD/);
-    assert.doesNotMatch(sent.text, /tg:\/\/user|View Invoice/); assert.deepEqual(sent.reply_markup.inline_keyboard, []);
+    assert.equal(calls.filter(c => c.path === "sendMessage").length, 0);
     assert.deepEqual(calls.find(c => c.path === "editMessageReplyMarkup")!.body.reply_markup.inline_keyboard, []);
     for (const action of ["approve", "adjust", "paid"]) await handleTopUpTelegram(callback(action === "paid" ? 222 : 333, action, 2), env);
     assert.equal(calls.filter(c => c.path === "topUps:transition" || c.path === "topUps:adjustmentPrompt").length, 0);
   }, removed);
 });
-test("a rapid restore still delivers the saved deletion notice without removing restored buttons", async () => {
+test("a rapid restore skips the old deletion job without messaging or removing restored buttons", async () => {
   await mocked(async calls => {
     await sendTopUpNotification(env, id as never, 2);
-    assert.match(calls.find(c => c.path === "sendMessage")!.body.text, /Deleted Topup Request/);
+    assert.equal(calls.filter(c => c.path === "sendMessage").length, 0);
     assert.equal(calls.filter(c => c.path === "editMessageReplyMarkup").length, 0);
   }, { ...pending, version: 3 }, { ...pending, version: 2, deletedAt: "2026-10-22T14:00:00Z", deletedBy: "Ali" });
 });

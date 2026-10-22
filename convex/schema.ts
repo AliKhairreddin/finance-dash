@@ -605,7 +605,7 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
-  topUpRequests: defineTable(topUpFields).index("by_submission", ["submissionId"]).index("by_document", ["documentId"]).index("by_status", ["status"]).index("by_deleted", ["deletedAt"]).index("by_deleted_status", ["deletedAt", "status"]).index("by_adjust_prompt", ["adjustPromptId"]),
+  topUpRequests: defineTable(topUpFields).index("by_submission", ["submissionId"]).index("by_document", ["documentId"]).index("by_status", ["status"]).index("by_deleted", ["deletedAt"]).index("by_deleted_status", ["deletedAt", "status"]).index("by_adjust_prompt", ["adjustPromptId"]).index("by_team", ["team"]),
   topUpSettings: defineTable({ key: v.string(), sequence: v.number() }).index("by_key", ["key"]),
   topUpRateLimits: defineTable({ key: v.string(), count: v.number(), expiresAt: v.number() }).index("by_key", ["key"]).index("by_expiry", ["expiresAt"]),
   topUpDeliveries: defineTable({ requestId: v.id("topUpRequests"), version: v.number(), state: v.string(), attempts: v.number(), token: v.optional(v.string()), error: v.optional(v.string()), messageId: v.optional(v.number()), deletedSnapshot: v.optional(topUpRecord) }).index("by_request_version", ["requestId", "version"]),

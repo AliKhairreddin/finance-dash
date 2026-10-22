@@ -17,6 +17,13 @@
 }
 
 .topup-brand strong { font-weight: 760; }
+.topup-back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 18px; color: var(--app-muted); font-size: 12px; }
+.topup-request-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 26px; }
+.topup-request-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 20px; padding: 24px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--panel); text-decoration: none; transition: background-color .16s, border-color .16s; }
+.topup-request-choice strong { font-size: 18px; letter-spacing: -.025em; }
+.topup-request-choice > svg:last-child { align-self: flex-end; }
+.topup-request-choice:hover { background: var(--hover-bg); border-color: var(--control-border-hover); }
+.topup-request-choice:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 
 .topup-form-card {
   position: relative;
@@ -159,6 +166,9 @@
 
 .topup-submit:not(:disabled):hover { background: var(--primary-hover-bg); }
 .topup-submit:disabled { opacity: 0.6; cursor: wait; }
+.topup-submit-error { scroll-margin-block: 24px; line-height: 1.5; overflow-wrap: anywhere; }
+.topup-submit-error strong { display: block; margin-bottom: 4px; }
+.topup-submit-error:focus { outline: 2px solid var(--red); outline-offset: 2px; }
 .topup-success { display: flex; flex-direction: column; align-items: center; padding: 32px 26px; text-align: center; }
 .topup-success > svg { color: var(--green); }
 .topup-success h2 { margin: 16px 0 8px; font-size: 22px; }
@@ -166,6 +176,7 @@
 .topup-honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 
 @media(max-width: 600px) {
+  .topup-request-choices { grid-template-columns: 1fr; padding: 20px; }
   .topup-public { padding: 20px 12px 32px; }
   .topup-brand { margin-bottom: 14px; }
   .topup-form-card { border-radius: 12px; }
