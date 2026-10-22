@@ -2690,8 +2690,8 @@ th.amount .sortable-table-heading {
 }
 
 .category-combobox-search:focus-within {
-  border-color: var(--search-focus-border);
-  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .category-combobox-search input {
@@ -2819,8 +2819,8 @@ th.amount .sortable-table-heading {
 }
 
 .searchable-select-control:focus-within {
-  border-color: var(--search-focus-border);
-  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .simple-select-control {
@@ -2866,6 +2866,7 @@ th.amount .sortable-table-heading {
 .searchable-select-input:focus-visible {
   border: 0;
   box-shadow: none;
+  outline: 0;
 }
 
 .searchable-select-input::placeholder {
@@ -3358,8 +3359,8 @@ th.amount .sortable-table-heading {
 }
 
 .search-box:focus-within {
-  border-color: var(--search-focus-border);
-  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .search-box input {
@@ -3432,8 +3433,8 @@ th.amount .sortable-table-heading {
 }
 
 .toolbar-search-field:focus-within {
-  border-color: var(--search-focus-border);
-  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .toolbar-search-field input {
@@ -6702,7 +6703,7 @@ th.amount .sortable-table-heading {
 .payment-picker-header h2 > span { margin-left: 6px; font-size: 0.75rem; font-weight: 500; color: var(--app-muted); }
 .payment-picker-controls { flex-shrink: 0; padding: 0 20px 12px; }
 .payment-picker-search { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle-bg); }
-.payment-picker-search:focus-within { outline: 2px solid var(--app-muted); outline-offset: 2px; }
+.payment-picker-search:focus-within { border-color: var(--ink); }
 .payment-picker-search > svg { flex-shrink: 0; color: var(--app-muted); }
 .payment-picker-search input { border: 0; box-shadow: none; padding: 0; outline: none; background: transparent; }
 .payment-picker-search input:focus-visible { box-shadow: none; }
@@ -13100,4 +13101,18 @@ body {
 @media (max-width: 640px) {
   .bank-overview-header.bank-manual-header { grid-template-columns: minmax(0, 1fr) auto; }
   .bank-manual-header > .status-pill { display: none; }
+}
+
+/* Search inputs share their enclosing control's border and focus indication. */
+.category-combobox-search input:focus-visible,
+.search-box input:focus-visible,
+.toolbar-search-field input:focus-visible,
+.payment-picker-search input:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+.simple-select-control:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  box-shadow: none;
 }

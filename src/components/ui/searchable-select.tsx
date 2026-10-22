@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Combobox } from "@base-ui/react/combobox";
 import { Select } from "@base-ui/react/select";
 import { Search, X } from "lucide-react";
@@ -12,6 +13,8 @@ export type SearchableSelectOption = {
 type SearchableSelectProps = {
   id?: string;
   onSearchChange?: (value: string) => void;
+  renderOption?: (option: SearchableSelectOption) => ReactNode;
+  optionClassName?: (option: SearchableSelectOption) => string | undefined;
   value: string;
   options: SearchableSelectOption[];
   onValueChange: (value: string) => void;
@@ -29,6 +32,8 @@ type SearchableSelectProps = {
 export function SearchableSelect({
   id,
   onSearchChange,
+  renderOption,
+  optionClassName,
   value,
   options,
   onValueChange,
@@ -76,10 +81,11 @@ export function SearchableSelect({
                     <Select.Item
                       key={option.value}
                       value={option.value}
-                      className="searchable-select-option"
+                      className={cn("searchable-select-option", optionClassName?.(option))}
+                      aria-label={option.label}
                       disabled={option.disabled}
                     >
-                      <Select.ItemText className="searchable-select-option-label">{option.label}</Select.ItemText>
+                      <Select.ItemText className="searchable-select-option-label">{renderOption ? renderOption(option) : option.label}</Select.ItemText>
                     </Select.Item>
                   ))}
                 </Select.List>
@@ -137,10 +143,11 @@ export function SearchableSelect({
                   <Combobox.Item
                     key={option.value}
                     value={option}
-                    className="searchable-select-option"
+                    className={cn("searchable-select-option", optionClassName?.(option))}
+                    aria-label={option.label}
                     disabled={option.disabled}
                   >
-                    <span className="searchable-select-option-label">{option.label}</span>
+                    <span className="searchable-select-option-label">{renderOption ? renderOption(option) : option.label}</span>
                   </Combobox.Item>
                 )}
               </Combobox.List>
