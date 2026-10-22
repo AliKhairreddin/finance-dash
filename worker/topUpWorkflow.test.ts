@@ -23,9 +23,9 @@ function database(initial: Record<string, Row[]> = {}) {
           withIndex(_index: string, select?: (q: any) => unknown) {
             const conditions: Array<(row: Row) => boolean> = [];
             const fieldValue = (row: Row, field: string): any => field.split(".").reduce<any>((value, part) => value?.[part], row);
-            const q = { eq(field: string, value: unknown) { conditions.push(row => fieldValue(row, field) === value); return q; }, lt(field: string, value: number) { conditions.push(row => fieldValue(row, field) < value); return q; }, gte(field: string, value: number) { conditions.push(row => fieldValue(row, field) >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => fieldValue(row, field) <= value); return q; } };
+            const q = { gt(field: string, value: string) { conditions.push(row => fieldValue(row, field) > value); return q; }, eq(field: string, value: unknown) { conditions.push(row => fieldValue(row, field) === value); return q; }, lt(field: string, value: number) { conditions.push(row => fieldValue(row, field) < value); return q; }, gte(field: string, value: number) { conditions.push(row => fieldValue(row, field) >= value); return q; }, lte(field: string, value: number | string) { conditions.push(row => fieldValue(row, field) <= value); return q; } };
             select?.(q); rows = rows.filter(row => conditions.every(check => check(row))); return builder;
-          }, async paginate(options: { cursor: string | null; numItems: number }) { const offset = Number(options.cursor ?? 0); return { page: rows.slice(offset, offset + options.numItems).map(row => read(table, row)), isDone: offset + options.numItems >= rows.length, continueCursor: String(offset + options.numItems) }; }, async first() { return read(table, rows[0] ?? null); }, async unique() { assert.ok(rows.length <= 1); return read(table, rows[0] ?? null); }, async take(count: number) { return rows.slice(0, count).map(row => read(table, row)); }
+          }, order(_direction: string) { return builder; }, async paginate(options: { cursor: string | null; numItems: number }) { const offset = Number(options.cursor ?? 0); return { page: rows.slice(offset, offset + options.numItems).map(row => read(table, row)), isDone: offset + options.numItems >= rows.length, continueCursor: String(offset + options.numItems) }; }, async first() { return read(table, rows[0] ?? null); }, async unique() { assert.ok(rows.length <= 1); return read(table, rows[0] ?? null); }, async take(count: number) { return rows.slice(0, count).map(row => read(table, row)); }
         }; return builder;
       },
       async get(id: string): Promise<Row> { for (const [table, rows] of tables) { const row = rows.find(row => row._id === id); if (row) return read(table, row)!; } return null as unknown as Row; },
@@ -102,7 +102,7 @@ test("Alaa's role exposes only Top-up requests and Documents and blocks bank dat
   for (const page of ["overview", "banks", "invoices", "providers", "settings", "redtrack"]) assert.equal(dashboardPageAllowed("top-up-reviewer", page), false);
   for (const path of ["/api/top-ups", "/api/top-ups/summary", "/api/top-ups/abc/invoice", "/api/documents"]) assert.equal(topUpReviewerCanAccess(new Request(`https://finance.test${path}`)), true);
   for (const path of ["/api/dashboard", "/api/transactions", "/api/top-ups/abc/draft-options"]) assert.equal(topUpReviewerCanAccess(new Request(`https://finance.test${path}`)), false);
-  for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/sync"]) assert.equal(topUpReviewerCanAccess(new Request(`https://finance.test${path}`, { method: "POST" })), false);
+  for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/delete", "/api/top-ups/abc/restore", "/api/sync"]) assert.equal(topUpReviewerCanAccess(new Request(`https://finance.test${path}`, { method: "POST" })), false);
 });
 test("Telegram message includes both USD spend fields, signed balance, and status", () => {
   const text = topUpMessage({ ...input(), number: 352, status: "pending", createdAt: "2026-10-17T20:09:40Z" } as any, "https://finance.test/invoice", "@AminGhossein");
@@ -112,3 +112,40 @@ test("Telegram message includes both USD spend fields, signed balance, and statu
 
 test("the same invoice cannot create a second top-up request under a different submission ID", async () => { const db = setup(); await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" }); await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" }, documentId: "doc" }), /already belongs/); });
 test("interrupted draft reconciliation requires a checked result and preserves the approval", async () => { const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" }); await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Amin" }); await db.ctx.db.patch(r._id, { draftStatus: "uncertain" }); await assert.rejects(db.run(topUps.reconcileDraft, { ...auth, id: r._id, actor: "Ali M", confirmedNoDraft: false }), /Check Revolut/); await db.run(topUps.reconcileDraft, { ...auth, id: r._id, actor: "Ali M", confirmedNoDraft: true }); const saved = await db.ctx.db.get(r._id); assert.equal(saved.draftStatus, "needs_review"); assert.equal(saved.status, "approved"); });
+
+test("deleting is recoverable, excludes active counts, invalidates actions and keeps invoice and ledger intact", async () => {
+  const db = setup(), r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 1, promptId: 44, userId: "333" });
+  const state = await db.ctx.db.get("state"), doc = await db.ctx.db.get("doc"); db.resetIo();
+  const removed = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 1, deleted: true, actor: "Ali" });
+  assert.equal(removed.deletedBy, "Ali"); assert.ok(removed.deletedAt); assert.equal(removed.version, 2); assert.equal(removed.events.at(-1).action, "deleted");
+  assert.equal(db.io.ledgerReads + db.io.ledgerWrites, 0);
+  assert.deepEqual(await db.ctx.db.get("state"), state); assert.deepEqual(await db.ctx.db.get("doc"), doc); assert.deepEqual(db.deletedFiles, []);
+  assert.deepEqual(await db.run(topUps.summary, auth), { pending: 0, approved: 0, capped: false });
+  const pageArgs = { ...auth, paginationOpts: { cursor: null, numItems: 20 } };
+  assert.deepEqual((await db.run(topUps.list, pageArgs)).page, []);
+  assert.equal((await db.run(topUps.deletedList, pageArgs)).page[0]._id, r._id);
+  for (const version of [1, 2]) await assert.rejects(db.run(topUps.transition, { ...auth, id: r._id, version, action: "approve", actor: "Amin" }), /changed/);
+  assert.equal(await db.run(topUps.findAdjustment, { ...auth, promptId: 44, userId: "333" }), null);
+  await assert.rejects(db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 2, promptId: 45, userId: "333" }), /changed/);
+  await assert.rejects(db.run(topUps.setDeleted, { ...auth, id: r._id, version: 1, deleted: false, actor: "Ali" }), /changed/);
+  const restored = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 2, deleted: false, actor: "Ali" });
+  assert.equal(restored.deletedAt, undefined); assert.equal(restored.status, "pending"); assert.equal(restored.version, 3);
+  assert.equal((await db.run(topUps.summary, auth)).pending, 1);
+  const snapshot = await db.run(topUps.deletedNotification, { ...auth, id: r._id, version: 2 });
+  assert.equal(snapshot.deletedBy, "Ali"); assert.equal(snapshot.version, 2); // Restore cannot erase the queued deletion notice.
+  assert.equal((db.tables.get("topUpDeliveries") ?? []).length, 3);
+});
+test("deletion and draft claims exclude one another; existing drafts are retained for review", async () => {
+  const db = setup(), r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Amin" });
+  await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 2, deleted: true, actor: "Ali" });
+  assert.equal(await db.run(topUps.claimDraft, { ...auth, id: r._id, token: "blocked" }), false);
+  await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 3, deleted: false, actor: "Ali" });
+  assert.equal(await db.run(topUps.claimDraft, { ...auth, id: r._id, token: "active" }), true);
+  for (const draftStatus of ["creating", "uncertain"]) { await db.ctx.db.patch(r._id, { draftStatus }); await assert.rejects(db.run(topUps.setDeleted, { ...auth, id: r._id, version: 4, deleted: true, actor: "Ali" }), /reconcile/); }
+  await db.ctx.db.patch(r._id, { draftStatus: "created", draftId: "existing-draft" });
+  const removed = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 4, deleted: true, actor: "Ali" });
+  assert.equal(removed.draftId, "existing-draft"); assert.match(topUpMessage(removed, "", ""), /remains in Revolut/);
+  await assert.rejects(db.run(topUps.setDeleted, { ...auth, serviceToken: "wrong", id: r._id, version: 5, deleted: false, actor: "Ali" }), /Unauthorized/);
+});

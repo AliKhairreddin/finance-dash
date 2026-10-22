@@ -2,3 +2,5 @@
 
 .topup-requests .list-toolbar>input{flex:1;min-width:180px;max-width:400px}.topup-requests .list-toolbar>.muted{margin-left:auto;white-space:nowrap;font-size:12px}.topup-request-table{min-width:1160px}.topup-request-table td{white-space:nowrap}.topup-request-table td:nth-child(2){min-width:150px}.topup-request-table td:nth-child(3){min-width:130px}.topup-request-table td small{font-size:11px}
 .topup-requests .list-toolbar{flex-direction:row;flex-wrap:nowrap}.topup-requests .list-toolbar>.searchable-select{width:230px;flex:0 0 230px}.topup-detail .topup-draft-form select{width:100%;min-height:34px;border:1px solid var(--line);border-radius:8px;background:var(--control-bg);padding:6px 10px}@media(max-width:640px){.topup-requests .list-toolbar{flex-wrap:wrap}.topup-requests .list-toolbar>input{flex-basis:100%;max-width:none}.topup-requests .list-toolbar>.searchable-select{flex:1 1 200px;width:auto}}
+
+.topup-delete-actions{border-top:1px solid var(--border);padding-top:1rem}.topup-delete-actions p{margin-bottom:.75rem}

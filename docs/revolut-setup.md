@@ -64,3 +64,9 @@ Do not enable Revolut production IP whitelisting for this Worker. Cloudflare Wor
 Reuse the existing registered certificate/private key and client ID. Run the setup helper with `--drafts`, approve the `READ,WRITE` consent in Revolut, and replace only `REVOLUT_REFRESH_TOKEN` using the protected output file as in step 4. Never add `PAY`. Existing read-only tokens cannot create drafts. This consent must be completed by the Revolut account administrator.
 
 Funding accounts must be reviewed per request in the dashboard. Automatic drafting can use `TOPUP_REVOLUT_DN_ACCOUNT_ID` or `TOPUP_REVOLUT_LMD_ACCOUNT_ID` only after verifying which legal entity owns the account. Do not configure both to the same account merely to make automation run.
+
+## Reauthorize an existing production certificate
+
+If the signing key is already stored only in Cloudflare, use the service-authenticated `POST /api/internal/revolut/authorize` through `npm run revolut:reauthorize -- /absolute/path/to/code.txt`. The administrator must first approve `READ,WRITE` consent (never `PAY`) and finish Revolut verification. Save the short-lived redirect `code` in a mode-600 file outside the repository and run the helper immediately. It exchanges the code with the existing Worker signing key, installs only `REVOLUT_REFRESH_TOKEN` via Wrangler standard input, and removes the code file after success. It does not print either credential. The route rejects browser sessions and unauthenticated callers; it requires the production service token.
+
+`WRITE` is Revolut's broader manage-account permission, including drafts and other account administration. Our integration uses it only for unsent payment drafts. The finance team still sends payments in Revolut.

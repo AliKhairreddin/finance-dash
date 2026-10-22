@@ -1,3 +1,4 @@
+import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, sendTopUpNotification, topUpSetup } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
 import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
@@ -8984,6 +8985,7 @@ export default {
       try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
       catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: error instanceof DocumentExtractionError && error.status === 429 ? 429 : 502, ...(error instanceof DocumentExtractionError && error.retryAfterSeconds ? { headers: { "Retry-After": String(error.retryAfterSeconds) } } : {}) }); }
     }
+    if (new URL(request.url).pathname === "/api/internal/revolut/authorize") return handleRevolutAuthorization(request, env);
     const publicTopUpResponse = await handlePublicTopUps(request, env);
     if (publicTopUpResponse) return publicTopUpResponse;
     if (new URL(request.url).pathname === "/api/internal/top-ups/setup") {

@@ -14,13 +14,13 @@ function telegramPerson(env: WorkerEnv, name: string) { const user = parseTelegr
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 async function signature(env: WorkerEnv, id: string, expires: string): Promise<string> { if (!env.AUTH_SESSION_SECRET?.trim()) throw new Error("Invoice link signing is not configured"); const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_SESSION_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`topup-invoice:${id}:${expires}`))); return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""); }
 async function invoiceLink(env: WorkerEnv, id: string): Promise<string> { const expires = String(Date.now() + 30 * 86400_000); const url = new URL(`/api/public/top-ups/${id}/invoice`, env.PUBLIC_APP_URL); url.searchParams.set("expires", expires); url.searchParams.set("token", await signature(env, id, expires)); return url.toString(); }
-async function invoice(env: WorkerEnv, id: Id<"topUpRequests">): Promise<Response> { const convex = client(env), r = await convex.query(api.topUps.get, { ...auth(env), id }); if (!r) return json({ message: "Request not found" }, 404); const doc = await convex.query(api.documents.get, { ...auth(env), id: r.documentId }); if (!doc?.url) return json({ message: "Invoice is unavailable" }, 404); const file = await fetch(doc.url, { signal: AbortSignal.timeout(20_000) }); if (!file.ok) throw new Error("Invoice could not be read"); return new Response(file.body, { headers: { "Content-Type": r.contentType, "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(r.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'" } }); }
+async function invoice(env: WorkerEnv, id: Id<"topUpRequests">, publicLink = false): Promise<Response> { const convex = client(env), r = await convex.query(api.topUps.get, { ...auth(env), id }); if (!r || (publicLink && r.deletedAt)) return json({ message: "Request not found" }, 404); const doc = await convex.query(api.documents.get, { ...auth(env), id: r.documentId }); if (!doc?.url) return json({ message: "Invoice is unavailable" }, 404); const file = await fetch(doc.url, { signal: AbortSignal.timeout(20_000) }); if (!file.ok) throw new Error("Invoice could not be read"); return new Response(file.body, { headers: { "Content-Type": r.contentType, "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(r.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'" } }); }
 async function limit(request: Request, env: WorkerEnv, kind: string, maximum: number) { const raw = `${kind}:${request.headers.get("CF-Connecting-IP") ?? "local"}`; const hashed = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw))), b => b.toString(16).padStart(2, "0")).join(""); return client(env).mutation(api.topUps.rateLimit, { ...auth(env), key: hashed, limit: maximum }); }
 export async function handlePublicTopUps(request: Request, env: WorkerEnv): Promise<Response | null> {
   const url = new URL(request.url); if (!url.pathname.startsWith("/api/public/top-ups")) return null;
   try {
     const share = /^\/api\/public\/top-ups\/([^/]+)\/invoice$/.exec(url.pathname);
-    if (share && request.method === "GET") { const expires = url.searchParams.get("expires") ?? ""; if (!/^\d{13}$/.test(expires) || Number(expires) <= Date.now() || Number(expires) > Date.now() + 31 * 86400_000 || !await secureHeaderMatches(url.searchParams.get("token"), await signature(env, share[1], expires))) return json({ message: "This invoice link has expired or is invalid" }, 403); return invoice(env, share[1] as Id<"topUpRequests">); }
+    if (share && request.method === "GET") { const expires = url.searchParams.get("expires") ?? ""; if (!/^\d{13}$/.test(expires) || Number(expires) <= Date.now() || Number(expires) > Date.now() + 31 * 86400_000 || !await secureHeaderMatches(url.searchParams.get("token"), await signature(env, share[1], expires))) return json({ message: "This invoice link has expired or is invalid" }, 403); return invoice(env, share[1] as Id<"topUpRequests">, true); }
     if (url.pathname === "/api/public/top-ups/options" && request.method === "GET") { if (!await limit(request, env, "search", 500)) return json({ message: "Search limit reached. Try again later." }, 429); return json(await client(env).query(api.topUps.options, { ...auth(env), search: (url.searchParams.get("search") ?? "").slice(0, 200) })); }
     if (url.pathname !== "/api/public/top-ups" || request.method !== "POST") return json({ message: "Not found" }, 404);
     if (request.headers.get("Origin") !== url.origin) return json({ message: "Submit this form from our website" }, 403);
@@ -31,6 +31,7 @@ export async function handlePublicTopUps(request: Request, env: WorkerEnv): Prom
     if (form.get("website")) return json({ message: "Invalid submission" }, 400);
     const input = validateTopUpInput(JSON.parse(String(form.get("details") ?? "null"))); const convex = client(env);
     const previous = await convex.query(api.topUps.bySubmission, { ...auth(env), submissionId: input.submissionId });
+    if (previous?.deletedAt) throw new Error("This request was deleted. Contact your administrator to restore it.");
     if (previous) return json({ number: previous.number, status: previous.status });
     const file = form.get("invoice"); if (!(file instanceof File) || !file.size || file.size > documentMaximumBytes) throw new Error("Upload an invoice (PDF, JPG, PNG or WebP, maximum 10 MB)");
     const doc = await ingestDocument(env, { bytes: new Uint8Array(await file.arrayBuffer()), fileName: file.name, contentType: file.type, source: "upload", sourceContext: `Top-up request from ${input.member}; company ${input.companyName}; ${input.notes}`, entity: input.entity });
@@ -38,14 +39,17 @@ export async function handlePublicTopUps(request: Request, env: WorkerEnv): Prom
   } catch (e) { return json({ message: e instanceof Error ? e.message.replace(/\[Request ID:.*$/s, "").slice(0, 400) : "Request could not be saved" }, 400); }
 }
 export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequests">, version: number): Promise<void> {
-  const convex = client(env), r = await convex.query(api.topUps.get, { ...auth(env), id }); if (!r || r.version !== version || r.telegramVersion === version) return;
+  const convex = client(env), current = await convex.query(api.topUps.get, { ...auth(env), id });
+  if (!current || current.telegramVersion === version) return;
+  const r = current.version === version ? current : await convex.query(api.topUps.deletedNotification, { ...auth(env), id, version });
+  if (!r) return;
   if (!group(env)) throw new Error("Top-up Telegram group is not configured");
   const person = r.status === "pending" ? telegramPerson(env, "Amin") : telegramPerson(env, "Ali M");
-  const mention = `<a href="tg://user?id=${person.chatId}">${r.status === "pending" ? "@AminGhossein" : "@AliMUser"}</a>`;
-  const link = await invoiceLink(env, id);
+  const mention = r.deletedAt ? "" : `<a href="tg://user?id=${person.chatId}">${r.status === "pending" ? "@AminGhossein" : "@AliMUser"}</a>`;
+  const link = r.deletedAt ? "" : await invoiceLink(env, id);
   const escaped = topUpMessage(r as TopUpRequest, link, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const buttons = r.status === "pending" ? [[{ text: "Approve", callback_data: `tu:approve:${id}:${version}` }, { text: "Adjust amount", callback_data: `tu:adjust:${id}:${version}` }]] : r.status === "approved" ? [[{ text: "Paid", callback_data: `tu:paid:${id}:${version}` }]] : [];
-  if (r.telegramMessageId) { try { await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: [] } }); } catch { /* The state/version check also rejects stale buttons. */ } }
+  const buttons = r.deletedAt ? [] : r.status === "pending" ? [[{ text: "Approve", callback_data: `tu:approve:${id}:${version}` }, { text: "Adjust amount", callback_data: `tu:adjust:${id}:${version}` }]] : r.status === "approved" ? [[{ text: "Paid", callback_data: `tu:paid:${id}:${version}` }]] : [];
+  if (current.version === version && r.telegramMessageId) { try { await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: [] } }); } catch { /* The state/version check also rejects stale buttons. */ } }
   const message = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `${escaped.replace(/📎 View Invoice: [^\n]+/, `📎 <a href="${link.replace(/&/g, "&amp;")}">View Invoice (${r.contentType === "application/pdf" ? "pdf link" : "file link"})</a>`)}${mention}`, parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: buttons } }) as { message_id: number };
   await convex.mutation(api.topUps.saveMessage, { ...auth(env), id, version, messageId: message.message_id });
 }
@@ -59,7 +63,7 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
       const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid"].includes(action)) throw new Error("Invalid action");
       const person = telegramPerson(env, action === "paid" ? "Ali M" : "Amin"); if (String(cb.from.id) !== person.chatId) throw new Error(`Only ${person.username} can ${action === "paid" ? "confirm payment" : "approve or adjust"} this request`);
       const id = rawId as Id<"topUpRequests">, version = Number(rawVersion), convex = client(env); const r = await convex.query(api.topUps.get, { ...auth(env), id });
-      if (!r || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
+      if (!r || r.deletedAt || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
       if (action === "adjust") {
         if (r.status !== "pending") throw new Error("Only pending requests can be adjusted");
         const prompt = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `Amin: reply to this message with the new amount for top-up #${r.number} in ${r.currency} (for example 20800.50). Expires in 10 minutes.`, reply_markup: { force_reply: true, input_field_placeholder: `Amount in ${r.currency}` } }) as { message_id: number };
@@ -80,9 +84,9 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
   const url = new URL(request.url); if (!url.pathname.startsWith("/api/top-ups")) return null;
   try {
     const convex = client(env);
-    if (request.method === "GET" && url.pathname === "/api/top-ups") return json(await convex.query(api.topUps.list, { ...auth(env), paginationOpts: { cursor: url.searchParams.get("cursor"), numItems: 200 } }));
+    if (request.method === "GET" && url.pathname === "/api/top-ups") return json(await convex.query(url.searchParams.get("deleted") === "true" ? api.topUps.deletedList : api.topUps.list, { ...auth(env), paginationOpts: { cursor: url.searchParams.get("cursor"), numItems: 200 } }));
     if (request.method === "GET" && url.pathname === "/api/top-ups/summary") return json(await convex.query(api.topUps.summary, auth(env)));
-    const match = /^\/api\/top-ups\/([^/]+)(?:\/(invoice|action|draft|draft-options|retry-notification|reconcile-draft))?$/.exec(url.pathname); if (!match) return json({ message: "Not found" }, 404); const id = match[1] as Id<"topUpRequests">;
+    const match = /^\/api\/top-ups\/([^/]+)(?:\/(invoice|action|draft|draft-options|retry-notification|reconcile-draft|delete|restore))?$/.exec(url.pathname); if (!match) return json({ message: "Not found" }, 404); const id = match[1] as Id<"topUpRequests">;
     if (request.method === "GET" && match[2] === "invoice") return invoice(env, id);
     if (request.method === "GET" && !match[2]) return json(await convex.query(api.topUps.get, { ...auth(env), id }));
     const session = await getDashboardSession(request, env); if (session?.role !== "administrator") return json({ message: "Administrator access required" }, 403);
@@ -91,6 +95,7 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
     if (request.headers.get("Origin") !== url.origin) return json({ message: "Submit this action from the dashboard" }, 403);
     if (match[2] === "retry-notification") { await convex.mutation(api.topUps.retryNotification, { ...auth(env), id }); return json({ ok: true }); }
     const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 12_000)));
+    if (match[2] === "delete" || match[2] === "restore") return json(await convex.mutation(api.topUps.setDeleted, { ...auth(env), id, version: body.version, deleted: match[2] === "delete", actor: session.username }));
     if (match[2] === "reconcile-draft") {
       const r = await convex.query(api.topUps.get, { ...auth(env), id }); if (!r) throw new Error("Request not found");
       let draftId: string | undefined;

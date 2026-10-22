@@ -1241,5 +1241,5 @@ test("Alaa's restricted role cannot reach dashboard, bank, settings or top-up ac
   const env = authenticatedEnv({ TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "8710954543" }) });
   const session = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "alaa"), env); assert.deepEqual(await session.json(), { username: "Alaa", role: "top-up-reviewer" });
   for (const path of ["/api/dashboard", "/api/transactions", "/api/settings", "/api/top-ups/abc/draft-options"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "alaa"), env)).status, 403, path);
-  for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/reconcile-draft", "/api/sync"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST" }, "alaa"), env)).status, 403, path);
+  for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/reconcile-draft", "/api/top-ups/abc/delete", "/api/top-ups/abc/restore", "/api/sync"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST" }, "alaa"), env)).status, 403, path);
 });

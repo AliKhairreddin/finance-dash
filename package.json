@@ -13,6 +13,7 @@
     "save:cash-flow-snapshot": "tsx scripts/save-cash-flow-snapshot.ts",
     "wise:reset": "tsx scripts/reset-wise.ts",
     "revolut:setup": "tsx scripts/setup-revolut.ts",
+    "revolut:reauthorize": "tsx scripts/reauthorize-revolut.ts",
     "ledger:cutover": "tsx scripts/migrate-bank-ledger.ts",
     "ledger:verify": "tsx scripts/verify-bank-ledger.ts",
     "build": "tsc -b && vite build && vite build --config vite.partner-report.config.ts && vite build --config vite.top-up.config.ts",

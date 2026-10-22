@@ -42,13 +42,17 @@ export const create = mutation({
 });
 export const list = query({
   args: { serviceToken: v.string(), paginationOpts: paginationOptsValidator }, returns: v.object({ page: v.array(topUpRecord), isDone: v.boolean(), continueCursor: v.string() }),
-  handler: async (ctx, a) => { authorize(a.serviceToken); const p = await ctx.db.query("topUpRequests").order("desc").paginate({ ...a.paginationOpts, numItems: Math.min(200, a.paginationOpts.numItems) }); return { page: p.page, isDone: p.isDone, continueCursor: p.continueCursor }; }
+  handler: async (ctx, a) => { authorize(a.serviceToken); const p = await ctx.db.query("topUpRequests").withIndex("by_deleted", q => q.eq("deletedAt", undefined)).order("desc").paginate({ ...a.paginationOpts, numItems: Math.min(200, a.paginationOpts.numItems) }); return { page: p.page, isDone: p.isDone, continueCursor: p.continueCursor }; }
 });
-export const summary = query({ args: { serviceToken: v.string() }, returns: v.object({ pending: v.number(), approved: v.number(), capped: v.boolean() }), handler: async (ctx, a) => { authorize(a.serviceToken); const pending = await ctx.db.query("topUpRequests").withIndex("by_status", q => q.eq("status", "pending")).take(1001); const approved = await ctx.db.query("topUpRequests").withIndex("by_status", q => q.eq("status", "approved")).take(1001); return { pending: pending.length, approved: approved.length, capped: pending.length === 1001 || approved.length === 1001 }; } });
+export const deletedList = query({
+  args: { serviceToken: v.string(), paginationOpts: paginationOptsValidator }, returns: v.object({ page: v.array(topUpRecord), isDone: v.boolean(), continueCursor: v.string() }),
+  handler: async (ctx, a) => { authorize(a.serviceToken); const p = await ctx.db.query("topUpRequests").withIndex("by_deleted", q => q.gt("deletedAt", "")).order("desc").paginate({ ...a.paginationOpts, numItems: Math.min(200, a.paginationOpts.numItems) }); return { page: p.page, isDone: p.isDone, continueCursor: p.continueCursor }; }
+});
+export const summary = query({ args: { serviceToken: v.string() }, returns: v.object({ pending: v.number(), approved: v.number(), capped: v.boolean() }), handler: async (ctx, a) => { authorize(a.serviceToken); const pending = await ctx.db.query("topUpRequests").withIndex("by_deleted_status", q => q.eq("deletedAt", undefined).eq("status", "pending")).take(1001); const approved = await ctx.db.query("topUpRequests").withIndex("by_deleted_status", q => q.eq("deletedAt", undefined).eq("status", "approved")).take(1001); return { pending: pending.length, approved: approved.length, capped: pending.length === 1001 || approved.length === 1001 }; } });
 export const get = query({ args: { serviceToken: v.string(), id: v.id("topUpRequests") }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => { authorize(a.serviceToken); return ctx.db.get(a.id); } });
 export const transition = mutation({
   args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), action: v.union(v.literal("approve"), v.literal("adjust"), v.literal("paid")), actor: v.string(), amount: v.optional(v.number()) }, returns: topUpRecord,
-  handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.version !== a.version) throw new ConvexError("This request has changed. Refresh before acting.");
+  handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.version !== a.version) throw new ConvexError("This request has changed. Refresh before acting.");
     const status = topUpTransition(r.status, a.action, r.draftStatus); const amount = a.action === "adjust" ? a.amount : r.amount;
     if (amount === undefined || !Number.isFinite(amount) || amount <= 0 || amount > 1e9 || Math.abs(amount * 100 - Math.round(amount * 100)) > 0.0001) throw new ConvexError("Enter a positive amount with at most two decimals");
     let providerId = r.providerId;
@@ -67,8 +71,8 @@ export const transition = mutation({
     return (await ctx.db.get(r._id))!;
   }
 });
-export const adjustmentPrompt = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), promptId: v.number(), userId: v.string() }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.status !== "pending" || r.version !== a.version) throw new ConvexError("Request has changed"); await ctx.db.patch(r._id, { adjustPromptId: a.promptId, adjustUserId: a.userId, adjustExpiresAt: Date.now() + 600_000 }); return null; } });
-export const findAdjustment = query({ args: { serviceToken: v.string(), promptId: v.number(), userId: v.string() }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.query("topUpRequests").withIndex("by_adjust_prompt", q => q.eq("adjustPromptId", a.promptId)).unique(); return r?.status === "pending" && r.adjustUserId === a.userId && (r.adjustExpiresAt ?? 0) > Date.now() ? r : null; } });
+export const adjustmentPrompt = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), promptId: v.number(), userId: v.string() }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.status !== "pending" || r.version !== a.version) throw new ConvexError("Request has changed"); await ctx.db.patch(r._id, { adjustPromptId: a.promptId, adjustUserId: a.userId, adjustExpiresAt: Date.now() + 600_000 }); return null; } });
+export const findAdjustment = query({ args: { serviceToken: v.string(), promptId: v.number(), userId: v.string() }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.query("topUpRequests").withIndex("by_adjust_prompt", q => q.eq("adjustPromptId", a.promptId)).unique(); return !r?.deletedAt && r?.status === "pending" && r.adjustUserId === a.userId && (r.adjustExpiresAt ?? 0) > Date.now() ? r : null; } });
 export const claimDelivery = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string() }, returns: v.boolean(), handler: async (ctx, a) => { const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique(); if (!d || d.state !== "pending") return false; await ctx.db.patch(d._id, { state: "sending", token: a.token, attempts: d.attempts + 1 }); await ctx.scheduler.runAfter(120_000, internal.topUps.recoverDelivery, a); return true; } });
 export const deliveryResult = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string(), error: v.optional(v.string()) }, returns: v.null(), handler: async (ctx, a) => { const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique(); if (!d || d.token !== a.token) return null;
   const retry = !!a.error && d.attempts < 4; await ctx.db.patch(d._id, { state: a.error ? retry ? "pending" : "failed" : "sent", error: a.error }); const r = await ctx.db.get(a.id); if (r && r.version === a.version) await ctx.db.patch(r._id, { notificationError: a.error });
@@ -76,7 +80,7 @@ export const deliveryResult = internalMutation({ args: { id: v.id("topUpRequests
 } });
 export const retryNotification = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests") }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r) throw new ConvexError("Request not found"); const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", r.version)).unique(); if (d?.state === "sending") throw new ConvexError("Delivery is already running"); if (d) await ctx.db.patch(d._id, { state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null; } });
 export const saveMessage = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), messageId: v.number() }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (r?.version === a.version) await ctx.db.patch(a.id, { telegramMessageId: a.messageId, telegramVersion: a.version }); return null; } });
-export const claimDraft = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string() }, returns: v.boolean(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.status !== "approved" || !["queued", "needs_review", "failed"].includes(r.draftStatus)) return false; await ctx.db.patch(r._id, { draftStatus: "creating", draftAttempt: a.token, draftError: undefined }); await ctx.scheduler.runAfter(180_000, internal.topUps.recoverDraft, { id: a.id, token: a.token }); return true; } });
+export const claimDraft = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string() }, returns: v.boolean(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.status !== "approved" || !["queued", "needs_review", "failed"].includes(r.draftStatus)) return false; await ctx.db.patch(r._id, { draftStatus: "creating", draftAttempt: a.token, draftError: undefined }); await ctx.scheduler.runAfter(180_000, internal.topUps.recoverDraft, { id: a.id, token: a.token }); return true; } });
 export const draftResult = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string(), status: v.union(v.literal("created"), v.literal("needs_review"), v.literal("failed"), v.literal("uncertain")), error: v.optional(v.string()), draftId: v.optional(v.string()), details: v.optional(paymentDetails) }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (r?.draftAttempt !== a.token) return null; await ctx.db.patch(a.id, { draftStatus: a.status, draftError: a.error, draftId: a.draftId, ...(a.details ? { paymentDetails: a.details } : {}) }); return null; } });
 
 export const recoverDelivery = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string() }, returns: v.null(), handler: async (ctx, a) => {
@@ -89,9 +93,33 @@ export const recoverDelivery = internalMutation({ args: { id: v.id("topUpRequest
 export const recoverDraft = internalMutation({ args: { id: v.id("topUpRequests"), token: v.string() }, returns: v.null(), handler: async (ctx, a) => {
   const r = await ctx.db.get(a.id); if (r?.draftAttempt === a.token && r.draftStatus === "creating") await ctx.db.patch(r._id, { draftStatus: "uncertain", draftError: "Draft preparation was interrupted. Check Revolut drafts before reconciling this request." }); return null;
 } });
-export const failQueuedDraft = internalMutation({ args: { id: v.id("topUpRequests") }, returns: v.null(), handler: async (ctx, a) => { const r = await ctx.db.get(a.id); if (r?.draftStatus === "queued") await ctx.db.patch(r._id, { draftStatus: "needs_review", draftError: "Automatic draft preparation could not start. Review this request to retry." }); return null; } });
+export const failQueuedDraft = internalMutation({ args: { id: v.id("topUpRequests") }, returns: v.null(), handler: async (ctx, a) => { const r = await ctx.db.get(a.id); if (r?.draftStatus === "queued" && !r.deletedAt) await ctx.db.patch(r._id, { draftStatus: "needs_review", draftError: "Automatic draft preparation could not start. Review this request to retry." }); return null; } });
 export const reconcileDraft = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), actor: v.string(), draftId: v.optional(v.string()), confirmedNoDraft: v.boolean() }, returns: v.null(), handler: async (ctx, a) => {
-  authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.status !== "approved" || r.draftStatus !== "uncertain") throw new ConvexError("Only interrupted drafts can be reconciled");
+  authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.status !== "approved" || r.draftStatus !== "uncertain") throw new ConvexError("Only interrupted drafts can be reconciled");
   if (!a.draftId && !a.confirmedNoDraft) throw new ConvexError("Check Revolut and confirm the result first");
   await ctx.db.patch(r._id, { draftStatus: a.draftId ? "created" : "needs_review", draftId: a.draftId, draftError: undefined, events: [...r.events, { at: now(), actor: a.actor, action: a.draftId ? "draft_reconciled" : "no_draft_confirmed", amount: r.amount }] }); return null;
+} });
+
+export const setDeleted = mutation({
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), deleted: v.boolean(), actor: v.string() }, returns: topUpRecord,
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    const r = await ctx.db.get(a.id);
+    if (!r || r.version !== a.version || !!r.deletedAt === a.deleted) throw new ConvexError("This request has changed. Refresh before acting.");
+    if (["creating", "uncertain"].includes(r.draftStatus)) throw new ConvexError("Check and reconcile the Revolut draft before deleting this request.");
+    const at = now(), version = r.version + 1;
+    await ctx.db.patch(r._id, { deletedAt: a.deleted ? at : undefined, deletedBy: a.deleted ? a.actor : undefined, version, updatedAt: at,
+      adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, notificationError: undefined,
+      events: [...r.events, { at, actor: a.actor, action: a.deleted ? "deleted" : "restored", amount: r.amount }].slice(-200) });
+    await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0, ...(a.deleted ? { deletedSnapshot: (await ctx.db.get(r._id))! } : {}) });
+    await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
+    if (!a.deleted && r.status === "approved" && r.draftStatus === "queued") await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
+    return (await ctx.db.get(r._id))!;
+  }
+});
+
+export const deletedNotification = query({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number() }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => {
+  authorize(a.serviceToken);
+  const delivery = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
+  return delivery?.deletedSnapshot ?? null;
 } });

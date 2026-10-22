@@ -9,7 +9,7 @@ export interface TopUpInput {
 export interface TopUpRequest extends TopUpInput {
   _id: string; number: number; documentId: string; fileName: string; contentType: string;
   status: TopUpStatus; version: number; createdAt: string; updatedAt: string;
-  originalAmount: number; approvedBy?: string; paidBy?: string;
+  originalAmount: number; approvedBy?: string; paidBy?: string; deletedAt?: string; deletedBy?: string;
   events: { at: string; actor: string; action: string; amount: number }[];
   notificationError?: string; draftStatus: string; draftError?: string; draftId?: string;
   paymentDetails?: TopUpPaymentDetails;
@@ -55,7 +55,8 @@ export function topUpTransition(status: TopUpStatus, action: "approve" | "adjust
 }
 export function topUpMessage(r: TopUpRequest, invoiceUrl: string, approver: string): string {
   const money = (n: number, c = r.currency) => `${n.toLocaleString("en-US", { maximumFractionDigits: 2 })} ${c}`;
-  return [`💸 ${r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : "Paid Topup Request"} #${r.number}`, "",
+  if (r.deletedAt) return [`🗑️ Deleted Topup Request #${r.number}`, "", `🏢 Company: ${r.companyName} | 👥 ${r.team} → ${r.member}`, `💰 Amount: ${money(r.amount)}`, `📊 Previous status: ${r.status[0].toUpperCase() + r.status.slice(1)}`, `Deleted by: ${r.deletedBy}`, `📅 ${new Date(r.deletedAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`, ...(r.draftId ? [`⚠️ Revolut draft ${r.draftId} remains in Revolut. Review it there.`] : []), "Recoverable from Deleted requests in Finance Dash."].join("\n");
+  return [`💸 ${r.events?.at(-1)?.action === "restored" ? "Restored Topup Request" : r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : "Paid Topup Request"} #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"} | 🏦 ${r.entity === "dn" ? "Digital Nudge OU" : "LoveMeDo BV"}`, "",
     `🏢 Company: ${r.companyName} | 👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, `💳 Open Balance: ${money(r.openBalance)}`,
     `Last 3 days spend: ${money(r.lastThreeDaysSpend, "USD")}`, `Expected next 3 days spend: ${money(r.expectedThreeDaysSpend, "USD")}`,

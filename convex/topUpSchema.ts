@@ -9,7 +9,7 @@ export const paymentDetails = v.object({ payerEntity: v.union(v.literal("dn"), v
 export const topUpFields = { ...topUpInputFields,
   number: v.number(), documentId: v.id("financialDocuments"), fileName: v.string(), contentType: v.string(),
   status: v.union(v.literal("pending"), v.literal("approved"), v.literal("paid")), version: v.number(), originalAmount: v.number(),
-  createdAt: v.string(), updatedAt: v.string(), approvedBy: v.optional(v.string()), paidBy: v.optional(v.string()),
+  createdAt: v.string(), updatedAt: v.string(), deletedAt: v.optional(v.string()), deletedBy: v.optional(v.string()), approvedBy: v.optional(v.string()), paidBy: v.optional(v.string()),
   events: v.array(v.object({ at: v.string(), actor: v.string(), action: v.string(), amount: v.number() })),
   notificationError: v.optional(v.string()), draftStatus: v.string(), draftError: v.optional(v.string()), draftId: v.optional(v.string()),
   draftAttempt: v.optional(v.string()), paymentDetails: v.optional(paymentDetails), telegramMessageId: v.optional(v.number()), telegramVersion: v.optional(v.number()),

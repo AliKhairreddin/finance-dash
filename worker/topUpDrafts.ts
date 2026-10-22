@@ -29,7 +29,7 @@ async function extract(env: WorkerEnv, request: TopUpRequest): Promise<TopUpPaym
 }
 export async function prepareTopUpDraft(env: WorkerEnv, id: Id<"topUpRequests">, review?: { details: unknown; sourceAccountId: string; reviewed: boolean }): Promise<void> {
   const convex = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN }; const r = await convex.query(api.topUps.get, { ...auth, id });
-  if (!r || r.status !== "approved") throw new Error("Approve the request before preparing a draft");
+  if (!r || r.deletedAt || r.status !== "approved") throw new Error("Approve the request before preparing a draft");
   const token = crypto.randomUUID(); if (!await convex.mutation(api.topUps.claimDraft, { ...auth, id, token })) throw new Error("A draft already exists, is running, or needs reconciliation in Revolut");
   let details: TopUpPaymentDetails | undefined, writing = false;
   try {

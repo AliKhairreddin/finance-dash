@@ -138,7 +138,6 @@
 .topup-upload:hover { border-color: var(--control-border-hover); }
 .topup-upload:focus-within { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
 .topup-upload small { margin: 0; }
-.topup-multi { display: flex; align-items: center; gap: 5px; }
 
 .topup-submit {
   display: flex;

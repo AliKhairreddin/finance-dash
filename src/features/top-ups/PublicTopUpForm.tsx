@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Banknote, Check, FileText, Loader2, Plus, Send, X } from "lucide-react";
+import { Banknote, Check, FileText, Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,7 +11,7 @@ import "./publicTopUp.css";
 export default function PublicTopUpForm() {
   const [search, setSearch] = useState(""); const [company, setCompany] = useState<{ id: string; name: string } | null>(null);
   const [options, setOptions] = useState<{ providers: { id: string; name: string }[]; teams: string[] }>({ providers: [], teams: ["Cognitive", "Wagner", "Atlantic"] });
-  const [team, setTeam] = useState(""); const [bm, setBm] = useState([""]); const [accounts, setAccounts] = useState([""]);
+  const [team, setTeam] = useState("");
   const [fileName, setFileName] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [searchError, setSearchError] = useState(""); const [success, setSuccess] = useState<number | null>(null);
   const submissionId = useRef(crypto.randomUUID());
   useEffect(() => { document.title = "Topup Request · Finance"; document.documentElement.classList.remove("dark"); }, []);
@@ -22,7 +22,7 @@ export default function PublicTopUpForm() {
       const fields = new FormData(form); const value = (name: string) => String(fields.get(name) ?? ""); const file = fields.get("invoice");
       if (!company) throw new Error("Choose an existing company or select the new provider option");
       if (!(file instanceof File) || !file.size || file.size > documentMaximumBytes) throw new Error("Upload an invoice up to 10 MB");
-      const input = validateTopUpInput({ submissionId: submissionId.current, entity: value("entity"), priority: value("priority"), companyName: company.name, ...(company.id.startsWith("new:") ? {} : { providerId: company.id }), commission: value("commission"), team: team === "Other" ? value("otherTeam") : team, member: value("member"), amount: Number(value("amount")), currency: value("currency"), openBalance: Number(value("openBalance")), lastThreeDaysSpend: Number(value("lastThreeDaysSpend")), expectedThreeDaysSpend: Number(value("expectedThreeDaysSpend")), paymentMethod: value("paymentMethod"), wiseLink: value("wiseLink"), notes: value("notes"), bmNames: bm, accountNames: accounts });
+      const input = validateTopUpInput({ submissionId: submissionId.current, entity: value("entity"), priority: value("priority"), companyName: company.name, ...(company.id.startsWith("new:") ? {} : { providerId: company.id }), commission: value("commission"), team: team === "Other" ? value("otherTeam") : team, member: value("member"), amount: Number(value("amount")), currency: value("currency"), openBalance: Number(value("openBalance")), lastThreeDaysSpend: Number(value("lastThreeDaysSpend")), expectedThreeDaysSpend: Number(value("expectedThreeDaysSpend")), paymentMethod: value("paymentMethod"), wiseLink: value("wiseLink"), notes: value("notes"), bmNames: [], accountNames: [] });
       const body = new FormData(); body.set("details", JSON.stringify(input)); body.set("invoice", file); body.set("website", value("website"));
       const response = await fetch("/api/public/top-ups", { method: "POST", body }); const result = await response.json(); if (!response.ok) throw new Error(result.message ?? "Could not submit request");
       setSuccess(result.number); submissionId.current = crypto.randomUUID();
@@ -31,7 +31,7 @@ export default function PublicTopUpForm() {
   const companyOptions = [...(company ? [company] : []), ...options.providers.filter(p => p.id !== company?.id)].map(p => ({ value: p.id, label: p.name }));
   if (search.trim().length >= 2 && !companyOptions.some(p => p.label.toLowerCase() === search.trim().toLowerCase())) companyOptions.push({ value: `new:${search.trim()}`, label: `New provider: ${search.trim()}` });
   return <main className="topup-public"><div className="topup-brand"><Banknote size={20} aria-hidden="true" /><strong>Finance</strong></div><article className="topup-form-card"><header className="topup-form-header"><p className="eyebrow">Top-up requests</p><h1>Topup Details Form</h1></header>
-    {success !== null ? <div className="topup-success" role="status"><Check size={38} /><h2>Request #{success} received</h2><p>Your invoice and request have been saved for approval.</p><Button className="topup-submit" onClick={() => { setSuccess(null); setCompany(null); setSearch(""); setTeam(""); setBm([""]); setAccounts([""]); setFileName(""); }}>Submit another request</Button></div>
+    {success !== null ? <div className="topup-success" role="status"><Check size={38} /><h2>Request #{success} received</h2><p>Your invoice and request have been saved for approval.</p><Button className="topup-submit" onClick={() => { setSuccess(null); setCompany(null); setSearch(""); setTeam(""); setFileName(""); }}>Submit another request</Button></div>
     : <form className="topup-form" onSubmit={submit}>
       <fieldset disabled={busy}>
         <div className="topup-honeypot" aria-hidden="true"><label>Website<Input name="website" autoComplete="off" tabIndex={-1} /></label></div>
@@ -55,7 +55,6 @@ export default function PublicTopUpForm() {
         </div>
         <h2 className="topup-section">Invoice</h2><div className="topup-grid"><label className="topup-upload topup-full"><span>Invoice Upload <b>*</b></span><FileText size={27} /><span>{fileName || "Choose your invoice"}</span><small>PDF, JPG, PNG or WebP · up to 10 MB</small><input type="file" name="invoice" aria-label="Invoice Upload" accept=".pdf,.jpg,.jpeg,.png,.webp" required onChange={e => setFileName(e.target.files?.[0]?.name ?? "")} /></label>
           <label className="topup-full">Notes <small>optional</small><Textarea name="notes" placeholder="Any additional details or instructions…" maxLength={4000} /></label></div>
-        <h2 className="topup-section">BM &amp; Account <small>optional</small></h2><div className="topup-grid">{[{ label: "BM Name(s)", values: bm, set: setBm, placeholder: "e.g. Insurance Digital", singular: "BM" }, { label: "Account Name(s)", values: accounts, set: setAccounts, placeholder: "e.g. P2W 123", singular: "account" }].map(group => <div className="topup-field" key={group.label}><label>{group.label} <small>optional</small></label>{group.values.map((value, i) => <div className="topup-multi" key={i}><Input aria-label={`${group.singular} name ${i + 1}`} value={value} maxLength={160} placeholder={group.placeholder} onChange={e => group.set(group.values.map((v, j) => i === j ? e.target.value : v))} />{group.values.length > 1 && <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${group.singular} ${i + 1}`} onClick={() => group.set(group.values.filter((_, j) => i !== j))}><X size={16} /></Button>}</div>)}<Button type="button" variant="ghost" disabled={group.values.length >= 20} onClick={() => group.set([...group.values, ""])}><Plus size={14} /> Add another {group.singular}</Button></div>)}</div>
         {error && <p className="inline-error" role="alert">{error}</p>}<Button type="submit" className="topup-submit" disabled={busy}>{busy ? <Loader2 className="spin" size={18} /> : <Send size={18} />}{busy ? "Submitting request…" : "Submit Request"}</Button>
       </fieldset>
     </form>}
