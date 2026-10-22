@@ -1,0 +1,182 @@
+.topup-public {
+  min-height: 100dvh;
+  padding: 30px 20px 56px;
+  color: var(--ink);
+  background: var(--app-bg);
+}
+
+.topup-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 740px;
+  margin: 0 auto 18px;
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: -0.025em;
+}
+
+.topup-brand strong { font-weight: 760; }
+
+.topup-form-card {
+  position: relative;
+  max-width: 740px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.topup-form-header {
+  padding: 23px 26px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+}
+
+.topup-form-header .eyebrow { margin: 0 0 7px; }
+.topup-form-header h1 { font-size: 25px; font-weight: 750; letter-spacing: -0.035em; line-height: 1.2; }
+.topup-form { padding: 0 26px 26px; }
+.topup-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+
+.topup-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 23px 0 14px;
+  color: var(--app-muted);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.065em;
+  text-transform: uppercase;
+}
+
+.topup-section:after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.topup-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.topup-full { grid-column: 1 / -1; }
+.topup-form label, .topup-form legend { color: var(--label-text); font-size: 12px; font-weight: 650; }
+.topup-form legend { margin-bottom: 8px; }
+.topup-form label { display: block; }
+.topup-form label > b, .topup-form legend > b { color: var(--red); }
+.topup-form small { margin-left: 4px; color: var(--app-muted); font-size: 11px; font-weight: 400; }
+
+.topup-form input:not([type=radio]):not([type=file]):not(.searchable-select-input),
+.topup-form select,
+.topup-form textarea {
+  width: 100%;
+  height: 40px;
+  margin-top: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--control-text);
+  background: var(--control-bg);
+  box-shadow: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.topup-form input::placeholder, .topup-form textarea::placeholder { color: var(--app-muted); }
+.topup-form input:not(.searchable-select-input):focus-visible,
+.topup-form select:focus-visible,
+.topup-form textarea:focus-visible {
+  outline: none;
+  border-color: var(--search-focus-border);
+  box-shadow: 0 0 0 3px var(--focus-ring-strong);
+}
+
+.topup-form textarea { min-height: 82px; padding: 10px 11px; resize: vertical; }
+.topup-form .searchable-select { margin-top: 7px; }
+.topup-form .searchable-select-control { min-height: 40px; border-radius: 8px; box-shadow: none; }
+.topup-form .searchable-select-input { min-height: 38px; font-size: 13px; }
+.topup-field > label { margin-bottom: 7px; }
+.topup-label-row { height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.topup-label-row > label { margin: 0; }
+.topup-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.topup-choices label { position: relative; }
+.topup-choices input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+.topup-choices span {
+  display: block;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--control-text);
+  background: var(--control-bg);
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.topup-choices span:hover { border-color: var(--control-border-hover); background: var(--hover-bg); }
+.topup-choices input:checked + span { border-color: var(--active-border); color: var(--ink); background: var(--active-bg); box-shadow: inset 0 0 0 1px var(--active-border); }
+.topup-choices input:focus-visible + span { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.topup-choices input:disabled + span { opacity: 0.6; cursor: wait; }
+.topup-amount { display: grid; grid-template-columns: minmax(0, 1fr) 125px; gap: 10px; }
+.topup-form input[type=number] { font-variant-numeric: tabular-nums; }
+
+.topup-upload {
+  position: relative;
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 16px;
+  border: 1px dashed var(--docs-border);
+  border-radius: 10px;
+  color: var(--label-text);
+  background: var(--docs-bg);
+  text-align: center;
+  cursor: pointer;
+}
+
+.topup-upload > svg { color: var(--app-muted); }
+.topup-upload > span { max-width: 100%; overflow-wrap: anywhere; }
+.topup-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.topup-upload:hover { border-color: var(--control-border-hover); }
+.topup-upload:focus-within { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.topup-upload small { margin: 0; }
+.topup-multi { display: flex; align-items: center; gap: 5px; }
+
+.topup-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 24px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--primary-text);
+  background: var(--primary-bg);
+  font-size: 13px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.topup-submit:not(:disabled):hover { background: var(--primary-hover-bg); }
+.topup-submit:disabled { opacity: 0.6; cursor: wait; }
+.topup-success { display: flex; flex-direction: column; align-items: center; padding: 32px 26px; text-align: center; }
+.topup-success > svg { color: var(--green); }
+.topup-success h2 { margin: 16px 0 8px; font-size: 22px; }
+.topup-success p { color: var(--app-muted); font-size: 13px; }
+.topup-honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+@media(max-width: 600px) {
+  .topup-public { padding: 20px 12px 32px; }
+  .topup-brand { margin-bottom: 14px; }
+  .topup-form-card { border-radius: 12px; }
+  .topup-form-header { padding: 20px; }
+  .topup-form-header h1 { font-size: 23px; }
+  .topup-form { padding: 0 20px 22px; }
+  .topup-grid { grid-template-columns: minmax(0, 1fr); }
+  .topup-amount { grid-template-columns: minmax(0, 1fr) 100px; }
+  .topup-form input:not([type=radio]):not([type=file]):not(.searchable-select-input),
+  .topup-form select,
+  .topup-form textarea,
+  .topup-form .searchable-select-input { font-size: 16px; }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, FileText, Loader2, Plus, Send, X } from "lucide-react";
+import { Banknote, Check, FileText, Loader2, Plus, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,7 +7,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import { documentMaximumBytes } from "../../../shared/financialDocuments";
 import { topUpCurrencies, validateTopUpInput } from "../../../shared/topUps";
-import "./topUps.css";
+import "./publicTopUp.css";
 export default function PublicTopUpForm() {
   const [search, setSearch] = useState(""); const [company, setCompany] = useState<{ id: string; name: string } | null>(null);
   const [options, setOptions] = useState<{ providers: { id: string; name: string }[]; teams: string[] }>({ providers: [], teams: ["Cognitive", "Wagner", "Atlantic"] });
@@ -30,7 +30,7 @@ export default function PublicTopUpForm() {
   }
   const companyOptions = [...(company ? [company] : []), ...options.providers.filter(p => p.id !== company?.id)].map(p => ({ value: p.id, label: p.name }));
   if (search.trim().length >= 2 && !companyOptions.some(p => p.label.toLowerCase() === search.trim().toLowerCase())) companyOptions.push({ value: `new:${search.trim()}`, label: `New provider: ${search.trim()}` });
-  return <main className="topup-public"><article className="topup-form-card"><header className="topup-form-header"><span className="topup-form-badge"><span /> Topup Request</span><h1>Topup Details Form</h1></header>
+  return <main className="topup-public"><div className="topup-brand"><Banknote size={20} aria-hidden="true" /><strong>Finance</strong></div><article className="topup-form-card"><header className="topup-form-header"><p className="eyebrow">Top-up requests</p><h1>Topup Details Form</h1></header>
     {success !== null ? <div className="topup-success" role="status"><Check size={38} /><h2>Request #{success} received</h2><p>Your invoice and request have been saved for approval.</p><Button className="topup-submit" onClick={() => { setSuccess(null); setCompany(null); setSearch(""); setTeam(""); setBm([""]); setAccounts([""]); setFileName(""); }}>Submit another request</Button></div>
     : <form className="topup-form" onSubmit={submit}>
       <fieldset disabled={busy}>
