@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import { documentMaximumBytes } from "../../../shared/financialDocuments";
-import { cryptoRequestCurrencies, topUpAmountDecimals, topUpCurrencies, isCryptoTopUp, topUpMinimumExpectedThreeDaysSpend, validateTopUpInput } from "../../../shared/topUps";
+import { cryptoRequestCurrencies, topUpAmountDecimals, topUpCurrencies, topUpPaymentMethods, isCryptoTopUp, topUpMinimumExpectedThreeDaysSpend, validateTopUpInput } from "../../../shared/topUps";
 import "./publicTopUp.css";
 
 const Brand = () => <div className="topup-brand"><Banknote size={20} aria-hidden="true" /><strong>Finance</strong></div>;
@@ -68,7 +68,7 @@ function PublicTopUpForm({ crypto: cryptoRequest }: { crypto: boolean }) {
           commission: value("commission"),
           openBalance: Number(value("openBalance")), lastThreeDaysSpend: Number(value("lastThreeDaysSpend")), expectedThreeDaysSpend: Number(value("expectedThreeDaysSpend"))
         }),
-        paymentMethod: cryptoRequest ? "Crypto" : value("paymentMethod"), wiseLink: cryptoRequest ? "" : value("wiseLink"), notes: value("notes"), bmNames: [], accountNames: []
+        paymentMethod: cryptoRequest ? "Crypto" : value("paymentMethod"), wiseLink: "", notes: value("notes"), bmNames: [], accountNames: []
       });
       const body = new FormData(); body.set("details", JSON.stringify(input));
       if (file instanceof File && file.size) body.set("invoice", file);
@@ -121,8 +121,7 @@ function PublicTopUpForm({ crypto: cryptoRequest }: { crypto: boolean }) {
             <label className="topup-balance topup-full">💰 Open Balance <b>*</b><Input name="openBalance" type="number" step="0.01" placeholder="Current balance before topup" required /></label>
             <label>Last three days spend (USD) <b>*</b><Input name="lastThreeDaysSpend" type="number" min="0" max="1000000000" step="0.01" placeholder="0.00" required /></label>
             <label>Expected spend — next three days (USD) <b>*</b><Input name="expectedThreeDaysSpend" type="number" min={topUpMinimumExpectedThreeDaysSpend} max="1000000000" step="0.01" placeholder="1000.00" required /></label>
-            <fieldset className="topup-full"><legend>Payment Method <small>optional</small></legend><div className="topup-choices">{["Wise", "Bank Transfer", "Card", "Crypto"].map(p => <label key={p}><input name="paymentMethod" type="radio" value={p} /><span>{p}</span></label>)}</div></fieldset>
-            <label className="topup-full">Wise Link <small>optional</small><Input name="wiseLink" type="url" placeholder="https://wise.com/…" maxLength={1000} /></label>
+            <fieldset className="topup-full"><legend>Payment Method <small>optional</small></legend><div className="topup-choices">{topUpPaymentMethods.map(p => <label key={p}><input name="paymentMethod" type="radio" value={p} /><span>{p}</span></label>)}</div></fieldset>
           </>}
         </div>
         <h2 className="topup-section">Invoice</h2><div className="topup-grid"><label className="topup-upload topup-full"><span>Invoice Upload {cryptoRequest ? <small>optional</small> : <b>*</b>}</span><FileText size={27} /><span>{fileName || "Choose your invoice"}</span><small>PDF, JPG, PNG or WebP · up to 10 MB</small><input type="file" name="invoice" aria-label="Invoice Upload" accept=".pdf,.jpg,.jpeg,.png,.webp" required={!cryptoRequest} onChange={e => setFileName(e.target.files?.[0]?.name ?? "")} /></label>

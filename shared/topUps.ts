@@ -1,4 +1,5 @@
 export const topUpCurrencies = ["USD", "EUR", "GBP", "AED", "LBP"] as const;
+export const topUpPaymentMethods = ["Revolut", "Bank Transfer", "Card", "Crypto"] as const;
 export const cryptoRequestCurrencies = ["USDC", "USDT", "BTC"] as const;
 export const isCryptoTopUp = (currency: string) => /^[A-Z][A-Z0-9]{1,11}$/.test(currency) && !topUpCurrencies.some(c => c === currency);
 export const topUpAmountDecimals = (currency: string) => currency === "USDC" || currency === "USDT" ? 6 : isCryptoTopUp(currency) ? 8 : 2;
@@ -52,7 +53,7 @@ export function validateTopUpInput(value: unknown): TopUpInput {
   if (!crypto && !topUpCurrencies.some(c => c === currency)) throw new Error("Select a currency");
   if (!crypto && v.entity !== "dn" && v.entity !== "lmd") throw new Error("Select Send From");
   const paymentMethod = text("paymentMethod", 30);
-  if (!["", "Wise", "Bank Transfer", "Card", "Crypto"].includes(paymentMethod)) throw new Error("Select a payment method");
+  if (paymentMethod !== "" && !topUpPaymentMethods.some(method => method === paymentMethod)) throw new Error("Select a payment method: Revolut, Bank Transfer, Card or Crypto");
   const wiseLink = text("wiseLink", 1000);
   if (wiseLink) { const url = new URL(wiseLink); if (url.protocol !== "https:" || !/^(?:[a-z0-9-]+\.)?wise\.com$/i.test(url.hostname) || url.username || url.password) throw new Error("Enter an HTTPS Wise link"); }
   const amount = validateTopUpAmount(v.amount, currency);

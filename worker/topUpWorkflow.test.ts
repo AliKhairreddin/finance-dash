@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getFunctionName } from "convex/server";
 import * as topUps from "../convex/topUps";
 import { validateTopUpInput, topUpMessage, topUpTransition } from "../shared/topUps";
 import { dashboardPageAllowed, dashboardHomePage, topUpReviewerCanAccess } from "../shared/dashboardAccess";
@@ -64,6 +65,23 @@ test("request creation deduplicates submissions and leaves providers and financi
   const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
   const repeat = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" }); assert.equal(repeat._id, r._id); assert.equal((db.tables.get("topUpRequests") ?? []).length, 1);
   assert.equal((await db.ctx.db.get("state")).providers.length, 0); assert.equal((await db.ctx.db.get("state")).expenses.length, 0); assert.equal(db.scheduled.length, 1);
+});
+test("Revolut requests queue an unsent draft on approval; card and crypto payments do not", async () => {
+  for (const paymentMethod of ["Revolut", "Bank Transfer", "", "Card", "Crypto"]) {
+    const db = setup();
+    const saved = await db.run(topUps.create, { ...auth, input: { ...input(), paymentMethod }, documentId: "doc" });
+    const approved = await db.run(topUps.transition, { ...auth, id: saved._id, version: 1, action: "approve", actor: "Ali M" });
+    const shouldDraft = ["Revolut", "Bank Transfer", ""].includes(paymentMethod);
+    assert.equal(approved.draftStatus, shouldDraft ? "queued" : "not_applicable");
+    assert.equal(db.scheduled.filter((job: any) => getFunctionName(job[1]) === "topUpProcessing:draft").length, shouldDraft ? 1 : 0);
+    assert.equal(approved.amount, saved.amount);
+    assert.deepEqual((await db.ctx.db.get("state")).paymentAllocations, []);
+  }
+});
+test("new requests reject the removed Wise payment method with a specific error", async () => {
+  const db = setup();
+  await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), paymentMethod: "Wise" }, documentId: "doc" }), /Select a payment method: Revolut/);
+  assert.equal(db.tables.get("topUpRequests"), undefined);
 });
 test("approval creates a new supplier once; version checks reject duplicate approvals, old buttons, and edits after approval", async () => {
   const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });

@@ -56,6 +56,7 @@ export const transition = mutation({
   args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), action: v.union(v.literal("approve"), v.literal("adjust"), v.literal("paid")), actor: v.string(), amount: v.optional(v.number()) }, returns: topUpRecord,
   handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.version !== a.version) throw new ConvexError("This request has changed. Refresh before acting.");
     const status = topUpTransition(r.status, a.action, r.draftStatus); const amount = a.action === "adjust" ? a.amount : r.amount;
+    const prepareDraft = !isCryptoTopUp(r.currency) && ["Revolut", "Bank Transfer", ""].includes(r.paymentMethod);
     try { validateTopUpAmount(amount, r.currency); } catch (error) { throw new ConvexError((error as Error).message); }
     if (amount === undefined) throw new ConvexError("Enter an amount");
     let providerId = r.providerId;
@@ -67,10 +68,10 @@ export const transition = mutation({
     }
     const at = now(); const version = r.version + 1;
     await ctx.db.patch(r._id, { status, amount, providerId, version, updatedAt: at, adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined,
-      ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: !isCryptoTopUp(r.currency) && (r.paymentMethod === "Bank Transfer" || r.paymentMethod === "") ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
+      ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: prepareDraft ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
       events: [...r.events, { at, actor: a.actor, action: a.action, amount }].slice(-200), notificationError: undefined });
     await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
-    if (a.action === "approve" && !isCryptoTopUp(r.currency) && (r.paymentMethod === "Bank Transfer" || !r.paymentMethod)) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
+    if (a.action === "approve" && prepareDraft) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
     return (await ctx.db.get(r._id))!;
   }
 });

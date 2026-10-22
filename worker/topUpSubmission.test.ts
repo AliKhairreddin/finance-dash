@@ -7,7 +7,7 @@ const details = {
   submissionId: "12345678-1234-1234-1234-123456789abc", entity: "dn", priority: "Normal",
   companyName: "Test supplier", commission: "3%", team: "Cognitive", member: "Test member",
   amount: 2000, currency: "USD", openBalance: -20, lastThreeDaysSpend: 0, expectedThreeDaysSpend: 1000,
-  paymentMethod: "Wise", wiseLink: "", notes: "", bmNames: [], accountNames: []
+  paymentMethod: "Revolut", wiseLink: "", notes: "", bmNames: [], accountNames: []
 };
 function submission(input = details) {
   const body = new FormData();
