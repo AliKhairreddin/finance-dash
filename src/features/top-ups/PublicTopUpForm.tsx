@@ -46,7 +46,7 @@ export default function PublicTopUpForm() {
           {team === "Other" && <label className="topup-full">Specify Team Name <b>*</b><Input name="otherTeam" placeholder="Enter team name" maxLength={120} required /></label>}
         </div>
         <h2 className="topup-section">Amount &amp; Balance</h2><div className="topup-grid">
-          <label className="topup-full">Topup Amount + Currency <b>*</b><div className="topup-amount"><Input name="amount" type="number" min="0.01" step="0.01" max="1000000000" placeholder="e.g. 1000" required /><select name="currency" aria-label="Topup currency" required defaultValue=""><option value="" disabled>Currency</option>{topUpCurrencies.map(c => <option key={c}>{c}</option>)}</select></div></label>
+          <label className="topup-full">Topup Amount + Currency <b>*</b><div className="topup-amount"><Input name="amount" type="number" min="0.01" step="0.01" max="1000000000" placeholder="e.g. 1000" required /><select name="currency" aria-label="Topup currency" required defaultValue="USD">{topUpCurrencies.map(c => <option key={c}>{c}</option>)}</select></div></label>
           <label className="topup-balance topup-full">💰 Open Balance <b>*</b><Input name="openBalance" type="number" step="0.01" placeholder="Current balance before topup" required /></label>
           <label>Last three days spend (USD) <b>*</b><Input name="lastThreeDaysSpend" type="number" min="0" max="1000000000" step="0.01" placeholder="0.00" required /></label>
           <label>Expected spend — next three days (USD) <b>*</b><Input name="expectedThreeDaysSpend" type="number" min={topUpMinimumExpectedThreeDaysSpend} max="1000000000" step="0.01" placeholder="1000.00" required /></label>
