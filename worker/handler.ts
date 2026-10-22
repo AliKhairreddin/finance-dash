@@ -9032,7 +9032,8 @@ export default {
       return handleApi(request, env, executionContext);
     }
     if (["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname)) {
-      return env.ASSETS.fetch(new Request(new URL("/top-up.html", url), request));
+      // Use the canonical asset path; fetching top-up.html redirects back here.
+      return env.ASSETS.fetch(new Request(new URL("/top-up", url), request));
     }
     return env.ASSETS.fetch(request);
   },

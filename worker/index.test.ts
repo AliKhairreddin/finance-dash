@@ -1232,9 +1232,9 @@ test("manual media sync rejects overlapping imports and oversized ranges before 
 
 test("public top-up routes serve their isolated entry while dashboard assets remain protected", async () => {
   const paths: string[] = [];
-  const env = authenticatedEnv({ ASSETS: { async fetch(request: Request) { paths.push(new URL(request.url).pathname); return new Response("public form"); } } });
+  const env = authenticatedEnv({ ASSETS: { async fetch(request: Request) { const path = new URL(request.url).pathname; paths.push(path); return path === "/top-up.html" ? Response.redirect("https://finance.example/top-up", 307) : new Response("public form"); } } });
   for (const path of ["/top-up", "/payments"]) { const r = await worker.fetch(new Request(`https://finance.example${path}`), env); assert.equal(r.status, 200); }
-  assert.deepEqual(paths, ["/top-up.html", "/top-up.html"]);
+  assert.deepEqual(paths, ["/top-up", "/top-up"]);
   assert.equal((await worker.fetch(new Request("https://finance.example/top-up.html"), env)).status, 303);
 });
 test("Alaa's restricted role cannot reach dashboard, bank, settings or top-up action APIs", async () => {
