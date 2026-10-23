@@ -23,7 +23,7 @@ export interface TopUpRequest extends TopUpInput {
   status: TopUpStatus; version: number; createdAt: string; updatedAt: string;
   originalAmount: number; approvedBy?: string; paidBy?: string; deletedAt?: string; deletedBy?: string;
   events: { at: string; actor: string; action: string; amount: number }[];
-  notificationError?: string; draftStatus: string; draftError?: string; draftId?: string;
+  notificationError?: string; draftStatus: string; draftError?: string; draftWarning?: string; draftId?: string;
   paymentDetails?: TopUpPaymentDetails;
 }
 export interface TopUpPaymentDetails { payerEntity: "dn" | "lmd" | ""; beneficiary: string; iban: string; bic: string; bankCountry?: string; accountNumber?: string; routingNumber?: string; reference: string; amount: number | null; currency: string; notes: string }

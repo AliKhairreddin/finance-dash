@@ -54,34 +54,54 @@ export async function prepareTopUpDraft(env: WorkerEnv, id: Id<"topUpRequests">,
   const token = crypto.randomUUID(); if (!await convex.mutation(api.topUps.claimDraft, { ...auth, id, token })) throw new Error("A draft already exists, is running, or needs reconciliation in Revolut");
   const { review } = options;
   let details: TopUpPaymentDetails | undefined, writing = false;
+  const warnings = new Set<string>();
   try {
-    details = review ? validatePaymentDetails(review.details) : options.reextract || !r.paymentDetails ? await extract(env, r) : validatePaymentDetails(r.paymentDetails);
-    if (!details.beneficiary || !details.reference || details.reference.length > 100) throw new Error("Review the invoice beneficiary and payment reference (maximum 100 characters)");
-    const accountQuery = invoiceAccountQuery(details);
-    // Extraction is evidence, not permission to substitute another amount/currency.
-    if (!review?.reviewed) {
-      if (details.notes) throw new Error("Invoice extraction needs review. Verify its payment details in the dashboard.");
-      if (details.payerEntity !== r.entity) throw new Error("The invoice payer differs from the request's sending company. Review the invoice in the dashboard.");
-      if (details.currency !== r.currency) throw new Error("The invoice currency differs from the approved request. Review the invoice in the dashboard.");
-      if (details.amount === null) throw new Error("The invoice total could not be extracted. Review the invoice in the dashboard.");
-      if (Math.abs(details.amount - r.amount) > 0.009) throw new Error(`Invoice total ${details.amount.toLocaleString("en-US")} ${details.currency} differs from approved request ${r.amount.toLocaleString("en-US")} ${r.currency}. Review the amount in the dashboard before drafting.`);
+    if (review) details = validatePaymentDetails(review.details);
+    else {
+      try { details = options.reextract || !r.paymentDetails ? await extract(env, r) : validatePaymentDetails(r.paymentDetails); }
+      catch { warnings.add("Invoice could not be read. Check the recipient and payment reference before sending."); }
     }
+    // Approval authorizes the request amount and funding company, independently of invoice totals.
+    if (details && (details.notes || details.payerEntity !== r.entity || details.currency !== r.currency)) warnings.add("Check the extracted invoice details before sending.");
+    const reference = details?.reference.slice(0, 100) || `Top-up #${r.number}`;
+    if (!details?.reference) warnings.add("Payment reference uses the request number. Check it before sending.");
     const accountId = review?.sourceAccountId || (r.entity === "dn" ? env.TOPUP_REVOLUT_DN_ACCOUNT_ID : env.TOPUP_REVOLUT_LMD_ACCOUNT_ID);
-    if (!accountId) throw new Error(`Select and verify the ${r.entity === "dn" ? "Digital Nudge" : "LoveMeDo"} funding account in the draft review`);
-    const bank = await draftApi(env); const accounts = await bank.accounts();
+    if (!accountId) throw new Error(`Select the ${r.entity === "dn" ? "Digital Nudge" : "LoveMeDo"} funding account in the draft review`);
+    const bank = await draftApi(env), accounts = await bank.accounts();
     if (!Array.isArray(accounts) || !accounts.some(a => a.id === accountId && a.currency === r.currency && a.state === "active")) throw new Error("Select an active Revolut funding account in the request currency");
-    const counterparties = await bank.counterparties(accountQuery);
-    const candidates = counterparties.filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a =>
-      a.currency === r.currency && ("iban" in accountQuery ? a.iban?.replace(/\s/g, "").toUpperCase() === accountQuery.iban
-        : a.account_no?.replace(/[\s-]/g, "") === accountQuery.account_no && a.routing_number?.replace(/[\s-]/g, "") === details!.routingNumber && a.bank_country === "US")
-    ).map(a => ({ counterparty: c, account: a })));
-    if (candidates.length !== 1) throw new Error(`Add or verify this invoice beneficiary in Revolut first. Exactly one saved recipient must match its ${"iban" in accountQuery ? "IBAN" : "US account and routing numbers"} and currency.`);
+    type Counterparty = Awaited<ReturnType<typeof bank.counterparties>>[number];
+    type Recipient = { counterparty: Counterparty; account: NonNullable<Counterparty["accounts"]>[number] };
+    let candidates: Recipient[] = [];
+    const normalizeName = (value: string) => value.normalize("NFKD").toLocaleLowerCase("en-US").replace(/[^\p{L}\p{N}]/gu, "");
+    let accountQuery: ReturnType<typeof invoiceAccountQuery> | undefined;
+    if (details) { try { accountQuery = invoiceAccountQuery(details); } catch { /* Saved recipient names can identify an account without invoice bank details. */ } }
+    if (accountQuery) {
+      const query = accountQuery;
+      candidates = (await bank.counterparties(query)).filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a =>
+        a.currency === r.currency && ("iban" in query ? a.iban?.replace(/\s/g, "").toUpperCase() === query.iban
+          : a.account_no?.replace(/[\s-]/g, "") === query.account_no && a.routing_number?.replace(/[\s-]/g, "") === details!.routingNumber && a.bank_country === "US")
+      ).map(a => ({ counterparty: c, account: a })));
+    }
+    if (candidates.length !== 1) {
+      const names = [...new Set([r.companyName, details?.beneficiary ?? ""].map(value => value.trim()).filter(value => normalizeName(value)))];
+      const matches = new Map<string, Recipient>();
+      for (const name of names) {
+        const expectedName = normalizeName(name);
+        const rows = await bank.counterparties({ name });
+        for (const c of rows.filter(c => c.state === "created")) for (const a of c.accounts ?? []) {
+          if (a.currency === r.currency && [c.name, a.name ?? ""].some(value => normalizeName(value) === expectedName)) matches.set(`${c.id}:${a.id}`, { counterparty: c, account: a });
+        }
+      }
+      candidates = [...matches.values()];
+      warnings.add("Recipient selected by saved Revolut name. Check its bank details before sending.");
+    }
+    if (candidates.length !== 1) throw new Error(candidates.length ? "Multiple saved Revolut recipient accounts match. Select the correct bank account in the draft review." : "Revolut requires a recipient. Add the recipient in Revolut or correct its bank details in the draft review, then retry.");
     const recipient = candidates[0];
-    const normalized = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!review?.reviewed && (!normalized(details.beneficiary) || ![recipient.counterparty.name, recipient.account.name ?? ""].some(name => normalized(name) === normalized(details!.beneficiary)))) throw new Error("The saved Revolut beneficiary name differs from the invoice. Review before drafting.");
+    if (details?.beneficiary && ![recipient.counterparty.name, recipient.account.name ?? ""].some(name => normalizeName(name) === normalizeName(details!.beneficiary))) warnings.add("Check the beneficiary name against the invoice before sending.");
+    const warning = [...warnings].join(" ").slice(0, 500);
     writing = true;
-    const result = await bank.create({ title: `Top-up #${r.number} · ${r.companyName}`.slice(0, 100), accountId, counterpartyId: recipient.counterparty.id, recipientAccountId: recipient.account.id, amount: r.amount, currency: r.currency, reference: details.reference });
-    await convex.mutation(api.topUps.draftResult, { ...auth, id, token, status: "created", draftId: result.id, details });
+    const result = await bank.create({ title: `Top-up #${r.number} · ${warning ? "Review details · " : ""}${r.companyName}`.slice(0, 100), accountId, counterpartyId: recipient.counterparty.id, recipientAccountId: recipient.account.id, amount: r.amount, currency: r.currency, reference });
+    await convex.mutation(api.topUps.draftResult, { ...auth, id, token, status: "created", draftId: result.id, ...(details ? { details } : {}), ...(warning ? { warning } : {}) });
   } catch (e) {
     await convex.mutation(api.topUps.draftResult, { ...auth, id, token, status: writing && !(e instanceof RevolutDraftRejectedError) ? "uncertain" : "needs_review", error: e instanceof Error ? e.message : "Draft preparation failed", ...(details ? { details } : {}) });
   }

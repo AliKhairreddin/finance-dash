@@ -8,7 +8,7 @@ const privateKeyPem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privat
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service", TOPUP_REVOLUT_DN_ACCOUNT_ID: "source-usd", REVOLUT_CLIENT_ID: "client", REVOLUT_ISSUER: "finance.test", REVOLUT_PRIVATE_KEY_PEM: privateKeyPem, REVOLUT_REFRESH_TOKEN: "refresh", OPENROUTER_API_KEY: "test-key", DOCUMENT_AI_MODEL: "test-model", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
 const details: TopUpPaymentDetails = { payerEntity: "dn", beneficiary: "Example Supplier LLC", iban: "", bic: "", bankCountry: "US", accountNumber: "00123456789", routingNumber: "021000021", reference: "INV-123", amount: 100, currency: "USD", notes: "" };
 const recipient = { id: "supplier", name: "Example Supplier LLC", state: "created", accounts: [{ id: "supplier-usd", account_no: details.accountNumber, routing_number: details.routingNumber, bank_country: "US", currency: "USD" }] };
-async function mocked(run: (state: { request: any; calls: { url: string; body: any; method?: string }[] }) => Promise<void>, options: { request?: Record<string, unknown>; recipients?: unknown[]; accounts?: unknown[]; createStatus?: number; extracted?: unknown } = {}) {
+async function mocked(run: (state: { request: any; calls: { url: string; body: any; method?: string }[] }) => Promise<void>, options: { request?: Record<string, unknown>; recipients?: unknown[]; accounts?: unknown[]; createStatus?: number; extractionStatus?: number; extracted?: unknown } = {}) {
   const original = globalThis.fetch;
   const request: any = { _id: "request-123", number: 3, status: "approved", draftStatus: "needs_review", currency: "USD", entity: "dn", amount: 100, companyName: "Example Supplier", documentId: "doc", contentType: "application/pdf", fileName: "invoice.pdf", paymentDetails: details, ...options.request };
   const calls: { url: string; body: any; method?: string }[] = [];
@@ -20,12 +20,12 @@ async function mocked(run: (state: { request: any; calls: { url: string; body: a
       if (body.path === "topUps:get") value = request;
       else if (body.path === "documents:get") value = { url: "https://storage.test/invoice" };
       else if (body.path === "topUps:claimDraft") { value = ["queued", "needs_review", "failed"].includes(request.draftStatus); if (value) { request.draftStatus = "creating"; request.draftAttempt = args.token; } }
-      else if (body.path === "topUps:draftResult") { assert.equal(args.token, request.draftAttempt); Object.assign(request, { draftStatus: args.status, draftError: args.error, draftId: args.draftId, paymentDetails: args.details }); }
+      else if (body.path === "topUps:draftResult") { assert.equal(args.token, request.draftAttempt); Object.assign(request, { draftStatus: args.status, draftError: args.error, draftWarning: args.warning, draftId: args.draftId, paymentDetails: args.details }); }
       else throw new Error(`Unexpected Convex operation ${body.path}`);
       return Response.json({ status: "success", value });
     }
     if (url === "https://storage.test/invoice") return new Response("%PDF-1.4 invoice fixture", { headers: { "Content-Type": "application/pdf" } });
-    if (url === "https://openrouter.ai/api/v1/chat/completions") return Response.json({ choices: [{ message: { content: JSON.stringify(options.extracted ?? details) } }] });
+    if (url === "https://openrouter.ai/api/v1/chat/completions") return Response.json({ choices: [{ message: { content: JSON.stringify(options.extracted ?? details) } }] }, { status: options.extractionStatus ?? 200 });
     if (url.endsWith("/auth/token")) return Response.json({ access_token: "access" });
     if (url.endsWith("/accounts")) return Response.json(options.accounts ?? [{ id: "source-usd", name: "Main", currency: "USD", state: "active" }]);
     if (url.includes("/counterparties?")) return Response.json(options.recipients ?? [recipient]);
@@ -62,21 +62,71 @@ test("IBAN invoices still match the exact saved currency account", async () => {
     recipients: [{ ...recipient, accounts: [{ id: "supplier-usd", iban: "BE68539007547034", currency: "USD" }] }]
   });
 });
-test("missing, ambiguous, or mismatched saved US accounts stop before any draft write", async () => {
-  for (const recipients of [[], [recipient, recipient], ...[{ routing_number: "123456789" }, { account_no: "999999" }, { bank_country: "CA" }, { currency: "EUR" }].map(change => [{ ...recipient, accounts: [{ ...recipient.accounts[0], ...change }] }])]) {
+test("a missing or ambiguous recipient still reports Revolut's required account details", async () => {
+  for (const recipients of [[], [recipient, { ...recipient, id: "supplier-two" }], [{ ...recipient, accounts: [{ ...recipient.accounts[0], currency: "EUR" }] }]]) {
     await mocked(async ({ request, calls }) => {
-      await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "needs_review"); assert.match(request.draftError, /Exactly one saved recipient/); assert.equal(writes(calls).length, 0);
+      await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "needs_review");
+      assert.match(request.draftError, /Revolut requires a recipient|Multiple saved Revolut recipient accounts/); assert.equal(writes(calls).length, 0);
     }, { recipients });
   }
 });
-test("invoice mismatches, recipient names and inactive funding accounts require review", async () => {
+test("approval creates a draft despite invoice payer, currency, name or extraction warnings", async () => {
   for (const options of [
-    { request: { paymentDetails: { ...details, amount: 99 } } },
     { request: { paymentDetails: { ...details, payerEntity: "lmd" } } },
+    { request: { paymentDetails: { ...details, currency: "EUR" } } },
     { request: { paymentDetails: { ...details, notes: "Ambiguous beneficiary" } } },
-    { recipients: [{ ...recipient, name: "Different beneficiary" }] },
-    { accounts: [{ id: "source-usd", currency: "USD", state: "inactive" }] }
-  ]) await mocked(async ({ request, calls }) => { await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "needs_review"); assert.equal(writes(calls).length, 0); }, options);
+    { recipients: [{ ...recipient, name: "Different beneficiary" }] }
+  ]) await mocked(async ({ request, calls }) => {
+    await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "created"); assert.ok(request.draftWarning);
+    assert.equal(writes(calls).length, 1); assert.equal(calls.find(c => c.url.endsWith("/payment-drafts"))!.body.payments[0].amount, request.amount);
+  }, options);
+});
+test("inactive funding accounts are reported before attempting a draft", async () => {
+  await mocked(async ({ request, calls }) => { await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "needs_review"); assert.match(request.draftError, /active Revolut funding account/); assert.equal(writes(calls).length, 0); }, { accounts: [{ id: "source-usd", currency: "USD", state: "inactive" }] });
+});
+test("saved recipient names allow drafting when invoice account details are missing or unmatched", async () => {
+  for (const bankDetails of [{ iban: "", accountNumber: "", routingNumber: "" }, { ...details, accountNumber: "999999" }, { ...details, routingNumber: "021000022" }]) {
+    await mocked(async ({ request, calls }) => {
+      await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "created"); assert.match(request.draftWarning, /Recipient selected by saved Revolut name/);
+      const searches = calls.filter(c => c.url.includes("/counterparties?")); assert.ok(searches.some(c => new URL(c.url).searchParams.has("name")));
+      assert.equal(calls.find(c => c.url.endsWith("/payment-drafts"))!.body.payments[0].receiver.account_id, "supplier-usd");
+    }, { request: { paymentDetails: { ...details, ...bankDetails } } });
+  }
+});
+test("a failed or unavailable invoice extraction still drafts for an exact saved request recipient", async () => {
+  for (const requestDetails of [undefined, { ...details, iban: "", accountNumber: "", routingNumber: "", reference: "" }]) await mocked(async ({ request, calls }) => {
+    await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "created");
+    const draft = calls.find(c => c.url.endsWith("/payment-drafts"))!.body;
+    assert.equal(draft.payments[0].reference, "Top-up #3"); assert.equal(draft.payments[0].receiver.counterparty_id, recipient.id);
+    assert.equal(draft.payments[0].amount, 100000); assert.match(draft.title, /Review details/);
+    assert.match(request.draftWarning, /Check|check/); assert.equal(writes(calls).length, 1);
+  }, { request: { amount: 100000, companyName: details.beneficiary, paymentDetails: requestDetails }, extractionStatus: 503 });
+});
+test("recipient matching rejects partial names and deduplicates the same account across exact searches", async () => {
+  await mocked(async ({ request, calls }) => {
+    await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "needs_review"); assert.equal(writes(calls).length, 0);
+  }, { request: { companyName: "Example", paymentDetails: undefined }, extractionStatus: 503 });
+  await mocked(async ({ request }) => {
+    await prepareTopUpDraft(env, request._id); assert.equal(request.draftStatus, "created");
+  }, { request: { companyName: "Example Supplier L.L.C.", paymentDetails: { ...details, accountNumber: "", routingNumber: "" } } });
+});
+test("unapproved, paid, deleted and crypto requests never reach a draft write", async () => {
+  for (const change of [{ status: "pending" }, { status: "paid" }, { deletedAt: "2026-10-22T20:00:00Z" }, { currency: "USDC" }]) await mocked(async ({ request, calls }) => {
+    await assert.rejects(prepareTopUpDraft(env, request._id)); assert.equal(writes(calls).length, 0); assert.equal(calls.filter(c => c.url.includes("revolut.com")).length, 0);
+  }, { request: change });
+});
+test("approval alone authorizes the request amount even if the invoice total differs or is missing", async () => {
+  for (const invoiceAmount of [26261.04, 100000.01, 200000, null]) {
+    await mocked(async ({ request, calls }) => {
+      await prepareTopUpDraft(env, request._id);
+      assert.equal(request.draftStatus, "created"); assert.equal(request.draftError, undefined);
+      const draft = calls.find(c => c.url.endsWith("/payment-drafts"))!.body;
+      assert.equal(draft.payments[0].amount, 100000);
+      assert.equal(draft.payments[0].currency, "USD");
+      assert.equal(request.paymentDetails.amount, invoiceAmount);
+      assert.equal(writes(calls).length, 1);
+    }, { request: { amount: 100000, draftStatus: "queued", approvedBy: "Ali M", paymentDetails: { ...details, amount: invoiceAmount } } });
+  }
 });
 test("explicit invoice review uses the approved amount and verified account rather than replacing it with invoice total", async () => {
   await mocked(async ({ request, calls }) => {

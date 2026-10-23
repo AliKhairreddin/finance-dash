@@ -220,3 +220,13 @@ test("a Telegram unchanged-message response is successful and never triggers a n
   try { await sendTopUpNotification(env, id as never, 1); assert.deepEqual(methods, ["editMessageText"]); }
   finally { globalThis.fetch = original; }
 });
+
+test("a created draft's review warning stays on the original request message", async () => {
+  await mocked(async calls => {
+    await sendTopUpNotification(env, id as never, 2);
+    const edit = calls.find(c => c.path === "editMessageText")!.body;
+    assert.match(edit.text, /Ready in Transfers → Drafts/);
+    assert.match(edit.text, /⚠️ Check recipient &amp; reference before sending/);
+    assert.equal(edit.message_id, 7); assert.equal(calls.filter(c => c.path === "sendMessage").length, 0);
+  }, { ...pending, version: 2, status: "approved", draftStatus: "created", draftWarning: "Check recipient & reference before sending" });
+});

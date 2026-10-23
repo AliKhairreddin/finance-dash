@@ -275,9 +275,9 @@ test("draft results queue an in-place status update and cannot be applied twice"
   const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
   await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Ali" });
   await db.run(topUps.claimDraft, { ...auth, id: r._id, token: "draft" });
-  await db.run(topUps.draftResult, { ...auth, id: r._id, token: "draft", status: "created", draftId: "revolut-id" });
+  await db.run(topUps.draftResult, { ...auth, id: r._id, token: "draft", status: "created", draftId: "revolut-id", warning: "Check recipient before sending" });
   await db.run(topUps.draftResult, { ...auth, id: r._id, token: "draft", status: "needs_review", error: "late response" });
-  const saved = await db.ctx.db.get(r._id); assert.equal(saved.version, 3); assert.equal(saved.draftStatus, "created");
+  const saved = await db.ctx.db.get(r._id); assert.equal(saved.version, 3); assert.equal(saved.draftStatus, "created"); assert.equal(saved.draftWarning, "Check recipient before sending");
   assert.ok(db.tables.get("topUpDeliveries")!.some(d => d.version === 3));
 });
 

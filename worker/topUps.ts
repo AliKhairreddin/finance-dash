@@ -77,7 +77,7 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
   const adjustment = r.status === "pending" && r.adjustPromptId && (r.adjustExpiresAt ?? 0) > Date.now()
     ? `\n\n✏️ <a href="tg://user?id=${r.adjustUserId}">Adjusting amount</a>: reply to this request with the new amount in ${r.currency} within 10 minutes.${r.adjustError ? `\n${escape(r.adjustError)}` : ""}` : "";
   const draft = r.status === "approved" && !isCryptoTopUp(r.currency) && r.draftStatus !== "not_applicable"
-    ? `\n\n🏦 Revolut draft: ${r.draftStatus === "created" ? "Ready in Transfers → Drafts" : r.draftStatus === "needs_review" ? "Needs review" : r.draftStatus.replaceAll("_", " ")}${r.draftError ? `\n${escape(r.draftError)}` : ""}` : "";
+    ? `\n\n🏦 Revolut draft: ${r.draftStatus === "created" ? "Ready in Transfers → Drafts" : r.draftStatus === "needs_review" ? "Needs review" : r.draftStatus.replaceAll("_", " ")}${r.draftError ? `\n${escape(r.draftError)}` : ""}${r.draftWarning ? `\n⚠️ ${escape(r.draftWarning)}` : ""}` : "";
   const payload = { chat_id: group(env), text: `${escaped.replace(/📎 View Invoice: [^\n]+/, `📎 <a href="${link.replace(/&/g, "&amp;")}">View Invoice (${r.contentType === "application/pdf" ? "pdf link" : "file link"})</a>`)}${mention}${draft}${adjustment}`, parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: buttons } };
   let messageId = r.telegramMessageId;
   if (messageId) await telegramApi(env, "editMessageText", { ...payload, message_id: messageId });
