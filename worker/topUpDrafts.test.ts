@@ -48,7 +48,8 @@ test("an exact saved US recipient creates one unsent draft from Main USD with th
     await prepareTopUpDraft(env, request._id);
     assert.equal(request.draftStatus, "created"); assert.equal(request.draftId, "draft-3");
     const lookup = new URL(calls.find(c => c.url.includes("/counterparties?"))!.url);
-    assert.equal(lookup.searchParams.get("account_no"), details.accountNumber); assert.equal(lookup.searchParams.has("iban"), false);
+    assert.equal(lookup.searchParams.has("account_no"), false); assert.equal(lookup.searchParams.has("iban"), false); assert.ok(lookup.searchParams.get("name"));
+    assert.ok(calls.filter(c => c.url.includes("/counterparties?")).every(c => !new URL(c.url).searchParams.has("account_no")));
     assert.deepEqual(writes(calls).map(c => new URL(c.url).pathname), ["/api/1.0/payment-drafts"]);
     assert.deepEqual(writes(calls)[0] && calls.find(c => c.url.endsWith("/payment-drafts"))!.body, { title: "Top-up #3 · Example Supplier", payments: [{ account_id: "source-usd", receiver: { counterparty_id: "supplier", account_id: "supplier-usd" }, amount: 100, currency: "USD", reference: "INV-123" }] });
     assert.equal(calls.filter(c => c.url.includes("openrouter.ai")).length, 0);

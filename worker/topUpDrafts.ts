@@ -73,26 +73,29 @@ export async function prepareTopUpDraft(env: WorkerEnv, id: Id<"topUpRequests">,
     type Recipient = { counterparty: Counterparty; account: NonNullable<Counterparty["accounts"]>[number] };
     let candidates: Recipient[] = [];
     const normalizeName = (value: string) => value.normalize("NFKD").toLocaleLowerCase("en-US").replace(/[^\p{L}\p{N}]/gu, "");
+    const names = [...new Map([r.companyName, details?.beneficiary ?? ""].map(value => value.trim()).filter(value => normalizeName(value)).map(value => [normalizeName(value), value])).values()];
+    let namedRecipients: Recipient[] | undefined;
+    const loadNamedRecipients = async () => {
+      if (namedRecipients) return namedRecipients;
+      const matches = new Map<string, Recipient>();
+      for (const name of names) for (const c of (await bank.counterparties({ name })).filter(c => c.state === "created")) for (const a of c.accounts ?? []) {
+        if (a.currency === r.currency) matches.set(`${c.id}:${a.id}`, { counterparty: c, account: a });
+      }
+      namedRecipients = [...matches.values()]; return namedRecipients;
+    };
     let accountQuery: ReturnType<typeof invoiceAccountQuery> | undefined;
     if (details) { try { accountQuery = invoiceAccountQuery(details); } catch { /* Saved recipient names can identify an account without invoice bank details. */ } }
-    if (accountQuery) {
+    if (accountQuery && "iban" in accountQuery) {
       const query = accountQuery;
-      candidates = (await bank.counterparties(query)).filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a =>
-        a.currency === r.currency && ("iban" in query ? a.iban?.replace(/\s/g, "").toUpperCase() === query.iban
-          : a.account_no?.replace(/[\s-]/g, "") === query.account_no && a.routing_number?.replace(/[\s-]/g, "") === details!.routingNumber && a.bank_country === "US")
-      ).map(a => ({ counterparty: c, account: a })));
+      candidates = (await bank.counterparties(query)).filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a => a.currency === r.currency && a.iban?.replace(/\s/g, "").toUpperCase() === query.iban).map(a => ({ counterparty: c, account: a })));
+    } else if (accountQuery) {
+      // Revolut's account_no search accepts GB account numbers only. Match US identifiers in named results.
+      const query = accountQuery;
+      candidates = (await loadNamedRecipients()).filter(({ account: a }) => a.account_no?.replace(/[\s-]/g, "") === query.account_no && a.routing_number?.replace(/[\s-]/g, "") === details!.routingNumber && a.bank_country === "US");
     }
     if (candidates.length !== 1) {
-      const names = [...new Set([r.companyName, details?.beneficiary ?? ""].map(value => value.trim()).filter(value => normalizeName(value)))];
-      const matches = new Map<string, Recipient>();
-      for (const name of names) {
-        const expectedName = normalizeName(name);
-        const rows = await bank.counterparties({ name });
-        for (const c of rows.filter(c => c.state === "created")) for (const a of c.accounts ?? []) {
-          if (a.currency === r.currency && [c.name, a.name ?? ""].some(value => normalizeName(value) === expectedName)) matches.set(`${c.id}:${a.id}`, { counterparty: c, account: a });
-        }
-      }
-      candidates = [...matches.values()];
+      const expectedNames = new Set(names.map(normalizeName));
+      candidates = (await loadNamedRecipients()).filter(({ counterparty: c, account: a }) => [c.name, a.name ?? ""].some(value => expectedNames.has(normalizeName(value))));
       warnings.add("Recipient selected by saved Revolut name. Check its bank details before sending.");
     }
     if (candidates.length !== 1) throw new Error(candidates.length ? "Multiple saved Revolut recipient accounts match. Select the correct bank account in the draft review." : "Revolut requires a recipient. Add the recipient in Revolut or correct its bank details in the draft review, then retry.");
