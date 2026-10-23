@@ -639,6 +639,8 @@ async function boundedErrorText(response: Response): Promise<string> {
   return text.replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
+export class RevolutApiError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+
 async function fetchRevolutJson<T>(fetcher: typeof fetch, url: string, init: RequestInit): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const response = await fetchBankProvider(fetcher, url, init, {
@@ -647,7 +649,7 @@ async function fetchRevolutJson<T>(fetcher: typeof fetch, url: string, init: Req
   });
   if (!response.ok) {
     const detail = await boundedErrorText(response);
-    throw new Error(
+    throw new RevolutApiError(response.status,
       `Revolut API request failed (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`
     );
   }

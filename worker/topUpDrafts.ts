@@ -2,7 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { isCryptoTopUp, type TopUpPaymentDetails, type TopUpRequest } from "../shared/topUps";
-import { revolutDraftApi, RevolutDraftRejectedError } from "../shared/revolutApi";
+import { revolutDraftApi, RevolutDraftRejectedError, RevolutApiError } from "../shared/revolutApi";
 import { boundedBytes } from "./documentIntake";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { documentMaximumBytes } from "../shared/financialDocuments";
@@ -87,18 +87,32 @@ export async function prepareTopUpDraft(env: WorkerEnv, id: Id<"topUpRequests">,
     if (details) { try { accountQuery = invoiceAccountQuery(details); } catch { /* Saved recipient names can identify an account without invoice bank details. */ } }
     if (accountQuery && "iban" in accountQuery) {
       const query = accountQuery;
-      candidates = (await bank.counterparties(query)).filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a => a.currency === r.currency && a.iban?.replace(/\s/g, "").toUpperCase() === query.iban).map(a => ({ counterparty: c, account: a })));
+      try { candidates = (await bank.counterparties(query)).filter(c => c.state === "created").flatMap(c => (c.accounts ?? []).filter(a => a.currency === r.currency && a.iban?.replace(/\s/g, "").toUpperCase() === query.iban).map(a => ({ counterparty: c, account: a }))); }
+      catch (error) {
+        if (!(error instanceof RevolutApiError) || error.status !== 400) throw error;
+        warnings.add("Invoice bank search was rejected. Check the selected recipient before sending.");
+      }
     } else if (accountQuery) {
       // Revolut's account_no search accepts GB account numbers only. Match US identifiers in named results.
       const query = accountQuery;
       candidates = (await loadNamedRecipients()).filter(({ account: a }) => a.account_no?.replace(/[\s-]/g, "") === query.account_no && a.routing_number?.replace(/[\s-]/g, "") === details!.routingNumber && a.bank_country === "US");
     }
-    if (candidates.length !== 1) {
-      const expectedNames = new Set(names.map(normalizeName));
-      candidates = (await loadNamedRecipients()).filter(({ counterparty: c, account: a }) => [c.name, a.name ?? ""].some(value => expectedNames.has(normalizeName(value))));
+    if (!candidates.length) {
+      const expectedNames = names.map(normalizeName);
+      candidates = (await loadNamedRecipients()).filter(({ counterparty: c, account: a }) => [c.name, a.name ?? ""].some(value => expectedNames.some(expected => normalizeName(value) === expected || expected.length >= 3 && normalizeName(value).includes(expected))));
       warnings.add("Recipient selected by saved Revolut name. Check its bank details before sending.");
     }
-    if (candidates.length !== 1) throw new Error(candidates.length ? "Multiple saved Revolut recipient accounts match. Select the correct bank account in the draft review." : "Revolut requires a recipient. Add the recipient in Revolut or correct its bank details in the draft review, then retry.");
+    if (!candidates.length) throw new Error("Revolut requires a recipient. Add the recipient in Revolut or correct its bank details in the draft review, then retry.");
+    if (candidates.length > 1) {
+      const score = ({ counterparty: c, account: a }: Recipient) =>
+        (details?.iban && a.iban?.replace(/\s/g, "").toUpperCase() === details.iban ? 100 : 0) +
+        (details?.accountNumber && a.account_no?.replace(/[\s-]/g, "") === details.accountNumber ? 80 : 0) +
+        (details?.routingNumber && a.routing_number?.replace(/[\s-]/g, "") === details.routingNumber ? 20 : 0) +
+        ([c.name, a.name ?? ""].some(name => normalizeName(name) === normalizeName(r.companyName)) ? 10 : 0) +
+        (details?.beneficiary && [c.name, a.name ?? ""].some(name => normalizeName(name) === normalizeName(details!.beneficiary)) ? 5 : 0);
+      candidates.sort((a, b) => score(b) - score(a));
+      warnings.add("Multiple saved accounts matched. Verify the selected bank account in Revolut before sending.");
+    }
     const recipient = candidates[0];
     if (details?.beneficiary && ![recipient.counterparty.name, recipient.account.name ?? ""].some(name => normalizeName(name) === normalizeName(details!.beneficiary))) warnings.add("Check the beneficiary name against the invoice before sending.");
     const warning = [...warnings].join(" ").slice(0, 500);
