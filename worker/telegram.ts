@@ -29,6 +29,8 @@ type TelegramEnv = Pick<
 };
 
 interface TelegramApiEnvelope {
+  error_code?: number;
+  description?: string;
   ok: boolean;
   result?: unknown;
 }
@@ -158,7 +160,7 @@ export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthU
 
 function telegramApiEnvelope(value: unknown): TelegramApiEnvelope | null {
   if (!isRecord(value) || typeof value.ok !== "boolean") return null;
-  return { ok: value.ok, ...(Object.hasOwn(value, "result") ? { result: value.result } : {}) };
+  return { ok: value.ok, ...(typeof value.error_code === "number" ? { error_code: value.error_code } : {}), ...(typeof value.description === "string" ? { description: value.description } : {}), ...(Object.hasOwn(value, "result") ? { result: value.result } : {}) };
 }
 
 async function readBoundedResponseJson(response: Response): Promise<unknown> {
@@ -223,6 +225,7 @@ export async function telegramApi(
     // Every Bot API response is expected to use Telegram's bounded JSON envelope.
   }
   if (!response.ok || !envelope?.ok) {
+    if (method.startsWith("editMessage") && envelope?.error_code === 400 && envelope.description?.startsWith("Bad Request: message is not modified")) return true;
     throw new Error(`Telegram ${method} request failed`);
   }
   return envelope.result;

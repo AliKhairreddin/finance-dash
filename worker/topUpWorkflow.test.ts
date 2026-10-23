@@ -143,7 +143,7 @@ test("interrupted draft reconciliation requires a checked result and preserves t
 
 test("deleting is recoverable, excludes active counts, invalidates actions and keeps invoice and ledger intact", async () => {
   const db = setup(), r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
-  await db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 1, promptId: 44, userId: "333" });
+  await db.ctx.db.patch(r._id, { telegramMessageId: 44, adjustPromptId: 44, adjustUserId: "333", adjustExpiresAt: Date.now() + 600_000 });
   const state = await db.ctx.db.get("state"), doc = await db.ctx.db.get("doc"); db.resetIo();
   const removed = await db.run(topUps.setDeleted, { ...auth, id: r._id, version: 1, deleted: true, actor: "Ali" });
   assert.equal(removed.deletedBy, "Ali"); assert.ok(removed.deletedAt); assert.equal(removed.version, 2); assert.equal(removed.events.at(-1).action, "deleted");
@@ -230,4 +230,65 @@ test("member suggestions come from the selected team's saved requests and omit d
   const row = db.tables.get("topUpRequests")![0];
   await db.run(topUps.setDeleted, { ...auth, id: row._id, version: 1, deleted: true, actor: "Ali" });
   assert.deepEqual((await db.run(topUps.options, { ...auth, search: "", team: "Cognitive" })).members, []);
+});
+
+
+test("card delivery is serialized across versions and an initial send ID survives a concurrent approval", async () => {
+  const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 1, token: "initial" }), true);
+  await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Ali" });
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 2, token: "approved" }), false);
+  assert.equal(db.tables.get("topUpDeliveries")!.find(d => d.version === 2)!.attempts, 0);
+  await db.run(topUps.saveMessage, { ...auth, id: r._id, version: 1, messageId: 99 });
+  assert.equal((await db.ctx.db.get(r._id)).telegramMessageId, 99);
+  await db.run(topUps.deliveryResult, { id: r._id, version: 1, token: "initial" });
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 2, token: "approved" }), true);
+  await db.run(topUps.saveMessage, { ...auth, id: r._id, version: 2, messageId: 99 });
+  await db.run(topUps.deliveryResult, { id: r._id, version: 2, token: "approved" });
+  await db.run(topUps.saveMessage, { ...auth, id: r._id, version: 1, messageId: 123 });
+  const saved = await db.ctx.db.get(r._id);
+  assert.equal(saved.telegramMessageId, 99); assert.equal(saved.telegramVersion, 2); assert.equal(saved.telegramDeliveryToken, undefined);
+});
+test("outdated deliveries cannot acquire a card and interrupted old leases release the latest version", async () => {
+  const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "adjust", amount: 200, actor: "Ali" });
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 1, token: "stale" }), false);
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 2, token: "current" }), true);
+  await db.run(topUps.transition, { ...auth, id: r._id, version: 2, action: "approve", actor: "Ali" });
+  await db.run(topUps.recoverDelivery, { id: r._id, version: 2, token: "wrong" });
+  assert.equal((await db.ctx.db.get(r._id)).telegramDeliveryToken, "current");
+  await db.run(topUps.recoverDelivery, { id: r._id, version: 2, token: "current" });
+  assert.equal(await db.run(topUps.claimDelivery, { id: r._id, version: 3, token: "new" }), true);
+});
+test("adjustment prompts update the existing card version and expire for the selected approver", async () => {
+  const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.ctx.db.patch(r._id, { telegramMessageId: 99 });
+  await assert.rejects(db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 1, promptId: 123, userId: "333" }), /changed/);
+  await db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 1, promptId: 99, userId: "333" });
+  const prompt = await db.ctx.db.get(r._id); assert.equal(prompt.version, 2); assert.ok(prompt.adjustExpiresAt > Date.now());
+  assert.equal((await db.run(topUps.findAdjustment, { ...auth, promptId: 99, userId: "333" }))._id, r._id);
+  assert.equal(await db.run(topUps.findAdjustment, { ...auth, promptId: 99, userId: "222" }), null);
+  await db.ctx.db.patch(r._id, { adjustExpiresAt: 0 });
+  assert.equal(await db.run(topUps.findAdjustment, { ...auth, promptId: 99, userId: "333" }), null);
+});
+test("draft results queue an in-place status update and cannot be applied twice", async () => {
+  const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.run(topUps.transition, { ...auth, id: r._id, version: 1, action: "approve", actor: "Ali" });
+  await db.run(topUps.claimDraft, { ...auth, id: r._id, token: "draft" });
+  await db.run(topUps.draftResult, { ...auth, id: r._id, token: "draft", status: "created", draftId: "revolut-id" });
+  await db.run(topUps.draftResult, { ...auth, id: r._id, token: "draft", status: "needs_review", error: "late response" });
+  const saved = await db.ctx.db.get(r._id); assert.equal(saved.version, 3); assert.equal(saved.draftStatus, "created");
+  assert.ok(db.tables.get("topUpDeliveries")!.some(d => d.version === 3));
+});
+
+test("an expired amount prompt clears instructions and updates the same card", async () => {
+  const db = setup(); const r = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  await db.ctx.db.patch(r._id, { telegramMessageId: 99 });
+  await db.run(topUps.adjustmentPrompt, { ...auth, id: r._id, version: 1, promptId: 99, userId: "333" });
+  await db.run(topUps.expireAdjustment, { id: r._id, version: 2 });
+  assert.equal((await db.ctx.db.get(r._id)).version, 2);
+  await db.ctx.db.patch(r._id, { adjustExpiresAt: 0 });
+  await db.run(topUps.expireAdjustment, { id: r._id, version: 2 });
+  const saved = await db.ctx.db.get(r._id); assert.equal(saved.version, 3); assert.equal(saved.adjustPromptId, undefined);
+  assert.equal(saved.telegramMessageId, 99); assert.ok(db.tables.get("topUpDeliveries")!.some(d => d.version === 3));
 });

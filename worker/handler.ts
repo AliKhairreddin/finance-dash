@@ -8995,9 +8995,9 @@ export default {
     if (new URL(request.url).pathname === "/api/internal/top-ups/process") {
       if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try {
-        const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { id: import("../convex/_generated/dataModel").Id<"topUpRequests">; version: number; job: string };
+        const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { id: import("../convex/_generated/dataModel").Id<"topUpRequests">; version: number; job: string; reextract?: boolean };
         if (body.job === "notification") await sendTopUpNotification(env, body.id, body.version);
-        else if (body.job === "draft") await prepareTopUpDraft(env, body.id);
+        else if (body.job === "draft") await prepareTopUpDraft(env, body.id, { reextract: body.reextract === true });
         else return json({ message: "Unknown job" }, { status: 400 });
         return json({ ok: true });
       } catch { return json({ message: "Top-up processing failed" }, { status: 502 }); }

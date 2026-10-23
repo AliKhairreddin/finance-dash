@@ -62,7 +62,10 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
   const r = current;
   if (!group(env)) throw new Error("Top-up Telegram group is not configured");
   if (r.deletedAt) {
-    if (r.telegramMessageId) await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: [] } });
+    if (r.telegramMessageId) {
+      await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: [] } });
+      await convex.mutation(api.topUps.saveMessage, { ...auth(env), id, version, messageId: r.telegramMessageId });
+    }
     return;
   }
   const person = r.status === "pending" ? telegramPerson(env, "Amin") : telegramPerson(env, "Ali M");
@@ -70,29 +73,40 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
   const link = r.documentId ? await invoiceLink(env, id) : "";
   const escaped = topUpMessage(r as TopUpRequest, link, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const buttons = r.deletedAt ? [] : r.status === "pending" ? [[{ text: "Approve", callback_data: `tu:approve:${id}:${version}` }, { text: "Adjust amount", callback_data: `tu:adjust:${id}:${version}` }]] : r.status === "approved" ? [[{ text: "Paid", callback_data: `tu:paid:${id}:${version}` }]] : [];
-  if (current.version === version && r.telegramMessageId) { try { await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: [] } }); } catch { /* The state/version check also rejects stale buttons. */ } }
-  const message = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `${escaped.replace(/📎 View Invoice: [^\n]+/, `📎 <a href="${link.replace(/&/g, "&amp;")}">View Invoice (${r.contentType === "application/pdf" ? "pdf link" : "file link"})</a>`)}${mention}`, parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: buttons } }) as { message_id: number };
-  await convex.mutation(api.topUps.saveMessage, { ...auth(env), id, version, messageId: message.message_id });
+  const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const adjustment = r.status === "pending" && r.adjustPromptId && (r.adjustExpiresAt ?? 0) > Date.now()
+    ? `\n\n✏️ <a href="tg://user?id=${r.adjustUserId}">Adjusting amount</a>: reply to this request with the new amount in ${r.currency} within 10 minutes.${r.adjustError ? `\n${escape(r.adjustError)}` : ""}` : "";
+  const draft = r.status === "approved" && !isCryptoTopUp(r.currency) && r.draftStatus !== "not_applicable"
+    ? `\n\n🏦 Revolut draft: ${r.draftStatus === "created" ? "Ready in Transfers → Drafts" : r.draftStatus === "needs_review" ? "Needs review" : r.draftStatus.replaceAll("_", " ")}${r.draftError ? `\n${escape(r.draftError)}` : ""}` : "";
+  const payload = { chat_id: group(env), text: `${escaped.replace(/📎 View Invoice: [^\n]+/, `📎 <a href="${link.replace(/&/g, "&amp;")}">View Invoice (${r.contentType === "application/pdf" ? "pdf link" : "file link"})</a>`)}${mention}${draft}${adjustment}`, parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: { inline_keyboard: buttons } };
+  let messageId = r.telegramMessageId;
+  if (messageId) await telegramApi(env, "editMessageText", { ...payload, message_id: messageId });
+  else {
+    const message = await telegramApi(env, "sendMessage", payload) as { message_id: number };
+    if (!Number.isSafeInteger(message?.message_id)) throw new Error("Telegram did not return a request message ID");
+    messageId = message.message_id;
+  }
+  await convex.mutation(api.topUps.saveMessage, { ...auth(env), id, version, messageId });
 }
 export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promise<boolean> {
   const update = value as { callback_query?: { id: string; data?: string; from: { id: number }; message?: { message_id: number; chat: { id: number } } }; message?: { chat: { id: number }; from?: { id: number }; text?: string; reply_to_message?: { message_id: number } } };
   const cb = update?.callback_query;
   if (cb?.data?.startsWith("tu:")) {
-    let message = "Request updated";
+    let message = "Request updated", failed = false;
     try {
       if (String(cb.message?.chat.id) !== group(env)) throw new Error("Use the Top-Up Request group");
       const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid"].includes(action)) throw new Error("Invalid action");
       const person = action === "paid" ? telegramPerson(env, "Ali M") : telegramTopUpApprover(env, String(cb.from.id));
       if (!person || String(cb.from.id) !== person.chatId) throw new Error(action === "paid" ? "Only Ali M can confirm payment for this request" : "Only Amin, Ali M or Ali can approve or adjust this request");
       const id = rawId as Id<"topUpRequests">, version = Number(rawVersion), convex = client(env); const r = await convex.query(api.topUps.get, { ...auth(env), id });
-      if (!r || r.deletedAt || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
+      if (!r || r.deletedAt || !r.telegramMessageId || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
       if (action === "adjust") {
         if (r.status !== "pending") throw new Error("Only pending requests can be adjusted");
-        const prompt = await telegramApi(env, "sendMessage", { chat_id: group(env), text: `${person.username}: reply to this message with the new amount for top-up #${r.number} in ${r.currency} (for example 20800.50). Expires in 10 minutes.`, reply_markup: { force_reply: true, input_field_placeholder: `Amount in ${r.currency}` } }) as { message_id: number };
-        await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id, version, promptId: prompt.message_id, userId: person.chatId }); message = "Reply to the amount prompt";
-      } else { await convex.mutation(api.topUps.transition, { ...auth(env), id, version, action: action as "approve" | "paid", actor: person.username }); message = action === "paid" ? "Marked paid in the dashboard" : "Approved. Ali M will receive the paid button."; }
-    } catch (e) { message = errorMessage(e, "Could not update this request").slice(0, 190); }
-    await telegramApi(env, "answerCallbackQuery", { callback_query_id: cb.id, text: message, show_alert: true }); return true;
+        await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id, version, promptId: r.telegramMessageId, userId: person.chatId });
+        message = `Reply to this request with the new amount in ${r.currency} within 10 minutes.`;
+      } else { await convex.mutation(api.topUps.transition, { ...auth(env), id, version, action: action as "approve" | "paid", actor: person.username }); message = action === "paid" ? "Marked paid in the dashboard" : "Approved. This request now has a Paid button for Ali M."; }
+    } catch (e) { failed = true; message = errorMessage(e, "Could not update this request").slice(0, 190); }
+    await telegramApi(env, "answerCallbackQuery", { callback_query_id: cb.id, text: message, show_alert: failed }); return true;
   }
   const m = update?.message;
   if (m && String(m.chat?.id) === group(env) && m.reply_to_message && m.from) {
@@ -100,7 +114,7 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
     const convex = client(env); const r = await convex.query(api.topUps.findAdjustment, { ...auth(env), promptId: m.reply_to_message.message_id, userId: person.chatId }); if (!r) return true;
     const raw = m.text?.trim() ?? "", decimals = topUpAmountDecimals(r.currency);
     try { if (!new RegExp(`^\\d+(?:\\.\\d{1,${decimals}})?$`).test(raw)) throw new Error(); validateTopUpAmount(Number(raw), r.currency); }
-    catch { await telegramApi(env, "sendMessage", { chat_id: group(env), text: `Reply with a positive amount only, with up to ${decimals} decimals in ${r.currency}.` }); return true; }
+    catch { await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id: r._id, version: r.version, promptId: r.adjustPromptId!, userId: person.chatId, error: `Enter a positive amount with up to ${decimals} decimals in ${r.currency}.` }); return true; }
     await convex.mutation(api.topUps.transition, { ...auth(env), id: r._id, version: r.version, action: "adjust", actor: person.username, amount: Number(raw) }); return true;
   }
   return false;
@@ -132,7 +146,7 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
       await convex.mutation(api.topUps.reconcileDraft, { ...auth(env), id, actor: session.username, confirmedNoDraft: body.confirmedNoDraft === true, ...(draftId ? { draftId } : {}) }); return json({ ok: true });
     }
     if (match[2] === "action") { const actor = session.username; return json(await convex.mutation(api.topUps.transition, { ...auth(env), id, version: body.version, action: body.action, amount: body.amount, actor })); }
-    if (match[2] === "draft") { if (body.reviewed !== true || typeof body.sourceAccountId !== "string") throw new Error("Verify the invoice and funding account first"); await prepareTopUpDraft(env, id, body); return json(await convex.query(api.topUps.get, { ...auth(env), id })); }
+    if (match[2] === "draft") { if (body.reviewed !== true || typeof body.sourceAccountId !== "string") throw new Error("Verify the invoice and funding account first"); await prepareTopUpDraft(env, id, { review: body }); return json(await convex.query(api.topUps.get, { ...auth(env), id })); }
     return json({ message: "Not found" }, 404);
   } catch (e) { return json({ message: errorMessage(e, "Request could not be completed").slice(0, 500) }, 400); }
 }

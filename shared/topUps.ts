@@ -26,7 +26,7 @@ export interface TopUpRequest extends TopUpInput {
   notificationError?: string; draftStatus: string; draftError?: string; draftId?: string;
   paymentDetails?: TopUpPaymentDetails;
 }
-export interface TopUpPaymentDetails { payerEntity: "dn" | "lmd" | ""; beneficiary: string; iban: string; bic: string; reference: string; amount: number | null; currency: string; notes: string }
+export interface TopUpPaymentDetails { payerEntity: "dn" | "lmd" | ""; beneficiary: string; iban: string; bic: string; bankCountry?: string; accountNumber?: string; routingNumber?: string; reference: string; amount: number | null; currency: string; notes: string }
 export function validateTopUpInput(value: unknown): TopUpInput {
   if (!value || typeof value !== "object") throw new Error("Complete the request details");
   const v = value as Record<string, unknown>;

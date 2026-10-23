@@ -1098,8 +1098,8 @@ export async function revolutDraftApi(options: RevolutActivityBatchOptions) {
   return {
     draft: (id: string) => fetchRevolutJson<{ id: string; title: string; payments: Array<{ amount: number; currency: string }> }>(fetcher, `${base}/payment-drafts/${encodeURIComponent(id)}`, { headers }),
     accounts: () => fetchRevolutJson<Array<{ id: string; name: string; currency: string; state: string }>>(fetcher, `${base}/accounts`, { headers }),
-    counterparties: async (iban: string) => {
-      const rows = await fetchRevolutJson<Array<{ id: string; name: string; state: string; accounts?: Array<{ id: string; iban?: string; currency: string }> }>>(fetcher, `${base}/counterparties?${new URLSearchParams({ iban, limit: "1000" })}`, { headers });
+    counterparties: async (account: { iban: string } | { account_no: string }) => {
+      const rows = await fetchRevolutJson<Array<{ id: string; name: string; state: string; accounts?: Array<{ id: string; iban?: string; account_no?: string; routing_number?: string; bank_country?: string; name?: string; currency: string }> }>>(fetcher, `${base}/counterparties?${new URLSearchParams({ ...account, limit: "1000" })}`, { headers });
       if (!Array.isArray(rows) || rows.length >= 1000) throw new Error("Counterparty results are incomplete. Review in Revolut."); return rows;
     },
     create: async (input: { title: string; accountId: string; counterpartyId: string; recipientAccountId: string; amount: number; currency: string; reference: string }) => {
