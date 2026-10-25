@@ -6,15 +6,15 @@ interface Fetcher {
 }
 
 interface BrowserRun {
+	fetch: typeof fetch;
 	quickAction(
-		name: "screenshot" | "scrape",
+		name: "screenshot",
 		options: {
 			url?: string;
 			html?: string;
 			addScriptTag?: Array<{ content: string }>;
 			waitForSelector?: { selector: string; timeout?: number };
 			selector?: string;
-			elements?: Array<{ selector: string }>;
 			cacheTTL?: number;
 			cookies?: Array<{
 				name: string;

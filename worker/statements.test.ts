@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import puppeteer from "@cloudflare/puppeteer";
 import { handleStatementApi, handleStatementProcessing, receiveStatementEmail, type StatementEnv } from "./statements";
 
 const origin = "https://statements.thatcanadian.dev";
@@ -97,10 +98,13 @@ test("forwarded email preserves raw provenance and quarantines spoofed or unveri
   } finally { globalThis.fetch = original; }
 });
 
-test("durable PDF processing uses saved model and stages evidence without inventing invoice transactions", async () => {
+test("durable PDF processing uses saved model and stages evidence without inventing invoice transactions", async t => {
   const original = globalThis.fetch, calls: Rpc[] = [];
   let model: unknown;
-  const processingEnv: StatementEnv = { ...env, BROWSER: { quickAction: async () => Response.json([{ selector: "#result", results: [{ text: JSON.stringify({ pages: [{ page: 1, text: "Invoice Acme EUR 12.34" }], method: "pdf-text", warnings: [] }) }] }]) } as WorkerEnv["BROWSER"] };
+  const processingEnv: StatementEnv = { ...env };
+  t.mock.method(puppeteer, "launch", async () => ({
+    newPage: async () => ({ setCacheEnabled: async () => {}, setContent: async () => {}, waitForSelector: async () => {}, $eval: async () => JSON.stringify({ pages: [{ page: 1, text: "Invoice Acme EUR 12.34" }], method: "pdf-text", warnings: [] }) }), close: async () => {}
+  }) as unknown as Awaited<ReturnType<typeof puppeteer.launch>>);
   globalThis.fetch = async (input, init) => {
     if (String(input) === "https://storage.invalid/original") return new Response("%PDF-1.4");
     if (String(input).includes("openrouter.ai")) {

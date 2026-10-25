@@ -9,7 +9,7 @@ import { isStatementCompany, normalizeStatementActor, parseStatementCsv, stateme
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { boundedBytes, secureHeaderMatches } from "./documentIntake";
 import { assignStatementDocumentCompany, extractStatementDetails, StatementAiError } from "./statementExtraction";
-import { extractStatementText } from "./statementOcr";
+import { extractStatementText, StatementOcrError } from "./statementOcr";
 
 export type StatementEnv = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OPENROUTER_API_KEY" | "BROWSER">;
 export const statementInbox = "statements@finance.thatcanadian.dev";
@@ -240,7 +240,7 @@ export async function handleStatementProcessing(request: Request, env: Statement
       generationId: result.generationId, costUsd: result.costUsd });
     return json({ processed: true });
   } catch (error) {
-    if (claim) await convex.mutation(api.statements.failDocument, { ...service(env), id: claim.document._id, attemptToken: claim.attemptToken, error: error instanceof Error ? error.message.slice(0, 1000) : "Document processing failed", retryAfterMs: error instanceof StatementAiError ? error.retryAfterMs : undefined });
+    if (claim) await convex.mutation(api.statements.failDocument, { ...service(env), id: claim.document._id, attemptToken: claim.attemptToken, error: error instanceof Error ? error.message.slice(0, 1000) : "Document processing failed", retryAfterMs: error instanceof StatementAiError || error instanceof StatementOcrError ? error.retryAfterMs : undefined });
     return json({ message: "Document processing failed; the original is preserved" }, 502);
   }
 }

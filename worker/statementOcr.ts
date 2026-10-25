@@ -1,3 +1,5 @@
+import puppeteer from "@cloudflare/puppeteer";
+
 export interface StatementText {
   pages: Array<{ page: number; text: string }>;
   method: "pdf-text" | "ocr" | "text";
@@ -8,6 +10,9 @@ const assetBase = "https://finance.thatcanadian.dev/statement-ocr-assets/";
 const maximumBytes = 15 * 1024 * 1024;
 const maximumPages = 40;
 const maximumCharacters = 240_000;
+export class StatementOcrError extends Error {
+  constructor(message: string, readonly retryAfterMs: number) { super(message); }
+}
 
 export function statementOcrHtml(bytes: Uint8Array, contentType: string, assets = assetBase): string {
   let binary = "";
@@ -77,12 +82,8 @@ finally { if(ocr) await ocr.terminate(); if(loadingTask) await loadingTask.destr
 }
 
 export function parseStatementOcrResult(value: unknown): StatementText {
-  const envelope = value as { success?: boolean; result?: unknown };
-  if (envelope?.success === false) throw new Error("Document text extraction failed; the original has been preserved");
-  const elements = (Array.isArray(value) ? value : envelope?.result) as Array<{ selector: string; results: Array<{ text?: string }> }> | undefined;
-  const text = elements?.find(element => element.selector === "#result")?.results?.[0]?.text;
-  if (!text) throw new Error("Document text extraction did not finish; retry the saved original");
-  const result = JSON.parse(text) as StatementText & { error?: string };
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid document text extraction result");
+  const result = value as StatementText & { error?: string };
   if (result.error) throw new Error(result.error.slice(0, 500));
   if (!Array.isArray(result.pages) || !result.pages.length || result.pages.length > maximumPages || !["pdf-text", "ocr"].includes(result.method) || !Array.isArray(result.warnings) || result.warnings.some(value => typeof value !== "string")) throw new Error("Invalid document text extraction result");
   if (result.pages.some((page, index) => page.page !== index + 1 || typeof page.text !== "string") || result.pages.reduce((sum, page) => sum + page.text.length, 0) > maximumCharacters) throw new Error("Document text extraction was incomplete or too large");
@@ -97,11 +98,25 @@ export async function extractStatementText(env: Pick<WorkerEnv, "BROWSER">, byte
     return { pages: [{ page: 1, text }], method: "text", warnings: [] };
   }
   if (!["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(contentType)) throw new Error("Use a PDF, PNG, JPEG, or WebP document");
-  const response = await env.BROWSER.quickAction("scrape", {
-    html: statementOcrHtml(bytes, contentType), elements: [{ selector: "#result" }],
-    waitForSelector: { selector: "#done", timeout: 60000 }, cacheTTL: 0,
-    gotoOptions: { waitUntil: "domcontentloaded", timeout: 10000 }
-  });
-  if (!response.ok) throw new Error(`Document text extraction is temporarily unavailable (${response.status}); retry the saved original`);
-  return parseStatementOcrResult(await response.json());
+  const browser = await puppeteer.launch({ fetch: async (input, init) => {
+    const response = await env.BROWSER.fetch(input, init);
+    if (response.status === 429 || response.status >= 500) {
+      const header = response.headers.get("Retry-After");
+      const delay = header && /^\d+$/.test(header) ? Number(header) * 1000 : header ? Date.parse(header) - Date.now() : 60000;
+      await response.body?.cancel();
+      throw new StatementOcrError(`Document text service returned ${response.status}; the original is preserved`, Number.isFinite(delay) ? Math.max(1000, Math.min(3_600_000, delay)) : 60000);
+    }
+    return response;
+  } }, { keep_alive: 120000 });
+  try {
+    const page = await browser.newPage();
+    await page.setCacheEnabled(false);
+    await page.setContent(statementOcrHtml(bytes, contentType), { waitUntil: "domcontentloaded", timeout: 15000 });
+    // Quick Actions HTML scraping can finish before async modules complete.
+    // An explicit CDP wait ties successful extraction to our completion marker.
+    await page.waitForSelector("#done", { timeout: 110000 });
+    const text = await page.$eval("#result", element => element.textContent ?? "");
+    if (!text) throw new Error("Document text extraction did not finish; retry the saved original");
+    return parseStatementOcrResult(JSON.parse(text));
+  } finally { await browser.close(); }
 }
