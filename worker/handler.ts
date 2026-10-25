@@ -1,4 +1,6 @@
 import { handleRevolutAuthorization } from "./revolutAuthorization";
+import { routeStatementSurface, statementsInbox } from "./statementRouting";
+import { receiveStatementEmail } from "./statements";
 import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, sendTopUpNotification, topUpSetup } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
 import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
@@ -8935,6 +8937,8 @@ export default {
     env: Env,
     executionContext?: ExecutionContext
   ): Promise<Response> {
+    const statementResponse = await routeStatementSurface(request, env);
+    if (statementResponse) return statementResponse;
     if (new URL(request.url).pathname === "/api/slash/card-events") return handleSlashCardWebhook(request, env);
     if (new URL(request.url).pathname === "/api/internal/slash/card-alerts") {
       if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
@@ -9039,7 +9043,7 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
-  async email(message: ForwardableEmailMessage, env: Env): Promise<void> { await (message.to.toLowerCase() === contractsInbox ? receiveContractEmail(message, env) : receiveDocumentEmail(message, env)); },
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> { await (message.to.toLowerCase() === statementsInbox ? receiveStatementEmail(message, env) : message.to.toLowerCase() === contractsInbox ? receiveContractEmail(message, env) : receiveDocumentEmail(message, env)); },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const failures: unknown[] = [];
     if (controller.cron === "* * * * *") {

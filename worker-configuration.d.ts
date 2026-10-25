@@ -7,13 +7,14 @@ interface Fetcher {
 
 interface BrowserRun {
 	quickAction(
-		name: "screenshot",
+		name: "screenshot" | "scrape",
 		options: {
 			url?: string;
 			html?: string;
 			addScriptTag?: Array<{ content: string }>;
 			waitForSelector?: { selector: string; timeout?: number };
 			selector?: string;
+			elements?: Array<{ selector: string }>;
 			cacheTTL?: number;
 			cookies?: Array<{
 				name: string;

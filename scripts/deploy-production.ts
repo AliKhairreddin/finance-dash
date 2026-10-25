@@ -71,6 +71,7 @@ function main(): void {
     run("npm", ["run", "slash:configure:card-alerts"], env);
     run("npm", ["run", "contracts:configure-inbox"], env);
     run("npm", ["run", "top-ups:configure"], env);
+    run("npm", ["run", "statements:configure"], env);
   }
 }
 
