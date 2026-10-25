@@ -10,7 +10,9 @@ export const importBatch = internalAction({ args: { id: v.id("statementImports")
 export const processDocument = internalAction({ args: { id: v.id("statementDocuments") }, returns: v.null(), handler: async (ctx, args) => {
   const target = await ctx.runQuery(internal.statements.processingTarget, {});
   try {
-    const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.serviceToken}` }, body: JSON.stringify(args), signal: AbortSignal.timeout(180_000) });
+    // Includes downloading, browser startup/OCR, and AI generation. The ten-minute
+    // document lease remains longer so a slow callback cannot start a duplicate.
+    const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.serviceToken}` }, body: JSON.stringify(args), signal: AbortSignal.timeout(8 * 60_000) });
     if (!response.ok) throw new Error(`Document processor returned ${response.status}`);
   } catch (error) {
     // A timeout may leave the Worker finishing. Its lease schedules a safe recovery attempt.

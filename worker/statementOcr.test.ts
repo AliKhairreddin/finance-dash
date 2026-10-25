@@ -55,3 +55,16 @@ test("browser capacity limits preserve the provider retry deadline", async t => 
   const env = { BROWSER: { fetch: async () => new Response("Busy", { status: 429, headers: { "Retry-After": "90" } }), quickAction: async () => { throw new Error("Not used"); } } };
   await assert.rejects(extractStatementText(env, new Uint8Array([1]), "application/pdf"), error => error instanceof StatementOcrError && error.retryAfterMs === 90000);
 });
+
+test("browser retry delays beyond one hour are preserved for seconds and HTTP dates", async t => {
+  const now = Date.parse("2026-10-25T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(puppeteer, "launch", async (binding: Parameters<typeof puppeteer.launch>[0]) => {
+    await binding.fetch("https://browser.invalid/v1/acquire");
+    throw new Error("Rate-limited browser should not launch");
+  });
+  for (const retryAfter of ["7200", "Sun, 25 Oct 2026 14:00:00 GMT"]) {
+    const env = { BROWSER: { fetch: async () => new Response("Busy", { status: 503, headers: { "Retry-After": retryAfter } }), quickAction: async () => { throw new Error("Not used"); } } };
+    await assert.rejects(extractStatementText(env, new Uint8Array([1]), "application/pdf"), error => error instanceof StatementOcrError && error.retryAfterMs === 7_200_000);
+  }
+});

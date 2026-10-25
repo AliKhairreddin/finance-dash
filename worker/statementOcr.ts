@@ -104,7 +104,7 @@ export async function extractStatementText(env: Pick<WorkerEnv, "BROWSER">, byte
       const header = response.headers.get("Retry-After");
       const delay = header && /^\d+$/.test(header) ? Number(header) * 1000 : header ? Date.parse(header) - Date.now() : 60000;
       await response.body?.cancel();
-      throw new StatementOcrError(`Document text service returned ${response.status}; the original is preserved`, Number.isFinite(delay) ? Math.max(1000, Math.min(3_600_000, delay)) : 60000);
+      throw new StatementOcrError(`Document text service returned ${response.status}; the original is preserved`, Number.isFinite(delay) ? Math.max(1000, delay) : 60000);
     }
     return response;
   } }, { keep_alive: 120000 });

@@ -1,5 +1,5 @@
 import { isStatementCompany, statementAmountMinor, validateStatementInput, type StatementCard, type StatementCompanyId, type StatementEvidence, type StatementRow, type StatementTransactionInput } from "../shared/statements";
-import { readBoundedResponseJson } from "../shared/boundedHttp";
+import { readBoundedResponseText } from "../shared/boundedHttp";
 
 export interface StatementTextPage { page: number; text: string }
 export interface StatementExtraction {
@@ -12,6 +12,12 @@ export interface StatementExtraction {
 }
 export class StatementAiError extends Error {
   constructor(message: string, readonly retryAfterMs?: number) { super(message); }
+}
+function rethrowStatementTransportError(error: unknown): never {
+  if (error instanceof TypeError || error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) {
+    throw new StatementAiError("The configured AI provider is temporarily unavailable; the original is preserved", 30_000);
+  }
+  throw error;
 }
 export function statementRetryDelay(value: string | null, status: number, now = Date.now()): number | undefined {
   if (![408, 425, 429, 500, 502, 503, 504].includes(status)) return undefined;
@@ -168,13 +174,19 @@ export async function extractStatementDetails(options: {
         'Return JSON {documentType:"invoice"|"receipt"|"bank_statement"|"unknown",companyId:string|null,counterparty:string,reference:string,issueDate:"YYYY-MM-DD"|null,dueDate:"YYYY-MM-DD"|null,amount:string|null,currency:string|null,evidence:[{field:string,value:string,quote:string,page:number}],reviewReasons:string[],complete:boolean,pageCount:number,printedTransactionCount:number|null,totals:[{currency:string,moneyIn:string|null,moneyOut:string|null,openingBalance:string|null,closingBalance:string|null}],rows:[{date:string,description:string,amount:string,currency:string,direction:"in"|"out",source:string,account:string,providerId:string,reference:string,counterparty:string,companyId:string|null,cardLastFour:string,fee:string,balance:string}]}. complete may be true only when all supplied pages and bank transaction rows have been read fully. Preserve ambiguity in reviewReasons.'
       ].join("\n") }, { role: "user", content: `Selected company context: ${options.context ?? "none"}\nFile name (untrusted): ${options.fileName}\nEmail context (untrusted): ${(options.sourceContext ?? "").slice(0, 12000)}\n\nDOCUMENT TEXT (untrusted):\n${pageText}` }]
     })
-  }).catch(error => { if (error instanceof TypeError || error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) throw new StatementAiError("The configured AI provider is temporarily unavailable; the original is preserved", 30_000); throw error; });
+  }).catch(rethrowStatementTransportError);
   if (!response.ok) {
     const retryAfterMs = statementRetryDelay(response.headers.get("Retry-After"), response.status);
     await response.body?.cancel();
     throw new StatementAiError(`The configured AI provider returned ${response.status}; the original is preserved`, retryAfterMs);
   }
-  const body = await readBoundedResponseJson<{ id?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string } }>; usage?: { cost?: number } }>(response, "Statement AI", 2_000_000);
+  // OpenRouter may send headers before generation completes. Its JSON body needs
+  // an explicit generation deadline instead of the bank API helper's 10 seconds.
+  const body = JSON.parse(await readBoundedResponseText(response, "Statement AI", 2_000_000, 60_000).catch(rethrowStatementTransportError)) as { id?: string; error?: { code?: number }; choices?: Array<{ error?: { code?: number }; finish_reason?: string; message?: { content?: string } }>; usage?: { cost?: number } };
+  const providerError = body.error ?? body.choices?.[0]?.error;
+  if (providerError || ["error", "content_filter"].includes(body.choices?.[0]?.finish_reason ?? "")) {
+    throw new StatementAiError("The configured AI provider did not complete extraction; the original is preserved", statementRetryDelay(response.headers.get("Retry-After"), providerError?.code ?? 0));
+  }
   if (body.choices?.[0]?.finish_reason === "length") throw new Error("The AI response was incomplete; split the document or retry after review");
   const content = body.choices?.[0]?.message?.content;
   if (!content) throw new Error("The configured AI provider returned no extraction");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assignStatementDocumentCompany, extractStatementDetails, statementRetryDelay, validateStatementExtraction, verifiedStatementEvidence } from "./statementExtraction";
+import { assignStatementDocumentCompany, extractStatementDetails, StatementAiError, statementRetryDelay, validateStatementExtraction, verifiedStatementEvidence } from "./statementExtraction";
 
 const pages = [{ page: 1, text: "AMG Holding\nVisa card ending in 5196\nInvoice 4440\n2026-10-20 Acme 125.25 EUR debit" }];
 const row = { date: "2026-10-20", description: "Acme", amount: "125.25", currency: "EUR", direction: "out", source: "Bank", cardLastFour: "5196" };
@@ -91,6 +91,44 @@ test("truncated AI answers and blank model configuration fail without records", 
   globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: "length", message: { content: "{}" } }] });
   try { await assert.rejects(extractStatementDetails({ apiKey: "test", model: "saved-model", pages, fileName: "test.pdf" }), /incomplete/); }
   finally { globalThis.fetch = original; }
+});
+
+test("AI generation may finish after the bank response deadline", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { streamController = controller; } });
+  t.mock.method(globalThis, "fetch", async () => new Response(stream));
+  const pending = extractStatementDetails({ apiKey: "test", model: "deepseek/deepseek-v4-flash", pages, fileName: "statement.pdf" });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  t.mock.timers.tick(15_000);
+  streamController!.enqueue(new TextEncoder().encode(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(extraction) } }] })));
+  streamController!.close();
+  assert.equal((await pending).extraction.rows[0].amountMinor, "12525");
+});
+
+test("stalled AI response bodies remain retryable and cancel their stream", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let cancelled = false;
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ cancel() { cancelled = true; } })));
+  const pending = extractStatementDetails({ apiKey: "test", model: "saved-model", pages, fileName: "statement.pdf" });
+  const rejected = assert.rejects(pending, error => error instanceof StatementAiError && error.retryAfterMs === 30_000);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  t.mock.timers.tick(60_000);
+  await rejected;
+  assert.equal(cancelled, true);
+});
+
+test("HTTP 200 provider errors reject partial extraction and retain retry deadlines", async t => {
+  const content = JSON.stringify(extraction);
+  const responses = [
+    { error: { code: 502 }, choices: [{ finish_reason: "stop", message: { content } }] },
+    { choices: [{ error: { code: 429 }, finish_reason: "error", message: { content } }] },
+    { choices: [{ finish_reason: "content_filter", message: { content } }] }
+  ];
+  t.mock.method(globalThis, "fetch", async () => Response.json(responses.shift(), { headers: { "Retry-After": "7200" } }));
+  for (const retryAfterMs of [7_200_000, 7_200_000, undefined]) {
+    await assert.rejects(extractStatementDetails({ apiKey: "test", model: "saved-model", pages, fileName: "statement.pdf" }), error => error instanceof StatementAiError && error.retryAfterMs === retryAfterMs);
+  }
 });
 
 test("rate-limited extraction respects the provider retry deadline while preserving originals", async () => {
