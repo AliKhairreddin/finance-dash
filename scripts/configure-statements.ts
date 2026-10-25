@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { resolveMx } from "node:dns/promises";
 import { parse } from "dotenv";
 import { productionEnvironment, productionServiceEnvironment } from "./deploy-production";
 import { statementCompanies } from "../shared/statements";
@@ -36,8 +37,10 @@ if (existing.length > 1 || existing.some(rule => !correct(rule))) throw new Erro
 if (!existing.length) await cloudflare(path, { name: "Statement dashboard intake", enabled: true, matchers: [{ type: "literal", field: "to", value: inbox }], actions: [{ type: "worker", value: ["finance-dash"] }] });
 const verified = matching(await allRules());
 if (verified.length !== 1 || !correct(verified[0])) throw new Error("Could not verify statement email routing");
-const { result: mx } = await cloudflare<{ name: string; content: string }[]>(`zones/${zones[0].id}/dns_records?type=MX&name=finance.thatcanadian.dev`);
-if (!mx.length || !mx.every(record => record.content.endsWith("mx.cloudflare.net"))) throw new Error("The finance subdomain's inbound MX records are missing or use a different mail service");
+// Public DNS is authoritative here; email-routing credentials need not carry
+// broad DNS-edit/read permissions simply to verify existing mail records.
+const mx = await resolveMx("finance.thatcanadian.dev");
+if (!mx.length || !mx.every(record => record.exchange.replace(/\.$/, "").endsWith("mx.cloudflare.net"))) throw new Error("The finance subdomain's inbound MX records are missing or use a different mail service");
 const env = productionServiceEnvironment(productionEnvironment({ ...(existsSync(".env.local") ? parse(readFileSync(".env.local")) : {}), ...process.env }));
 const response = await fetch(`https://${hostname}/api/internal/statements/setup`, { method: "POST", headers: { Authorization: `Bearer ${env.CONVEX_SERVICE_TOKEN}` }, signal: AbortSignal.timeout(60_000) });
 if (!response.ok) throw new Error(`Statement setup returned ${response.status}`);
