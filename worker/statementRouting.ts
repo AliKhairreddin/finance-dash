@@ -8,6 +8,11 @@ import { handleStatementApi, handleStatementProcessing } from "./statements";
 import { extractStatementText } from "./statementOcr";
 import { extractStatementDetails } from "./statementExtraction";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { exactCallbackLanding, handleExactApi } from "./exact";
+import { handleStatementInvoices } from "./statementInvoices";
+import { renderInvoicePdf } from "./statementInvoicePdf";
+import { invoiceAi } from "./statementInvoiceAi";
+import { validateInvoiceAi } from "../shared/statementInvoices";
 
 export const statementsHostname = "statements.thatcanadian.dev";
 export const statementsInbox = "statements@finance.thatcanadian.dev";
@@ -21,6 +26,19 @@ export function isStatementSurface(url: URL): boolean {
 // accidentally reach the finance API, reports, or other host-specific entrypoints.
 export async function routeStatementSurface(request: Request, env: WorkerEnv): Promise<Response | null> {
   const url = new URL(request.url);
+  if (url.pathname === "/api/internal/statements/verify-invoice") {
+    if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, 401);
+    try {
+      const client = new ConvexHttpClient(env.CONVEX_URL), settings = await client.query(api.statements.processingSettings, { serviceToken: env.CONVEX_SERVICE_TOKEN }), aiSettings = JSON.parse(settings.aiSettingsJson);
+      if (aiSettings?.provider !== "openrouter" || !aiSettings.model) throw new Error("Saved model unavailable");
+      const ai = await invoiceAi(env.OPENROUTER_API_KEY, aiSettings.model, 'Return JSON {lines:[{transactionId:"sample",description:string}]} describing the supplied synthetic service. No amounts.', { transactionId: "sample", description: "Synthetic layout verification service" });
+      const line = validateInvoiceAi(ai.result, ["sample"])[0];
+      const example = await PDFDocument.create(), page = example.addPage([595, 842]), font = await example.embedFont(StandardFonts.Helvetica);
+      page.drawText("DEMO COMPANY", { x: 36, y: 795, size: 22, font }); page.drawText("OLD INVOICE 999999 - MUST NOT APPEAR", { x: 36, y: 600, size: 12, font }); page.drawText("Demo company - Example bank details", { x: 36, y: 35, size: 10, font });
+      const result = await renderInvoicePdf(env, await example.save(), { headerPercent: 9, footerPercent: 8, sellerDetails: "Demo Company\nExample Street 1\nAmsterdam", paymentDetails: "Synthetic example only. Do not pay." }, { number: "LAYOUT-TEST-001", date: "2026-10-26", dueDate: "", customer: "Example Customer", customerAddress: "Example street 2\nMontréal", notes: "Synthetic verification only. No financial records were created.", currency: "EUR", taxMode: "included", lines: Array.from({ length: 70 }, (_, i) => ({ transactionId: `sample-${i}`, description: `${line.description} ${i + 1} — café, consultation and project work`, amount: "121.00", taxPercent: "21" })) }, true);
+      return new Response(result, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Invoice-Model": ai.model, "X-Invoice-ZDR": "true", "X-Invoice-Total": "8470.00" } });
+    } catch (error) { return json({ message: error instanceof Error ? error.message.slice(0, 500) : "Invoice verification failed" }, 502); }
+  }
   if (url.pathname.startsWith("/statement-ocr-assets/")) {
     if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
     const response = await env.ASSETS.fetch(request);
@@ -68,13 +86,15 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (!isStatementSurface(url)) return null;
   if (["GET", "HEAD"].includes(request.method) && ["/favicon.svg", "/apple-touch-icon.png", "/site.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"].includes(url.pathname)) return env.ASSETS.fetch(request);
   if (url.hostname === statementsHostname && url.pathname.startsWith("/api/") && url.pathname !== "/api/session" && !url.pathname.startsWith("/api/statements/")) return json({ message: "Not found" }, 404);
+  const exactLanding = exactCallbackLanding(request);
+  if (exactLanding) return exactLanding;
   const authentication = await enforceSiteAuthentication(request, env);
   if (authentication) return authentication;
   const session = await getDashboardSession(request, env);
   if (!session) return json({ message: "Authentication required" }, 401);
   try { normalizeStatementActor(session.username); } catch { return json({ message: "This account cannot access statements" }, 403); }
   if (url.pathname === "/api/session") return request.method === "GET" ? json(session) : json({ message: "Method not allowed" }, 405);
-  if (url.pathname.startsWith("/api/statements/")) return await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
+  if (url.pathname.startsWith("/api/statements/")) return await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
   if (url.pathname.startsWith("/api/")) return json({ message: "Not found" }, 404);
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   // Static app assets use their original path; all app routes render the root SPA.

@@ -141,3 +141,32 @@
   .statement-page-heading > .row-actions > button { width: 100%; min-width: 0; margin: 0; padding-inline: 8px; }
   .statement-page-heading > .row-actions > button:first-child { margin-right: 0; padding-inline: 0; }
 }
+.exact-connection { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.exact-connection > div { display: flex; align-items: center; gap: 10px; }
+.exact-setup { padding: 28px; margin-bottom: 20px; }
+.exact-setup > svg { color: var(--app-muted); }
+.exact-setup h2 { font-size: 18px; margin: 12px 0 8px; }
+.exact-setup p, .exact-setup summary { font-size: 13px; color: var(--app-muted); }
+.exact-setup code { font-size: 12px; overflow-wrap: anywhere; }
+.exact-setup details { margin-top: 15px; }
+.exact-records .data-table { min-width: 1150px; }
+.exact-records td:nth-child(5) { max-width: 250px; white-space: normal; }
+.exact-records td:last-child { position: sticky; right: 0; background: var(--panel); }
+.exact-operations { margin-top: 22px; }
+.exact-details { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0; }
+.exact-details dt { color: var(--app-muted); font-size: 11px; }
+.exact-details dd { font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
+.exact-lines { display: grid; gap: 14px; margin-top: 20px; }
+.exact-lines legend { font-size: 12px; padding: 0 6px; }
+@media (max-width: 700px) { .exact-details { grid-template-columns: 1fr; } .exact-connection .row-actions { flex-wrap: wrap; } }
+
+.statement-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 8px 16px; border-bottom: 1px solid var(--app-border); }
+.statement-selection .statement-checkbox { margin: 0; font-size: 12px; }
+
+.statement-invoice-section { margin-top: 20px; }
+.statement-invoice-upload { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 18px; border-top: 1px solid var(--line); }
+.statement-invoice-upload label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.statement-invoice-pdf { width: 100%; height: 65vh; margin-top: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.statement-invoice-lines { margin-top: 20px; max-height: 380px; overflow: auto; }
+.statement-invoice-lines th:first-child { width: 60%; }
+.statement-invoice-lines small { color: var(--app-muted); }

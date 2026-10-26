@@ -14,7 +14,7 @@ also verifies the service token, membership, and company access. Original files
 are downloaded through authenticated Worker routes, without exposing storage URLs.
 
 The six companies are AMG Holding, Artec, Inch Engineering, Digital Nudge, Inch
-Digital, and MZS Bouw. Mix Transactions queries the same canonical records.
+Digital, and MZS Bouw. All companies queries the same canonical records.
 Initial card mappings are 5196, 4440, and 6805 respectively for the first three
 companies. Cards are text, can be scoped by source/account, and are editable in
 Settings. LMD/LOVEMEDO and card mapping 1003 are excluded from this module.
@@ -36,7 +36,7 @@ deduplicate reliable repeats; weaker similarities remain visible for review.
 
 Forward PDFs to `statements@finance.thatcanadian.dev`. The raw email and original
 PDFs are saved with sender, subject, and message provenance. **Every forwarded
-PDF initially requires an authorized member to choose Approve processing.**
+PDF initially requires an authorized member to choose Allow AI to read file.**
 Saved sender addresses label recognized senders; they do not bypass this check.
 Untrusted email Authentication-Results headers are not sufficient to establish
 sender identity. Uploaded PDFs can start processing immediately.
@@ -66,8 +66,7 @@ output and OCR are suggestions and require review before financial confirmation.
 - Failed processing preserves originals. Processing leases prevent concurrent
   attempts; retries honor provider Retry-After and have a bounded attempt count.
 - The address book stores postal addresses and optional contact details. There is
-  no automatic outbound email, reminder sending, bank connection, or fabricated
-  invoice generation in this release.
+  no automatic outbound email, reminder sending, bank connection, or automatic invoice sending.
 
 `npm run check` validates the project. `npm run deploy` builds, deploys Convex to
 production, verifies the existing bank ledger, deploys Cloudflare, configures the
@@ -82,3 +81,76 @@ The application intentionally retains statement originals; do not purge storage
 or alter production datasets as part of a normal release or rollback. Roll back
 application code through the normal production release workflow and retain the
 additive statement tables for recovery.
+
+## Select all and plain language
+
+The interface uses Company, Needs checking, Checked, Done, and Paid to / received
+from. Select this page and Select all matching transactions are separate actions.
+Selection persists across pages and clears when filters or sorting change. Full
+selection requires complete coverage within the existing 2,000-record limit.
+Bulk changes run in groups of 50; confirmed groups remain changed when a later
+group fails. Unknown outcomes are never retried automatically. Trash is reversible.
+
+## Create AI invoices
+
+Settings → Invoice examples accepts one reusable example per company (PDF, up to
+5 MB and 5 pages). AI reads its text and suggests company details and header/footer
+cuts. The user previews and approves the layout. Only rasterized header/footer
+strips enter the new PDF, so hidden text from the old invoice is not embedded.
+The first page supplies branding; the new body uses a clear, paginated invoice
+layout. This is not a pixel-for-pixel copy of every example's body.
+
+Select 1–200 transactions from one company, one currency and one direction, then
+Create AI invoice. Enter the customer, address, unique invoice number, dates,
+explicit tax rate and whether selected amounts include tax. The same saved
+OpenRouter model writes descriptions with ZDR, deny data collection, and no
+fallbacks. AI cannot change IDs, amounts, currency or tax. Exact decimal
+calculations round tax per line in the currency's smallest unit.
+
+Drafts are saved before AI generation, protected by a lease and request ID, and
+can be retried after failure. Review/edit the draft and preview its PDF before
+saving the final invoice. Final PDFs are stored and immutable; changed source
+transactions block finalization. Discarded drafts retain history and release the
+unused invoice number. Created invoices shows the latest 100 records. This does
+not send email, post to Exact, mark payments or add evidence links automatically.
+Templates, source snapshots, drafts, model/cost metadata and PDFs remain in Convex
+under existing company access controls. Uploading a replacement example does not
+change existing invoices.
+
+The service-token-protected POST `/api/internal/statements/verify-invoice` runs a
+fixed synthetic AI/PDF check, creates no financial records and returns a sample
+PDF. It verifies the saved model/ZDR and multi-page PDF rendering after deployment.
+
+## Exact connection
+
+The Exact page is implemented but requires the account owner's app registration
+before live synchronization can start. Register Statements Dashboard with redirect
+URI `https://statements.thatcanadian.dev/api/statements/exact/callback`.
+Install `EXACT_CLIENT_ID`, `EXACT_CLIENT_SECRET`, and a random 32-byte hex
+`EXACT_ENCRYPTION_KEY` in production Convex server environment variables. Never
+put them in frontend variables or source control. Then use Connect Exact and
+approve the intended companies. App permissions govern the final company list;
+the current login lacks Manage apps and Manage subscription rights.
+
+The dashboard discovers all companies available to the authorized app rather than
+hard-coding AMG Holding. It saves customer/supplier accounts, customer invoices,
+supplier bills, transactions, open amounts, documents/attachments and reference
+lists. Reads use saved Convex data. Supported writes create/update contacts,
+create invoices/bills, edit descriptions/references on open invoices/bills, and
+create documents/upload attachments. These write paths are implemented and tested
+with fixtures; they still need a live account smoke test after app setup. This
+release does not process/send invoices, pay bills, match bank transactions, file
+tax returns or run payroll through Exact.
+
+Incremental sources and open amounts refresh hourly; reference lists daily.
+Permission discovery is daily and cached reads block after 26 hours without a
+successful discovery. Explicit updates have a 15-minute freshness minimum.
+Check older records requests a full reconciliation, and snapshot sources reset
+after company moves or extended inactivity. A global lease serializes API calls,
+rotating refresh tokens are encrypted and saved before reuse, and rate-limit
+headers control retries. Ambiguous financial writes are marked uncertain and
+never automatically repeated. Completed snapshots survive failed/partial updates.
+The Exact view is capped at 2,000 source rows including detail rows and tombstones;
+partial coverage is shown and CSV export is disabled for incomplete/failed data.
+File transfers are limited to 3 MB. Original statement data is not replaced by
+Exact data; no database cutover is part of this release.

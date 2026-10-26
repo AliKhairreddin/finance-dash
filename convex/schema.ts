@@ -8,6 +8,8 @@ import { financialDocumentFields } from "./documentSchema";
 import { amexStatementFields } from "./amexStatementSchema";
 import { manualBankFields, manualBankRecord } from "./manualBankSchema";
 import { statementTables } from "./statementSchema";
+import { exactTables } from "./exactSchema";
+import { invoiceTables } from "./statementInvoiceSchema";
 
 const dataSource = v.union(
   v.literal("wise"),
@@ -607,6 +609,8 @@ const profitDistributionSnapshot = v.object({
 
 export default defineSchema({
   ...statementTables,
+  ...exactTables,
+  ...invoiceTables,
   topUpRequests: defineTable(topUpFields).index("by_submission", ["submissionId"]).index("by_document", ["documentId"]).index("by_status", ["status"]).index("by_deleted", ["deletedAt"]).index("by_deleted_status", ["deletedAt", "status"]).index("by_adjust_prompt", ["adjustPromptId"]).index("by_team", ["team"]),
   topUpSettings: defineTable({ key: v.string(), sequence: v.number() }).index("by_key", ["key"]),
   topUpRateLimits: defineTable({ key: v.string(), count: v.number(), expiresAt: v.number() }).index("by_key", ["key"]).index("by_expiry", ["expiresAt"]),

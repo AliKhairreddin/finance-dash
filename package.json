@@ -68,6 +68,7 @@
     "@types/node": "^24.10.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "convex-test": "^0.0.50",
     "esbuild": "0.28.1",
     "miniflare": "5.20260820.0-alpha",
     "pdfjs-dist": "^6.4.299",

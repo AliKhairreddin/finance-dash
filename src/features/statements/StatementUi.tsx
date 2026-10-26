@@ -1,3 +1,4 @@
+import { simpleStatementText, statementStatusLabels } from "./statementWords";
 import type { ReactNode } from "react";
 import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ export function jsonRequest(method: string, value: unknown): RequestInit {
 }
 
 export function ErrorMessage({ error }: { error: string }) {
-  return error ? <p className="inline-error statement-error" role="alert">{error}</p> : null;
+  return error ? <p className="inline-error statement-error" role="alert">{simpleStatementText(error)}</p> : null;
 }
 
 export function StatementModal({ title, busy = false, onClose, children, wide = false }: {
@@ -52,8 +53,8 @@ export function useStatementSort<K extends string>(prefix: string, keys: readonl
 }
 
 export function StatusPill({ value }: { value: string }) {
-  const labels: Record<string, string> = { pending: "Pending", reconciled: "Reconciled", completed: "Completed", queued: "Queued", processing: "Processing", needs_review: "Needs review", ready: "Ready", imported: "Imported", importing: "Importing", failed: "Failed", duplicate: "Duplicate", review: "Needs review" };
-  return <span className={`status-pill ${["completed", "reconciled", "imported"].includes(value) ? "good" : value === "failed" ? "danger" : "warning"}`}>{labels[value] || value.replaceAll("_", " ")}</span>;
+
+  return <span className={`status-pill ${["completed", "reconciled", "imported"].includes(value) ? "good" : value === "failed" ? "danger" : "warning"}`}>{statementStatusLabels[value] || value.replaceAll("_", " ")}</span>;
 }
 
 export function downloadText(name: string, contents: string, type = "text/csv;charset=utf-8") {
