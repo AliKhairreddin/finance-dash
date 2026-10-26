@@ -43,8 +43,8 @@ export async function renderInvoicePdf(env: Pick<WorkerEnv, "BROWSER">, example:
     const page = await browser.newPage(), brand = await readBrand(page, example, layout);
     await page.setContent(invoiceHtml(draft, layout, isDraft), { waitUntil: "load", timeout: 15000 });
     const headerHeight = brand.height * layout.headerPercent / 100, footerHeight = brand.height * layout.footerPercent / 100;
-    const pdf = await page.pdf({ width: `${brand.width}pt`, height: `${brand.height}pt`, printBackground: true, displayHeaderFooter: true,
-      margin: { top: `${headerHeight + 28}pt`, bottom: `${footerHeight + 32}pt`, left: "36pt", right: "36pt" },
+    const pdf = await page.pdf({ width: `${brand.width / 72}in`, height: `${brand.height / 72}in`, printBackground: true, displayHeaderFooter: true,
+      margin: { top: `${(headerHeight + 28) / 72}in`, bottom: `${(footerHeight + 32) / 72}in`, left: "0.5in", right: "0.5in" },
       headerTemplate: `<div style="width:100%;margin-top:-15px">${brand.header ? `<img src="${brand.header}" style="width:100%;height:${headerHeight}pt">` : ""}</div>`,
       footerTemplate: `<div style="width:100%;font-size:8px;text-align:center"><div style="margin-bottom:6px">${isDraft ? "DRAFT · " : ""}Page <span class="pageNumber"></span> / <span class="totalPages"></span></div>${brand.footer ? `<img src="${brand.footer}" style="width:100%;height:${footerHeight}pt">` : ""}</div>` });
     if (pdf.length > 15 * 1024 * 1024) throw new Error("The invoice PDF is too large. Use fewer transactions");
