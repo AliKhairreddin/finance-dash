@@ -40,7 +40,10 @@ export async function inspectInvoiceExample(env: Pick<WorkerEnv, "BROWSER">, byt
 export async function renderInvoicePdf(env: Pick<WorkerEnv, "BROWSER">, example: Uint8Array, profile: InvoiceTemplateLayout, draft: InvoiceDraft, isDraft: boolean): Promise<Uint8Array<ArrayBuffer>> {
   const layout = invoiceLayout(profile), browser = await openBrowser(env);
   try {
-    const page = await browser.newPage(), brand = await readBrand(page, example, layout);
+    const sourcePage = await browser.newPage(), brand = await readBrand(sourcePage, example, layout);
+    // A fresh document prevents the example reader's restrictive CSP from
+    // carrying over and disabling the invoice's print stylesheet.
+    const page = await browser.newPage();
     await page.setContent(invoiceHtml(draft, layout, isDraft), { waitUntil: "load", timeout: 15000 });
     const headerHeight = brand.height * layout.headerPercent / 100, footerHeight = brand.height * layout.footerPercent / 100;
     const pdf = await page.pdf({ width: `${brand.width / 72}in`, height: `${brand.height / 72}in`, printBackground: true, displayHeaderFooter: true,
