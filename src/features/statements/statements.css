@@ -170,3 +170,12 @@
 .statement-invoice-lines { margin-top: 20px; max-height: 380px; overflow: auto; }
 .statement-invoice-lines th:first-child { width: 60%; }
 .statement-invoice-lines small { color: var(--app-muted); }
+.statement-invoice-form { border: 0; padding: 0; min-width: 0; display: grid; gap: 16px; }
+.statement-invoice-company { display: grid; gap: 12px; min-width: 0; }
+.statement-invoice-company h3 { margin: 0; font-size: 14px; }
+.statement-invoice-suggestion { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.statement-invoice-suggestion-text { flex: 1; min-width: 150px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.statement-invoice-suggestion-text small { display: block; margin-top: 4px; color: var(--muted-foreground); }
+
+.statement-invoice-companies { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 540px) { .statement-invoice-companies { grid-template-columns: minmax(0, 1fr); } }

@@ -3,7 +3,7 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
 import { isStatementCompany, normalizeStatementActor } from "../shared/statements";
-import { invoiceLayout, type InvoiceDraft, type InvoiceTemplateLayout } from "../shared/statementInvoices";
+import { invoiceLayout, invoiceText, type InvoiceDraft, type InvoiceTemplateLayout } from "../shared/statementInvoices";
 import { boundedBytes } from "./documentIntake";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { inspectInvoiceExample, renderInvoicePdf } from "./statementInvoicePdf";
@@ -11,7 +11,7 @@ import { invoiceAi } from "./statementInvoiceAi";
 import { extractStatementText } from "./statementOcr";
 import type { StatementEnv } from "./statements";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "private, no-store" } });
-type Saved = { _id: Id<"statementInvoices">; state: string; revision: number; error?: string; leaseUntil: number; draft: InvoiceDraft; sources: Array<{ transactionId: string; description: string; date: string; amount: string; counterparty: string }>; instructions: string; layout: InvoiceTemplateLayout; templateUrl: string; pdfUrl: string | null };
+type Saved = { _id: Id<"statementInvoices">; state: string; revision: number; error?: string; leaseUntil: number; draft: InvoiceDraft; sources: Array<{ transactionId: string; description: string; date: string; amount: string; counterparty: string }>; instructions: string; layout: InvoiceTemplateLayout; templateUrl: string | null; pdfUrl: string | null };
 const safeInvoice = (row: Saved) => ({ id: row._id, state: row.state, revision: row.revision, error: row.error, leaseUntil: row.leaseUntil, draft: row.draft, sources: row.sources, layout: row.layout });
 async function bytesFrom(url: string, max = 5 * 1024 * 1024) { const response = await fetch(url, { signal: AbortSignal.timeout(30000) }); if (!response.ok) { await response.body?.cancel(); throw new Error("The saved PDF could not be read"); } return boundedBytes(response.body, max); }
 async function savePdf(client: ConvexHttpClient, serviceToken: string, bytes: Uint8Array<ArrayBuffer>) {
@@ -29,6 +29,23 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
   if (!["GET", "HEAD"].includes(request.method) && request.headers.get("Origin") !== new URL(request.url).origin) return json({ message: "Open this action from Statements" }, 403);
   const client = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor };
   const body = async () => JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 250000))) as Record<string, unknown>;
+  async function readExample(id: Id<"statementInvoiceTemplates">) {
+    const token = crypto.randomUUID();
+    if (!await client.mutation(api.statementInvoices.claimExample, { ...auth, id, token })) return { id };
+    try {
+      const saved = JSON.parse(await client.query(api.statementInvoices.template, { ...auth, id })), bytes = await bytesFrom(saved.url);
+      const inspected = await inspectInvoiceExample(env, bytes), selectedModel = await model(client, auth.serviceToken);
+      const text = inspected.text.length ? undefined : (await extractStatementText(env, bytes, "application/pdf")).pages[0].text;
+      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, 'Read the example invoice. Return JSON {headerPercent:number,footerPercent:number,sellerDetails:string,paymentDetails:string}. Header is the top 0–30% of page 1; footer is the bottom 0–20%. Keep only static seller branding/logo/contact details in those strips. Never include the old invoice number, date, buyer, amounts, page number or line items. If no safe strip exists, set it to 0. Text positions are percentages from the top. Extract only literal seller company/address/tax ID and payment details; never buyer details. Do not invent missing details. All fields will be reviewed by a person.', { companyId: saved.companyId, positions: inspected.text, scannedText: text });
+      await client.mutation(api.statementInvoices.completeExample, { ...auth, id, token, layoutJson: JSON.stringify(invoiceLayout(ai.result)), model: ai.model, costUsd: ai.costUsd });
+      return { id };
+    } catch (error) {
+      const reason = error instanceof Error && !error.message.includes("[Request ID:") ? error.message.slice(0, 250) : "The example could not be read.";
+      const message = `${reason} Your PDF is saved. Choose Read again to retry.`;
+      await client.mutation(api.statementInvoices.completeExample, { ...auth, id, token, error: message });
+      return { id, message };
+    }
+  }
   try {
     if (path === "/invoice-examples" && request.method === "GET") return json(JSON.parse(await client.query(api.statementInvoices.templates, auth)));
     if (path === "/invoice-examples" && request.method === "POST") {
@@ -37,15 +54,14 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       if (!file || typeof file === "string" || !isStatementCompany(companyId) || !file.size || file.size > 5 * 1024 * 1024) throw new Error("Choose a company and an example PDF under 5 MB");
       const member = await client.query(api.statements.bootstrap, auth); if (!member.canManage || !member.companies.some(c => c.id === companyId)) throw new Error("Company access required");
       const bytes = new Uint8Array(await file.arrayBuffer()); if (new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("Choose a valid PDF");
-      const inspected = await inspectInvoiceExample(env, bytes), selectedModel = await model(client, auth.serviceToken);
-      const text = inspected.text.length ? undefined : (await extractStatementText(env, bytes, "application/pdf")).pages[0].text;
-      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, 'Read the example invoice. Return JSON {headerPercent:number,footerPercent:number,sellerDetails:string,paymentDetails:string}. Header is the top 0–30% of page 1; footer is the bottom 0–20%. Keep only static seller branding/logo/contact details in those strips. Never include the old invoice number, date, buyer, amounts, page number or line items. If no safe strip exists, set it to 0. Text positions are percentages from the top. Extract only literal seller company/address/tax ID and payment details; never buyer details. Do not invent missing details. All fields will be reviewed by a person.', { companyId, positions: inspected.text, scannedText: text });
-      const layout = invoiceLayout(ai.result), storageId = await savePdf(client, auth.serviceToken, bytes);
-      return json({ id: await client.mutation(api.statementInvoices.saveTemplate, { ...auth, companyId, storageId, fileName: file.name.slice(0, 250), layoutJson: JSON.stringify(layout), model: ai.model, costUsd: ai.costUsd }) }, 201);
+      const storageId = await savePdf(client, auth.serviceToken, bytes);
+      const id = await client.mutation(api.statementInvoices.uploadExample, { ...auth, companyId, storageId, fileName: file.name.slice(0, 250) });
+      return json(await readExample(id), 201);
     }
-    const example = /^\/invoice-examples\/([a-z0-9]+)(?:\/(file|preview))?$/.exec(path);
+    const example = /^\/invoice-examples\/([a-z0-9]+)(?:\/(file|preview|read))?$/.exec(path);
     if (example) {
       const id = example[1] as Id<"statementInvoiceTemplates">;
+      if (example[2] === "read" && request.method === "POST") return json(await readExample(id));
       if (!example[2] && request.method === "PATCH") { const input = await body(); return json({ id: await client.mutation(api.statementInvoices.approveTemplate, { ...auth, id, layoutJson: JSON.stringify(input.layout), confirmed: input.confirmed === true }) }); }
       const saved = JSON.parse(await client.query(api.statementInvoices.template, { ...auth, id }));
       if (example[2] === "file" && request.method === "GET") return pdf(await bytesFrom(saved.url), saved.fileName);
@@ -54,10 +70,20 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
         return pdf(await renderInvoicePdf(env, await bytesFrom(saved.url), layout, { number: "EXAMPLE-001", date: "2026-01-01", dueDate: "", customer: "Example customer", customerAddress: "Example address", notes: "Layout check only. No invoice has been issued.", currency: "EUR", taxMode: "included", lines: [{ transactionId: "example", description: "Example invoice line", amount: "100.00", taxPercent: "0" }] }, true), "invoice-layout-check.pdf");
       }
     }
+    if (path === "/created-invoices/profile" && request.method === "POST") {
+      const input = await body(); if (!isStatementCompany(input.companyId)) throw new Error("Choose a company");
+      return json(JSON.parse(await client.query(api.statementInvoices.profile, { ...auth, companyId: input.companyId, otherName: invoiceText(input.otherName, "company name", 250) })));
+    }
+    if ((path === "/created-invoices/setup" || path === "/created-invoices/suggest-description") && request.method === "POST") {
+      const input = await body(), setup = JSON.parse(await client.query(api.statementInvoices.setup, { ...auth, ids: input.ids as Id<"statementTransactions">[] }));
+      if (path.endsWith("/setup")) return json(setup);
+      const ai = await invoiceAi(env.OPENROUTER_API_KEY, await model(client, auth.serviceToken), 'Suggest one short, plain-English invoice description using only facts explicitly present in the selected transaction descriptions. Do not guess goods, services, addresses, VAT numbers, tax or payment status. If the descriptions do not identify what was bought, return an empty description. Return JSON {description:string}. This is a suggestion for the person to accept or edit.', { transactions: setup.sources });
+      return json({ description: invoiceText((ai.result as { description?: unknown })?.description, "suggested description", 500), source: "AI suggestion from selected transactions" });
+    }
     if (path === "/created-invoices" && request.method === "GET") return json(JSON.parse(await client.query(api.statementInvoices.list, auth)));
     let id: Id<"statementInvoices"> | undefined, generate = false;
     if (path === "/created-invoices" && request.method === "POST") {
-      const input = await body(); id = await client.mutation(api.statementInvoices.begin, { ...auth, requestId: String(input.requestId), ids: input.ids as Id<"statementTransactions">[], draftJson: JSON.stringify(input.draft), instructions: String(input.instructions ?? "") }); generate = true;
+      const input = await body(); id = await client.mutation(api.statementInvoices.begin, { ...auth, requestId: String(input.requestId), ids: input.ids as Id<"statementTransactions">[], draftJson: JSON.stringify(input.draft), instructions: String(input.instructions ?? ""), ...(input.plainDetails ? { plainDetailsJson: JSON.stringify(input.plainDetails), remember: input.remember === true, profileRevision: Number(input.profileRevision) } : {}) }); generate = true;
     }
     const match = /^\/created-invoices\/([a-z0-9]+)(?:\/(generate|preview|finalize|file|discard))?$/.exec(path);
     if (match) { id = match[1] as Id<"statementInvoices">; generate = match[2] === "generate" && request.method === "POST"; }
@@ -74,10 +100,10 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       if (match && !match[2] && request.method === "PATCH") { const input = await body(); await client.mutation(api.statementInvoices.save, { ...auth, id, revision: Number(input.revision), draftJson: JSON.stringify(input.draft) }); }
       const row = JSON.parse(await client.query(api.statementInvoices.get, { ...auth, id })) as Saved;
       if (match?.[2] === "file" && request.method === "GET") { if (!row.pdfUrl || row.state !== "ready") throw new Error("Save the final invoice first"); return pdf(await bytesFrom(row.pdfUrl, 15 * 1024 * 1024), `${row.draft.number}.pdf`); }
-      if (match?.[2] === "preview" && request.method === "GET") { if (row.state !== "draft") throw new Error("Wait for the draft to finish"); return pdf(await renderInvoicePdf(env, await bytesFrom(row.templateUrl), row.layout, row.draft, true), `${row.draft.number}-draft.pdf`); }
+      if (match?.[2] === "preview" && request.method === "GET") { if (row.state !== "draft") throw new Error("Wait for the draft to finish"); return pdf(await renderInvoicePdf(env, row.templateUrl ? await bytesFrom(row.templateUrl) : null, row.layout, row.draft, true), `${row.draft.number}-draft.pdf`); }
       if (match?.[2] === "finalize" && request.method === "POST") {
         const input = await body(); if (input.confirmed !== true || row.state !== "draft" || Number(input.revision) !== row.revision) throw new Error("Check the latest invoice draft first");
-        const bytes = await renderInvoicePdf(env, await bytesFrom(row.templateUrl), row.layout, row.draft, false), storageId = await savePdf(client, auth.serviceToken, bytes);
+        const bytes = await renderInvoicePdf(env, row.templateUrl ? await bytesFrom(row.templateUrl) : null, row.layout, row.draft, false), storageId = await savePdf(client, auth.serviceToken, bytes);
         await client.mutation(api.statementInvoices.finalize, { ...auth, id, revision: row.revision, storageId, confirmed: true });
         return json(safeInvoice(JSON.parse(await client.query(api.statementInvoices.get, { ...auth, id }))));
       }

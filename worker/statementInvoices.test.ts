@@ -26,3 +26,15 @@ test("invoice routes reject missing membership and cross-site writes before acce
   assert.equal((await handleStatementInvoices(new Request(url), env, null))?.status, 403);
   assert.equal((await handleStatementInvoices(new Request(url, { method: "POST", headers: { Origin: "https://bad.test" } }), env, { username: "Ali", role: "administrator" }))?.status, 403);
 });
+test("invoice AI body deadlines cancel stalled streams and reject oversized responses", async () => {
+  const { readInvoiceAiBody } = await import("./statementInvoiceAi");
+  let cancelled = false;
+  const stalled = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+  await assert.rejects(readInvoiceAiBody(stalled, 10), /taking too long/); assert.equal(cancelled, true);
+  await assert.rejects(readInvoiceAiBody(new Response("x".repeat(1_000_001))), /too large/);
+  assert.equal(await readInvoiceAiBody(new Response('{"ok":true}')), '{"ok":true}');
+});
+test("customer VAT appears on PDFs as escaped text", () => {
+  const html = invoiceHtml({ ...draft, customerVat: "<VAT>" }, { headerPercent: 0, footerPercent: 0, sellerDetails: "Supplier\nVAT: NL-123", paymentDetails: "" }, true);
+  assert.ok(html.includes("VAT: &lt;VAT&gt;")); assert.ok(html.includes("VAT: NL-123"));
+});

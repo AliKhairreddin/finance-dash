@@ -2,7 +2,20 @@ import { statementAmountDecimal, statementAmountMinor } from "./statements";
 
 export type InvoiceTemplateLayout = { headerPercent: number; footerPercent: number; sellerDetails: string; paymentDetails: string };
 export type InvoiceLine = { transactionId: string; description: string; amount: string; taxPercent: string };
-export type InvoiceDraft = { number: string; date: string; dueDate: string; customer: string; customerAddress: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
+export type InvoiceDraft = { number: string; date: string; dueDate: string; customer: string; customerAddress: string; customerVat?: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
+export type InvoiceCompanyDetails = { name: string; address: string; vat: string };
+export type InvoicePairDetails = { ours: InvoiceCompanyDetails; other: InvoiceCompanyDetails; description: string };
+export type InvoicePairProfile = { details: InvoicePairDetails; revision: number; updatedAt: number };
+export const invoiceCompanyKey = (name: string) => name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+export function validateInvoicePair(value: unknown): InvoicePairDetails {
+  const pair = value as InvoicePairDetails;
+  const company = (c: InvoiceCompanyDetails): InvoiceCompanyDetails => ({ name: invoiceText(c?.name, "company name", 250, true), address: invoiceText(c?.address, "company address", 600, true), vat: invoiceText(c?.vat, "VAT number", 80) });
+  return { ours: company(pair?.ours), other: company(pair?.other), description: invoiceText(pair?.description, "usual description", 500) };
+}
+export function plainInvoiceParties(pair: InvoicePairDetails, direction: "in" | "out") {
+  const checked = validateInvoicePair(pair), seller = direction === "out" ? checked.other : checked.ours, buyer = direction === "out" ? checked.ours : checked.other;
+  return { customer: buyer.name, customerAddress: buyer.address, customerVat: buyer.vat, layout: invoiceLayout({ headerPercent: 0, footerPercent: 0, sellerDetails: [seller.name, seller.address, seller.vat ? `VAT: ${seller.vat}` : ""].filter(Boolean).join("\n"), paymentDetails: "" }) };
+}
 export const invoiceSelectionLimit = 200;
 export function invoiceText(value: unknown, label: string, maximum = 1000, required = false): string {
   if (typeof value !== "string" || value.length > maximum || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)) throw new Error(`Check ${label}`);
@@ -25,6 +38,7 @@ export function validateInvoiceDraft(value: unknown): InvoiceDraft {
   }) };
   if (new Set(result.lines.map(l => l.transactionId)).size !== result.lines.length) throw new Error("A transaction can appear only once in this invoice");
   if (result.dueDate && result.dueDate < result.date) throw new Error("The due date must be on or after the invoice date");
+  if (v.customerVat !== undefined) result.customerVat = invoiceText(v.customerVat, "customer VAT number", 80);
   return result;
 }
 export function invoiceTotals(draft: InvoiceDraft) {
