@@ -72,9 +72,11 @@ async function selectedTransactions(ctx: QueryCtx | MutationCtx, a: { serviceTok
 export const setup = query({ args: { ...auth, ids: v.array(v.id("statementTransactions")) }, returns: v.string(), handler: async (ctx, a) => {
   const { rows, first, companyId } = await selectedTransactions(ctx, a);
   const profiles = await ctx.db.query("statementInvoiceProfiles").withIndex("by_company_updated", q => q.eq("companyId", companyId)).order("desc").take(101);
-  const addresses = await ctx.db.query("statementAddresses").withIndex("by_companyId", q => q.eq("companyId", companyId)).take(101);
+  const addresses = (await Promise.all([companyId, "all" as const].map(scope => ctx.db.query("statementAddresses").withIndex("by_companyId", q => q.eq("companyId", scope)).take(500)))).flat();
+  const uniqueAddresses = new Map<string, typeof addresses[number]>();
+  for (const address of addresses) if (!uniqueAddresses.has(invoiceCompanyKey(address.name))) uniqueAddresses.set(invoiceCompanyKey(address.name), address);
   const example = await ctx.db.query("statementInvoiceTemplates").withIndex("by_company_approved", q => q.eq("companyId", companyId).eq("approved", true)).order("desc").first();
-  return JSON.stringify({ companyId, direction: first.direction, hasExample: example?.approved === true, profiles: profiles.slice(0, 100).map(p => ({ details: JSON.parse(p.detailsJson), revision: p.revision, updatedAt: p.updatedAt })), profilesTruncated: profiles.length > 100, addresses: addresses.slice(0, 100).map(a => ({ name: a.name, address: [a.addressLine1, a.addressLine2, [a.postalCode, a.city].filter(Boolean).join(" "), a.country].filter(Boolean).join("\n") })), sources: rows.map(r => ({ transactionId: r!._id, description: r!.description, counterparty: r!.counterparty ?? "" })) });
+  return JSON.stringify({ companyId, direction: first.direction, hasExample: example?.approved === true, profiles: profiles.slice(0, 100).map(p => ({ details: JSON.parse(p.detailsJson), revision: p.revision, updatedAt: p.updatedAt })), profilesTruncated: profiles.length > 100, addresses: [...uniqueAddresses.values()].map(a => ({ name: a.name, invoiceName: a.invoiceName, vat: a.vat, description: a.description, aliases: a.aliases, reviewNote: a.reviewNote, address: [a.addressLine1, a.addressLine2, [a.postalCode, a.city].filter(Boolean).join(" "), a.country].filter(Boolean).join("\n") })), sources: rows.map(r => ({ transactionId: r!._id, description: r!.description, counterparty: r!.counterparty ?? "" })) });
 } });
 export const get = query({ args: { ...auth, id: v.id("statementInvoices") }, returns: v.string(), handler: async (ctx, a) => {
   const row = await invoice(ctx, a), example = row.templateId ? await ctx.db.get(row.templateId) : null;

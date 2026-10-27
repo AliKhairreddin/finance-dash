@@ -224,9 +224,33 @@ export const listLinks = query({ args: { ...authArgs, transactionId: recordId },
   return links.map(publicSimple);
 } });
 
-export const listAddresses = query({ args: authArgs, returns: v.array(statementAddressPublic), handler: async (ctx, args) => { const access = await member(ctx, args); return (await ctx.db.query("statementAddresses").take(500)).filter(row => access.companyIds.includes(row.companyId)).map(publicSimple); } });
-export const saveAddress = mutation({ args: { ...authArgs, id: v.optional(v.id("statementAddresses")), ...statementAddressFields }, returns: v.id("statementAddresses"), handler: async (ctx, args) => { const access = await member(ctx, args); checkCompany(access, args.companyId); if (!args.name.trim() || args.name.length > 200 || (args.email !== undefined && args.email !== "" && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email) || args.email.length > 254)) || args.notes.length > 2000 || [args.addressLine1,args.addressLine2,args.city,args.postalCode,args.country].some(value => (value?.length ?? 0) > 250)) throw new ConvexError("Enter a valid business name and contact details"); const { id, serviceToken: _token, actor: _actor, ...fields } = args; if (id) { const row = await ctx.db.get(id); if (!row) throw new ConvexError("Address not found"); checkCompany(access, row.companyId); await ctx.db.patch(id, fields); await audit(ctx, access.actor, "address", id, "updated"); return id; } if ((await ctx.db.query("statementAddresses").take(500)).length >= 500) throw new ConvexError("Address book limit reached"); const created = await ctx.db.insert("statementAddresses", fields); await audit(ctx, access.actor, "address", created, "created"); return created; } });
-export const removeAddress = mutation({ args: { ...authArgs, id: v.id("statementAddresses") }, returns: v.null(), handler: async (ctx, args) => { const access = await member(ctx, args), row = await ctx.db.get(args.id); if (row) { checkCompany(access, row.companyId); await ctx.db.delete(args.id); await audit(ctx, access.actor, "address", args.id, "removed"); } return null; } });
+function checkAddressWrite(access: Member, companyId: StatementCompanyId | "all") {
+  if (companyId === "all") { manage(access); checkCompany(access); }
+  else checkCompany(access, companyId);
+}
+export const listAddresses = query({ args: authArgs, returns: v.array(statementAddressPublic), handler: async (ctx, args) => {
+  const access = await member(ctx, args);
+  const groups = await Promise.all([...access.companyIds, "all" as const].map(companyId => ctx.db.query("statementAddresses").withIndex("by_companyId", q => q.eq("companyId", companyId)).take(500)));
+  return groups.flat().map(publicSimple);
+} });
+export const saveAddress = mutation({ args: { ...authArgs, id: v.optional(v.id("statementAddresses")), ...statementAddressFields }, returns: v.id("statementAddresses"), handler: async (ctx, args) => {
+  const access = await member(ctx, args); checkAddressWrite(access, args.companyId);
+  if (!args.name.trim() || args.name.length > 200 || (args.email !== undefined && args.email !== "" && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.email) || args.email.length > 254)) || args.notes.length > 2000 || [args.addressLine1, args.addressLine2, args.city, args.postalCode, args.country, args.invoiceName].some(value => (value?.length ?? 0) > 250) || (args.vat?.length ?? 0) > 80 || [args.description, args.reviewNote].some(value => (value?.length ?? 0) > 500) || (args.aliases?.length ?? 0) > 20 || args.aliases?.some(value => !value.trim() || value.length > 200)) throw new ConvexError("Enter a valid business name and contact details");
+  const { id, serviceToken: _token, actor: _actor, ...fields } = args;
+  const existing = id ? await ctx.db.get(id) : null;
+  if (id && !existing) throw new ConvexError("Address not found");
+  if (existing) checkAddressWrite(access, existing.companyId);
+  const peers = await ctx.db.query("statementAddresses").withIndex("by_companyId", q => q.eq("companyId", args.companyId)).take(500);
+  const key = (name: string) => name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  if (peers.some(row => row._id !== id && key(row.name) === key(fields.name))) throw new ConvexError("This contact is already saved for this company. Edit the saved contact instead");
+  if (id) { await ctx.db.patch(id, fields); await audit(ctx, access.actor, "address", id, "updated"); return id; }
+  if ((await ctx.db.query("statementAddresses").take(500)).length >= 500) throw new ConvexError("Address book limit reached");
+  const created = await ctx.db.insert("statementAddresses", fields); await audit(ctx, access.actor, "address", created, "created"); return created;
+} });
+export const removeAddress = mutation({ args: { ...authArgs, id: v.id("statementAddresses") }, returns: v.null(), handler: async (ctx, args) => {
+  const access = await member(ctx, args), row = await ctx.db.get(args.id);
+  if (row) { checkAddressWrite(access, row.companyId); await ctx.db.delete(args.id); await audit(ctx, access.actor, "address", args.id, "removed"); } return null;
+} });
 export const listAudit = query({ args: { ...authArgs, entityId: v.optional(v.string()) }, returns: v.array(statementAuditPublic), handler: async (ctx, args) => { const access = await member(ctx, args); manage(access); checkCompany(access); return (args.entityId ? await ctx.db.query("statementAudit").withIndex("by_entityId", q => q.eq("entityId", args.entityId!)).order("desc").take(200) : await ctx.db.query("statementAudit").order("desc").take(200)).map(publicSimple); } });
 export const settings = query({ args: authArgs, returns: v.object({ allowedSenders: v.array(statementSenderPublic) }), handler: async (ctx, args) => { const access = await member(ctx, args); manage(access); return { allowedSenders: (await ctx.db.query("statementSenders").take(100)).map(publicSimple) }; } });
 export const saveSender = mutation({ args: { ...authArgs, email: v.string(), senderActor: statementActor }, returns: v.id("statementSenders"), handler: async (ctx, args) => { const access = await member(ctx, args); manage(access); const email = args.email.trim().toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) throw new ConvexError("Enter a valid sender email"); const row = await ctx.db.query("statementSenders").withIndex("by_email", q => q.eq("email", email)).unique(); if (row) { await ctx.db.patch(row._id, { actor: args.senderActor }); await audit(ctx, access.actor, "sender", row._id, "updated", email); return row._id; } if ((await ctx.db.query("statementSenders").take(100)).length >= 100) throw new ConvexError("Sender limit reached"); const id = await ctx.db.insert("statementSenders", { email, actor: args.senderActor }); await audit(ctx, access.actor, "sender", id, "approved", email); return id; } });

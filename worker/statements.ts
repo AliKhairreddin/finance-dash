@@ -197,10 +197,13 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
     if (route === "/address-book" && request.method === "GET") return json(await convex.query(api.statements.listAddresses, credentials));
     const address = /^\/address-book\/([a-z0-9]+)$/.exec(route);
     if ((route === "/address-book" && request.method === "POST") || (address && request.method === "PATCH")) {
-      const input = await body(request), companyId = company(input.companyId); if (!companyId) throw new Error("Select a company");
+      const input = await body(request), companyId = input.companyId === "all" ? "all" : company(input.companyId); if (!companyId) throw new Error("Select a company");
       return json(await convex.mutation(api.statements.saveAddress, { ...credentials, ...(address ? { id: address[1] as Id<"statementAddresses"> } : {}), companyId, name: string(input.name, 200), email: typeof input.email === "string" ? string(input.email, 254) : undefined,
         addressLine1: typeof input.addressLine1 === "string" ? string(input.addressLine1, 250) : undefined, addressLine2: typeof input.addressLine2 === "string" ? string(input.addressLine2, 250) : undefined,
         city: typeof input.city === "string" ? string(input.city, 250) : undefined, postalCode: typeof input.postalCode === "string" ? string(input.postalCode, 250) : undefined,
+        invoiceName: typeof input.invoiceName === "string" ? string(input.invoiceName, 250) : undefined, vat: typeof input.vat === "string" ? string(input.vat, 80) : undefined,
+        description: typeof input.description === "string" ? string(input.description, 500) : undefined, reviewNote: typeof input.reviewNote === "string" ? string(input.reviewNote, 500) : undefined,
+        aliases: Array.isArray(input.aliases) ? input.aliases.map(value => string(value, 200)) : undefined,
         country: typeof input.country === "string" ? string(input.country, 250) : undefined, notes: typeof input.notes === "string" ? string(input.notes) : "" }));
     }
     if (address && request.method === "DELETE") return json(await convex.mutation(api.statements.removeAddress, { ...credentials, id: address[1] as Id<"statementAddresses"> }));

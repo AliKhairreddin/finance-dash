@@ -30,7 +30,7 @@ const { contentHash: _importHash, storageId: _importStorage, ...importPublicFiel
 export const statementImportPublic = v.object({ _id: v.id("statementImports"), ...importPublicFields });
 const { rows: _rows, csvText: _csv, mappingJson: _mapping, ...importSummaryFields } = importPublicFields;
 export const statementImportSummary = v.object({ _id: v.id("statementImports"), ...importSummaryFields, transactionCount: v.number() });
-export const statementAddressFields = { companyId: statementCompany, name: v.string(), email: v.optional(v.string()), notes: v.string(), addressLine1: v.optional(v.string()), addressLine2: v.optional(v.string()), city: v.optional(v.string()), postalCode: v.optional(v.string()), country: v.optional(v.string()) };
+export const statementAddressFields = { companyId: v.union(statementCompany, v.literal("all")), name: v.string(), email: v.optional(v.string()), notes: v.string(), addressLine1: v.optional(v.string()), addressLine2: v.optional(v.string()), city: v.optional(v.string()), postalCode: v.optional(v.string()), country: v.optional(v.string()), invoiceName: v.optional(v.string()), vat: v.optional(v.string()), description: v.optional(v.string()), aliases: v.optional(v.array(v.string())), reviewNote: v.optional(v.string()) };
 export const statementAddressPublic = v.object({ _id: v.id("statementAddresses"), ...statementAddressFields });
 export const statementAuditFields = { entityType: v.string(), entityId: v.string(), actor: v.string(), action: v.string(), details: v.string(), createdAt: v.string() };
 export const statementAuditPublic = v.object({ _id: v.id("statementAudit"), ...statementAuditFields });

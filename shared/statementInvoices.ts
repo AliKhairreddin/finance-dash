@@ -7,6 +7,12 @@ export type InvoiceCompanyDetails = { name: string; address: string; vat: string
 export type InvoicePairDetails = { ours: InvoiceCompanyDetails; other: InvoiceCompanyDetails; description: string };
 export type InvoicePairProfile = { details: InvoicePairDetails; revision: number; updatedAt: number };
 export const invoiceCompanyKey = (name: string) => name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+export type InvoiceAddress = { name: string; address: string; invoiceName?: string; vat?: string; description?: string; aliases?: string[]; reviewNote?: string };
+export function matchingInvoiceAddress(addresses: InvoiceAddress[], name: string) {
+  const key = invoiceCompanyKey(name);
+  if (!key) return undefined;
+  return addresses.find(address => [address.name, address.invoiceName, ...(address.aliases ?? [])].some(value => value && invoiceCompanyKey(value) === key));
+}
 export function validateInvoicePair(value: unknown): InvoicePairDetails {
   const pair = value as InvoicePairDetails;
   const company = (c: InvoiceCompanyDetails): InvoiceCompanyDetails => ({ name: invoiceText(c?.name, "company name", 250, true), address: invoiceText(c?.address, "company address", 600, true), vat: invoiceText(c?.vat, "VAT number", 80) });

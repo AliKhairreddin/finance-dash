@@ -93,6 +93,16 @@ group fails. Unknown outcomes are never retried automatically. Trash is reversib
 
 ## Create AI invoices
 
+The address book supports company-specific records and shared contacts under
+All companies. Shared contacts appear in each company workspace. Only managers
+with access to all six companies can change shared contacts. Invoice names,
+VAT numbers, usual descriptions and explicit name aliases are saved with the
+address. Invoice forms offer these details for review; they are used only after
+the user chooses them. Contacts with a Needs checking note are excluded from
+address-book suggestions until corrected. Original imported details and source
+references remain in the contact's notes. Missing VAT and address details stay
+blank.
+
 Settings → Invoice examples accepts one reusable example per company (PDF, up to
 5 MB and 5 pages). AI reads its text and suggests company details and header/footer
 cuts. The user previews and approves the layout. Only rasterized header/footer

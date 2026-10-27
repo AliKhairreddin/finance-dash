@@ -46,7 +46,7 @@ export interface StatementList {
   totals: Array<{ currency: string; inMinor: string; outMinor: string }>;
 }
 export interface StatementBootstrap { companies: Array<{ id: StatementCompanyId; name: string }>; cards: StatementCard[]; actor: StatementActor; canManage: boolean; inbox: string }
-export interface StatementAddress { _id: string; companyId: StatementCompanyId; name: string; email?: string; notes: string; addressLine1?: string; addressLine2?: string; city?: string; postalCode?: string; country?: string }
+export interface StatementAddress { _id: string; companyId: StatementCompanyId | "all"; name: string; email?: string; notes: string; addressLine1?: string; addressLine2?: string; city?: string; postalCode?: string; country?: string; invoiceName?: string; vat?: string; description?: string; aliases?: string[]; reviewNote?: string }
 export interface StatementAudit { _id: string; entityType: string; entityId: string; actor: string; action: string; details: string; createdAt: string }
 export interface StatementSender { _id: string; email: string; actor: StatementActor }
 export interface StatementLink { _id: string; transactionId: string; documentId: string; amountMinor: string; currency: string; note: string; createdBy: string; createdAt: string }

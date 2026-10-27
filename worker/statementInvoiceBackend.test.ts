@@ -6,7 +6,7 @@ import { api } from "../convex/_generated/api";
 import { statementCompanies } from "../shared/statements";
 process.env.CONVEX_SERVICE_TOKEN = "invoice-test";
 const auth = { serviceToken: "invoice-test", actor: "Ali" };
-const modules = { "../convex/_generated/server.ts": () => import("../convex/_generated/server"), "../convex/statementInvoices.ts": () => import("../convex/statementInvoices") };
+const modules = { "../convex/statements.ts": () => import("../convex/statements"), "../convex/_generated/server.ts": () => import("../convex/_generated/server"), "../convex/statementInvoices.ts": () => import("../convex/statementInvoices") };
 async function setup() {
   const t = convexTest(schema, modules);
   const fixture = await t.run(async ctx => {
@@ -110,4 +110,36 @@ test("failed example analysis preserves the PDF and the previous approved exampl
   await assert.rejects(t.mutation(api.statementInvoices.completeExample, { ...auth, id, token: "one", error: "Late result" }));
   await t.mutation(api.statementInvoices.completeExample, { ...auth, id, token: "retry", model: "saved/model", layoutJson: JSON.stringify({ headerPercent: 0, footerPercent: 0, sellerDetails: "Read seller", paymentDetails: "" }) });
   assert.equal(JSON.parse(await t.query(api.statementInvoices.template, { ...auth, id })).analysisState, "done");
+});
+
+
+test("shared address book details reach invoices while company-private records stay scoped", async () => {
+  const { t, input, other } = await setup();
+  const shared = { ...auth, companyId: "all" as const, name: "Shared vendor", invoiceName: "Shared Vendor B.V.", vat: "NL123456789B01", description: "Hosting", aliases: ["Vendor payment"], addressLine1: "Street 1", notes: "Supplied contact" };
+  await t.mutation(api.statements.saveAddress, shared);
+  await t.mutation(api.statements.saveAddress, { ...auth, companyId: "amg-holding", name: "AMG Holding", addressLine1: "Private address", notes: "" });
+  await t.mutation(api.statements.saveAddress, { ...auth, companyId: "all", name: "Needs review", addressLine1: "Uncertain address", reviewNote: "Company name mismatch", notes: "Original retained" });
+  const amg = JSON.parse(await t.query(api.statementInvoices.setup, { ...auth, ids: input.ids }));
+  const artec = JSON.parse(await t.query(api.statementInvoices.setup, { ...auth, actor: "Alaa", ids: [other] }));
+  assert.equal(amg.addresses.length, 3); assert.equal(artec.addresses.length, 2);
+  assert.ok(!artec.addresses.some((a: { name: string }) => a.name === "AMG Holding"));
+  const vendor = artec.addresses.find((a: { name: string }) => a.name === shared.name);
+  assert.equal(vendor.vat, shared.vat); assert.equal(vendor.invoiceName, shared.invoiceName); assert.deepEqual(vendor.aliases, shared.aliases); assert.equal(vendor.description, shared.description);
+  assert.equal(artec.addresses.find((a: { name: string }) => a.name === "Needs review").reviewNote, "Company name mismatch");
+  const visible = await t.query(api.statements.listAddresses, { ...auth, actor: "Alaa" });
+  assert.equal(visible.length, 2);
+});
+
+test("shared contacts require full management rights and duplicate imports cannot create extra entries", async () => {
+  const { t } = await setup();
+  const fields = { ...auth, companyId: "all" as const, name: "Example vendor", vat: "NL123456789B01", notes: "" };
+  await assert.rejects(t.mutation(api.statements.saveAddress, { ...fields, actor: "Alaa" }));
+  const id = await t.mutation(api.statements.saveAddress, fields);
+  await assert.rejects(t.mutation(api.statements.saveAddress, { ...fields, name: " EXAMPLE  VENDOR " }), /already saved/);
+  await assert.rejects(t.mutation(api.statements.saveAddress, { ...fields, id, actor: "Alaa", companyId: "artec" }));
+  await assert.rejects(t.mutation(api.statements.removeAddress, { ...auth, id, actor: "Alaa" }));
+  const localId = await t.mutation(api.statements.saveAddress, { ...fields, actor: "Alaa", companyId: "artec" });
+  await assert.rejects(t.mutation(api.statements.saveAddress, { ...fields, id: localId, actor: "Alaa" }));
+  await t.mutation(api.statements.saveAddress, { ...fields, id, reviewNote: "Check VAT" });
+  assert.equal((await t.query(api.statements.listAddresses, auth)).find(a => a._id === id)?.reviewNote, "Check VAT");
 });
