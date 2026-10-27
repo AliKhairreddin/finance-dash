@@ -13,6 +13,38 @@ export function matchingInvoiceAddress(addresses: InvoiceAddress[], name: string
   if (!key) return undefined;
   return addresses.find(address => [address.name, address.invoiceName, ...(address.aliases ?? [])].some(value => value && invoiceCompanyKey(value) === key));
 }
+export type InvoiceSavedCompanies = { profiles: InvoicePairProfile[]; addresses: InvoiceAddress[] };
+function sameInvoiceCompany(saved: InvoiceSavedCompanies, a: string, b: string) {
+  if (invoiceCompanyKey(a) === invoiceCompanyKey(b)) return true;
+  const contact = matchingInvoiceAddress(saved.addresses, a);
+  return Boolean(contact && contact === matchingInvoiceAddress(saved.addresses, b));
+}
+export function invoiceProfileForName(saved: InvoiceSavedCompanies, name: string) {
+  return saved.profiles.find(profile => sameInvoiceCompany(saved, profile.details.other.name, name));
+}
+export function savedInvoiceDetails(saved: InvoiceSavedCompanies, value: InvoicePairDetails): Partial<InvoicePairDetails> {
+  const profile = invoiceProfileForName(saved, value.other.name);
+  const ownProfile = [profile, ...saved.profiles].find(p => p && sameInvoiceCompany(saved, p.details.ours.name, value.ours.name));
+  const result: Partial<InvoicePairDetails> = {};
+  for (const side of ["ours", "other"] as const) {
+    const contact = matchingInvoiceAddress(saved.addresses, value[side].name);
+    if (contact?.reviewNote) continue;
+    const remembered = side === "ours" ? ownProfile?.details.ours : profile?.details.other;
+    if (remembered || contact) result[side] = { name: remembered?.name || contact?.invoiceName || contact!.name, address: remembered?.address || contact?.address || "", vat: remembered?.vat || contact?.vat || "" };
+    if (side === "other") result.description = profile?.details.description || contact?.description || "";
+  }
+  return result;
+}
+export function applySavedInvoiceDetails(saved: InvoiceSavedCompanies | null, value: InvoicePairDetails, edited: ReadonlySet<string> = new Set()): InvoicePairDetails {
+  if (!saved) return value;
+  const details = savedInvoiceDetails(saved, value), next = { ...value, ours: { ...value.ours }, other: { ...value.other } };
+  for (const side of ["ours", "other"] as const) for (const field of ["name", "address", "vat"] as const) {
+    const stored = details[side]?.[field];
+    if (stored && !edited.has(`${side}.${field}`)) next[side][field] = stored;
+  }
+  if (details.description && !edited.has("description")) next.description = details.description;
+  return JSON.stringify(next) === JSON.stringify(value) ? value : next;
+}
 export function validateInvoicePair(value: unknown): InvoicePairDetails {
   const pair = value as InvoicePairDetails;
   const company = (c: InvoiceCompanyDetails): InvoiceCompanyDetails => ({ name: invoiceText(c?.name, "company name", 250, true), address: invoiceText(c?.address, "company address", 600, true), vat: invoiceText(c?.vat, "VAT number", 80) });

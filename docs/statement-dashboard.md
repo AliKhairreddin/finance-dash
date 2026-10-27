@@ -97,9 +97,12 @@ The address book supports company-specific records and shared contacts under
 All companies. Shared contacts appear in each company workspace. Only managers
 with access to all six companies can change shared contacts. Invoice names,
 VAT numbers, usual descriptions and explicit name aliases are saved with the
-address. Invoice forms offer these details for review; they are used only after
-the user chooses them. Contacts with a Needs checking note are excluded from
-address-book suggestions until corrected. Original imported details and source
+address. Invoice forms automatically fill matching saved details and remain
+editable. User edits survive later saved-profile loading. Changing the company
+clears the previous company’s details before applying the new match. Contacts
+with a Needs checking note are excluded from automatic filling until corrected.
+AI description suggestions remain available when no saved description exists.
+The editable invoice tax rate starts at 21%. Original imported details and source
 references remain in the contact's notes. Missing VAT and address details stay
 blank.
 
