@@ -8,6 +8,7 @@ import { financialDocumentFields } from "./documentSchema";
 import { amexStatementFields } from "./amexStatementSchema";
 import { manualBankFields, manualBankRecord } from "./manualBankSchema";
 import { statementTables } from "./statementSchema";
+import { statementMailboxTables } from "./statementMailboxSchema";
 import { exactTables } from "./exactSchema";
 import { invoiceTables } from "./statementInvoiceSchema";
 
@@ -610,6 +611,7 @@ const profitDistributionSnapshot = v.object({
 export default defineSchema({
   statementCaptureDevices: defineTable({ actor: v.string(), tokenHash: v.string(), active: v.boolean(), createdAt: v.number(), minuteStart: v.number(), minuteCount: v.number(), dayStart: v.number(), dayCount: v.number() }).index("by_actor", ["actor"]).index("by_tokenHash", ["tokenHash"]),
   ...statementTables,
+  ...statementMailboxTables,
   ...exactTables,
   ...invoiceTables,
   topUpRequests: defineTable(topUpFields).index("by_submission", ["submissionId"]).index("by_document", ["documentId"]).index("by_status", ["status"]).index("by_deleted", ["deletedAt"]).index("by_deleted_status", ["deletedAt", "status"]).index("by_adjust_prompt", ["adjustPromptId"]).index("by_team", ["team"]),

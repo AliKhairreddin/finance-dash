@@ -195,3 +195,81 @@ The Exact view is capped at 2,000 source rows including detail rows and tombston
 partial coverage is shown and CSV export is disabled for incomplete/failed data.
 File transfers are limited to 3 MB. Original statement data is not replaced by
 Exact data; no database cutover is part of this release.
+
+## Connected Gmail and Outlook mailboxes
+
+Settings → Connected mailboxes supports individual, delegated OAuth connections.
+Each Connect click opens the provider account chooser. It does not discover or
+monitor other accounts in the organization. Accounts from different Google
+Workspaces can be connected independently using an **External** Google app.
+Only full Statements managers can connect, disconnect, or view mailbox status.
+The connection dialog records approval to analyze document candidates with the
+existing AI service and share imported documents under Statements access rules.
+
+### One-time provider app setup
+
+Configure these secrets **on Convex production `famous-oyster-878`**, not in the
+browser or the Cloudflare public variables:
+
+- `MAILBOX_ENCRYPTION_KEY`: 32 random bytes, hex encoded. Configured for this release.
+  Preserve it; changing it makes stored credentials unreadable.
+- `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`: Google OAuth Web application credentials.
+  Enable the Gmail API, select an External audience for multiple Workspaces,
+  request `https://www.googleapis.com/auth/gmail.readonly`, and register exactly
+  `https://statements.thatcanadian.dev/api/statements/mailboxes/gmail/callback`.
+- `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`: Microsoft Entra Web application
+  credentials. Choose the intended organizational/personal account types. Request
+  delegated `Mail.Read`, `User.Read`, and `offline_access`, and register exactly
+  `https://statements.thatcanadian.dev/api/statements/mailboxes/outlook/callback`.
+
+Store each secret through the Convex dashboard, or use
+`npx convex env set NAME --deployment famous-oyster-878` with its secure stdin
+prompt. Never put secrets in command arguments or commit them. No additional
+Cloudflare secret is required. Status checks reflect configuration automatically.
+
+Google External apps using restricted Gmail scopes may require verification and
+an independent security assessment unless an exception applies. Publish the
+required privacy policy and meet Google's Limited Use requirements, including
+clear disclosure of AI processing. Testing mode is not a durable production
+setup: Gmail refresh tokens generally expire after seven days in that mode.
+Workspace or Microsoft tenant policies may require admin consent even though
+access is granted per selected mailbox. The dashboard cannot bypass provider
+policies. A successful synthetic test does not prove real provider consent.
+
+### Import scope and scheduling
+
+The selected date is inclusive at 00:00 UTC. Initial history is paginated in
+10-message batches. Provider message IDs are durably checkpointed; original PDFs
+are deduplicated by SHA-256 across mailboxes and upload sources. Body/image PDFs
+use deterministic metadata for stable retry hashes. A cursor is committed only
+after every message on the page is processed. Errors preserve all previous
+records and coverage; rate limits honor Retry-After, with exponential backoff and
+at most five failed attempts before an explicit retry or reconnect is required.
+
+Connected mailboxes check new mail about every five minutes. Timestamp windows
+include a one-hour overlap; daily reconciliation expands that overlap to seven
+days. Already-processed message IDs avoid repeated body/attachment downloads.
+Scan history deliberately searches an earlier range for missed or late-added
+historical messages while reusing known records. This is a receipt-import index,
+not a complete local mailbox replica. Reloads only read saved status.
+
+Gmail scans all mail except Spam, Trash and Drafts. Outlook uses received messages
+across mailbox folders (excluding drafts); this can include Deleted Items. Shared
+mailboxes without their own sign-in and aliases are not separate OAuth accounts.
+Only PDFs, candidate non-inline JPEG/PNG attachments, and receipt-like body text
+are imported. PDFs are preserved; images/text are converted to PDF. No embedded
+HTML is executed or remote attachment links fetched. Inline images, linked files,
+other attachment types, and body text outside the renderer's character/size scope
+need manual upload. Import issues remain visible. The existing document AI
+classifies candidates; every financial field still requires review. Ordinary
+email contents are not retained: only processed provider IDs and timestamps.
+Candidate documents retain sender, subject, received time and a bounded context.
+
+OAuth uses account selection, PKCE, one-time actor/provider-bound state and a
+10-minute HttpOnly state cookie. The dashboard's Strict session cookie is
+preserved through a same-origin callback form. Access and refresh tokens are
+AES-GCM encrypted server-side. Refresh-token rotations are saved before further
+provider calls. Per-mailbox leases fence concurrent scans and stale callbacks.
+Disconnect clears credentials and stops future imports; previously imported
+documents and the minimal deduplication index are retained. Changes are additive
+new tables; existing financial data is not migrated or replaced.

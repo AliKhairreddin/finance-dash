@@ -12,6 +12,7 @@ import { DocumentsTable, TransactionReview } from "./StatementDocuments";
 import { ImportHistory, StatementUpload } from "./StatementImports";
 import { AddressBook, CardSettings, SenderSettings } from "./StatementSettings";
 import { ReceiptCameraSettings } from "./ReceiptCameraSettings";
+import { StatementMailboxes } from "./StatementMailboxes";
 import { ManualTransactions, companyName, decimalAmount, displayAmount, type StatementTransaction } from "./StatementTransactions";
 import { ErrorMessage, StatementModal, StatusPill, csvCell, downloadText, jsonRequest, statementRequest, useStatementSort } from "./StatementUi";
 import "./statements.css";
@@ -85,7 +86,7 @@ export default function StatementApp() {
           {(view === "documents" || view === "pending") && <><DocumentsTable documents={documents} companyId={company} pending={view === "pending"} onSaved={save} /><div className="statement-list-coverage"><span>{documents.length} documents loaded{!documentPage.isDone && " · more records available"}</span>{!documentPage.isDone && <Button variant="outline" disabled={moreBusy} onClick={() => void loadMore("documents")}>{moreBusy && <Loader2 className="spin" size={14} />}Load more documents</Button>}</div></>}
           {view === "contacts" && <AddressBook entries={contacts} companyId={company} onSaved={save} />}
           {view === "imports" && <><ImportHistory imports={imports} onSaved={save} /><div className="statement-list-coverage"><span>{imports.length} imports loaded{!importPage.isDone && " · more records available"}</span>{!importPage.isDone && <Button variant="outline" disabled={moreBusy} onClick={() => void loadMore("imports")}>{moreBusy && <Loader2 className="spin" size={14} />}Load more imports</Button>}</div></>}
-          {view === "settings" && <>{bootstrap.canManage && <ReceiptCameraSettings />}<CardSettings cards={bootstrap.cards} onSaved={save} /><SenderSettings revision={revision} /><InvoiceExamples companyId={company} revision={revision} onSaved={save} /></>}
+          {view === "settings" && <>{bootstrap.canManage && <><StatementMailboxes revision={revision} /><ReceiptCameraSettings /></>}<CardSettings cards={bootstrap.cards} onSaved={save} /><SenderSettings revision={revision} /><InvoiceExamples companyId={company} revision={revision} onSaved={save} /></>}
           {view === "invoices" && <CreatedInvoices companyId={company} revision={revision} onSaved={save} />}
           {view === "exact" && <StatementExact revision={revision} />}
         </>}

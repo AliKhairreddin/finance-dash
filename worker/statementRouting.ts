@@ -14,6 +14,7 @@ import { renderInvoicePdf } from "./statementInvoicePdf";
 import { invoiceAi } from "./statementInvoiceAi";
 import { validateInvoiceAi } from "../shared/statementInvoices";
 import { handleCaptureDevice, routeReceiptCapture } from "./receiptCapture";
+import { handleMailboxApi, mailboxCallbackLanding } from "./statementMailboxes";
 
 export const statementsHostname = "statements.thatcanadian.dev";
 export const statementsInbox = "statements@finance.thatcanadian.dev";
@@ -90,6 +91,8 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (!isStatementSurface(url)) return null;
   if (["GET", "HEAD"].includes(request.method) && ["/favicon.svg", "/apple-touch-icon.png", "/site.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"].includes(url.pathname)) return env.ASSETS.fetch(request);
   if (url.hostname === statementsHostname && url.pathname.startsWith("/api/") && url.pathname !== "/api/session" && !url.pathname.startsWith("/api/statements/")) return json({ message: "Not found" }, 404);
+  const mailboxLanding = mailboxCallbackLanding(request);
+  if (mailboxLanding) return mailboxLanding;
   const exactLanding = exactCallbackLanding(request);
   if (exactLanding) return exactLanding;
   const authentication = await enforceSiteAuthentication(request, env);
@@ -98,7 +101,7 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (!session) return json({ message: "Authentication required" }, 401);
   try { normalizeStatementActor(session.username); } catch { return json({ message: "This account cannot access statements" }, 403); }
   if (url.pathname === "/api/session") return request.method === "GET" ? json(session) : json({ message: "Method not allowed" }, 405);
-  if (url.pathname.startsWith("/api/statements/")) return await handleCaptureDevice(request, env, session) ?? await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
+  if (url.pathname.startsWith("/api/statements/")) return await handleMailboxApi(request, env, session) ?? await handleCaptureDevice(request, env, session) ?? await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
   if (url.pathname.startsWith("/api/")) return json({ message: "Not found" }, 404);
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   // Static app assets use their original path; all app routes render the root SPA.
