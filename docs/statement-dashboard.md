@@ -140,7 +140,18 @@ transactions. Each upload rechecks the manager's access. Atomic counters limit
 each key to 5 attempts per minute and 120 per 24 hours. No key or setup URL is
 written to logs. Setup secrets use URL fragments and are removed after import.
 
-The camera opens automatically, uses the rear camera, and stops in the background.
+The camera opens automatically and uses the rear camera. One pending permission
+request is shared by overlapping resume events. The same stream is reused for
+retakes and subsequent receipts; its tracks are disabled during review and while
+the page is hidden, so capture is paused. Leaving the page releases the stream.
+iOS may end the stream or terminate the app, and a fresh launch can prompt again.
+Home-screen camera permission persistence is a known WebKit issue; the website
+cannot force iOS to remember permission. Safari's per-website Camera → Allow
+setting applies to Safari, not reliably to the separate home-screen app.
+See https://bugs.webkit.org/show_bug.cgi?id=327237.
+Dedicated camera-and-receipt artwork supplies the favicon, Apple touch icon and
+manifest icons. Versioned filenames avoid reusing the Finance icon's cache entry;
+an already-installed iPhone icon may still require adding the app again.
 Capture produces a JPEG embedded in a one-page PDF; the photo is not automatically
 cropped or perspective-corrected. The pending photo and exact PDF are saved in
 IndexedDB before showing review. Send requires internet; unsuccessful/uncertain

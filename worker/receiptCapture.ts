@@ -49,7 +49,7 @@ export async function routeReceiptCapture(request: Request, env: WorkerEnv): Pro
     } catch { return json({ message: "Delivery was not confirmed. Your photo is still on this phone. Try Send again; duplicates are detected." }, 502); }
   }
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
-  const publicAsset = url.pathname.startsWith("/assets/") || ["/receipt-capture.webmanifest", "/favicon.svg", "/apple-touch-icon.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"].includes(url.pathname);
+  const publicAsset = url.pathname.startsWith("/assets/") || ["/receipt-capture.webmanifest", "/receipt-icons/camera-receipt-v1.svg", "/receipt-icons/camera-receipt-180-v1.png", "/receipt-icons/camera-receipt-192-v1.png", "/receipt-icons/camera-receipt-512-v1.png"].includes(url.pathname);
   if (url.pathname !== "/" && !publicAsset) return json({ message: "Not found" }, 404);
   // Cloudflare canonicalizes .html URLs with a redirect. Fetch the clean asset
   // path internally so the public app stays at its manifest start URL, /.

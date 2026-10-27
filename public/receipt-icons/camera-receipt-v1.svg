@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <title>Receipts — camera and receipt</title>
+  <path fill="#09090b" d="M0 0h512v512H0z"/>
+  <g stroke="#fafafa" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M109 216h23l15-25h55l15 25h22a14 14 0 0 1 14 14v91a14 14 0 0 1-14 14H109a14 14 0 0 1-14-14v-91a14 14 0 0 1 14-14Z"/>
+    <circle cx="174" cy="274" r="33"/>
+    <path d="M292 170l16 12 17-12 17 12 17-12 17 12 16-12 17 12v162l-17-12-16 12-17-12-17 12-17-12-17 12-16-12V170Z"/>
+    <path d="M319 222h63m-63 33h63m-63 33h34"/>
+  </g>
+  <circle cx="226" cy="239" r="5" fill="#fafafa"/>
+</svg>

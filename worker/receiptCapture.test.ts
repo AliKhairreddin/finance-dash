@@ -18,6 +18,9 @@ test("camera host opens without a session and blocks every dashboard/internal AP
     assert.equal((await routeStatementSurface(request(path), env))?.status, 404, path);
   }
   assert.equal((await routeReceiptCapture(request("/receipt-capture.webmanifest"), env))?.status, 200);
+  for (const path of ["/receipt-icons/camera-receipt-v1.svg", "/receipt-icons/camera-receipt-180-v1.png", "/receipt-icons/camera-receipt-192-v1.png", "/receipt-icons/camera-receipt-512-v1.png"]) {
+    assert.equal(await (await routeReceiptCapture(request(path), env))?.text(), path);
+  }
   assert.equal(await routeReceiptCapture(new Request("https://finance.thatcanadian.dev/"), env), null);
 });
 test("uploads require an upload key and same origin, never a dashboard cookie", async () => {
