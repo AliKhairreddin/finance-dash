@@ -162,6 +162,13 @@ so only that worker asset receives a separate CSP allowing evaluation, with all
 network access disabled. The page's script policy remains restricted to self.
 Keep all corners visible on a contrasting surface. Curled paper and poor lighting
 can still need a retake; this is perspective correction, not curved-page dewarping.
+The camera supports centered 1×–3× digital zoom with a two-finger pinch or − / +
+buttons. Tap the zoom number to reset. The preview, live edge detector and saved
+capture use the same crop, without upscaling the saved image. This does not switch
+lenses or add optical detail; moving the phone closer is preferable for small text.
+1× is the widest available view. Touch/gesture handling is limited to the camera
+surface, leaving browser accessibility zoom available elsewhere. The preview clips
+the enlarged video within its fitted frame; the app also fits landscape screens.
 The original is saved in IndexedDB before processing. The cropped JPEG and exact
 one-page PDF are saved before review; the original remains available for Adjust
 edges until sending or retaking. Send requires internet; unsuccessful/uncertain

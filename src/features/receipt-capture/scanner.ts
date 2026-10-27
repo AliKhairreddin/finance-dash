@@ -1,5 +1,6 @@
 import type { ScanCorners } from "./scanGeometry";
 import type { ScanPixels } from "./scanEngine";
+import { drawCameraFrame } from "./zoom";
 
 type ScanReply = { ready?: boolean; id: number; corners: ScanCorners | null; pixels: ScanPixels; error?: string };
 
@@ -47,12 +48,9 @@ export class ReceiptScanner {
   }
 }
 
-export function cameraPixels(video: HTMLVideoElement, maxSize = 640): ImageData {
-  const scale = Math.min(1, maxSize / Math.max(video.videoWidth, video.videoHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(2, Math.round(video.videoWidth * scale)); canvas.height = Math.max(2, Math.round(video.videoHeight * scale));
-  const context = canvas.getContext("2d", { willReadFrequently: true })!;
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+export function cameraPixels(video: HTMLVideoElement, zoom = 1): ImageData {
+  const canvas = drawCameraFrame(video, zoom, 640);
+  const context = canvas.getContext("2d")!;
   return context.getImageData(0, 0, canvas.width, canvas.height);
 }
 

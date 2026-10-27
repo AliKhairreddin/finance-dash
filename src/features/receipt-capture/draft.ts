@@ -1,6 +1,7 @@
 import { PDFDocument } from "pdf-lib";
 import { fullImageCorners, type ScanCorners } from "./scanGeometry";
 import type { ScanPixels } from "./scanEngine";
+import { drawCameraFrame } from "./zoom";
 
 export type ReceiptDraft = { id: "pending"; photo: Blob; pdf: Blob; scan?: { original: Blob; width: number; height: number; corners: ScanCorners; confirmed: boolean; detected: boolean } };
 
@@ -36,15 +37,8 @@ async function canvasDraft(canvas: HTMLCanvasElement): Promise<ReceiptDraft> {
   return draft;
 }
 
-export async function photograph(video: HTMLVideoElement): Promise<ReceiptDraft> {
-  if (!video.videoWidth || !video.videoHeight) throw new Error("Wait for the camera to be ready.");
-  const scale = Math.min(1, 3200 / Math.max(video.videoWidth, video.videoHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("The photo could not be captured. Try again.");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+export async function photograph(video: HTMLVideoElement, zoom = 1): Promise<ReceiptDraft> {
+  const canvas = drawCameraFrame(video, zoom, 3200);
   const draft = await canvasDraft(canvas);
   draft.scan = { original: draft.photo, width: canvas.width, height: canvas.height, corners: fullImageCorners(), confirmed: false, detected: false };
   // Persist the original before detection/cropping so an interruption loses nothing.

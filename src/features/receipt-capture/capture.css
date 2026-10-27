@@ -8,6 +8,15 @@ body:has(.capture-app) { margin: 0; background: #09090b; }
 .capture-dot.connected { background: var(--green); }
 .capture-viewfinder { flex: 1; min-height: 160px; overflow: hidden; position: relative; background: #09090b; color: #fff; }
 .capture-viewfinder video, .capture-viewfinder img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.capture-camera { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.capture-camera[hidden] { display: none; }
+.capture-camera-frame { position: absolute; overflow: hidden; }
+.capture-camera-frame video { transform-origin: center; }
+.capture-zoom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px; border: 1px solid #ffffff40; border-radius: 999px; background: #18181be8; color: #fff; }
+.capture-zoom button { min-width: 44px; min-height: 44px; border-radius: 999px; color: #fff; background: transparent; touch-action: manipulation; }
+.capture-zoom button:hover { color: #fff; background: #ffffff20; }
+.capture-zoom button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.capture-zoom-value { width: 64px; font-variant-numeric: tabular-nums; }
 .capture-guides { pointer-events: none; position: absolute; inset: 6% 8%; }
 .capture-guides i { position: absolute; height: 28px; width: 28px; border-color: #fff; border-style: solid; border-width: 0; opacity: .8; }
 .capture-guides i:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 8px; }
@@ -46,4 +55,12 @@ body:has(.capture-app) { margin: 0; background: #09090b; }
 .capture-dialog label { font-size: 14px; font-weight: 600; }
 .capture-dialog textarea { width: 100%; min-height: 100px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 16px; resize: vertical; overflow-wrap: anywhere; }
 .capture-dialog button { min-height: 44px; }
-@media (orientation: landscape) and (max-height: 500px) { .capture-app { height: auto; min-height: 100dvh; } .capture-viewfinder { min-height: 65vh; } }
+@media (orientation: landscape) and (max-height: 500px) {
+  .capture-app { display: grid; grid-template-columns: minmax(0, 1fr) 220px; grid-template-rows: auto minmax(0, 1fr); max-width: none; }
+  .capture-header { grid-column: 1 / -1; padding: 4px 18px; }
+  .capture-viewfinder { grid-column: 1; grid-row: 2; min-height: 0; }
+  .capture-controls { grid-column: 2; grid-row: 2; justify-content: center; overflow-y: auto; padding: 12px; }
+  .capture-review-actions { flex-direction: column; gap: 8px; }
+  .capture-review-actions button, .capture-send { flex: none; }
+  .capture-hint { text-align: center; }
+}
