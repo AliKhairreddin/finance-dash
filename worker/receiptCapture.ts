@@ -51,7 +51,9 @@ export async function routeReceiptCapture(request: Request, env: WorkerEnv): Pro
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   const publicAsset = url.pathname.startsWith("/assets/") || ["/receipt-capture.webmanifest", "/favicon.svg", "/apple-touch-icon.png", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"].includes(url.pathname);
   if (url.pathname !== "/" && !publicAsset) return json({ message: "Not found" }, 404);
-  const response = await env.ASSETS.fetch(url.pathname === "/" ? new Request(new URL("/receipt-capture.html", url), request) : request);
+  // Cloudflare canonicalizes .html URLs with a redirect. Fetch the clean asset
+  // path internally so the public app stays at its manifest start URL, /.
+  const response = await env.ASSETS.fetch(url.pathname === "/" ? new Request(new URL("/receipt-capture", url), request) : request);
   const headers = new Headers(response.headers);
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");

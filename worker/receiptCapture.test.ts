@@ -11,7 +11,7 @@ function post(bytes: Uint8Array, token = key, from = origin) { return request("/
 const success = (value: unknown) => Response.json({ status: "success", value });
 test("camera host opens without a session and blocks every dashboard/internal API", async () => {
   const response = await routeStatementSurface(request("/"), env);
-  assert.equal(response?.status, 200); assert.equal(await response?.text(), "/receipt-capture.html");
+  assert.equal(response?.status, 200); assert.equal(await response?.text(), "/receipt-capture");
   assert.match(response!.headers.get("Permissions-Policy")!, /camera=\(self\)/);
   assert.equal(response!.headers.get("Referrer-Policy"), "no-referrer");
   for (const path of ["/api/session", "/api/snapshot", "/api/statements/documents", "/api/internal/statements/setup", "/login", "/top-up"]) {
