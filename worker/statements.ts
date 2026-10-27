@@ -73,7 +73,7 @@ async function saveFile(env: StatementEnv, bytes: Uint8Array<ArrayBuffer>, conte
   if (!result.storageId) throw new Error("File storage returned no identifier");
   return result.storageId as Id<"_storage">;
 }
-async function ingestPdf(env: StatementEnv, input: { bytes: Uint8Array<ArrayBuffer>; name: string; origin: "file" | "email"; actor?: StatementActor; companyId?: StatementCompanyId;
+export async function ingestPdf(env: StatementEnv, input: { bytes: Uint8Array<ArrayBuffer>; name: string; origin: "file" | "email"; actor?: StatementActor; companyId?: StatementCompanyId;
   sender?: string; subject?: string; messageId?: string; receivedAt?: string; emailRawStorageId?: Id<"_storage">; quarantined: boolean; sourceContext?: string; senderKnown?: boolean }) {
   if (new TextDecoder("ascii").decode(input.bytes.subarray(0, 5)) !== "%PDF-" || input.bytes.length > maximumFileBytes) throw new Error("A valid PDF no larger than 15 MB is required");
   const { bytes, name, ...metadata } = input;

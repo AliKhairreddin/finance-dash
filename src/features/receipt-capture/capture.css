@@ -1,0 +1,39 @@
+.capture-app { width: 100%; max-width: 620px; min-height: 100svh; height: 100dvh; margin: auto; display: flex; flex-direction: column; color: var(--ink); background: var(--app-bg); padding-top: env(safe-area-inset-top); }
+body:has(.capture-app) { margin: 0; background: #09090b; }
+.capture-header { flex-shrink: 0; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; }
+.capture-brand, .capture-header-actions { display: flex; align-items: center; gap: 10px; }
+.capture-brand strong { font-size: 18px; font-weight: 650; letter-spacing: -.5px; }
+.capture-header-actions button { position: relative; min-width: 44px; min-height: 44px; }
+.capture-dot { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--app-muted); top: 7px; right: 6px; }
+.capture-dot.connected { background: var(--green); }
+.capture-viewfinder { flex: 1; min-height: 160px; overflow: hidden; position: relative; background: #09090b; color: #fff; }
+.capture-viewfinder video, .capture-viewfinder img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.capture-guides { pointer-events: none; position: absolute; inset: 6% 8%; }
+.capture-guides i { position: absolute; height: 28px; width: 28px; border-color: #fff; border-style: solid; border-width: 0; opacity: .8; }
+.capture-guides i:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 8px; }
+.capture-guides i:nth-child(2) { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; border-top-right-radius: 8px; }
+.capture-guides i:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; border-bottom-left-radius: 8px; }
+.capture-guides i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; border-bottom-right-radius: 8px; }
+.capture-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 28px; text-align: center; background: #09090b; }
+.capture-state p { max-width: 340px; color: #d4d4d8; font-size: 14px; line-height: 1.5; }
+.capture-state h1 { font-size: 24px; font-weight: 600; letter-spacing: -.7px; }
+.capture-state button { color: #09090b; background: #fff; height: 48px; padding: 0 24px; }
+.capture-success-icon { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 50%; background: #dcfce7; color: #166534; }
+.capture-review-label { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); background: #09090bd9; border: 1px solid #71717a; color: #fff; padding: 8px 14px; border-radius: 24px; white-space: nowrap; font-size: 12px; }
+.capture-controls { flex-shrink: 0; display: flex; align-items: center; flex-direction: column; gap: 12px; padding: 16px 20px max(20px, env(safe-area-inset-bottom)); }
+.capture-hint { font-size: 13px; color: var(--app-muted); }
+.capture-shutter { width: 76px; height: 76px; border: 3px solid var(--ink); border-radius: 50%; padding: 5px; background: var(--panel); color: var(--ink); }
+.capture-shutter:hover { background: var(--panel-soft); }
+.capture-shutter > span { display: block; width: 100%; height: 100%; background: var(--ink); border-radius: 50%; }
+.capture-review-actions { display: flex; gap: 12px; width: 100%; }
+.capture-review-actions button, .capture-send { min-height: 52px; font-size: 16px; }
+.capture-review-actions > button:first-child { flex: 1; }
+.capture-send { flex: 2; width: 100%; }
+.capture-error { font-size: 13px; color: var(--red); background: var(--red-soft); border: 1px solid var(--red-border); border-radius: 8px; padding: 12px; line-height: 1.5; width: 100%; }
+.capture-dialog { max-width: min(420px, calc(100vw - 32px)) !important; max-height: 85dvh; overflow-y: auto; }
+.capture-dialog p { font-size: 14px; line-height: 1.6; color: var(--app-muted); }
+.capture-dialog form { display: grid; gap: 12px; }
+.capture-dialog label { font-size: 14px; font-weight: 600; }
+.capture-dialog textarea { width: 100%; min-height: 100px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 16px; resize: vertical; overflow-wrap: anywhere; }
+.capture-dialog button { min-height: 44px; }
+@media (orientation: landscape) and (max-height: 500px) { .capture-app { height: auto; min-height: 100dvh; } .capture-viewfinder { min-height: 65vh; } }

@@ -35,6 +35,10 @@
   },
   "routes": [
     {
+      "pattern": "receipts.thatcanadian.dev",
+      "custom_domain": true
+    },
+    {
       "pattern": "finance.thatcanadian.dev",
       "custom_domain": true
     },

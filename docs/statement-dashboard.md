@@ -121,6 +121,36 @@ The service-token-protected POST `/api/internal/statements/verify-invoice` runs 
 fixed synthetic AI/PDF check, creates no financial records and returns a sample
 PDF. It verifies the saved model/ZDR and multi-page PDF rendering after deployment.
 
+## Receipt camera
+
+`https://receipts.thatcanadian.dev` is a separate public, mobile camera app in the
+same Worker. It never asks for dashboard sign-in or uses a dashboard session.
+In Statements → Settings → Receipt camera, a manager creates a private phone
+setup link. Add the camera website to the iPhone Home Screen, open that app,
+then paste the link into its connection screen once. Safari and installed web
+apps may have separate storage, so connect inside the installed app. Camera
+permission remains controlled by iOS. No native app or App Store is needed.
+
+The phone retains a random 256-bit upload-only key in local storage with no
+timed expiry. Convex stores only its SHA-256 digest. One key per manager may be
+active; Disconnect phone revokes every copy. A lost link can be replaced by
+disconnecting and creating another. Clearing website data removes the phone's
+connection. Keys cannot read documents, access financial APIs, or change bank
+transactions. Each upload rechecks the manager's access. Atomic counters limit
+each key to 5 attempts per minute and 120 per 24 hours. No key or setup URL is
+written to logs. Setup secrets use URL fragments and are removed after import.
+
+The camera opens automatically, uses the rear camera, and stops in the background.
+Capture produces a JPEG embedded in a one-page PDF; the photo is not automatically
+cropped or perspective-corrected. The pending photo and exact PDF are saved in
+IndexedDB before showing review. Send requires internet; unsuccessful/uncertain
+delivery retains the draft and retries reuse identical bytes for deduplication.
+Confirmed intake clears the local draft. There is no offline app-shell cache or
+background upload; keep the app open until Send is confirmed. Existing durable
+OCR, AI privacy controls, company assignment and human review apply. Sending does
+not mark a receipt paid or create a bank transaction. No existing records are
+migrated; the only schema addition is the device authorization table.
+
 ## Exact connection
 
 The Exact page is implemented but requires the account owner's app registration

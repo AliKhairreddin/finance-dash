@@ -13,6 +13,7 @@ import { handleStatementInvoices } from "./statementInvoices";
 import { renderInvoicePdf } from "./statementInvoicePdf";
 import { invoiceAi } from "./statementInvoiceAi";
 import { validateInvoiceAi } from "../shared/statementInvoices";
+import { handleCaptureDevice, routeReceiptCapture } from "./receiptCapture";
 
 export const statementsHostname = "statements.thatcanadian.dev";
 export const statementsInbox = "statements@finance.thatcanadian.dev";
@@ -25,6 +26,8 @@ export function isStatementSurface(url: URL): boolean {
 // Called before legacy finance routing: a session on the statements host cannot
 // accidentally reach the finance API, reports, or other host-specific entrypoints.
 export async function routeStatementSurface(request: Request, env: WorkerEnv): Promise<Response | null> {
+  const capture = await routeReceiptCapture(request, env);
+  if (capture) return capture;
   const url = new URL(request.url);
   if (url.pathname === "/api/internal/statements/verify-invoice") {
     if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, 401);
@@ -95,7 +98,7 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (!session) return json({ message: "Authentication required" }, 401);
   try { normalizeStatementActor(session.username); } catch { return json({ message: "This account cannot access statements" }, 403); }
   if (url.pathname === "/api/session") return request.method === "GET" ? json(session) : json({ message: "Method not allowed" }, 405);
-  if (url.pathname.startsWith("/api/statements/")) return await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
+  if (url.pathname.startsWith("/api/statements/")) return await handleCaptureDevice(request, env, session) ?? await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
   if (url.pathname.startsWith("/api/")) return json({ message: "Not found" }, 404);
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   // Static app assets use their original path; all app routes render the root SPA.
