@@ -27,6 +27,9 @@ const views = [
 ] as const;
 type View = typeof views[number]["id"];
 type Action = "reconcile" | "complete" | "reopen" | "trash" | "restore";
+type TransactionCount = { company: string; completed: boolean; revision: number } & (
+  { status: "loading" | "error" } | { status: "ready"; total: number; truncated: boolean }
+);
 const actionNames: Record<Action, string> = { reconcile: "Mark checked", complete: "Mark done", reopen: "Check again", trash: "Move to Trash", restore: "Restore" };
 const emptyList: StatementList = { transactions: [], total: 0, hasMore: false, offset: 0, truncated: false, totals: [] };
 const pageSize = 50;
@@ -35,6 +38,7 @@ export default function StatementApp() {
   const [company, setCompany] = useUrlState<string>("company", "all", { allowedValues: ["all", ...statementCompanies.map(row => row.id)] });
   const [view, setView] = useUrlState<View>("view", "transactions", { allowedValues: views.map(row => row.id), history: "push" });
   const [bootstrap, setBootstrap] = useState<StatementBootstrap | null>(null);
+  const [transactionCount, setTransactionCount] = useState<TransactionCount | null>(null);
   const [documents, setDocuments] = useState<StatementDocument[]>([]), [imports, setImports] = useState<StatementImportSummary[]>([]), [contacts, setContacts] = useState<StatementAddress[]>([]);
   const [documentPage, setDocumentPage] = useState({ continueCursor: "", isDone: true }), [importPage, setImportPage] = useState({ continueCursor: "", isDone: true });
   const [moreBusy, setMoreBusy] = useState(false);
@@ -60,6 +64,10 @@ export default function StatementApp() {
   }, [documents, imports, refresh]);
   const pending = documents.filter(row => row.status !== "ready" && (company === "all" || row.companyId === company)).length;
   const save = () => { refresh(); setMessage(""); };
+  const showTransactionCount = view === "transactions" || view === "completed";
+  const currentCount = transactionCount?.company === company && transactionCount.completed === (view === "completed") && transactionCount.revision === revision ? transactionCount : null;
+  const countText = currentCount?.status === "ready" ? `${currentCount.total.toLocaleString()}${currentCount.truncated ? "+" : ""}` : currentCount?.status === "error" ? "—" : "…";
+  const countLabel = currentCount?.status === "ready" ? `${currentCount.truncated ? "At least " : ""}${currentCount.total.toLocaleString()} matching transactions` : currentCount?.status === "error" ? "Transaction count unavailable" : "Loading transaction count";
   const loadMore = async (kind: "documents" | "imports") => {
     setMoreBusy(true); setError("");
     try { const params = new URLSearchParams({ companyId: company, cursor: kind === "documents" ? documentPage.continueCursor : importPage.continueCursor });
@@ -68,12 +76,12 @@ export default function StatementApp() {
     } catch (err) { setError(err instanceof Error ? err.message : "More records could not be loaded"); } finally { setMoreBusy(false); }
   };
   return <main className="statement-shell">
-    <header className="statement-topbar"><div className="statement-topbar-brand-group"><div className="statement-brand"><span className="statement-brand-icon"><LayoutList size={20} /></span><div><strong>Statements</strong><span>Company finances</span></div></div><div className="statement-navigation-selects">{view !== "exact" && <NativeSelect className="statement-company-select" aria-label="Company workspace" value={company} onValueChange={setCompany}>{statementCompanies.map(row => <NativeSelectOption key={row.id} value={row.id}>{row.name}</NativeSelectOption>)}<NativeSelectOption value="all">All companies</NativeSelectOption></NativeSelect>}<NativeSelect className="statement-page-select" aria-label="Page" searchable={false} value={view} onValueChange={value => setView(value as View)}>{views.map(item => <NativeSelectOption key={item.id} value={item.id}>{item.label}{item.id === "pending" && pending > 0 ? ` (${pending}${!documentPage.isDone ? "+" : ""})` : ""}</NativeSelectOption>)}</NativeSelect></div></div><div className="statement-topbar-actions"><button className="statement-inbox" aria-label="Copy statements email address" title="Copy statements email address" onClick={async () => { try { await navigator.clipboard.writeText(bootstrap?.inbox || "statements@finance.thatcanadian.dev"); setMessage("Receiving address copied."); } catch { setMessage("statements@finance.thatcanadian.dev"); } }}><Mail size={15} /><span>{bootstrap?.inbox || "statements@finance.thatcanadian.dev"}</span><Copy size={13} /></button><a href="https://finance.thatcanadian.dev" className="statement-finance-link">Finance dashboard<ArrowUpRight size={14} /></a>{bootstrap && <span className="statement-user">{bootstrap.actor}</span>}<a href="/logout" className="statement-logout">Sign out</a></div></header>
+    <header className="statement-topbar"><div className="statement-topbar-brand-group"><div className="statement-brand"><span className="statement-brand-icon"><LayoutList size={20} /></span><div><strong>Statements</strong><span>Company finances</span></div></div><div className="statement-navigation-selects">{view !== "exact" && <NativeSelect className="statement-company-select" aria-label="Company workspace" value={company} onValueChange={setCompany}>{statementCompanies.map(row => <NativeSelectOption key={row.id} value={row.id}>{row.name}</NativeSelectOption>)}<NativeSelectOption value="all">All companies</NativeSelectOption></NativeSelect>}<NativeSelect className="statement-page-select" aria-label="Page" searchable={false} value={view} onValueChange={value => setView(value as View)}>{views.map(item => <NativeSelectOption key={item.id} value={item.id}>{item.label}{item.id === view && showTransactionCount ? ` (${countText})` : ""}{item.id === "pending" && pending > 0 ? ` (${pending}${!documentPage.isDone ? "+" : ""})` : ""}</NativeSelectOption>)}</NativeSelect></div></div><div className="statement-topbar-actions"><button className="statement-inbox" aria-label="Copy statements email address" title="Copy statements email address" onClick={async () => { try { await navigator.clipboard.writeText(bootstrap?.inbox || "statements@finance.thatcanadian.dev"); setMessage("Receiving address copied."); } catch { setMessage("statements@finance.thatcanadian.dev"); } }}><Mail size={15} /><span>{bootstrap?.inbox || "statements@finance.thatcanadian.dev"}</span><Copy size={13} /></button><a href="https://finance.thatcanadian.dev" className="statement-finance-link">Finance dashboard<ArrowUpRight size={14} /></a>{bootstrap && <span className="statement-user">{bootstrap.actor}</span>}<a href="/logout" className="statement-logout">Sign out</a></div></header>
     <div className="statement-workspace"><aside className="statement-sidebar"><nav aria-label="Statement pages">{views.map(item => <button key={item.id} className={view === item.id ? "active" : ""} aria-current={view === item.id ? "page" : undefined} onClick={() => setView(item.id)}><item.icon size={16} /><span>{item.label}</span>{item.id === "pending" && pending > 0 && <span className="statement-nav-count">{pending}{!documentPage.isDone && "+"}</span>}</button>)}</nav><div className="statement-sidebar-foot"><span className="statement-live-dot" />Saved in Finance</div></aside>
-      <div className="statement-content"><div className="statement-page-heading"><div><h1>{views.find(item => item.id === view)?.label}</h1></div><div className="row-actions"><Button variant="ghost" size="icon" aria-label="Refresh saved records" disabled={loading} onClick={refresh}><RefreshCw size={17} className={loading ? "spin" : ""} /></Button>{view !== "exact" && <><Button variant="outline" onClick={() => setUpload(true)} disabled={!bootstrap}><Upload size={15} />Upload</Button><Button className="primary-button" onClick={() => setManual(true)} disabled={!bootstrap}><Plus size={15} />Add transaction</Button></>}</div></div>
+      <div className="statement-content"><div className="statement-page-heading"><div><h1>{views.find(item => item.id === view)?.label}{showTransactionCount && <span className="statement-title-count" aria-label={countLabel}>{countText}</span>}</h1></div><div className="row-actions"><Button variant="ghost" size="icon" aria-label="Refresh saved records" disabled={loading} onClick={refresh}><RefreshCw size={17} className={loading ? "spin" : ""} /></Button>{view !== "exact" && <><Button variant="outline" onClick={() => setUpload(true)} disabled={!bootstrap}><Upload size={15} />Upload</Button><Button className="primary-button" onClick={() => setManual(true)} disabled={!bootstrap}><Plus size={15} />Add transaction</Button></>}</div></div>
         <ErrorMessage error={error} />{error && <Button variant="outline" onClick={refresh}>Retry</Button>}{message && <div className="statement-notice" role="status">{message}<button aria-label="Dismiss notification" onClick={() => setMessage("")}>×</button></div>}
         {!bootstrap && loading ? <div className="statement-loading" role="status"><Loader2 size={22} className="spin" />Loading Statements…</div> : bootstrap && <>
-          {(view === "transactions" || view === "completed") && <Transactions company={company} completed={view === "completed"} revision={revision} onSaved={save} onReview={setReview} onCopy={setCopy} />}
+          {(view === "transactions" || view === "completed") && <Transactions company={company} completed={view === "completed"} revision={revision} onCountChange={setTransactionCount} onSaved={save} onReview={setReview} onCopy={setCopy} />}
           {(view === "documents" || view === "pending") && <><DocumentsTable documents={documents} companyId={company} pending={view === "pending"} onSaved={save} /><div className="statement-list-coverage"><span>{documents.length} documents loaded{!documentPage.isDone && " · more records available"}</span>{!documentPage.isDone && <Button variant="outline" disabled={moreBusy} onClick={() => void loadMore("documents")}>{moreBusy && <Loader2 className="spin" size={14} />}Load more documents</Button>}</div></>}
           {view === "contacts" && <AddressBook entries={contacts} companyId={company} onSaved={save} />}
           {view === "imports" && <><ImportHistory imports={imports} onSaved={save} /><div className="statement-list-coverage"><span>{imports.length} imports loaded{!importPage.isDone && " · more records available"}</span>{!importPage.isDone && <Button variant="outline" disabled={moreBusy} onClick={() => void loadMore("imports")}>{moreBusy && <Loader2 className="spin" size={14} />}Load more imports</Button>}</div></>}
@@ -89,7 +97,7 @@ export default function StatementApp() {
   </main>;
 }
 
-function Transactions({ company, completed, revision, onSaved, onReview, onCopy }: { company: string; completed: boolean; revision: number; onSaved: () => void; onReview: (row: StatementTransaction) => void; onCopy: (row: StatementTransaction) => void }) {
+function Transactions({ company, completed, revision, onCountChange, onSaved, onReview, onCopy }: { company: string; completed: boolean; revision: number; onCountChange: (count: TransactionCount | null) => void; onSaved: () => void; onReview: (row: StatementTransaction) => void; onCopy: (row: StatementTransaction) => void }) {
   const [search, setSearch] = useUrlState("search", ""), [status, setStatus] = useUrlState<string>("status", "all", { allowedValues: ["all", "pending", "reconciled", "completed"] });
   const [direction, setDirection] = useUrlState<string>("direction", "all", { allowedValues: ["all", "in", "out"] });
   const [currency, setCurrency] = useUrlState("currency", ""), [source, setSource] = useUrlState("source", "");
@@ -109,8 +117,17 @@ function Transactions({ company, completed, revision, onSaved, onReview, onCopy 
   useEffect(() => { setPage(0); setSelectedRows([]); setSelectionBusy(false); selectionAbort.current?.abort(); return () => selectionAbort.current?.abort(); }, [scope]);
   useEffect(() => {
     const abort = new AbortController(); setLoading(true); setError("");
-    void statementRequest<StatementList>(`/transactions?${params}`, { signal: abort.signal }).then(result => { setList(result); setSelectedRows(current => current.map(row => result.transactions.find(next => next._id === row._id) ?? row)); }).catch(err => { if (!abort.signal.aborted) setError(err instanceof Error ? err.message : "Transactions unavailable"); }).finally(() => { if (!abort.signal.aborted) setLoading(false); }); return () => abort.abort();
-  }, [params, revision]);
+    const countScope = { company, completed, revision };
+    onCountChange({ ...countScope, status: "loading" });
+    void statementRequest<StatementList>(`/transactions?${params}`, { signal: abort.signal }).then(result => {
+      if (abort.signal.aborted) return;
+      setList(result); setSelectedRows(current => current.map(row => result.transactions.find(next => next._id === row._id) ?? row));
+      onCountChange({ ...countScope, status: "ready", total: result.total, truncated: result.truncated });
+    }).catch(err => {
+      if (!abort.signal.aborted) { setError(err instanceof Error ? err.message : "Transactions unavailable"); onCountChange({ ...countScope, status: "error" }); }
+    }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    return () => { abort.abort(); onCountChange(null); };
+  }, [params, revision, company, completed, onCountChange]);
   const chosen = selectedRows;
   const allSelected = list.transactions.length > 0 && list.transactions.every(row => selected.includes(row._id));
   const selectAll = async () => {
@@ -131,7 +148,8 @@ function Transactions({ company, completed, revision, onSaved, onReview, onCopy 
     } catch (err) { setError(err instanceof Error ? err.message : "Download failed"); } finally { setExportBusy(false); }
   };
   return <>
-    <div className="statement-summary"><div><span>{list.truncated ? "Transactions shown" : "Transactions"}</span><strong>{list.total.toLocaleString()}{list.truncated && "+"}</strong></div>{list.totals.map(total => <div key={total.currency}><span>{total.currency}{list.truncated && " · incomplete totals"}</span><div className="statement-summary-values"><span><ArrowDownLeft size={14} />{displayAmount(total.inMinor, total.currency)}</span><span><ArrowUpRight size={14} />{displayAmount(total.outMinor, total.currency)}</span></div></div>)}{list.truncated && <span className="statement-warning">Only 2,000 saved records can be checked at once. Choose a smaller date range to see complete totals.</span>}</div>
+    {list.totals.length > 0 && <div className="statement-totals" aria-label={list.truncated ? "Incomplete totals" : "Transaction totals"} aria-busy={loading}>{list.totals.map(total => <div key={total.currency}><strong>{total.currency}</strong><span><ArrowDownLeft size={14} aria-hidden="true" /><span className="sr-only">Money in: </span>{displayAmount(total.inMinor, total.currency)}</span><span><ArrowUpRight size={14} aria-hidden="true" /><span className="sr-only">Money out: </span>{displayAmount(total.outMinor, total.currency)}</span></div>)}</div>}
+    {list.truncated && <p className="statement-warning">Only 2,000 saved records can be checked at once. Choose a smaller date range to see complete totals.</p>}
     <section className="statement-panel"><div className="statement-filterbar"><div className="statement-search"><Search size={16} /><Input aria-label="Search transactions" placeholder="Search transactions" value={search} onChange={event => setSearch(event.target.value)} /></div>
       {company === "all" && <NativeSelect aria-label="Filter company" value={companyFilter} onValueChange={setCompanyFilter}><NativeSelectOption value="all">All companies</NativeSelectOption><NativeSelectOption value="unassigned">No company</NativeSelectOption>{statementCompanies.map(row => <NativeSelectOption key={row.id} value={row.id}>{row.name}</NativeSelectOption>)}</NativeSelect>}
       {!completed && <NativeSelect aria-label="Filter status" value={status} onValueChange={setStatus}><NativeSelectOption value="all">Any status</NativeSelectOption><NativeSelectOption value="pending">Needs checking</NativeSelectOption><NativeSelectOption value="reconciled">Checked</NativeSelectOption><NativeSelectOption value="completed">Done</NativeSelectOption></NativeSelect>}
