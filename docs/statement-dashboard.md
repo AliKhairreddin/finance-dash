@@ -152,9 +152,19 @@ See https://bugs.webkit.org/show_bug.cgi?id=327237.
 Dedicated camera-and-receipt artwork supplies the favicon, Apple touch icon and
 manifest icons. Versioned filenames avoid reusing the Finance icon's cache entry;
 an already-installed iPhone icon may still require adding the app again.
-Capture produces a JPEG embedded in a one-page PDF; the photo is not automatically
-cropped or perspective-corrected. The pending photo and exact PDF are saved in
-IndexedDB before showing review. Send requires internet; unsuccessful/uncertain
+The web scanner detects receipt boundaries in the live view. Tap Scan, check or
+drag the four corners, then Use scan to crop and correct perspective. Capture is
+manual; a detected outline does not automatically take a picture. If edges cannot
+be detected, the editor explicitly asks the user to set the four corners. Detection
+and correction use pinned, self-hosted OpenCV in a dedicated browser worker; no
+images leave the phone for this processing. Its runtime may generate functions,
+so only that worker asset receives a separate CSP allowing evaluation, with all
+network access disabled. The page's script policy remains restricted to self.
+Keep all corners visible on a contrasting surface. Curled paper and poor lighting
+can still need a retake; this is perspective correction, not curved-page dewarping.
+The original is saved in IndexedDB before processing. The cropped JPEG and exact
+one-page PDF are saved before review; the original remains available for Adjust
+edges until sending or retaking. Send requires internet; unsuccessful/uncertain
 delivery retains the draft and retries reuse identical bytes for deduplication.
 Confirmed intake clears the local draft. There is no offline app-shell cache or
 background upload; keep the app open until Send is confirmed. Existing durable

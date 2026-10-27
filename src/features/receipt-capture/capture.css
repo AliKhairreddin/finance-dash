@@ -24,7 +24,17 @@ body:has(.capture-app) { margin: 0; background: #09090b; }
 .capture-hint { font-size: 13px; color: var(--app-muted); }
 .capture-shutter { width: 76px; height: 76px; border: 3px solid var(--ink); border-radius: 50%; padding: 5px; background: var(--panel); color: var(--ink); }
 .capture-shutter:hover { background: var(--panel-soft); }
-.capture-shutter > span { display: block; width: 100%; height: 100%; background: var(--ink); border-radius: 50%; }
+.capture-shutter > span { display: grid; place-items: center; width: 100%; height: 100%; background: var(--ink); color: var(--panel); border-radius: 50%; }
+.scan-live-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.scan-live-edges polygon { fill: #4ade8012; stroke: #4ade80; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.scan-crop { position: absolute; inset: 0; touch-action: none; }
+.scan-crop svg { position: absolute; }
+.scan-corner { position: absolute; transform: translate(-50%, -50%); width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; touch-action: none; cursor: grab; border-radius: 50%; }
+.scan-corner span { width: 17px; height: 17px; border: 3px solid #fff; background: #16a34a; border-radius: 50%; box-shadow: 0 1px 5px #0008; }
+.scan-corner:focus-visible { outline: 2px solid #4ade80; outline-offset: 0; }
+.scan-corner:active { cursor: grabbing; }
+.capture-adjust { min-height: 44px; }
+.capture-error button { text-decoration: underline; font-weight: 600; }
 .capture-review-actions { display: flex; gap: 12px; width: 100%; }
 .capture-review-actions button, .capture-send { min-height: 52px; font-size: 16px; }
 .capture-review-actions > button:first-child { flex: 1; }

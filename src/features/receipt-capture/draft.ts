@@ -1,6 +1,8 @@
 import { PDFDocument } from "pdf-lib";
+import { fullImageCorners, type ScanCorners } from "./scanGeometry";
+import type { ScanPixels } from "./scanEngine";
 
-export type ReceiptDraft = { id: "pending"; photo: Blob; pdf: Blob };
+export type ReceiptDraft = { id: "pending"; photo: Blob; pdf: Blob; scan?: { original: Blob; width: number; height: number; corners: ScanCorners; confirmed: boolean; detected: boolean } };
 
 async function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -23,6 +25,17 @@ export async function receiptDraft(value?: ReceiptDraft | null): Promise<Receipt
   } finally { db.close(); }
 }
 
+async function canvasDraft(canvas: HTMLCanvasElement): Promise<ReceiptDraft> {
+  const photo = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("The scan could not be saved.")), "image/jpeg", 0.94));
+  const pdf = await PDFDocument.create();
+  const embedded = await pdf.embedJpg(await photo.arrayBuffer());
+  const page = pdf.addPage([canvas.width * 0.24, canvas.height * 0.24]);
+  page.drawImage(embedded, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
+  const draft: ReceiptDraft = { id: "pending", photo, pdf: new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" }) };
+  if (draft.pdf.size > 15 * 1024 * 1024) throw new Error("The scan is too large. Retake it with the receipt closer.");
+  return draft;
+}
+
 export async function photograph(video: HTMLVideoElement): Promise<ReceiptDraft> {
   if (!video.videoWidth || !video.videoHeight) throw new Error("Wait for the camera to be ready.");
   const scale = Math.min(1, 3200 / Math.max(video.videoWidth, video.videoHeight));
@@ -32,14 +45,21 @@ export async function photograph(video: HTMLVideoElement): Promise<ReceiptDraft>
   const context = canvas.getContext("2d");
   if (!context) throw new Error("The photo could not be captured. Try again.");
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const photo = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("The photo could not be captured.")), "image/jpeg", 0.94));
-  const pdf = await PDFDocument.create();
-  const embedded = await pdf.embedJpg(await photo.arrayBuffer());
-  const page = pdf.addPage([canvas.width * 0.24, canvas.height * 0.24]);
-  page.drawImage(embedded, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
-  const draft: ReceiptDraft = { id: "pending", photo, pdf: new Blob([new Uint8Array(await pdf.save())], { type: "application/pdf" }) };
-  if (draft.pdf.size > 15 * 1024 * 1024) throw new Error("The photo is too large. Retake it with the receipt closer.");
-  // Save exactly the same PDF for every retry, including after an app restart.
+  const draft = await canvasDraft(canvas);
+  draft.scan = { original: draft.photo, width: canvas.width, height: canvas.height, corners: fullImageCorners(), confirmed: false, detected: false };
+  // Persist the original before detection/cropping so an interruption loses nothing.
   await receiptDraft(draft);
   return draft;
+}
+
+export async function saveScan(draft: ReceiptDraft, pixels: ScanPixels, corners: ScanCorners): Promise<ReceiptDraft> {
+  if (!draft.scan) throw new Error("Retake this receipt to scan it.");
+  const canvas = document.createElement("canvas"); canvas.width = pixels.width; canvas.height = pixels.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("The scan could not be saved. Try again.");
+  context.putImageData(new ImageData(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height), 0, 0);
+  const next = { ...await canvasDraft(canvas), scan: { ...draft.scan, corners, confirmed: true } };
+  // Every Send retry reuses this exact PDF, including after an app restart.
+  await receiptDraft(next);
+  return next;
 }

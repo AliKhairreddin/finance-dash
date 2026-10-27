@@ -29,6 +29,16 @@ test("uploads require an upload key and same origin, never a dashboard cookie", 
   assert.equal((await routeReceiptCapture(post(bytes, key, "https://evil.invalid"), env))?.status, 403);
   assert.equal((await routeReceiptCapture(request("/api/capture"), env))?.status, 404);
 });
+test("scan processing permissions are confined to the dedicated offline worker", async () => {
+  const page = (await routeReceiptCapture(request("/"), env))!;
+  assert.doesNotMatch(page.headers.get("Content-Security-Policy")!, /unsafe-eval/);
+  assert.match(page.headers.get("Content-Security-Policy")!, /worker-src 'self'/);
+  const scanner = (await routeReceiptCapture(request("/assets/receipt-scanner-abc123.js"), env))!;
+  assert.match(scanner.headers.get("Content-Security-Policy")!, /script-src 'self' 'unsafe-eval'/);
+  assert.match(scanner.headers.get("Content-Security-Policy")!, /connect-src 'none'/);
+  const other = (await routeReceiptCapture(request("/assets/receiptCapture-abc123.js"), env))!;
+  assert.doesNotMatch(other.headers.get("Content-Security-Policy")!, /unsafe-eval/);
+});
 test("confirmed mobile upload uses existing durable PDF intake and hides private document IDs", async () => {
   const original = globalThis.fetch, calls: Array<{ path: string; args: Record<string, unknown>[] }> = [];
   const document = await PDFDocument.create(); document.addPage([300, 600]); const bytes = await document.save();

@@ -58,7 +58,12 @@ export async function routeReceiptCapture(request: Request, env: WorkerEnv): Pro
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+  // OpenCV's WASM bindings generate functions inside this dedicated worker only.
+  // It receives pixels, never upload keys, and cannot make network requests.
+  const scanWorker = /^\/assets\/receipt-scanner-[\w-]+\.js$/.test(url.pathname);
+  headers.set("Content-Security-Policy", scanWorker
+    ? "default-src 'none'; script-src 'self' 'unsafe-eval'; connect-src 'none'"
+    : "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
   if (url.pathname === "/") headers.set("Cache-Control", "no-store");
   return new Response(response.body, { status: response.status, headers });
 }
