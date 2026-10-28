@@ -18,10 +18,10 @@ test("issuer designs distinguish our companies and resolve supplier aliases acro
 });
 test("copied example layouts reject overlaps and out-of-page or incomplete mappings", () => {
   const keys = ["seller", "number", "date", "customer", "customerAddress", "lines", "net", "tax", "total"] as const;
-  const copy = { width: 595, height: 842, currency: "EUR", fields: keys.map((key, i) => ({ key, x: 30, y: 30 + 80 * i, width: 500, height: 50, fontSize: 10, color: "#222222", background: "#ffffff", align: "left" as const, font: "sans" as const })), erase: [], columns: (["description", "net", "taxPercent", "total"] as const).map((key, i) => ({ key, x: 25 * i, width: 25 })) };
+  const copy = { width: 595, height: 842, currency: "EUR", fields: keys.map((key, i) => ({ key, x: 30, y: 30 + 80 * i, width: 500, height: 50, fontSize: 10, color: "#222222", background: "#ffffff", align: "left" as const, font: "sans" as const })), erase: [], columns: (["description", "net", "taxPercent", "total"] as const).map((key, i) => ({ key, x: 30 + 125 * i, width: 125 })) };
   assert.deepEqual(validateInvoiceCopy(copy), copy);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.slice(1) }), /must include/);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map((f, i) => i === 1 ? { ...f, y: 30 } : f) }), /overlap/);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map(f => ({ ...f, x: 200 })) }), /text areas/);
-  assert.throws(() => validateInvoiceCopy({ ...copy, columns: copy.columns.map(c => ({ ...c, x: 0 })) }), /overlap/);
+  assert.throws(() => validateInvoiceCopy({ ...copy, columns: copy.columns.map(c => ({ ...c, x: 30 })) }), /overlap/);
 });

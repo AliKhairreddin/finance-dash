@@ -75,7 +75,7 @@ test("company PDFs use white paper with local verified logos and stable restrain
 });
 test("example copies replace mapped values, escape new text and keep the original image design", () => {
   const keys = ["seller", "number", "date", "customer", "customerAddress", "lines", "net", "tax", "total"] as const;
-  const copy = { width: 595, height: 842, currency: "EUR", fields: keys.map((key, i) => ({ key, x: 30, y: 30 + 80 * i, width: 500, height: 50, fontSize: 10, color: "#222222", background: "#ffffff", align: "left" as const, font: "sans" as const })), erase: [{ x: 25, y: 25, width: 505, height: 750 }], columns: (["description", "net", "taxPercent", "total"] as const).map((key, i) => ({ key, x: 25 * i, width: 25 })) };
+  const copy = { width: 595, height: 842, currency: "EUR", fields: keys.map((key, i) => ({ key, x: 30, y: 30 + 80 * i, width: 500, height: 50, fontSize: 10, color: "#222222", background: "#ffffff", align: "left" as const, font: "sans" as const })), erase: [{ x: 25, y: 25, width: 505, height: 750 }], columns: (["description", "net", "taxPercent", "total"] as const).map((key, i) => ({ key, x: 30 + 125 * i, width: 125 })) };
   const layout = { headerPercent: 0, footerPercent: 0, sellerDetails: "Seller <Company>", paymentDetails: "", copy };
   const html = invoiceCopyHtml(draft, layout, "data:image/png;base64,AAAA", true);
   assert.ok(html.includes('class="original"')); assert.ok(html.includes('class="erase"')); assert.ok(html.includes("Seller &lt;Company&gt;"));

@@ -27,7 +27,9 @@ export async function verifyInvoiceCopy(env: Pick<WorkerEnv, "BROWSER" | "OPENRO
   const ai = await invoiceAi(env.OPENROUTER_API_KEY, model, invoiceCopyPrompt, { issuer: "Demo Company", width: inspected.width, height: inspected.height, positions: inspected.text }, { reasoningEffort: "none" });
   const mapped = ai.result as { error?: string; copy?: unknown };
   if (mapped.error || !mapped.copy) throw new Error(mapped.error || "No copied layout was produced");
-  const layout = invoiceLayout({ ...mapped, headerPercent: 0, footerPercent: 0 });
+  let layout;
+  try { layout = invoiceLayout({ ...mapped, headerPercent: 0, footerPercent: 0 }); }
+  catch (error) { throw new Error(`${error instanceof Error ? error.message : "Invalid mapping"}: ${JSON.stringify((mapped.copy as { columns?: unknown }).columns)}`); }
   const draft: InvoiceDraft = { number: "10001", date: "2026-09-24", dueDate: "", customer: "New Customer", customerAddress: "New Street 2\n2000 BB New City", currency: "EUR", notes: "", taxMode: "included", lines: [{ transactionId: "synthetic", description: "New service", amount: "121.00", taxPercent: "21" }] };
   return { bytes: await renderInvoicePdf(env, bytes, layout, draft, true), model: ai.model };
 }

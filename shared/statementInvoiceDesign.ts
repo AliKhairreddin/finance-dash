@@ -40,7 +40,8 @@ export function validateInvoiceCopy(value: InvoiceCopyLayout): InvoiceCopyLayout
   const keys = value.fields.map(f => f.key);
   if (new Set(keys).size !== keys.length || ["seller", "number", "date", "customer", "customerAddress", "lines", "net", "tax", "total"].some(key => !keys.includes(key as InvoiceCopyField["key"]))) throw new Error("The example must include company details, invoice number, date, lines and totals");
   if (value.fields.some((a, i) => value.fields.slice(i + 1).some(b => Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 0.5 && Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 0.5))) throw new Error("The example's text areas overlap. Adjust their positions before saving.");
-  if (new Set(value.columns.map(c => c.key)).size !== 4 || value.columns.some(c => !["description", "net", "taxPercent", "total"].includes(c.key) || !Number.isFinite(c.x) || !Number.isFinite(c.width) || c.x < 0 || c.width <= 0 || c.x + c.width > 100)) throw new Error("Check the example's line columns");
+  const lines = value.fields.find(f => f.key === "lines")!;
+  if (new Set(value.columns.map(c => c.key)).size !== 4 || value.columns.some(c => !["description", "net", "taxPercent", "total"].includes(c.key) || !Number.isFinite(c.x) || !Number.isFinite(c.width) || c.x < lines.x - 0.1 || c.width <= 0 || c.x + c.width > lines.x + lines.width + 0.1)) throw new Error("Check the example's line columns");
   if (value.columns.some((a, i) => value.columns.slice(i + 1).some(b => Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 0.1))) throw new Error("The example's line columns overlap");
   return value;
 }
