@@ -22,6 +22,6 @@ test("copied example layouts reject overlaps and out-of-page or incomplete mappi
   assert.deepEqual(validateInvoiceCopy(copy), copy);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.slice(1) }), /must include/);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map((f, i) => i === 1 ? { ...f, y: 30 } : f) }), /overlap/);
-  assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map(f => ({ ...f, x: 200 })) }), /text areas/);
+  assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map(f => ({ ...f, x: 200 })) }), /outside the page/);
   assert.throws(() => validateInvoiceCopy({ ...copy, columns: copy.columns.map(c => ({ ...c, x: 30 })) }), /overlap/);
 });

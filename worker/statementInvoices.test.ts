@@ -4,7 +4,7 @@ import { invoiceAi } from "./statementInvoiceAi";
 import { invoiceHtml, invoiceTemplateHtml } from "./statementInvoicePdf";
 import { handleStatementInvoices } from "./statementInvoices";
 import type { InvoiceDraft } from "../shared/statementInvoices";
-import { invoiceCopyHtml } from "./statementInvoiceCopy";
+import { invoiceCopyHtml, invoiceCopySchema } from "./statementInvoiceCopy";
 import { defaultInvoiceDesign } from "../shared/statementInvoiceDesign";
 const draft: InvoiceDraft = { number: "TEST-1", date: "2026-10-26", dueDate: "", customer: '<img src="https://bad.test">', customerAddress: "Amsterdam", notes: "", currency: "EUR", taxMode: "included", lines: [{ transactionId: "one", description: "<script>bad()</script>", amount: "121.00", taxPercent: "21" }] };
 test("invoice HTML escapes document/user text and does not include source transaction metadata", () => {
@@ -19,7 +19,7 @@ test("example branding is rasterized into bounded strips rather than embedding h
 test("invoice AI uses only the exact saved model with ZDR and rejects incomplete replies", async () => {
   const original = globalThis.fetch; let payload: Record<string, unknown> = {};
   globalThis.fetch = async (_url, init) => { payload = JSON.parse(String(init?.body)); return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"lines":[]}' } }], usage: { cost: 0.001 } }); };
-  try { const result = await invoiceAi("test", "saved/exact-model", "Test", {}, { reasoningEffort: "none" }); assert.equal(result.model, "saved/exact-model"); assert.equal(payload.model, "saved/exact-model"); assert.deepEqual(payload.reasoning, { effort: "none" }); assert.deepEqual(payload.provider, { zdr: true, data_collection: "deny", allow_fallbacks: false });
+  try { const result = await invoiceAi("test", "saved/exact-model", "Test", {}, { reasoningEffort: "none", outputSchema: invoiceCopySchema }); assert.equal(result.model, "saved/exact-model"); assert.equal(payload.model, "saved/exact-model"); assert.deepEqual(payload.reasoning, { effort: "none" }); assert.deepEqual(payload.provider, { zdr: true, data_collection: "deny", allow_fallbacks: false, require_parameters: true }); assert.deepEqual(payload.response_format, { type: "json_schema", json_schema: { name: "invoice_example", strict: true, schema: invoiceCopySchema } });
     globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: "length", message: { content: '{"lines":[]}' } }] }); await assert.rejects(invoiceAi("test", "saved/exact-model", "Test", {}));
   } finally { globalThis.fetch = original; }
 });

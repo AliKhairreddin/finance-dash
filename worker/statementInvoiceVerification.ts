@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { invoiceLayout, type InvoiceDraft } from "../shared/statementInvoices";
-import { invoiceCopyPrompt } from "./statementInvoiceCopy";
+import { invoiceCopyPrompt, invoiceCopySchema } from "./statementInvoiceCopy";
 import { invoiceAi } from "./statementInvoiceAi";
 import { inspectInvoiceExample, renderInvoicePdf } from "./statementInvoicePdf";
 
@@ -24,7 +24,7 @@ export async function verifyInvoiceCopy(env: Pick<WorkerEnv, "BROWSER" | "OPENRO
   text("Tax", 405, 494); text("209.79", 510, 494);
   line(520); text("Total EUR", 405, 532, 11, true); text("1208.79", 510, 532, 11, true);
   const bytes = await pdf.save(), inspected = await inspectInvoiceExample(env, bytes);
-  const ai = await invoiceAi(env.OPENROUTER_API_KEY, model, invoiceCopyPrompt, { issuer: "Demo Company", width: inspected.width, height: inspected.height, positions: inspected.text }, { reasoningEffort: "none" });
+  const ai = await invoiceAi(env.OPENROUTER_API_KEY, model, invoiceCopyPrompt, { issuer: "Demo Company", width: inspected.width, height: inspected.height, positions: inspected.text }, { reasoningEffort: "none", outputSchema: invoiceCopySchema });
   const mapped = ai.result as { error?: string; copy?: unknown };
   if (mapped.error || !mapped.copy) throw new Error(mapped.error || "No copied layout was produced");
   let layout;
