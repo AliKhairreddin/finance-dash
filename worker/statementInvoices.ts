@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
@@ -110,5 +111,12 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       return json(safeInvoice(row));
     }
     return json({ message: "Invoice route not found" }, 404);
-  } catch (error) { const raw = error instanceof Error ? error.message : "Invoice request failed"; return json({ message: (/Uncaught ConvexError: ([^\n]+)/.exec(raw)?.[1] ?? raw.split("\n")[0]).slice(0, 500) }, 400); }
+  } catch (error) {
+    // Production Convex messages hide the reason; expected errors carry it in data.
+    if (error instanceof ConvexError && typeof error.data === "string") return json({ message: error.data.slice(0, 500) }, 400);
+    const raw = error instanceof Error ? error.message : "Invoice request failed";
+    const reference = /\[Request ID: ([a-f0-9]+)\]/i.exec(raw)?.[1];
+    if (reference) return json({ message: `The invoice request could not finish. Try again. If it happens again, share this reference: ${reference}` }, 500);
+    return json({ message: raw.split("\n")[0].slice(0, 500) }, 400);
+  }
 }

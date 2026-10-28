@@ -29,7 +29,7 @@ test("invoice drafts use saved amounts, reject mixed-company selections and enfo
   assert.equal(row.draft.currency, "EUR"); assert.equal(row.draft.lines[0].amount, "121.00");
   await assert.rejects(t.query(api.statementInvoices.get, { ...auth, actor: "Alaa", id }));
   assert.equal(await t.mutation(api.statementInvoices.begin, input), id);
-  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID() }));
+  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID() }), /Invoice number TEST-001 is already used for this company\. Open it in Created invoices, or enter a different number\./);
 });
 test("invoice AI claims serialize generation and cannot change amounts or the selection", async () => {
   const { t, input } = await setup(), id = await t.mutation(api.statementInvoices.begin, input);

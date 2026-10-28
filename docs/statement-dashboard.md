@@ -126,6 +126,9 @@ saving the final invoice. Final PDFs are stored and immutable; changed source
 transactions block finalization. Discarded drafts retain history and release the
 unused invoice number. Created invoices shows the latest 100 records. This does
 not send email, post to Exact, mark payments or add evidence links automatically.
+Expected invoice errors use Convex's structured error data in production. A used
+invoice number points users to Created invoices or a different number; the
+existing invoice and saved company details remain unchanged.
 Templates, source snapshots, drafts, model/cost metadata and PDFs remain in Convex
 under existing company access controls. Uploading a replacement example does not
 change existing invoices.

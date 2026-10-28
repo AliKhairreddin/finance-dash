@@ -26,6 +26,33 @@ test("invoice routes reject missing membership and cross-site writes before acce
   assert.equal((await handleStatementInvoices(new Request(url), env, null))?.status, 403);
   assert.equal((await handleStatementInvoices(new Request(url, { method: "POST", headers: { Origin: "https://bad.test" } }), env, { username: "Ali", role: "administrator" }))?.status, 403);
 });
+test("invoice routes show production Convex error data without starting AI", async () => {
+  const original = globalThis.fetch, calls: string[] = [];
+  const env = { CONVEX_URL: "https://invoice-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test" } as WorkerEnv;
+  const url = "https://statements.thatcanadian.dev/api/statements/created-invoices";
+  try {
+    for (const reason of ["Invoice number 22409 is already used for this company. Open it in Created invoices, or enter a different number.", "Saved company details changed. Close this form and open it again before saving"]) {
+      globalThis.fetch = async (_url, init) => {
+        const payload = JSON.parse(String(init?.body)); calls.push(payload.path);
+        assert.equal(payload.path, "statementInvoices:begin");
+        return Response.json({ status: "error", errorMessage: "[Request ID: df3f86da489b2735] Server Error", errorData: reason }, { status: 560 });
+      };
+      const response = await handleStatementInvoices(new Request(url, { method: "POST", headers: { Origin: new URL(url).origin, "Content-Type": "application/json" }, body: JSON.stringify({ requestId: crypto.randomUUID(), ids: ["transaction"], draft }) }), env, { username: "Ali", role: "administrator" });
+      assert.equal(response?.status, 400); assert.deepEqual(await response?.json(), { message: reason });
+      assert.equal(response?.headers.get("Cache-Control"), "private, no-store");
+    }
+    assert.equal(calls.length, 2);
+  } finally { globalThis.fetch = original; }
+});
+test("unexpected invoice server failures keep a support reference without exposing backend details", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ status: "error", errorMessage: "[Request ID: df3f86da489b2735] Server Error\nPrivate backend details" }, { status: 560 });
+  try {
+    const response = await handleStatementInvoices(new Request("https://statements.thatcanadian.dev/api/statements/created-invoices"), { CONVEX_URL: "https://invoice-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test" } as WorkerEnv, { username: "Ali", role: "administrator" });
+    assert.equal(response?.status, 500);
+    assert.deepEqual(await response?.json(), { message: "The invoice request could not finish. Try again. If it happens again, share this reference: df3f86da489b2735" });
+  } finally { globalThis.fetch = original; }
+});
 test("invoice AI body deadlines cancel stalled streams and reject oversized responses", async () => {
   const { readInvoiceAiBody } = await import("./statementInvoiceAi");
   let cancelled = false;

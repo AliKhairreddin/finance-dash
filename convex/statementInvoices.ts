@@ -106,7 +106,7 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   const input = JSON.parse(a.draftJson) as InvoiceDraft;
   const sources = rows.map(row => ({ transactionId: row!._id, revision: row!.revision, date: row!.date, description: row!.description, amount: statementAmountDecimal(row!.amountMinor, first.currency), counterparty: row!.counterparty ?? "" }));
   const draft = validateInvoiceDraft({ ...input, ...(parties ? { customer: parties.customer, customerAddress: parties.customerAddress, customerVat: parties.customerVat } : {}), currency: first.currency, lines: sources.map(row => ({ transactionId: row.transactionId, description: row.description, amount: row.amount, taxPercent: input.lines?.[0]?.taxPercent ?? "" })) });
-  if (await ctx.db.query("statementInvoices").withIndex("by_company_number", q => q.eq("companyId", first.companyId!).eq("number", draft.number)).first()) throw new ConvexError("This company already has an invoice with that number");
+  if (await ctx.db.query("statementInvoices").withIndex("by_company_number", q => q.eq("companyId", first.companyId!).eq("number", draft.number)).first()) throw new ConvexError(`Invoice number ${draft.number} is already used for this company. Open it in Created invoices, or enter a different number.`);
   const id = await ctx.db.insert("statementInvoices", { companyId, templateId: example?._id, plainLayoutJson: parties ? JSON.stringify(parties.layout) : undefined, requestId: a.requestId, draftJson: JSON.stringify(draft), sourceJson: JSON.stringify(sources), instructions: invoiceText([pair?.description, a.instructions].filter(Boolean).join("\n"), "instructions", 2501), state: "failed", leaseUntil: 0, revision: 1, createdAt: Date.now(), updatedAt: Date.now(), actor: member.actor, number: draft.number });
   await audit(ctx, member.actor, id, "draft_created"); return id;
 } });
@@ -126,7 +126,7 @@ export const save = mutation({ args: { ...auth, id: v.id("statementInvoices"), r
   const draft = validateInvoiceDraft(JSON.parse(a.draftJson)), old = validateInvoiceDraft(JSON.parse(row.draftJson));
   if (draft.currency !== old.currency || draft.lines.length !== old.lines.length || draft.lines.some(l => !old.lines.some(x => x.transactionId === l.transactionId))) throw new ConvexError("Keep the selected transactions and currency");
   const duplicate = await ctx.db.query("statementInvoices").withIndex("by_company_number", q => q.eq("companyId", row.companyId).eq("number", draft.number)).first();
-  if (duplicate && duplicate._id !== row._id) throw new ConvexError("This invoice number is already used");
+  if (duplicate && duplicate._id !== row._id) throw new ConvexError(`Invoice number ${draft.number} is already used for this company. Open it in Created invoices, or enter a different number.`);
   await ctx.db.patch(row._id, { draftJson: JSON.stringify(draft), number: draft.number, revision: row.revision + 1, updatedAt: Date.now() }); await audit(ctx, a.actor, row._id, "draft_updated"); return null;
 } });
 export const finalize = mutation({ args: { ...auth, id: v.id("statementInvoices"), revision: v.number(), storageId: v.id("_storage"), confirmed: v.boolean() }, returns: v.null(), handler: async (ctx, a) => {
