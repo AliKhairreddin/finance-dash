@@ -40,7 +40,7 @@ export function validateInvoiceCopy(value: InvoiceCopyLayout): InvoiceCopyLayout
     const reason = !box(f) ? "outside the page" : !invoiceCopyKeys.includes(f.key) ? "unknown field" : !Number.isFinite(f.fontSize) || f.fontSize < 6 || f.fontSize > 30 ? "text size must be 6–30" : !/^#[0-9a-f]{6}$/i.test(f.color) || !/^#[0-9a-f]{6}$/i.test(f.background) ? "use six-digit hex colors" : !["left", "right"].includes(f.align) ? "align left or right" : !["sans", "serif"].includes(f.font) ? "choose sans or serif" : "";
     if (reason) throw new Error(`Check the example's ${String(f.key).slice(0, 30)} text area: ${reason}`);
   }
-  if (value.erase.some(b => !box(b))) throw new Error("An old-text removal area is outside the page");
+  if (value.erase.some(b => !b || ![b.x, b.y, b.width, b.height].every(Number.isFinite) || b.width < 0 || b.height < 0 || Math.abs(b.x) > value.width * 2 || Math.abs(b.y) > value.height * 2 || b.width > value.width * 2 || b.height > value.height * 2)) throw new Error("Check the old-text removal areas");
   const keys = value.fields.map(f => f.key);
   if (new Set(keys).size !== keys.length || ["seller", "number", "date", "customer", "customerAddress", "lines", "net", "tax", "total"].some(key => !keys.includes(key as InvoiceCopyField["key"]))) throw new Error("The example must include company details, invoice number, date, lines and totals");
   if (value.fields.some((a, i) => value.fields.slice(i + 1).some(b => Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 0.5 && Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 0.5))) throw new Error("The example's text areas overlap. Adjust their positions before saving.");
