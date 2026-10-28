@@ -9,7 +9,7 @@ import { boundedBytes } from "./documentIntake";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { inspectInvoiceExample, renderInvoicePdf } from "./statementInvoicePdf";
 import { invoiceAi } from "./statementInvoiceAi";
-import { extractStatementText } from "./statementOcr";
+import { invoiceCopyPrompt } from "./statementInvoiceCopy";
 import type { StatementEnv } from "./statements";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "private, no-store" } });
 type Saved = { _id: Id<"statementInvoices">; state: string; revision: number; error?: string; leaseUntil: number; draft: InvoiceDraft; sources: Array<{ transactionId: string; description: string; date: string; amount: string; counterparty: string }>; instructions: string; layout: InvoiceTemplateLayout; templateUrl: string | null; pdfUrl: string | null };
@@ -36,8 +36,11 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
     try {
       const saved = JSON.parse(await client.query(api.statementInvoices.template, { ...auth, id })), bytes = await bytesFrom(saved.url);
       const inspected = await inspectInvoiceExample(env, bytes), selectedModel = await model(client, auth.serviceToken);
-      const text = inspected.text.length ? undefined : (await extractStatementText(env, bytes, "application/pdf")).pages[0].text;
-      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, 'Read the example invoice. Return JSON {headerPercent:number,footerPercent:number,sellerDetails:string,paymentDetails:string}. Header is the top 0–30% of page 1; footer is the bottom 0–20%. Keep only static seller branding/logo/contact details in those strips. Never include the old invoice number, date, buyer, amounts, page number or line items. If no safe strip exists, set it to 0. Text positions are percentages from the top. Extract only literal seller company/address/tax ID and payment details; never buyer details. Do not invent missing details. All fields will be reviewed by a person.', { companyId: saved.companyId, positions: inspected.text, scannedText: text });
+      if (inspected.pages !== 1 || !inspected.text.some(item => item.text.trim())) throw new Error("Upload a clear, text-based one-page example PDF");
+      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, invoiceCopyPrompt, { issuer: saved.issuerName, width: inspected.width, height: inspected.height, positions: inspected.text });
+      const mapped = ai.result as { error?: string; copy?: unknown; sellerDetails?: string; paymentDetails?: string };
+      if (mapped.error || !mapped.copy) throw new Error(mapped.error || "The example layout could not be mapped");
+      ai.result = invoiceLayout({ ...mapped, headerPercent: 0, footerPercent: 0 });
       await client.mutation(api.statementInvoices.completeExample, { ...auth, id, token, layoutJson: JSON.stringify(invoiceLayout(ai.result)), model: ai.model, costUsd: ai.costUsd });
       return { id };
     } catch (error) {
@@ -56,7 +59,7 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       const member = await client.query(api.statements.bootstrap, auth); if (!member.canManage || !member.companies.some(c => c.id === companyId)) throw new Error("Company access required");
       const bytes = new Uint8Array(await file.arrayBuffer()); if (new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("Choose a valid PDF");
       const storageId = await savePdf(client, auth.serviceToken, bytes);
-      const id = await client.mutation(api.statementInvoices.uploadExample, { ...auth, companyId, storageId, fileName: file.name.slice(0, 250) });
+      const id = await client.mutation(api.statementInvoices.uploadExample, { ...auth, companyId, issuerName: invoiceText(form.get("issuerName"), "invoice issuer", 250, true), storageId, fileName: file.name.slice(0, 250) });
       return json(await readExample(id), 201);
     }
     const example = /^\/invoice-examples\/([a-z0-9]+)(?:\/(file|preview|read))?$/.exec(path);
@@ -68,7 +71,7 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       if (example[2] === "file" && request.method === "GET") return pdf(await bytesFrom(saved.url), saved.fileName);
       if (example[2] === "preview" && request.method === "POST") {
         const input = await body(), layout = invoiceLayout(input.layout);
-        return pdf(await renderInvoicePdf(env, await bytesFrom(saved.url), layout, { number: "EXAMPLE-001", date: "2026-01-01", dueDate: "", customer: "Example customer", customerAddress: "Example address", notes: "Layout check only. No invoice has been issued.", currency: "EUR", taxMode: "included", lines: [{ transactionId: "example", description: "Example invoice line", amount: "100.00", taxPercent: "0" }] }, true), "invoice-layout-check.pdf");
+        return pdf(await renderInvoicePdf(env, await bytesFrom(saved.url), layout, { number: "10001", date: "2026-01-01", dueDate: "", customer: "Example customer", customerAddress: "Example address", notes: layout.copy && !layout.copy.fields.some(f => f.key === "notes") ? "" : "Layout check only.", currency: "EUR", taxMode: "included", lines: [{ transactionId: "example", description: "Example invoice line", amount: "100.00", taxPercent: "0" }] }, true), "invoice-layout-check.pdf");
       }
     }
     if (path === "/created-invoices/profile" && request.method === "POST") {

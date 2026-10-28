@@ -7,7 +7,7 @@ export type StatementCompanyId = typeof statementCompanies[number]["id"];
 export type StatementActor = "Ali" | "Ali M" | "Alaa";
 export type StatementStatus = "pending" | "reconciled" | "completed";
 export type StatementOrigin = "manual" | "file" | "email";
-export const statementSortKeys = ["date", "companyId", "description", "counterparty", "reference", "source", "account", "cardLastFour", "amountMinor", "currency", "direction", "origin", "status"] as const;
+export const statementSortKeys = ["date", "companyId", "description", "counterparty", "reference", "source", "account", "cardLastFour", "amountMinor", "currency", "direction", "origin", "status", "generatedInvoiceNumber"] as const;
 export type StatementSortKey = typeof statementSortKeys[number];
 export interface StatementTransactionInput {
   companyId?: StatementCompanyId; date: string; description: string; counterparty?: string; reference?: string;
@@ -21,6 +21,7 @@ export interface StatementTransaction extends StatementRow {
   _id: string; origin: StatementOrigin; status: StatementStatus; documentIds: string[];
   revision: number; createdAt: string; updatedAt: string; createdBy: string; importId?: string;
   deletedAt?: string;
+  generatedInvoiceId?: string; generatedInvoiceNumber?: string; generatedInvoiceState?: "draft" | "ready"; counterpartyAddressMissing?: boolean; counterpartyKind?: "ours" | "supplier" | "customer";
 }
 export interface StatementCard { _id: string; companyId: StatementCompanyId; lastFour: string; label: string; source?: string; account?: string; active: boolean }
 export interface StatementEvidence { field: string; value: string; quote: string; page?: number }

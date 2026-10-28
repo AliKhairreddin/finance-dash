@@ -252,3 +252,12 @@
 .statement-mailbox-setup { margin: 0; padding: 0 16px 12px; color: var(--muted-foreground); font-size: 13px; display: flex; align-items: center; gap: 6px; }
 .statement-mailbox-consent { align-items: start; line-height: 1.5; margin: 18px 0; }
 .statement-mailbox-callback { display: block; overflow-wrap: anywhere; font-size: 12px; }
+
+.statement-company-chip { display: inline-block; font-size: 12px; line-height: 1.5; padding: 3px 7px; border-radius: 5px; }
+.statement-company-chip.ours { color: #294c62; background: #edf3f7; border: 1px solid #c3d1dc; font-weight: 600; }
+.statement-company-chip.other { color: var(--app-text); background: var(--surface-muted, #f7f7f8); border: 1px solid var(--line); }
+.statement-row-note, .statement-shell .data-table .statement-missing-address { display: block; margin-top: 4px; font-size: 11px; }
+.statement-row-note { color: var(--app-muted); }
+.statement-shell .data-table .statement-missing-address { color: #a33f21; font-weight: 600; }
+.statement-shell .status-pill.statement-ai-status { background: #f1edf8; color: #5b417b; border: 1px solid #d4c5e5; }
+.statement-row-pdf { display: flex; width: fit-content; margin-top: 4px; align-items: center; gap: 5px; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }

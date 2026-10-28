@@ -15,6 +15,9 @@ import { invoiceAi } from "./statementInvoiceAi";
 import { validateInvoiceAi } from "../shared/statementInvoices";
 import { handleCaptureDevice, routeReceiptCapture } from "./receiptCapture";
 import { handleMailboxApi, mailboxCallbackLanding } from "./statementMailboxes";
+import { verifyInvoiceCopy } from "./statementInvoiceVerification";
+import { defaultInvoiceDesign } from "../shared/statementInvoiceDesign";
+import { statementCompanies } from "../shared/statements";
 
 export const statementsHostname = "statements.thatcanadian.dev";
 export const statementsInbox = "statements@finance.thatcanadian.dev";
@@ -35,16 +38,21 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
     try {
       const client = new ConvexHttpClient(env.CONVEX_URL), settings = await client.query(api.statements.processingSettings, { serviceToken: env.CONVEX_SERVICE_TOKEN }), aiSettings = JSON.parse(settings.aiSettingsJson);
       if (aiSettings?.provider !== "openrouter" || !aiSettings.model) throw new Error("Saved model unavailable");
+      if (url.searchParams.get("layout") === "copy") {
+        const result = await verifyInvoiceCopy(env, aiSettings.model);
+        return new Response(result.bytes, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Invoice-Model": result.model, "X-Invoice-ZDR": "true", "X-Invoice-Total": "121.00" } });
+      }
       const ai = await invoiceAi(env.OPENROUTER_API_KEY, aiSettings.model, 'Return JSON {lines:[{transactionId:"sample",description:string}]} describing the supplied synthetic service. No amounts.', { transactionId: "sample", description: "Synthetic layout verification service" });
       const line = validateInvoiceAi(ai.result, ["sample"])[0];
       const example = await PDFDocument.create(), page = example.addPage([595, 842]), font = await example.embedFont(StandardFonts.Helvetica);
       page.drawText("DEMO COMPANY", { x: 36, y: 795, size: 22, font }); page.drawText("OLD INVOICE 999999 - MUST NOT APPEAR", { x: 36, y: 600, size: 12, font }); page.drawText("Demo company - Example bank details", { x: 36, y: 35, size: 10, font });
-      const plain = url.searchParams.get("layout") === "plain";
-      const result = await renderInvoicePdf(env, plain ? null : await example.save(), { headerPercent: plain ? 0 : 9, footerPercent: plain ? 0 : 8, sellerDetails: "Demo Company\nExample Street 1\nAmsterdam", paymentDetails: "Synthetic example only. Do not pay." }, { number: "LAYOUT-TEST-001", date: "2026-10-26", dueDate: "", customer: "Example Customer", customerAddress: "Example street 2\nMontréal", customerVat: "TEST-VAT-123", notes: "Synthetic verification only. No financial records were created.", currency: "EUR", taxMode: "included", lines: Array.from({ length: 70 }, (_, i) => ({ transactionId: `sample-${i}`, description: `${line.description} ${i + 1} — café, consultation and project work`, amount: "121.00", taxPercent: "21" })) }, true);
-      return new Response(result, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Invoice-Model": ai.model, "X-Invoice-ZDR": "true", "X-Invoice-Total": "8470.00" } });
+      const company = statementCompanies.find(c => c.id === url.searchParams.get("company"));
+      const plain = url.searchParams.get("layout") === "plain" || Boolean(company);
+      const result = await renderInvoicePdf(env, plain ? null : await example.save(), { headerPercent: plain ? 0 : 9, footerPercent: plain ? 0 : 8, sellerDetails: "Demo Company\nExample Street 1\nAmsterdam", paymentDetails: "Synthetic example only. Do not pay.", ...(company ? { design: defaultInvoiceDesign(`our:${company.id}`, company.name), sellerDetails: `${company.name}\nExample Street 1\nAmsterdam` } : {}) }, { number: "LAYOUT-TEST-001", date: "2026-10-26", dueDate: "", customer: "Example Customer", customerAddress: "Example street 2\nMontréal", customerVat: "TEST-VAT-123", notes: "Synthetic verification only. No financial records were created.", currency: "EUR", taxMode: "included", lines: Array.from({ length: company ? 2 : 70 }, (_, i) => ({ transactionId: `sample-${i}`, description: `${line.description} ${i + 1} — café, consultation and project work`, amount: "121.00", taxPercent: "21" })) }, true);
+      return new Response(result, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Invoice-Model": ai.model, "X-Invoice-ZDR": "true", "X-Invoice-Total": company ? "242.00" : "8470.00" } });
     } catch (error) { return json({ message: error instanceof Error ? error.message.slice(0, 500) : "Invoice verification failed" }, 502); }
   }
-  if (url.pathname.startsWith("/statement-ocr-assets/")) {
+  if ((url.pathname.startsWith("/statement-ocr-assets/") || /^\/invoice-brands\/[a-z0-9-]+\.(png|svg|jpg)$/.test(url.pathname))) {
     if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
     const response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);

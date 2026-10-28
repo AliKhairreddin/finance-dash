@@ -106,16 +106,32 @@ The editable invoice tax rate starts at 21%. Original imported details and sourc
 references remain in the contact's notes. Missing VAT and address details stay
 blank.
 
-Settings → Invoice examples accepts one reusable example per company (PDF, up to
-5 MB and 5 pages). AI reads its text and suggests company details and header/footer
-cuts. The user previews and approves the layout. Only rasterized header/footer
-strips enter the new PDF, so hidden text from the old invoice is not embedded.
-The first page supplies branding; the new body uses a clear, paginated invoice
-layout. This is not a pixel-for-pixel copy of every example's body.
+Settings → Invoice examples stores examples by the company issuing the invoice,
+including suppliers selected from the address book. Use an upright, text-based,
+one-page PDF up to 5 MB. AI maps replacement areas from the original text positions.
+The PDF renderer preserves the original page as a raster background, removes old
+values from that raster itself, and writes the new details into the mapped areas. Logos, rules, headings
+and artwork retain their original positions. Replacement text uses matching
+sans/serif fonts, not the original embedded typeface. Preview and approve the
+layout before use; inspect it for any remaining old values. Overlapping areas,
+out-of-page coordinates and overflowing replacement text are rejected. Large
+selections that do not fit must be split; notes/due dates require mapped areas.
 
-Select 1–200 transactions from one company, one currency and one direction, then
-Create AI invoice. Enter the customer, address, unique invoice number, dates,
-explicit tax rate and whether selected amounts include tax. The same saved
+Without an example, each issuer receives a saved design with white paper, dark
+text and restrained accents. Our verified logos/colors are documented in
+`public/invoice-brands/SOURCES.md`; other companies receive a consistent typographic
+design. Supplier aliases use their saved canonical company name, so the design is
+shared across buyer workspaces. Approved examples take priority, within the user's
+company permissions. Each invoice snapshots its design so later changes do not
+alter it.
+
+Select 1–200 transactions from one company, one currency, one direction and one
+other company (saved aliases count as the same company), then Create AI invoice.
+Saved addresses/VAT are applied automatically. Leave the invoice number blank to
+assign an atomic per-workspace/year sequence such as INCH-2026-000001. Numbers are
+reserved before AI starts and retained across retries. Manual numbers remain
+editable and cannot collide. The default date is the selected transaction date;
+for several dates, use the latest selected date. It remains editable. The saved
 OpenRouter model writes descriptions with ZDR, deny data collection, and no
 fallbacks. AI cannot change IDs, amounts, currency or tax. Exact decimal
 calculations round tax per line in the currency's smallest unit.
@@ -124,8 +140,15 @@ Drafts are saved before AI generation, protected by a lease and request ID, and
 can be retried after failure. Review/edit the draft and preview its PDF before
 saving the final invoice. Final PDFs are stored and immutable; changed source
 transactions block finalization. Discarded drafts retain history and release the
-unused invoice number. Created invoices shows the latest 100 records. This does
-not send email, post to Exact, mark payments or add evidence links automatically.
+unused invoice number. Created invoices shows the latest 100 records. Transactions show AI generated and a PDF link as soon as a draft is ready, with
+an additional Draft label until finalized. The same link serves the saved PDF
+after finalization. This display state does not mark a transaction checked, done,
+paid, or posted to Exact. Discarding a draft restores an earlier valid invoice
+link if one exists. Editing the source transaction clears the current link;
+invoices and source snapshots remain in history. Our-company names and other
+companies have different chip styles; outgoing rows show Address missing below
+the recipient when no usable saved address exists. Nothing is sent by email or
+added to reconciliation evidence automatically.
 Expected invoice errors use Convex's structured error data in production. A used
 invoice number points users to Created invoices or a different number; the
 existing invoice and saved company details remain unchanged.
@@ -136,6 +159,11 @@ change existing invoices.
 The service-token-protected POST `/api/internal/statements/verify-invoice` runs a
 fixed synthetic AI/PDF check, creates no financial records and returns a sample
 PDF. It verifies the saved model/ZDR and multi-page PDF rendering after deployment.
+
+Release migration: run `statementInvoices:backfillTransactionInvoices` on production
+with `{paginationOpts:{cursor:null,numItems:20}}`, following `continueCursor` until
+`isDone`. It adds only invoice links/display metadata to existing draft/final
+transactions, preserving financial revisions, amounts and existing PDF storage IDs.
 
 ## Receipt camera
 

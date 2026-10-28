@@ -54,7 +54,7 @@ export function useStatementSort<K extends string>(prefix: string, keys: readonl
 
 export function StatusPill({ value }: { value: string }) {
 
-  return <span className={`status-pill ${["completed", "reconciled", "imported"].includes(value) ? "good" : value === "failed" ? "danger" : "warning"}`}>{statementStatusLabels[value] || value.replaceAll("_", " ")}</span>;
+  return <span className={`status-pill ${value === "ai_generated" ? "statement-ai-status" : ["completed", "reconciled", "imported"].includes(value) ? "good" : value === "failed" ? "danger" : "warning"}`}>{statementStatusLabels[value] || value.replaceAll("_", " ")}</span>;
 }
 
 export function downloadText(name: string, contents: string, type = "text/csv;charset=utf-8") {
