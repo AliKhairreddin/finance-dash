@@ -37,7 +37,7 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       const saved = JSON.parse(await client.query(api.statementInvoices.template, { ...auth, id })), bytes = await bytesFrom(saved.url);
       const inspected = await inspectInvoiceExample(env, bytes), selectedModel = await model(client, auth.serviceToken);
       if (inspected.pages !== 1 || !inspected.text.some(item => item.text.trim())) throw new Error("Upload a clear, text-based one-page example PDF");
-      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, invoiceCopyPrompt, { issuer: saved.issuerName, width: inspected.width, height: inspected.height, positions: inspected.text });
+      const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, invoiceCopyPrompt, { issuer: saved.issuerName, width: inspected.width, height: inspected.height, positions: inspected.text }, { reasoningEffort: "none" });
       const mapped = ai.result as { error?: string; copy?: unknown; sellerDetails?: string; paymentDetails?: string };
       if (mapped.error || !mapped.copy) throw new Error(mapped.error || "The example layout could not be mapped");
       ai.result = invoiceLayout({ ...mapped, headerPercent: 0, footerPercent: 0 });

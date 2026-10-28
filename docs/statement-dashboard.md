@@ -108,7 +108,9 @@ blank.
 
 Settings → Invoice examples stores examples by the company issuing the invoice,
 including suppliers selected from the address book. Use an upright, text-based,
-one-page PDF up to 5 MB. AI maps replacement areas from the original text positions.
+one-page PDF up to 5 MB. AI maps replacement areas from the original text positions. This extraction request
+uses the same model with reasoning disabled to avoid long reasoning timeouts
+(the deployed DeepSeek v4 Flash supports `reasoning.effort: none`).
 The PDF renderer preserves the original page as a raster background, removes old
 values from that raster itself, and writes the new details into the mapped areas. Logos, rules, headings
 and artwork retain their original positions. Replacement text uses matching
