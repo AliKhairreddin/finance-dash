@@ -830,7 +830,18 @@ export async function enforceSiteAuthentication(
   if ((request.method === "GET" || request.method === "HEAD") && (PUBLIC_APP_ASSET_PATHS.has(url.pathname) || ["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname) || url.pathname.startsWith("/top-up-assets/"))) {
     return null;
   }
-  return enforceTelegramAuth(request, env, url, dependencies);
+  const response = await enforceTelegramAuth(request, env, url, dependencies);
+  if (url.hostname !== "statements.thatcanadian.dev" || !response?.headers.get("Content-Type")?.includes("text/html")) return response;
+  // This HTML is the bounded, locally generated sign-in page. Preserve its CSP,
+  // nonce and cookies while giving the Statements host its own app identity.
+  const html = (await response.text())
+    .replace(/href="\/favicon\.svg\?[^\"]*"/, 'href="/statement-icons/statement-ledger-v1.svg"')
+    .replace(/href="\/apple-touch-icon\.png\?[^\"]*"/, 'href="/statement-icons/statement-ledger-180-v1.png"')
+    .replace(/href="\/site\.webmanifest\?[^\"]*"/, 'href="/statement.webmanifest?v=1"')
+    .replace('<meta name="theme-color" content="#09090b">', '<meta name="theme-color" content="#4f46e5">')
+    .replace('<meta name="apple-mobile-web-app-title" content="Finance">', '<meta name="apple-mobile-web-app-title" content="Statements">')
+    .replace('<title>Sign in · Finance Dashboard</title>', '<title>Sign in · Statements Dashboard</title>');
+  return new Response(html, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 export async function getDashboardSession(

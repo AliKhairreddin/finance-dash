@@ -7,7 +7,7 @@ const Workspace = lazy(() => import("./App"));
 const StatementWorkspace = lazy(() => import("./features/statements/StatementApp"));
 const isStatementWorkspace = window.location.hostname === "statements.thatcanadian.dev" || /^\/statements(?:\/|$)/.test(window.location.pathname);
 const CurrentWorkspace = isStatementWorkspace ? StatementWorkspace : Workspace;
-if (isStatementWorkspace) document.title = "Statements · Finance";
+if (isStatementWorkspace) document.title = "Statements Dashboard";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

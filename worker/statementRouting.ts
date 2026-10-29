@@ -35,6 +35,15 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   const capture = await routeReceiptCapture(request, env);
   if (capture) return capture;
   const url = new URL(request.url);
+  if (/^\/statement-icons\/statement-ledger(?:-(?:32|180|192|512|maskable-512))?-v1\.(svg|png)$/.test(url.pathname) || url.pathname === "/statement.webmanifest") {
+    if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
+    const response = await env.ASSETS.fetch(request);
+    if (url.pathname === "/statement.webmanifest" && url.hostname !== statementsHostname && response.ok && request.method === "GET") {
+      const manifest = await response.json() as Record<string, unknown>;
+      return Response.json({ ...manifest, id: "/statements", start_url: "/statements", scope: "/statements" }, { headers: { "Content-Type": "application/manifest+json", "Cache-Control": "public, max-age=0, must-revalidate" } });
+    }
+    return response;
+  }
   if (url.pathname === "/api/internal/statements/research") return handleStatementResearch(request, env);
   if (url.pathname === "/api/internal/statements/verify-research") return handleStatementResearch(request, env, true);
   if (url.pathname === "/api/internal/statements/verify-invoice") {
@@ -102,7 +111,15 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
     } catch { return json({ message: "Statement setup could not be verified" }, 502); }
   }
   if (!isStatementSurface(url)) return null;
-  if (["GET", "HEAD"].includes(request.method) && ["/favicon.svg", "/apple-touch-icon.png", "/site.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-maskable-512.png"].includes(url.pathname)) return env.ASSETS.fetch(request);
+  const appIcons: Record<string, string> = {
+    "/favicon.svg": "/statement-icons/statement-ledger-v1.svg",
+    "/apple-touch-icon.png": "/statement-icons/statement-ledger-180-v1.png",
+    "/site.webmanifest": "/statement.webmanifest",
+    "/icons/icon-192.png": "/statement-icons/statement-ledger-192-v1.png",
+    "/icons/icon-512.png": "/statement-icons/statement-ledger-512-v1.png",
+    "/icons/icon-maskable-512.png": "/statement-icons/statement-ledger-maskable-512-v1.png",
+  };
+  if (["GET", "HEAD"].includes(request.method) && appIcons[url.pathname]) return env.ASSETS.fetch(new Request(new URL(appIcons[url.pathname], url), request));
   if (url.hostname === statementsHostname && url.pathname.startsWith("/api/") && url.pathname !== "/api/session" && !url.pathname.startsWith("/api/statements/")) return json({ message: "Not found" }, 404);
   const mailboxLanding = mailboxCallbackLanding(request);
   if (mailboxLanding) return mailboxLanding;
@@ -119,5 +136,5 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   // Static app assets use their original path; all app routes render the root SPA.
   return env.ASSETS.fetch(url.pathname.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(url.pathname)
-    ? request : new Request(new URL("/", url), request));
+    ? request : new Request(new URL("/statements.html", url), request));
 }

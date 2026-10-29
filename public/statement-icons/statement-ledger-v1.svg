@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Statements dashboard">
+  <rect width="64" height="64" rx="14" fill="#4f46e5"/>
+  <rect x="16" y="11" width="32" height="42" rx="6" fill="#fff"/>
+  <path d="M24 21h16" stroke="#4f46e5" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#4f46e5">
+    <circle cx="24" cy="31" r="2"/>
+    <circle cx="24" cy="39" r="2"/>
+    <circle cx="24" cy="47" r="2"/>
+  </g>
+  <path d="M31 31h9m-9 8h9m-9 8h5" stroke="#4f46e5" stroke-width="3" stroke-linecap="round"/>
+</svg>
