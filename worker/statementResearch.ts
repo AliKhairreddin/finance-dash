@@ -47,7 +47,9 @@ export async function researchMerchant(apiKey: string, model: string, name: stri
   if (!sources.length) throw new ResearchError("Research needs a retrieved source from search-service citations", 502);
   let suggestion;
   try { suggestion = validateMerchantSuggestion(JSON.parse(message.content.replace(/^```(?:json)?\s*|\s*```$/g, "")), sources); }
-  catch { throw new ResearchError("Research details do not match a retrieved source or the required profile format", 502); }
+  catch (error) {
+    throw new ResearchError(error instanceof SyntaxError ? "Research returned invalid JSON" : error instanceof Error ? error.message : "Research returned an invalid profile", 502);
+  }
   return { suggestion, sources, model };
 }
 
