@@ -19,6 +19,7 @@ import { handleMailboxApi, mailboxCallbackLanding } from "./statementMailboxes";
 import { verifyInvoiceCopy } from "./statementInvoiceVerification";
 import { defaultInvoiceDesign } from "../shared/statementInvoiceDesign";
 import { statementCompanies } from "../shared/statements";
+import { handleStatementResearch } from "./statementResearch";
 
 export const statementsHostname = "statements.thatcanadian.dev";
 export const statementsInbox = "statements@finance.thatcanadian.dev";
@@ -34,6 +35,8 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   const capture = await routeReceiptCapture(request, env);
   if (capture) return capture;
   const url = new URL(request.url);
+  if (url.pathname === "/api/internal/statements/research") return handleStatementResearch(request, env);
+  if (url.pathname === "/api/internal/statements/verify-research") return handleStatementResearch(request, env, true);
   if (url.pathname === "/api/internal/statements/verify-invoice") {
     if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, 401);
     try {

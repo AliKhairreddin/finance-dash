@@ -824,6 +824,35 @@ test("a queued request revalidates its policy, merchant rule and financial revis
   );
 });
 
+test("merchant activation is idempotent, skips trash, preserves records and protects leased research jobs", async () => {
+  const { t, ids } = await fixture();
+  await t.mutation(api.statements.createTransactions, { ...auth, requestId: crypto.randomUUID(), rows: [entry("revolut-lmd")] });
+  await t.run(async ctx => {
+    await ctx.db.patch(ids[2], { deletedAt: new Date().toISOString() });
+    for (const row of await ctx.db.query("statementMerchants").take(100)) await ctx.db.delete(row._id);
+    await ctx.db.insert("dashboardState", {
+      key: "default", providers: [], invoices: [], expenses: [], manualReceivables: [], teams: [], transactionCategoryRules: [], revenuePartners: [],
+      wiseCardHolderTeamAssignments: [], wiseStatementImports: [], revenueRuns: [], revenueAccruals: [], paymentAllocations: [], holdings: [], fxRates: [],
+      automationRuns: [], profitDistributionAdjustments: [], updatedAt: new Date().toISOString(), aiSettings: { provider: "openrouter", model: "saved-model" },
+    });
+  });
+  const before = await t.run(ctx => ctx.db.query("statementTransactions").take(100));
+  const args = { paginationOpts: { cursor: null, numItems: 100 }, dryRun: true };
+  assert.equal((await t.mutation(internal.statementIntelligence.enqueueExisting, args)).queued, 2);
+  assert.equal((await t.run(ctx => ctx.db.query("statementMerchants").take(100))).length, 0);
+  assert.equal((await t.mutation(internal.statementIntelligence.enqueueExisting, { ...args, dryRun: false })).queued, 2);
+  assert.equal((await t.mutation(internal.statementIntelligence.enqueueExisting, { ...args, dryRun: false })).queued, 0);
+  assert.deepEqual(await t.run(ctx => ctx.db.query("statementTransactions").take(100)), before);
+  const merchant = (await t.run(ctx => ctx.db.query("statementMerchants").first()))!;
+  await t.mutation(internal.statementIntelligence.claim, { id: merchant._id, token: "lease" });
+  const request = { serviceToken: auth.serviceToken, id: merchant._id, token: "lease" };
+  assert.deepEqual(await t.query(api.statementIntelligence.researchJob, request), { name: merchant.name, model: "saved-model" });
+  await assert.rejects(t.query(api.statementIntelligence.researchJob, { ...request, token: "wrong" }), /lease/);
+  await assert.rejects(t.query(api.statementIntelligence.researchJob, { ...request, serviceToken: "wrong" }), /Unauthorized/);
+  await t.run(ctx => ctx.db.patch(merchant._id, { leaseUntil: 0 }));
+  await assert.rejects(t.query(api.statementIntelligence.researchJob, request), /lease/);
+});
+
 test("merchant research honors rate limits and refreshes suggestions without replacing approved data", async (context) => {
   const { t } = await fixture(),
     merchant = (await t.run((ctx) =>
@@ -831,13 +860,10 @@ test("merchant research honors rate limits and refreshes suggestions without rep
     ))!;
   const previous = Object.fromEntries(
     [
-      "BRAVE_SEARCH_API_KEY",
-      "OPENROUTER_API_KEY",
-      "STATEMENT_RESEARCH_MODEL",
+      "STATEMENT_PROCESSOR_URL",
     ].map((k) => [k, process.env[k]]),
   );
-  for (const key of Object.keys(previous))
-    process.env[key] = "synthetic-fixture-only";
+  process.env.STATEMENT_PROCESSOR_URL = "https://processor.example/api/statements/process";
   context.after(() => {
     for (const [k, v] of Object.entries(previous)) {
       if (v === undefined) delete process.env[k];
@@ -864,8 +890,8 @@ test("merchant research honors rate limits and refreshes suggestions without rep
     async (input: RequestInfo | URL) => {
       calls++;
       const url = String(input);
-      if (url.includes("search.brave"))
-        return new Response(null, {
+      if (url === "https://processor.example/api/internal/statements/research")
+        return Response.json({ message: "Research provider rate limit" }, {
           status: 429,
           headers: { "Retry-After": "3600" },
         });
@@ -881,22 +907,8 @@ test("merchant research honors rate limits and refreshes suggestions without rep
   await t.run((ctx) => ctx.db.patch(merchant._id, { nextAttemptAt: 0 }));
   mock.mock.mockImplementation(async (input: RequestInfo | URL) => {
     calls++;
-    if (String(input).includes("search.brave"))
-      return Response.json({
-        web: {
-          results: [
-            {
-              title: "Official synthetic company",
-              url: profile.sources[0],
-              description: profile.address,
-            },
-          ],
-        },
-      });
-    if (String(input).includes("openrouter.ai"))
-      return Response.json({
-        choices: [{ message: { content: JSON.stringify(profile) } }],
-      });
+    if (String(input) === "https://processor.example/api/internal/statements/research")
+      return Response.json({ suggestion: profile, sources: profile.sources });
     throw new Error("Unexpected external request blocked");
   });
   await t.action(internal.statementIntelligence.research, { id: merchant._id });
