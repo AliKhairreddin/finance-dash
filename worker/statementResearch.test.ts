@@ -9,7 +9,7 @@ const profile = {
   sources: ["https://merchant.example/about"], confidence: 0.7, conflicts: [],
 };
 const answer = (sources: string[] = profile.sources, finish_reason = "stop") => ({ choices: [{ finish_reason, message: {
-  content: JSON.stringify(profile), annotations: sources.map(url => ({ type: "url_citation", url_citation: { url } })),
+  content: JSON.stringify(profile), annotations: sources.map(url => ({ type: "url_citation", url_citation: { url, title: "Official company", content: "Synthetic Hosting provides web hosting services." } })),
 } }] });
 const env = { OPENROUTER_API_KEY: "synthetic-key", CONVEX_SERVICE_TOKEN: "synthetic-service", CONVEX_URL: "https://fixture.convex.cloud" };
 
@@ -19,12 +19,17 @@ test("merchant research reuses OpenRouter with bounded explicit search and only 
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer synthetic-key");
     const body = JSON.parse(String(init?.body));
     assert.equal(body.model, "saved-model");
-    assert.equal(body.tools[0].type, "openrouter:web_search");
-    assert.equal(body.tools[0].parameters.engine, "exa");
-    assert.equal(body.tools[0].parameters.max_uses, 1);
-    assert.equal(body.tools[0].parameters.max_total_results, 5);
-    assert.equal(body.max_tool_calls, 2);
-    assert.deepEqual(JSON.parse(body.messages[1].content), { merchant: "Synthetic Hosting" });
+    if (body.tools) {
+      assert.equal(body.tools[0].type, "openrouter:web_search");
+      assert.equal(body.tools[0].parameters.engine, "exa");
+      assert.equal(body.tools[0].parameters.max_uses, 1);
+      assert.equal(body.tools[0].parameters.max_total_results, 5);
+      assert.equal(body.max_tool_calls, 2);
+      assert.deepEqual(JSON.parse(body.messages[1].content), { merchant: "Synthetic Hosting" });
+    } else {
+      assert.equal(body.response_format.type, "json_object");
+      assert.deepEqual(JSON.parse(body.messages[1].content), { merchant: "Synthetic Hosting", evidence: [{ url: profile.sources[0], title: "Official company", content: "Synthetic Hosting provides web hosting services." }] });
+    }
     assert.deepEqual(body.provider, { data_collection: "deny", zdr: true, allow_fallbacks: false });
     return Response.json(answer());
   });
@@ -85,5 +90,24 @@ test("processor resolves leased jobs on the server and the verification request 
   assert.equal((await handleStatementResearch(request(), env)).status, 200);
   assert.deepEqual(queries[0][1], { serviceToken: env.CONVEX_SERVICE_TOKEN, id: "fixture-id", token: "lease" });
   assert.equal((await handleStatementResearch(request(), env, true)).status, 200);
-  assert.deepEqual(names, ["Synthetic Hosting", "Cloudflare Inc."]);
+  assert.deepEqual(names, ["Synthetic Hosting", "Synthetic Hosting", "Cloudflare Inc.", "Cloudflare Inc."]);
+});
+
+test("search prose and citation markers are kept separate from structured profile extraction", async context => {
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls++;
+    const body = JSON.parse(String(init?.body));
+    if (calls === 1) {
+      assert.equal(body.response_format, undefined);
+      const response = answer();
+      response.choices[0].message.content = "Official company information [1](https://merchant.example/about). This is not JSON.";
+      return Response.json(response);
+    }
+    assert.equal(body.tools, undefined);
+    assert.doesNotMatch(body.messages[1].content, /This is not JSON/);
+    return Response.json(answer());
+  });
+  assert.deepEqual((await researchMerchant("fixture", "model", "Merchant")).suggestion, profile);
+  assert.equal(calls, 2);
 });

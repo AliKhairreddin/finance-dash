@@ -16,7 +16,7 @@ The inference request requires ZDR and denies data collection. Search has its ow
 
 Imports and manual entry enqueue merchants. The existing Convex cron processes up to three profiles each minute. A request permits one search with at most five results, bounded response size and timeouts. Claims prevent concurrent processing. Retries honor rate limits and stop after five attempts. Saved suggestions refresh after 30 days; page loads read saved data.
 
-Profile source URLs must match search-service citation metadata, independently of URLs the model writes in its JSON. Missing citations, unfinished output, invalid JSON, and unsupported facts are not promoted to approved data. Conflicts and uncertainty remain visible for review. User-approved details remain unchanged when research refreshes.
+Research first retrieves search-service citation excerpts, then extracts a JSON profile from those excerpts in a separate model request. Search prose and citation markers never enter the JSON parser. Profile source URLs must match the retrieved citation metadata, independently of URLs the model writes in its JSON. Missing citations, unfinished output, invalid JSON, and unsupported facts are not promoted to approved data. Conflicts and uncertainty remain visible for review. User-approved details remain unchanged when research refreshes.
 
 ## Activation and verification
 
