@@ -21,7 +21,7 @@ const auth = { serviceToken: "test-service", actor: "Ali" }, division = 3503006;
 async function setup() {
   const t = convexTest(schema, modules);
   await t.run(async ctx => {
-    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true });
+    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: ["view","settings","documents","import","download"], accountIds: ["revolut-lmd","amex-lmd","wise-lmd"] });
     await ctx.db.insert("exactConnections", { key: "primary", state: "connected", leaseUntil: Date.now() + 90000, leaseToken: "lease", nextAllowedAt: 0, lastDiscoveryAt: Date.now() });
     await ctx.db.insert("exactCompanies", { division, name: "Test Company", code: "1", currency: "EUR", active: true, moveDate: "", discoveredAt: Date.now() });
   });

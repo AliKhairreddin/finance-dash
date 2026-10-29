@@ -2,7 +2,11 @@
   "compilerOptions": {
     "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -13,13 +17,25 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src", "server", "shared", "worker", "convex", "scripts", "worker-configuration.d.ts"],
+  "include": [
+    "src",
+    "server",
+    "shared",
+    "worker",
+    "convex",
+    "scripts",
+    "worker-configuration.d.ts",
+    "tests",
+    "playwright.statements.config.ts"
+  ],
   "references": []
 }

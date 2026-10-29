@@ -33,11 +33,16 @@
     "contracts:configure-inbox": "tsx scripts/configure-contract-inbox.ts",
     "auth:configure:top-ups": "tsx scripts/configure-top-up-user.ts",
     "top-ups:configure": "tsx scripts/configure-top-ups.ts",
-    "statements:configure": "tsx scripts/configure-statements.ts"
+    "statements:configure": "tsx scripts/configure-statements.ts",
+    "test:statements:e2e": "playwright test --config playwright.statements.config.ts",
+    "test:statements:fixtures": "tsx scripts/statement-fixture-server.ts",
+    "test:statements:pdfs": "tsx scripts/statement-sample-pdfs.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "@tailwindcss/vite": "^4.3.2",
     "@techstark/opencv-js": "4.12.0-release.1",
     "@vitejs/plugin-react": "^5.1.1",
@@ -62,6 +67,7 @@
   },
   "devDependencies": {
     "@cloudflare/puppeteer": "^1.4.0",
+    "@playwright/test": "^1.64.1",
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/nld": "^1.0.0",
     "@types/cors": "^2.8.19",

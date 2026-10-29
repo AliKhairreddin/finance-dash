@@ -3,7 +3,7 @@ import { statementAmountDecimal, statementAmountMinor } from "./statements";
 
 export type InvoiceTemplateLayout = { headerPercent: number; footerPercent: number; sellerDetails: string; paymentDetails: string; design?: InvoiceDesign; copy?: InvoiceCopyLayout };
 export type InvoiceLine = { transactionId: string; description: string; amount: string; taxPercent: string };
-export type InvoiceDraft = { number: string; date: string; dueDate: string; customer: string; customerAddress: string; customerVat?: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
+export type InvoiceDraft = { documentType?: "internal_support" | "sales_invoice"; taxAssessment?: "unassessed" | "configured"; number: string; date: string; dueDate: string; customer: string; customerAddress: string; customerVat?: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
 export type InvoiceCompanyDetails = { name: string; address: string; vat: string };
 export type InvoicePairDetails = { ours: InvoiceCompanyDetails; other: InvoiceCompanyDetails; description: string };
 export type InvoicePairProfile = { details: InvoicePairDetails; revision: number; updatedAt: number };
@@ -70,7 +70,7 @@ export function validateInvoiceDraft(value: unknown): InvoiceDraft {
   const v = value as InvoiceDraft;
   if (!v || !Array.isArray(v.lines) || !v.lines.length || v.lines.length > invoiceSelectionLimit || !["included", "added"].includes(v.taxMode)) throw new Error(`An invoice needs 1–${invoiceSelectionLimit} lines and a tax setting`);
   const date = (s: unknown, optional = false) => { if (optional && s === "") return ""; if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s)) || new Date(s).toISOString().slice(0, 10) !== s) throw new Error("Enter a valid date"); return s; };
-  const result: InvoiceDraft = { number: invoiceText(v.number, "invoice number", 80, true), date: date(v.date), dueDate: date(v.dueDate, true), customer: invoiceText(v.customer, "customer name", 250, true), customerAddress: invoiceText(v.customerAddress, "customer address", 1000, true), notes: invoiceText(v.notes, "notes", 1500), currency: invoiceText(v.currency, "currency", 4, true), taxMode: v.taxMode, lines: v.lines.map(line => {
+  const result: InvoiceDraft = { ...(v.documentType ? { documentType: v.documentType } : {}), ...(v.taxAssessment ? { taxAssessment: v.taxAssessment } : {}), number: invoiceText(v.number, "invoice number", 80, true), date: date(v.date), dueDate: date(v.dueDate, true), customer: invoiceText(v.customer, "customer name", 250, true), customerAddress: invoiceText(v.customerAddress, "customer address", 1000, true), notes: invoiceText(v.notes, "notes", 1500), currency: invoiceText(v.currency, "currency", 4, true), taxMode: v.taxMode, lines: v.lines.map(line => {
     const amount = statementAmountDecimal(statementAmountMinor(invoiceText(line.amount, "line amount", 40), v.currency), v.currency);
     if (!/^\d{1,3}(?:\.\d{1,2})?$/.test(line.taxPercent) || Number(line.taxPercent) > 100) throw new Error("Enter a tax rate from 0 to 100");
     return { transactionId: invoiceText(line.transactionId, "selected transaction", 100, true), description: invoiceText(line.description, "line description", 500, true), amount, taxPercent: line.taxPercent };

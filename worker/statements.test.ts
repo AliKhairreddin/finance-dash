@@ -35,7 +35,7 @@ test("manual transactions send only validated fields and authenticated actor", a
 
 test("unassigned filters, date ranges, sorting, and pagination reach saved-data queries", async () => {
   const original = globalThis.fetch, calls: Rpc[] = [];
-  globalThis.fetch = async (_input, init) => { calls.push(JSON.parse(String(init?.body))); return rpcResponse({ transactions: [], documents: [], imports: [], continueCursor: "", isDone: true }); };
+  globalThis.fetch = async (_input, init) => { if(String(_input).endsWith("/query_ts"))return Response.json({ts:"test-snapshot"}); calls.push(JSON.parse(String(init?.body))); return rpcResponse({ transactions: [], total:0,totals:[],scanDone:true,scanCursor:"", documents: [], imports: [], continueCursor: "", isDone: true }); };
   try {
     assert.equal((await handleStatementApi(new Request(`${origin}/api/statements/transactions?companyId=unassigned&from=2026-10-01&to=2026-10-25&sort=amountMinor&order=asc&trash=1`), env, session))?.status, 200);
     assert.equal(calls[0].args[0].companyId, "unassigned"); assert.equal(calls[0].args[0].sort, "amountMinor"); assert.equal(calls[0].args[0].trashed, true);

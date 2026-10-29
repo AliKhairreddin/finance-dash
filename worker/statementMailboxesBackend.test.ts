@@ -18,7 +18,7 @@ const modules = {
 async function setup() {
   const t = convexTest(schema, modules);
   const id = await t.run(async ctx => {
-    for (const actor of ["Ali", "Ali M"] as const) await ctx.db.insert("statementMembers", { actor, companyIds: statementCompanies.map(c => c.id), manage: true });
+    for (const actor of ["Ali", "Ali M"] as const) await ctx.db.insert("statementMembers", { actor, companyIds: statementCompanies.map(c => c.id), manage: true, permissions: ["view","settings","documents","import","download"], accountIds: ["revolut-lmd","amex-lmd","wise-lmd"] });
     await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: true });
     return ctx.db.insert("statementMailboxes", { provider: "gmail", accountId: "boss@workspace.example", email: "boss@workspace.example", actor: "Ali", scanFrom: "2026-01-01", state: "queued", encryptedTokens: "encrypted", expiresAt: Date.now() + 3600000, nextRunAt: 0, leaseUntil: 0, attempts: 0, windowFrom: Date.parse("2026-01-01"), windowTo: Date.now(), scanned: 0, imported: 0, skipped: 0, issues: 0, createdAt: Date.now(), lastRequestedAt: 0 });
   }); return { t, id };

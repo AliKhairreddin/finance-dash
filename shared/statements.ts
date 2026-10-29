@@ -1,53 +1,72 @@
 export const statementCompanies = [
   { id: "amg-holding", name: "AMG Holding" }, { id: "artec", name: "Artec" },
   { id: "inch-engineering", name: "Inch Engineering" }, { id: "digital-nudge", name: "Digital Nudge" },
-  { id: "inch-digital", name: "Inch Digital" }, { id: "mzs-bouw", name: "MZS Bouw" }
+  { id: "inch-digital", name: "Inch Digital" }, { id: "mzs-bouw", name: "MZS Bouw" }, { id: "lovemedo", name: "LoveMeDo B.V." }
 ] as const;
 export type StatementCompanyId = typeof statementCompanies[number]["id"];
+export const statementAccounts = [
+  { id: "revolut-lmd", companyId: "lovemedo", name: "Revolut LMD", provider: "Revolut", historical: false },
+  { id: "amex-lmd", companyId: "lovemedo", name: "Amex LMD", provider: "Amex", historical: false },
+  { id: "wise-lmd", companyId: "lovemedo", name: "Wise LMD (historical)", provider: "Wise", historical: true }
+] as const;
+export const statementWorkspaces = [...statementCompanies.filter(c => c.id !== "lovemedo"), ...statementAccounts.filter(a => !a.historical).map(a => ({ id: a.id, name: a.name }))];
+export function statementContext(id: string): { companyId?: StatementCompanyId; financialAccountId?: string } {
+  const account = statementAccounts.find(a => a.id === id);
+  return account ? { companyId: account.companyId, financialAccountId: account.id } : isStatementCompany(id) ? { companyId: id } : {};
+}
+export const statementPermissions = ["view", "entry", "import", "edit", "generate", "download", "export", "complete", "undo", "forget", "hide", "delete", "settings", "contacts", "documents", "reminders"] as const;
+export type StatementPermission = typeof statementPermissions[number];
+export interface StatementWorkflow {
+  reviewState?: "pending" | "reviewed" | "unresolved";
+  documentState?: "missing" | "requested" | "processing" | "available" | "failed" | "stale" | "cancelled";
+  completedAt?: string; completedBy?: string; completionReason?: string;
+  doneAt?: string; doneBy?: string; forgottenAt?: string; forgottenReason?: string; hiddenAt?: string;
+  financialRevision?: number;
+}
 export type StatementActor = "Ali" | "Ali M" | "Alaa";
 export type StatementStatus = "pending" | "reconciled" | "completed";
 export type StatementOrigin = "manual" | "file" | "email";
 export const statementSortKeys = ["date", "companyId", "description", "counterparty", "reference", "source", "account", "cardLastFour", "amountMinor", "currency", "direction", "origin", "status", "generatedInvoiceNumber"] as const;
 export type StatementSortKey = typeof statementSortKeys[number];
 export interface StatementTransactionInput {
-  companyId?: StatementCompanyId; date: string; description: string; counterparty?: string; reference?: string;
+  companyId?: StatementCompanyId; financialAccountId?: string; date: string; description: string; counterparty?: string; reference?: string;
   source: string; account?: string; providerId?: string; cardLastFour?: string; amount: string; currency: string;
   direction: "in" | "out"; notes?: string; fee?: string; balance?: string;
 }
 export interface StatementRow extends Omit<StatementTransactionInput, "amount" | "fee" | "balance"> {
   amountMinor: string; feeMinor?: string; balanceMinor?: string; reviewReasons: string[];
 }
-export interface StatementTransaction extends StatementRow {
+export interface StatementTransaction extends StatementRow, StatementWorkflow {
   _id: string; origin: StatementOrigin; status: StatementStatus; documentIds: string[];
   revision: number; createdAt: string; updatedAt: string; createdBy: string; importId?: string;
   deletedAt?: string;
-  generatedInvoiceId?: string; generatedInvoiceNumber?: string; generatedInvoiceState?: "draft" | "ready"; counterpartyAddressMissing?: boolean; counterpartyKind?: "ours" | "supplier" | "customer";
+  merchantResearch?: string; generatedInvoiceId?: string; generatedInvoiceNumber?: string; generatedInvoiceState?: "draft" | "ready"; counterpartyAddressMissing?: boolean; counterpartyKind?: "ours" | "supplier" | "customer";
 }
-export interface StatementCard { _id: string; companyId: StatementCompanyId; lastFour: string; label: string; source?: string; account?: string; active: boolean }
+export interface StatementCard { _id: string; companyId: StatementCompanyId; financialAccountId?: string; lastFour: string; label: string; source?: string; account?: string; active: boolean }
 export interface StatementEvidence { field: string; value: string; quote: string; page?: number }
 export interface StatementDocument {
-  _id: string; companyId?: StatementCompanyId; fileName: string; contentType: string; size: number; origin: "file" | "email";
+  _id: string; companyId?: StatementCompanyId; financialAccountId?: string; downloadedAt?: string; cancelledAt?: string; fileName: string; contentType: string; size: number; origin: "file" | "email";
   status: "queued" | "processing" | "needs_review" | "ready" | "failed";
   documentType: "unknown" | "invoice" | "receipt" | "bank_statement" | "supporting";
   sender?: string; subject?: string; messageId?: string; receivedAt?: string;
   sourceContext?: string; senderKnown?: boolean;
   evidence: StatementEvidence[]; reviewReasons: string[]; extracted?: string; error?: string; attempts: number;
   transactionIds: string[]; createdAt: string; updatedAt: string; importId?: string;
-  quarantined: boolean; generationId?: string; costUsd?: number;
+  quarantined: boolean; generatedInvoiceId?: string; generationId?: string; costUsd?: number;
 }
 export interface StatementImport {
-  _id: string; fileName: string; companyId?: StatementCompanyId; origin: "file" | "email";
+  _id: string; fileName: string; companyId?: StatementCompanyId; financialAccountId?:string; origin: "file" | "email";
   status: "ready" | "importing" | "imported" | "failed"; rows: StatementRow[]; documentId?: string;
   processed: number; inserted: number; duplicates: number; reviewReasons: string[]; error?: string; createdAt: string;
   createdBy: string; reviewed: boolean; csvText?: string; mappingJson?: string; errors: string[];
 }
-export type StatementImportSummary = Omit<StatementImport, "rows" | "csvText" | "mappingJson"> & { transactionCount: number };
+export type StatementImportSummary = Omit<StatementImport, "rows" | "csvText" | "mappingJson"> & { transactionCount: number; unresolved: number; rejected: number; skipped: number };
 export interface StatementList {
   transactions: StatementTransaction[]; total: number; hasMore: boolean; offset: number; truncated: boolean;
   totals: Array<{ currency: string; inMinor: string; outMinor: string }>;
 }
-export interface StatementBootstrap { companies: Array<{ id: StatementCompanyId; name: string }>; cards: StatementCard[]; actor: StatementActor; canManage: boolean; inbox: string }
-export interface StatementAddress { _id: string; companyId: StatementCompanyId | "all"; name: string; email?: string; notes: string; addressLine1?: string; addressLine2?: string; city?: string; postalCode?: string; country?: string; invoiceName?: string; vat?: string; description?: string; aliases?: string[]; reviewNote?: string }
+export interface StatementBootstrap { accounts:Array<{id:string;companyId:StatementCompanyId;name:string;provider:string;historical:boolean;verified:boolean}>; companies: Array<{ id: StatementCompanyId; name: string }>; cards: StatementCard[]; actor: StatementActor; canManage: boolean; permissions:string[]; accountIds:string[]; inbox: string }
+export interface StatementAddress { _id: string; financialAccountId?:string; companyId: StatementCompanyId | "all"; name: string; email?: string; notes: string; addressLine1?: string; addressLine2?: string; city?: string; postalCode?: string; country?: string; invoiceName?: string; vat?: string; description?: string; aliases?: string[]; reviewNote?: string }
 export interface StatementAudit { _id: string; entityType: string; entityId: string; actor: string; action: string; details: string; createdAt: string }
 export interface StatementSender { _id: string; email: string; actor: StatementActor }
 export interface StatementLink { _id: string; transactionId: string; documentId: string; amountMinor: string; currency: string; note: string; createdBy: string; createdAt: string }
@@ -87,6 +106,9 @@ const bounded = (value: string | undefined, maximum: number, label: string): str
   return text;
 };
 export function validateStatementInput(input: StatementTransactionInput): StatementRow {
+  const account = statementAccounts.find(a => a.id === input.financialAccountId);
+  if (account && account.companyId !== input.companyId) throw new Error("Financial account and legal company do not match");
+  if (input.financialAccountId && !/^[a-z0-9-]{1,80}$/.test(input.financialAccountId)) throw new Error("Invalid financial account");
   if (input.companyId !== undefined && !isStatementCompany(input.companyId)) throw new Error("Choose an included company");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date) || !Number.isFinite(Date.parse(input.date)) || new Date(input.date).toISOString().slice(0, 10) !== input.date) throw new Error("Enter a valid transaction date");
   const description = bounded(input.description, 1024, "Description"), source = bounded(input.source, 100, "Financial source");
@@ -95,20 +117,22 @@ export function validateStatementInput(input: StatementTransactionInput): Statem
   if (BigInt(amountMinor) <= 0n) throw new Error("Amount must be greater than zero");
   if (input.direction !== "in" && input.direction !== "out") throw new Error("Choose money in or money out");
   if (input.cardLastFour && !/^\d{4}$/.test(input.cardLastFour)) throw new Error("Card digits must be exactly four digits");
-  return { ...(input.companyId ? { companyId: input.companyId } : {}), date: input.date, description, source, currency, amountMinor, direction: input.direction,
+  return { ...(input.companyId ? { companyId: input.companyId } : {}), ...(input.financialAccountId ? { financialAccountId: input.financialAccountId } : {}), date: input.date, description, source, currency, amountMinor, direction: input.direction,
     ...Object.fromEntries((["counterparty", "reference", "account", "providerId", "notes", "cardLastFour"] as const).flatMap(key => { const value = bounded(input[key], key === "notes" ? 2000 : 512, key); return value ? [[key, value]] : []; })),
     ...(input.fee ? { feeMinor: statementAmountMinor(input.fee, currency) } : {}), ...(input.balance ? { balanceMinor: statementAmountMinor(input.balance, currency, true) } : {}), reviewReasons: [] };
 }
 export function statementIdentity(row: StatementRow): string | undefined {
-  return row.providerId && row.account ? JSON.stringify([row.source.toLowerCase(), row.account.toLowerCase(), row.providerId]) : undefined;
+  return row.providerId && row.account ? JSON.stringify([row.companyId ?? null, row.financialAccountId ?? null, row.source.toLowerCase(), row.account.toLowerCase(), row.providerId]) : undefined;
 }
 export function statementCandidateKey(row: StatementRow): string { return JSON.stringify([row.date, row.amountMinor, row.currency, row.direction, row.description.toLowerCase().replace(/[^a-z0-9]/g, "")]); }
 export function matchStatementCompany(row: StatementRow, cards: readonly StatementCard[], context?: StatementCompanyId): StatementRow {
-  const matches = row.cardLastFour ? cards.filter(card => card.active && card.lastFour === row.cardLastFour && (!card.source || card.source.toLowerCase() === row.source.toLowerCase()) && (!card.account || card.account.toLowerCase() === row.account?.toLowerCase())) : [];
-  const companyIds = [...new Set(matches.map(card => card.companyId))];
-  const evidence = [...new Set([row.companyId, context, ...companyIds].filter((id): id is StatementCompanyId => Boolean(id)))];
-  if (evidence.length > 1) { const { companyId: _companyId, ...rest } = row; return { ...rest, reviewReasons: [...row.reviewReasons, "Conflicting company evidence; assign this transaction after review"] }; }
-  return { ...row, ...(evidence[0] ? { companyId: evidence[0] } : {}), reviewReasons: [...row.reviewReasons, ...(!evidence.length ? ["Company is unassigned"] : [])] };
+  // Only a structured payment-card field can use an explicitly saved card mapping.
+  const matches = row.cardLastFour ? cards.filter(card => card.active && card.lastFour !== "1003" && card.lastFour === row.cardLastFour && (!card.source || card.source.toLowerCase() === row.source.toLowerCase()) && (!card.account || card.account.toLowerCase() === row.account?.toLowerCase())) : [];
+  const evidence = [...new Set([row.companyId, context, ...matches.map(card=>card.companyId)].filter((id): id is StatementCompanyId => Boolean(id)))];
+  if (evidence.length > 1) { const { companyId: _companyId, financialAccountId:_account, ...rest } = row; return { ...rest, reviewReasons: [...row.reviewReasons, "Conflicting company evidence; assign this transaction after review"] }; }
+  const accounts=[...new Set([row.financialAccountId,...matches.map(card=>card.financialAccountId)].filter((id):id is string=>Boolean(id)))];
+  if(accounts.length>1){const{financialAccountId:_account,...rest}=row;return {...rest,...(evidence[0]?{companyId:evidence[0]}:{}),reviewReasons:[...row.reviewReasons,"Conflicting financial account evidence; verify the account"]};}
+  return { ...row, ...(evidence[0] ? { companyId: evidence[0] } : {}), ...(accounts.length===1?{financialAccountId:accounts[0]}:{}), reviewReasons: [...row.reviewReasons, ...(!evidence.length ? ["Company is unassigned"] : [])] };
 }
 export type StatementCsvMapping = Partial<Record<keyof StatementTransactionInput, string>>;
 export function statementCsvGrid(text: string): string[][] {
@@ -131,7 +155,7 @@ export function statementCsvGrid(text: string): string[][] {
 export function parseStatementCsv(text: string, defaults: Partial<StatementTransactionInput> = {}, mapping: StatementCsvMapping = {}): { headers: string[]; rows: StatementRow[]; errors: string[]; mapping: StatementCsvMapping } {
   const [headers = [], ...records] = statementCsvGrid(text), normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (new Set(headers.map(normalize)).size !== headers.length) throw new Error("CSV contains duplicate headers");
-  const aliases: Record<string, string[]> = { date: ["date", "transactiondate", "datum"], description: ["description", "omschrijving", "details"], amount: ["amount", "bedrag", "signedamount"], currency: ["currency", "valuta"], direction: ["direction"], source: ["source", "bank"], account: ["account", "accountname"], providerId: ["transactionid", "providerid", "id"], companyId: ["company", "companyid"], counterparty: ["counterparty", "merchant", "payee"], reference: ["reference", "memo"], cardLastFour: ["cardlastfour", "cardlast4"], fee: ["fee", "fees"], balance: ["balance"] };
+  const aliases: Record<string, string[]> = { date: ["date", "transactiondate", "datum"], description: ["description", "omschrijving", "details"], amount: ["amount", "bedrag", "signedamount"], currency: ["currency", "valuta"], direction: ["direction"], source: ["source", "bank"], account: ["account", "accountname"], providerId: ["transactionid", "providerid", "id"], financialAccountId: ["financialaccountid", "financialaccount"], companyId: ["company", "companyid"], counterparty: ["counterparty", "merchant", "payee"], reference: ["reference", "memo"], cardLastFour: ["cardlastfour", "cardlast4"], fee: ["fee", "fees"], balance: ["balance"] };
   const resolved = { ...mapping };
   for (const [key, names] of Object.entries(aliases)) if (!(key in resolved)) { const h = headers.find(header => names.includes(normalize(header))); if (h) resolved[key as keyof StatementTransactionInput] = h; }
   const rows: StatementRow[] = [], errors: string[] = [];
@@ -148,3 +172,5 @@ export function parseStatementCsv(text: string, defaults: Partial<StatementTrans
   if (!records.length) errors.push("CSV contains no transactions");
   return { headers, rows, errors, mapping: resolved };
 }
+
+export const statementActionPermissions = { reconcile: "complete", complete: "complete", done: "complete", undo_done: "undo", reopen: "undo", trash: "delete", restore: "undo", forget: "forget", undo_forget: "undo", hide: "hide", unhide: "hide", request: "generate" } as const;

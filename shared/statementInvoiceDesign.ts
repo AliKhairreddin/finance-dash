@@ -1,14 +1,15 @@
 import { statementCompanies, type StatementCompanyId } from "./statements";
 import { invoiceCompanyKey, matchingInvoiceAddress, type InvoiceAddress } from "./statementInvoices";
 
-export type InvoiceDesign = { key: string; name: string; accent: string; style: "rule" | "minimal" | "frame"; font: "sans" | "serif"; logoPath?: string; logoMode?: "mark" | "padded"; source?: string };
+export const invoiceDesignStyles = ["corporate", "minimal", "technology", "insurance", "professional_services", "retail", "subscription"] as const;
+export type InvoiceDesign = { template?: typeof invoiceDesignStyles[number]; key: string; name: string; accent: string; style: "rule" | "minimal" | "frame"; font: "sans" | "serif"; logoPath?: string; logoDataUrl?: string; logoMode?: "mark" | "padded"; source?: string };
 export type InvoiceBox = { x: number; y: number; width: number; height: number };
 export const invoiceCopyKeys = ["seller", "number", "date", "dueDate", "customer", "customerAddress", "customerVat", "payment", "notes", "currency", "lines", "net", "tax", "total"] as const;
 export type InvoiceCopyField = InvoiceBox & { key: typeof invoiceCopyKeys[number]; fontSize: number; color: string; background: string; align: "left" | "right"; font: "sans" | "serif" };
 export type InvoiceCopyLayout = { width: number; height: number; currency: string; fields: InvoiceCopyField[]; erase: InvoiceBox[]; columns: Array<{ key: "description" | "net" | "taxPercent" | "total"; x: number; width: number }> };
 const palette = ["#35566c", "#536a48", "#71553e", "#5f5473", "#41696a", "#755760", "#515b72", "#686044"];
-const owned: Record<StatementCompanyId, { accent: string; style: InvoiceDesign["style"]; font: InvoiceDesign["font"]; logoPath?: string; logoMode?: "mark" | "padded"; source?: string }> = {
-  "amg-holding": { accent: "#3d4e66", style: "minimal", font: "serif" },
+const owned: Record<StatementCompanyId, { accent: string; style: InvoiceDesign["style"]; font: InvoiceDesign["font"]; logoPath?: string; logoDataUrl?: string; logoMode?: "mark" | "padded"; source?: string }> = {
+  lovemedo: { accent: "#7046a5", style: "minimal", font: "sans" }, "amg-holding": { accent: "#3d4e66", style: "minimal", font: "serif" },
   "artec": { accent: "#eba11c", style: "rule", font: "sans", logoPath: "/invoice-brands/artec.png", source: "https://ar-tec.nl/" },
   "inch-engineering": { accent: "#47704c", style: "frame", font: "sans", logoPath: "/invoice-brands/inch-engineering.jpg", logoMode: "padded", source: "https://inchengineering.com/" },
   "digital-nudge": { accent: "#4754e8", style: "minimal", font: "sans", source: "https://digital-nudge.com/" },
@@ -30,6 +31,12 @@ export function defaultInvoiceDesign(key: string, name: string): InvoiceDesign {
 }
 export function validateInvoiceDesign(value: InvoiceDesign): InvoiceDesign {
   if (!value || !/^#[0-9a-f]{6}$/i.test(value.accent) || !["rule", "minimal", "frame"].includes(value.style) || !["sans", "serif"].includes(value.font) || typeof value.key !== "string" || value.key.length > 300 || typeof value.name !== "string" || value.name.length > 250 || (value.logoPath && !/^\/invoice-brands\/[a-z0-9-]+\.(png|svg|jpg)$/.test(value.logoPath))) throw new Error("Check the company design");
+  if (value.logoDataUrl) {
+    if (value.logoDataUrl.length > 180000 || !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value.logoDataUrl)) throw new Error("Use a PNG or JPEG logo under 128 KB");
+    let bytes:string;try{bytes=atob(value.logoDataUrl.split(",")[1]);}catch{throw new Error("Invalid logo encoding");}
+    if(bytes.length>131072 || (value.logoDataUrl.startsWith("data:image/png") ? !bytes.startsWith("\x89PNG\r\n\x1a\n") : !bytes.startsWith("\xff\xd8\xff")))throw new Error("Logo content does not match its image type");
+  }
+  if (value.template && !invoiceDesignStyles.includes(value.template)) throw new Error("Choose a supported document template");
   if (value.logoMode && !["mark", "padded"].includes(value.logoMode)) throw new Error("Check the company logo");
   return value;
 }

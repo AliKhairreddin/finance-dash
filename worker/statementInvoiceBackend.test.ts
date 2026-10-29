@@ -3,22 +3,22 @@ import test from "node:test";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
-import { statementCompanies } from "../shared/statements";
+import { statementCompanies, statementPermissions } from "../shared/statements";
 process.env.CONVEX_SERVICE_TOKEN = "invoice-test";
 const auth = { serviceToken: "invoice-test", actor: "Ali" };
 const modules = { "../convex/statements.ts": () => import("../convex/statements"), "../convex/_generated/server.ts": () => import("../convex/_generated/server"), "../convex/statementInvoices.ts": () => import("../convex/statementInvoices") };
 async function setup() {
   const t = convexTest(schema, modules);
   const fixture = await t.run(async ctx => {
-    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true });
-    await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false });
+    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: [...statementPermissions], accountIds: [] });
+    await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false, permissions: [...statementPermissions], accountIds: [] });
     const storageId = await ctx.storage.store(new Blob(["%PDF-sample"], { type: "application/pdf" }));
     const templateId = await ctx.db.insert("statementInvoiceTemplates", { companyId: "amg-holding", issuerKey: "our:amg-holding", issuerName: "AMG Holding", storageId, fileName: "test.pdf", layoutJson: JSON.stringify({ headerPercent: 10, footerPercent: 10, sellerDetails: "Test seller", paymentDetails: "" }), approved: true, createdAt: Date.now(), actor: "Ali", model: "saved/model" });
     const base = { date: "2026-10-26", description: "Test service", source: "Test bank", amountMinor: "12100", currency: "EUR", direction: "in" as const, reviewReasons: [], origin: "manual" as const, status: "pending" as const, documentIds: [], revision: 1, createdAt: "2026-10-26", updatedAt: "2026-10-26", createdBy: "Ali", candidateKey: "test", intakeKey: "test" };
     const id = await ctx.db.insert("statementTransactions", { ...base, companyId: "amg-holding" }), other = await ctx.db.insert("statementTransactions", { ...base, companyId: "artec" });
     return { storageId, templateId, id, other };
   });
-  const input = { ...auth, requestId: crypto.randomUUID(), ids: [fixture.id], instructions: "Describe the work simply", draftJson: JSON.stringify({ number: "TEST-001", date: "2026-10-26", dueDate: "", customer: "Customer", customerAddress: "Address", notes: "", currency: "USD", taxMode: "included", lines: [{ taxPercent: "21", amount: "999" }] }) };
+  const input = { ...auth, requestId: crypto.randomUUID(), ids: [fixture.id], instructions: "Describe the work simply", plainDetailsJson: JSON.stringify(pair), draftJson: JSON.stringify({ number: "TEST-001", date: "2026-10-26", dueDate: "", customer: "Customer", customerAddress: "Address", notes: "", currency: "USD", taxMode: "included", lines: [{ taxPercent: "21", amount: "999" }] }) };
   return { t, ...fixture, input };
 }
 test("invoice drafts use saved amounts, reject mixed-company selections and enforce access", async () => {
@@ -29,7 +29,7 @@ test("invoice drafts use saved amounts, reject mixed-company selections and enfo
   assert.equal(row.draft.currency, "EUR"); assert.equal(row.draft.lines[0].amount, "121.00");
   await assert.rejects(t.query(api.statementInvoices.get, { ...auth, actor: "Alaa", id }));
   assert.equal(await t.mutation(api.statementInvoices.begin, input), id);
-  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID() }), /Invoice number TEST-001 is already used for this company\. Open it in Created invoices, or enter a different number\./);
+  assert.equal(await t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID() }), id);
 });
 test("invoice AI claims serialize generation and cannot change amounts or the selection", async () => {
   const { t, input } = await setup(), id = await t.mutation(api.statementInvoices.begin, input);
@@ -40,15 +40,14 @@ test("invoice AI claims serialize generation and cannot change amounts or the se
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id })); assert.equal(row.state, "draft"); assert.equal(row.draft.lines[0].amount, "121.00"); assert.equal(row.draft.lines[0].description, "Clear wording");
   await assert.rejects(t.mutation(api.statementInvoices.save, { ...auth, id, revision: 1, draftJson: row.draftJson }));
 });
-test("final invoices require review and unchanged source records, then become immutable", async () => {
+test("final documents require unchanged sources, permit one-click saving and become immutable", async () => {
   const { t, input, storageId } = await setup(), id = await t.mutation(api.statementInvoices.begin, input);
   await t.mutation(api.statementInvoices.claim, { ...auth, id, token: "one" });
   await t.mutation(api.statementInvoices.generated, { ...auth, id, token: "one", resultJson: JSON.stringify({ lines: [{ transactionId: input.ids[0], description: "Service" }] }) });
-  await assert.rejects(t.mutation(api.statementInvoices.finalize, { ...auth, id, revision: 2, storageId, confirmed: false }));
   await t.run(async ctx => { await ctx.db.patch(input.ids[0], { revision: 2 }); });
   await assert.rejects(t.mutation(api.statementInvoices.finalize, { ...auth, id, revision: 2, storageId, confirmed: true }));
   await t.run(async ctx => { await ctx.db.patch(input.ids[0], { revision: 1 }); });
-  await t.mutation(api.statementInvoices.finalize, { ...auth, id, revision: 2, storageId, confirmed: true });
+  await t.mutation(api.statementInvoices.finalize, { ...auth, id, revision: 2, storageId, confirmed: false });
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id })); assert.equal(row.state, "ready");
   await assert.rejects(t.mutation(api.statementInvoices.save, { ...auth, id, revision: 3, draftJson: row.draftJson }));
   await assert.rejects(t.mutation(api.statementInvoices.discard, { ...auth, id }));
@@ -69,14 +68,13 @@ test("automatic numbers are unique, skip existing numbers, preserve retries, and
   const id = await t.mutation(api.statementInvoices.begin, create);
   assert.equal(await t.mutation(api.statementInvoices.begin, create), id);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
-  assert.equal(row.number, "AMG-2026-000002"); assert.equal(row.draft.date, "2026-09-24");
+  assert.equal(row.number, "AMG-SUP-2026-000001"); assert.equal(row.draft.date, "2026-09-24");
   const next = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID() });
-  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: next })).number, "AMG-2026-000003");
+  assert.equal(next, id);
   const artec = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [other], plainDetailsJson: JSON.stringify({ ...pair, ours: { ...pair.ours, name: "Artec" } }) });
-  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: artec })).number, "ARTEC-2026-000001");
+  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: artec })).number, "ARTEC-SUP-2026-000001");
   await t.run(async ctx => { await ctx.db.patch(other, { companyId: "amg-holding", date: "2026-09-25" }); });
-  const multi = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [...input.ids, other] });
-  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: multi })).draft.date, "2026-09-25");
+  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [...input.ids, other] }), /already belongs/);
 });
 test("invoice status and PDF projection follow draft/final/discard lifecycle without changing the ledger", async () => {
   const { t, input, storageId } = await setup();
@@ -89,13 +87,13 @@ test("invoice status and PDF projection follow draft/final/discard lifecycle wit
   assert.equal(results.total, 1); assert.equal(results.transactions[0].generatedInvoiceId, id); assert.equal(results.transactions[0].generatedInvoiceState, "draft");
   assert.equal(results.transactions[0].status, "pending"); assert.equal(results.transactions[0].revision, before!.revision); assert.equal(results.transactions[0].amountMinor, before!.amountMinor);
   const saved = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
-  await t.mutation(api.statementInvoices.save, { ...auth, id, revision: saved.revision, draftJson: JSON.stringify({ ...saved.draft, number: "RENAMED" }) });
+  await t.mutation(api.statementInvoices.save, { ...auth, id, revision: saved.revision, draftJson: JSON.stringify({ ...saved.draft, notes: "Reviewed supporting record" }) });
   results = await t.query(api.statements.listTransactions, { ...auth, status: "ai_generated" });
-  assert.equal(results.transactions[0].generatedInvoiceNumber, "RENAMED");
+  assert.equal(results.transactions[0].generatedInvoiceNumber, saved.number);
   await t.mutation(api.statementInvoices.finalize, { ...auth, id, revision: 3, storageId, confirmed: true });
   results = await t.query(api.statements.listTransactions, { ...auth, status: "ai_generated" });
   assert.equal(results.transactions[0].generatedInvoiceState, "ready");
-  const newer = await t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID() });
+  const newer = await t.mutation(api.statementInvoices.begin, { ...input, requestId: crypto.randomUUID(), regenerate: true });
   await t.mutation(api.statementInvoices.claim, { ...auth, id: newer, token: "two" });
   await t.mutation(api.statementInvoices.generated, { ...auth, id: newer, token: "two", resultJson: JSON.stringify({ lines: [{ transactionId: input.ids[0], description: "Service again" }] }) });
   await t.mutation(api.statementInvoices.discard, { ...auth, id: newer });
@@ -106,21 +104,21 @@ test("invoice status and PDF projection follow draft/final/discard lifecycle wit
   assert.equal(after?.generatedInvoiceId, id); assert.equal(after?.revision, before!.revision); assert.equal(after?.amountMinor, before!.amountMinor);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id })).storageId, storageId);
 });
-test("issuer identity selects supplier examples and reuses designs across workspaces without leaking private templates", async () => {
+test("internal records use legal issuer designs and never impersonate supplier templates", async () => {
   const { t, input, other, templateId, storageId } = await setup();
   await t.run(async ctx => { await ctx.db.patch(input.ids[0], { direction: "out", counterparty: "Vendor payment" }); await ctx.db.patch(other, { direction: "out", counterparty: "Vendor payment" }); });
   await t.mutation(api.statements.saveAddress, { ...auth, companyId: "all", name: "Example Supplier", invoiceName: "Supplier BV", aliases: ["Vendor payment"], addressLine1: "Street 1", notes: "" });
   const create = { ...input, plainDetailsJson: JSON.stringify(pair) };
   const first = await t.mutation(api.statementInvoices.begin, create);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: first }));
-  assert.equal(row.templateId, undefined); assert.equal(row.layout.design.key, "supplier:supplier bv");
-  assert.equal(row.draft.customer, "AMG Holding");
+  assert.equal(row.templateId, undefined); assert.equal(row.layout.design.key, "our:amg-holding");
+  assert.equal(row.draft.customer, "Example Supplier");
   const second = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [other], plainDetailsJson: JSON.stringify({ ...pair, ours: { ...pair.ours, name: "Artec" } }) });
-  assert.deepEqual(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: second })).layout.design, row.layout.design);
+  assert.notDeepEqual(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: second })).layout.design, row.layout.design);
   const supplierExample = await t.run(async ctx => { const own = await ctx.db.get(templateId); const { _id, _creationTime, ...fields } = own!; return ctx.db.insert("statementInvoiceTemplates", { ...fields, storageId, issuerKey: "supplier:supplier bv", issuerName: "Supplier BV" }); });
   const third = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), draftJson: JSON.stringify({ ...JSON.parse(input.draftJson), number: "THIRD" }) });
   const withExample = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: third }));
-  assert.equal(withExample.templateId, supplierExample); assert.equal(withExample.layout.design, undefined);
+  assert.equal(withExample.templateId, undefined); assert.ok(withExample.layout.design);
   const privateSetup = JSON.parse(await t.query(api.statementInvoices.setup, { ...auth, actor: "Alaa", ids: [other] }));
   assert.equal(privateSetup.hasExample, false);
 });
@@ -141,8 +139,8 @@ test("no-example invoices save confirmed company-pair details and preserve the c
   const create = { ...input, plainDetailsJson: JSON.stringify(pair), remember: true, profileRevision: 0 };
   const id = await t.mutation(api.statementInvoices.begin, create);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
-  assert.equal(row.templateUrl, null); assert.equal(row.draft.customer, pair.ours.name); assert.equal(row.draft.customerVat, pair.ours.vat);
-  assert.ok(row.layout.sellerDetails.includes(pair.other.vat)); assert.ok(row.layout.sellerDetails.includes(pair.other.address));
+  assert.equal(row.templateUrl, null); assert.equal(row.draft.customer, pair.other.name); assert.equal(row.draft.customerVat, pair.other.vat);
+  assert.ok(row.layout.sellerDetails.includes(pair.ours.vat)); assert.ok(row.layout.sellerDetails.includes(pair.ours.address));
   assert.equal(row.draft.lines[0].amount, "121.00"); assert.ok(row.instructions.includes(pair.description));
   assert.equal(await t.mutation(api.statementInvoices.begin, create), id);
   const profile = JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: "  EXAMPLE   SUPPLIER " }));
@@ -157,8 +155,8 @@ test("remember is optional, stale updates cannot overwrite saved details, and fa
   const create = { ...input, plainDetailsJson: JSON.stringify(pair), remember: false, profileRevision: 0 };
   const id = await t.mutation(api.statementInvoices.begin, create);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: pair.other.name })), null);
-  // Duplicate invoice number fails even after attempting to save a profile: the mutation is atomic.
-  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...create, remember: true, requestId: crypto.randomUUID() }));
+  // A business-key retry returns the existing document without overwriting saved profiles.
+  assert.equal(await t.mutation(api.statementInvoices.begin, { ...create, remember: true, requestId: crypto.randomUUID() }), id);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: pair.other.name })), null);
   await t.mutation(api.statementInvoices.discard, { ...auth, id });
   const second = await t.mutation(api.statementInvoices.begin, { ...create, remember: true, requestId: crypto.randomUUID() });

@@ -1,3 +1,4 @@
+import { fullStatementManagement } from "./statementAccess";
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { normalizeStatementActor, statementCompanies } from "../shared/statements";
@@ -8,7 +9,7 @@ function authorize(token: string) {
 }
 async function member(ctx: QueryCtx | MutationCtx, actor: string) {
   const row = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", normalizeStatementActor(actor))).unique();
-  if (!row?.manage || row.companyIds.length !== statementCompanies.length) throw new ConvexError("Full statements management access required");
+  if (!row || !fullStatementManagement(row)) throw new ConvexError("Full statements management access required");
   return row;
 }
 export const status = query({
@@ -57,7 +58,7 @@ export const acceptUpload = mutation({
     const row = await ctx.db.query("statementCaptureDevices").withIndex("by_tokenHash", q => q.eq("tokenHash", args.tokenHash)).unique();
     if (!row?.active) return { actor: null, retryAfter: 0 };
     const owner = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", normalizeStatementActor(row.actor))).unique();
-    if (!owner?.manage || owner.companyIds.length !== statementCompanies.length) return { actor: null, retryAfter: 0 };
+    if (!owner || !fullStatementManagement(owner)) return { actor: null, retryAfter: 0 };
     const now = Date.now(), minuteStart = now - row.minuteStart >= 60_000 ? now : row.minuteStart;
     const dayStart = now - row.dayStart >= 86_400_000 ? now : row.dayStart;
     const minuteCount = minuteStart === row.minuteStart ? row.minuteCount : 0;

@@ -22,7 +22,7 @@ const modules = {
 async function setup(provider: "gmail" | "outlook") {
   const t = convexTest(schema, modules), encryptedTokens = await mailboxEncrypt(JSON.stringify({ access_token: "old-access", refresh_token: "old-refresh", expires_in: 3600 }), process.env.MAILBOX_ENCRYPTION_KEY!);
   const id = await t.run(async ctx => {
-    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true });
+    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: ["view","settings","documents","import","download"], accountIds: ["revolut-lmd","amex-lmd","wise-lmd"] });
     return ctx.db.insert("statementMailboxes", { provider, accountId: "test@example.com", email: "test@example.com", actor: "Ali", scanFrom: "2026-01-01", state: "queued", encryptedTokens, expiresAt: 0, nextRunAt: 0, leaseUntil: 0, attempts: 0, windowFrom: Date.parse("2026-01-01"), windowTo: Date.now(), scanned: 0, imported: 0, skipped: 0, issues: 0, createdAt: Date.now(), lastRequestedAt: 0 });
   }); return { t, id };
 }

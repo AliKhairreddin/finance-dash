@@ -5,7 +5,7 @@ import * as backend from "../convex/statements";
 
 const input = (overrides: Partial<StatementTransactionInput> = {}): StatementTransactionInput => ({ companyId: "artec", date: "2026-10-01", description: "Office supplies", source: "Test bank", account: "Account one", amount: "12.34", currency: "EUR", direction: "out", ...overrides });
 test("statement companies and exact money keep currencies and precision separate", () => {
-  assert.deepEqual(statementCompanies.map(company => company.name), ["AMG Holding", "Artec", "Inch Engineering", "Digital Nudge", "Inch Digital", "MZS Bouw"]);
+  assert.deepEqual(statementCompanies.map(company => company.name), ["AMG Holding", "Artec", "Inch Engineering", "Digital Nudge", "Inch Digital", "MZS Bouw", "LoveMeDo B.V."]);
   assert.equal(BigInt(statementAmountMinor("0.10", "EUR")) + BigInt(statementAmountMinor("0.20", "EUR")), 30n);
   assert.equal(statementAmountMinor("1.234", "KWD"), "1234");
   assert.equal(statementAmountMinor("0.00000001", "BTC"), "1");
@@ -144,11 +144,11 @@ test("reviewed allocations enforce document totals, currency, completion and reo
   await assert.rejects(handler(backend.reviewDocument)(ctx, { ...auth, id: docId, companyId: "artec", documentType: "invoice", reviewed: true }), /amount and currency/);
   await handler(backend.reviewDocument)(ctx, { ...auth, id: docId, companyId: "artec", documentType: "invoice", amount: "100", currency: "EUR", reviewed: true });
   const ids = await handler(backend.createTransactions)(ctx, { ...auth, requestId: "allocation-request-0001", rows: [input({ amount: "70", description: "First payment" }), input({ amount: "40", description: "Second payment" }), input({ amount: "10", currency: "USD", description: "Wrong currency" })] });
-  await assert.rejects(handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[0]], action: "complete" }), /Reconcile/);
+  assert.equal((await handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[0]], action: "complete" }))[0].outcome, "failed");
   await handler(backend.linkDocument)(ctx, { ...auth, id: docId, transactionId: ids[0], amount: "70" });
   await assert.rejects(handler(backend.linkDocument)(ctx, { ...auth, id: docId, transactionId: ids[1], amount: "40" }), /document's remaining amount/);
   await handler(backend.linkDocument)(ctx, { ...auth, id: docId, transactionId: ids[1], amount: "30" });
-  await assert.rejects(handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[1]], action: "reconcile" }), /complete transaction amount/);
+  assert.equal((await handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[1]], action: "reconcile" }))[0].outcome, "failed");
   await assert.rejects(handler(backend.linkDocument)(ctx, { ...auth, id: docId, transactionId: ids[2], amount: "10" }), /currencies must match/);
   await handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[0]], action: "reconcile" });
   await handler(backend.transactionActions)(ctx, { ...auth, ids: [ids[0]], action: "complete" });

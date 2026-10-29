@@ -1,3 +1,5 @@
+> Local restoration update (29 October 2026): see [implementation delivery](statement-restoration-delivery.md) and [validation](statement-restoration-validation.md). The material below documents the earlier deployed baseline; its six-company, 2,000-row and invoice-preview descriptions are superseded by the local restoration. The restoration has not been deployed.
+
 # Statement Dashboard
 
 The Statement Dashboard runs in the existing Cloudflare Worker at

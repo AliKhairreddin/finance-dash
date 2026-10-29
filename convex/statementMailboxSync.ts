@@ -82,6 +82,7 @@ export const scan = internalAction({ args: { id: v.id("statementMailboxes") }, r
       if (raw.length > 25 * 1024 * 1024) throw new Error("An email exceeds the 25 MB import limit. Import its receipt manually.");
       if (Date.parse(receivedAt) < Date.parse(row.scanFrom) || Date.parse(receivedAt) >= row.windowTo) continue;
       const parsed = await mailboxContent(raw), files: Array<{ storageId: Id<"_storage">; contentHash: string; fileName: string; size: number }> = [];
+      const emailRawStorageId = parsed.files.length ? await ctx.storage.store(new Blob([raw], { type: "message/rfc822" })) : undefined;
       for (const file of parsed.files) {
         const storageId = await ctx.storage.store(new Blob([file.bytes], { type: "application/pdf" }));
         files.push({ storageId, contentHash: file.hash, fileName: file.name, size: file.bytes.length });
@@ -89,7 +90,7 @@ export const scan = internalAction({ args: { id: v.id("statementMailboxes") }, r
         // references, so it never removes an original committed by a replay.
         await ctx.scheduler.runAfter(12 * 60_000, internal.statementMailboxes.cleanupUploads, { files: [{ storageId, contentHash: file.hash }] });
       }
-      await ctx.runMutation(internal.statementMailboxes.record, { ...args, token, providerId, files, sender: parsed.sender, subject: parsed.subject, receivedAt, sourceContext: `Connected mailbox: ${row.email}\n${parsed.sourceContext}`.slice(0, 12000), issue: parsed.issue });
+      await ctx.runMutation(internal.statementMailboxes.record, { ...args, token, providerId, files, emailRawStorageId, sender: parsed.sender, subject: parsed.subject, receivedAt, sourceContext: `Connected mailbox: ${row.email}\n${parsed.sourceContext}`.slice(0, 12000), issue: parsed.issue });
     }
     await ctx.runMutation(internal.statementMailboxes.checkpoint, { ...args, token, cursor: page.next });
   } catch (error) {

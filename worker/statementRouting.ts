@@ -1,3 +1,4 @@
+import { handleStatementAutomaticGeneration } from "./statementInvoices";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { normalizeStatementActor } from "../shared/statements";
@@ -61,6 +62,7 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
     headers.set("X-Content-Type-Options", "nosniff");
     return new Response(response.body, { status: response.status, headers });
   }
+  if(url.pathname === "/api/statements/process-generation")return handleStatementAutomaticGeneration(request,env);
   if (url.pathname === "/api/statements/process") return handleStatementProcessing(request, env);
   if (url.pathname === "/api/internal/statements/verify-extraction") {
     if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, 401);

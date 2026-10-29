@@ -34,7 +34,7 @@ const record = (value: unknown): Record<string, unknown> => {
 const text = (value: unknown, maximum = 2000): string => typeof value === "string" ? value.trim().slice(0, maximum) : "";
 const normalized = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 const companyNames: Record<StatementCompanyId, readonly string[]> = {
-  "amg-holding": ["amg holding"], artec: ["artec", "ar tec"], "inch-engineering": ["inch engineering"],
+  lovemedo: ["LoveMeDo B.V.", "LoveMeDo"], "amg-holding": ["amg holding"], artec: ["artec", "ar tec"], "inch-engineering": ["inch engineering"],
   "digital-nudge": ["digital nudge"], "inch-digital": ["inch digital"], "mzs-bouw": ["mzs bouw"]
 };
 const date = (value: unknown): string | undefined => {

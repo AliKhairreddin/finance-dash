@@ -1,19 +1,20 @@
+import { useStatementAccounts } from "./StatementAccountContext";
 import { useState } from "react";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { InfoPopover } from "@/components/ui/finance-visuals";
-import { statementCompanies, statementAmountDecimal, type StatementRow, type StatementTransaction as SharedStatementTransaction } from "../../../shared/statements";
+import { statementCompanies, statementAccounts, statementContext, statementWorkspaces, statementAmountDecimal, type StatementRow, type StatementTransaction as SharedStatementTransaction } from "../../../shared/statements";
 import { ErrorMessage, SelectField, StatementModal, SubmitButton, jsonRequest, statementRequest } from "./StatementUi";
 
 export interface TransactionDraft {
-  companyId: string; date: string; description: string; counterparty: string; reference: string;
+  companyId: string; financialAccountId: string; date: string; description: string; counterparty: string; reference: string;
   source: string; account: string; providerId: string; cardLastFour: string; amount: string; currency: string;
   direction: "in" | "out"; notes: string; fee: string; balance: string;
 }
 export type StatementTransaction = SharedStatementTransaction & { deletedAt?: string };
-export const companyName = (id?: string) => statementCompanies.find(company => company.id === id)?.name || "No company";
+export const companyName = (id?: string,accounts:Array<{id:string;name:string}>=[]) => [...accounts,...statementCompanies, ...statementAccounts].find(company => company.id === id)?.name || "No company";
 export const companyOptions = [{ value: "", label: "No company — choose later" }, ...statementCompanies.map(company => ({ value: company.id, label: company.name }))];
 export const decimalAmount = statementAmountDecimal;
 export function displayAmount(minor: string, currency: string): string {
@@ -21,19 +22,21 @@ export function displayAmount(minor: string, currency: string): string {
   const [integer, fraction] = decimal.split(".");
   return `${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${fraction ? `.${fraction}` : ""} ${currency}`;
 }
-export const blankDraft = (companyId = ""): TransactionDraft => ({ companyId, date: new Date().toLocaleDateString("en-CA"), description: "", counterparty: "", reference: "", source: "Manual", account: "", providerId: "", cardLastFour: "", amount: "", currency: "EUR", direction: "out", notes: "", fee: "", balance: "" });
+export const blankDraft = (companyId = ""): TransactionDraft => ({ companyId: statementContext(companyId).companyId || "", financialAccountId: statementContext(companyId).financialAccountId || "", date: new Date().toLocaleDateString("en-CA"), description: "", counterparty: "", reference: "", source: "Manual", account: "", providerId: "", cardLastFour: "", amount: "", currency: "EUR", direction: "out", notes: "", fee: "", balance: "" });
 export const transactionDraft = (row: StatementRow): TransactionDraft => ({
-  companyId: row.companyId || "", date: row.date, description: row.description, counterparty: row.counterparty || "", reference: row.reference || "", source: row.source,
+  companyId: row.companyId || "", financialAccountId: row.financialAccountId || "", date: row.date, description: row.description, counterparty: row.counterparty || "", reference: row.reference || "", source: row.source,
   account: row.account || "", providerId: row.providerId || "", cardLastFour: row.cardLastFour || "", amount: decimalAmount(row.amountMinor, row.currency), currency: row.currency, direction: row.direction, notes: row.notes || "", fee: row.feeMinor ? decimalAmount(row.feeMinor, row.currency) : "", balance: row.balanceMinor ? decimalAmount(row.balanceMinor, row.currency) : ""
 });
 export function transactionPayload(draft: TransactionDraft) {
-  return { ...draft, companyId: draft.companyId || undefined, providerId: draft.providerId || undefined, cardLastFour: draft.cardLastFour || undefined };
+  return { ...draft, companyId: draft.companyId || undefined, financialAccountId: draft.financialAccountId || undefined, providerId: draft.providerId || undefined, cardLastFour: draft.cardLastFour || undefined };
 }
 
 export function TransactionFields({ draft, onChange, disabled = false }: { draft: TransactionDraft; onChange: (draft: TransactionDraft) => void; disabled?: boolean }) {
   const edit = (field: keyof TransactionDraft, value: string) => onChange({ ...draft, [field]: value });
+  const accounts=useStatementAccounts();
   return <fieldset className="statement-fields" disabled={disabled}>
-    <SelectField label="Company" value={draft.companyId} options={companyOptions} onChange={value => edit("companyId", value)} disabled={disabled} />
+    <SelectField label="Company" value={draft.companyId} options={companyOptions} onChange={value => onChange({ ...draft, companyId: value, financialAccountId: "" })} disabled={disabled} />
+    <SelectField label="Financial account" value={draft.financialAccountId} onChange={value => edit("financialAccountId", value)} options={[{ value: "", label: "Unresolved account" }, ...accounts.filter(a => a.companyId === draft.companyId).map(a => ({ value: a.id, label: a.name }))]} />
     <label>Date<Input type="date" required value={draft.date} onChange={event => edit("date", event.target.value)} /></label>
     <label>Amount<Input inputMode="decimal" required pattern="[0-9]+([.,][0-9]+)?" placeholder="0.00" value={draft.amount} onChange={event => edit("amount", event.target.value.replace(",", "."))} /></label>
     <label>Currency<Input required pattern="[A-Z]{3,4}" maxLength={4} value={draft.currency} onChange={event => edit("currency", event.target.value.toUpperCase())} /></label>

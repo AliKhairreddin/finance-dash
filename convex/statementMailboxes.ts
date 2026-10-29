@@ -1,3 +1,4 @@
+import { fullStatementManagement } from "./statementAccess";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
@@ -10,7 +11,7 @@ const claimArgs = { id: v.id("statementMailboxes"), token: v.string() };
 export const mailboxConfigured = (provider: MailProvider) => Boolean(process.env[provider === "gmail" ? "GMAIL_CLIENT_ID" : "OUTLOOK_CLIENT_ID"] && process.env[provider === "gmail" ? "GMAIL_CLIENT_SECRET" : "OUTLOOK_CLIENT_SECRET"] && /^[a-f0-9]{64}$/i.test(process.env.MAILBOX_ENCRYPTION_KEY ?? ""));
 async function member(ctx: QueryCtx | MutationCtx, actor: string) {
   const normalized = normalizeStatementActor(actor), row = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", normalized)).unique();
-  if (!row?.manage || !statementCompanies.every(c => row.companyIds.includes(c.id))) throw new ConvexError("Full Statements management access is required for mailbox connections");
+  if (!row || !fullStatementManagement(row)) throw new ConvexError("Full Statements management access is required for mailbox connections");
   return normalized;
 }
 async function access(ctx: QueryCtx | MutationCtx, args: { serviceToken: string; actor: string }) {
@@ -87,7 +88,7 @@ export const saveTokens = internalMutation({ args: { ...claimArgs, encryptedToke
 export const seen = internalQuery({ args: { ...claimArgs, providerId: v.string() }, returns: v.boolean(), handler: async (ctx, args) => { await lease(ctx, args.id, args.token); return Boolean(await ctx.db.query("statementMailboxMessages").withIndex("by_mailboxId_and_providerId", q => q.eq("mailboxId", args.id).eq("providerId", args.providerId)).unique()); } });
 // Document creation and provider-message checkpoint are one transaction. A stale
 // action cannot import after disconnect, and a replay never schedules duplicate AI.
-export const record = internalMutation({ args: { ...claimArgs, providerId: v.string(), sender: v.string(), subject: v.string(), receivedAt: v.string(), sourceContext: v.string(), issue: v.optional(v.string()), files: v.array(v.object({ storageId: v.id("_storage"), contentHash: v.string(), fileName: v.string(), size: v.number() })) }, returns: v.null(), handler: async (ctx, args) => {
+export const record = internalMutation({ args: { ...claimArgs, providerId: v.string(), sender: v.string(), subject: v.string(), receivedAt: v.string(), sourceContext: v.string(), emailRawStorageId: v.optional(v.id("_storage")), issue: v.optional(v.string()), files: v.array(v.object({ storageId: v.id("_storage"), contentHash: v.string(), fileName: v.string(), size: v.number() })) }, returns: v.null(), handler: async (ctx, args) => {
   const row = await lease(ctx, args.id, args.token);
   if (args.files.length > 10 || args.sourceContext.length > 12000 || args.subject.length > 500 || args.providerId.length > 1000 || args.files.some(file => !/^[a-f0-9]{64}$/.test(file.contentHash) || file.size <= 0 || file.size > 15 * 1024 * 1024 || file.fileName.length > 240)) throw new ConvexError("Invalid mailbox document batch");
   const previous = await ctx.db.query("statementMailboxMessages").withIndex("by_mailboxId_and_providerId", q => q.eq("mailboxId", args.id).eq("providerId", args.providerId)).unique();
@@ -97,12 +98,12 @@ export const record = internalMutation({ args: { ...claimArgs, providerId: v.str
     const existing = await ctx.db.query("statementDocuments").withIndex("by_contentHash", q => q.eq("contentHash", file.contentHash)).unique();
     if (existing) { await ctx.storage.delete(file.storageId); ids.push(existing._id); continue; }
     const now = new Date().toISOString();
-    const id = await ctx.db.insert("statementDocuments", { ...file, contentType: "application/pdf", origin: "email", status: "queued", documentType: "unknown", sourceContext: args.sourceContext, sender: args.sender, subject: args.subject, messageId: `${row.provider}:${row.accountId}:${args.providerId}`.slice(0, 1000), receivedAt: args.receivedAt, evidence: [], reviewReasons: ["Imported from a connected mailbox; verify extracted fields against the original"], attempts: 0, quarantined: false, transactionIds: [], createdAt: now, updatedAt: now });
+    const id = await ctx.db.insert("statementDocuments", { ...file, contentType: "application/pdf", origin: "email", status: "queued", documentType: "unknown", sourceContext: args.sourceContext, emailRawStorageId: args.emailRawStorageId, sender: args.sender, subject: args.subject, messageId: `${row.provider}:${row.accountId}:${args.providerId}`.slice(0, 1000), receivedAt: args.receivedAt, evidence: [], reviewReasons: ["Imported from a connected mailbox; verify extracted fields against the original"], attempts: 0, quarantined: false, transactionIds: [], createdAt: now, updatedAt: now });
     ids.push(id); imported++;
     await ctx.db.insert("statementAudit", { entityType: "document", entityId: id, actor: row.actor, action: "mailbox_import", details: `${row.provider}: ${row.email}`, createdAt: now });
     await ctx.scheduler.runAfter(0, internal.statementProcessing.processDocument, { id });
   }
-  await ctx.db.insert("statementMailboxMessages", { mailboxId: row._id, providerId: args.providerId, documents: ids, issue: args.issue?.slice(0, 500), processedAt: Date.now() });
+  await ctx.db.insert("statementMailboxMessages", { mailboxId: row._id, providerId: args.providerId, documents: ids, emailRawStorageId: args.emailRawStorageId, issue: args.issue?.slice(0, 500), processedAt: Date.now() });
   await ctx.db.patch(row._id, { scanned: row.scanned + 1, imported: row.imported + imported, skipped: row.skipped + (ids.length ? 0 : 1), issues: row.issues + (args.issue ? 1 : 0), ...(args.issue ? { latestIssue: `${args.subject || "Email"}: ${args.issue}`.slice(0, 500) } : {}) });
   return null;
 } });

@@ -9,7 +9,7 @@ const auth = { serviceToken: "capture-test", actor: "Ali" }, tokenHash = "a".rep
 const modules = { "../convex/_generated/server.ts": () => import("../convex/_generated/server"), "../convex/statementCapture.ts": () => import("../convex/statementCapture") };
 async function setup() {
   const t = convexTest(schema, modules);
-  await t.run(async ctx => { await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true }); await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false }); });
+  await t.run(async ctx => { await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: ["view","settings","documents","import","download"], accountIds: ["revolut-lmd","amex-lmd","wise-lmd"] }); await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false }); });
   return t;
 }
 test("device keys have no timed expiry, require full membership and can be revoked", async () => {

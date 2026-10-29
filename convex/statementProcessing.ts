@@ -8,8 +8,8 @@ export const importBatch = internalAction({ args: { id: v.id("statementImports")
   return null;
 } });
 export const processDocument = internalAction({ args: { id: v.id("statementDocuments") }, returns: v.null(), handler: async (ctx, args) => {
-  const target = await ctx.runQuery(internal.statements.processingTarget, {});
   try {
+    const target = await ctx.runQuery(internal.statements.processingTarget, {});
     // Includes downloading, browser startup/OCR, and AI generation. The ten-minute
     // document lease remains longer so a slow callback cannot start a duplicate.
     const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.serviceToken}` }, body: JSON.stringify(args), signal: AbortSignal.timeout(8 * 60_000) });

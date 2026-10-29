@@ -4,7 +4,7 @@ import PostalMime from "postal-mime";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
-import { isStatementCompany, normalizeStatementActor, parseStatementCsv, statementSortKeys, validateStatementInput,
+import { isStatementCompany, statementContext, statementWorkspaces, normalizeStatementActor, parseStatementCsv, statementSortKeys, statementCurrencyScale, validateStatementInput,
   type StatementActor, type StatementCompanyId, type StatementCsvMapping, type StatementTransactionInput } from "../shared/statements";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { boundedBytes, secureHeaderMatches } from "./documentIntake";
@@ -35,7 +35,7 @@ export async function statementHash(bytes: Uint8Array<ArrayBuffer>): Promise<str
 function inputFields(raw: unknown): StatementTransactionInput {
   const row = object(raw), fields: StatementTransactionInput = { date: string(row.date, 20), description: string(row.description, 1024), amount: string(row.amount, 40), currency: string(row.currency, 8), source: string(row.source, 100), direction: row.direction === "in" ? "in" : row.direction === "out" ? "out" : (() => { throw new Error("Choose money in or money out"); })() };
   const companyId = company(row.companyId); if (companyId) fields.companyId = companyId;
-  for (const key of ["counterparty", "reference", "account", "providerId", "cardLastFour", "notes", "fee", "balance"] as const) if (row[key] !== undefined && row[key] !== "") fields[key] = string(row[key], key === "notes" ? 2000 : 512);
+  for (const key of ["financialAccountId", "counterparty", "reference", "account", "providerId", "cardLastFour", "notes", "fee", "balance"] as const) if (row[key] !== undefined && row[key] !== "") fields[key] = string(row[key], key === "notes" ? 2000 : 512);
   validateStatementInput(fields);
   return fields;
 }
@@ -47,8 +47,8 @@ function mapping(value: unknown): StatementCsvMapping {
   return mapped;
 }
 function defaults(values: Record<string, unknown>): Partial<StatementTransactionInput> {
-  const selected = company(values.companyId);
-  return { ...(selected ? { companyId: selected } : {}), ...(typeof values.source === "string" && values.source.trim() ? { source: string(values.source, 100) } : {}),
+  const context = statementContext(String(values.companyId ?? "")), selected = context.companyId ?? company(values.companyId);
+  return { ...context, ...(selected ? { companyId: selected } : {}), ...(typeof values.financialAccountId === "string" && values.financialAccountId ? { financialAccountId: values.financialAccountId } : {}), ...(typeof values.source === "string" && values.source.trim() ? { source: string(values.source, 100) } : {}),
     ...(typeof values.account === "string" && values.account.trim() ? { account: string(values.account, 512) } : {}), ...(typeof values.currency === "string" && values.currency.trim() ? { currency: string(values.currency, 8) } : {}) };
 }
 async function upload(request: Request): Promise<{ bytes: Uint8Array<ArrayBuffer>; name: string; type: "application/pdf" | "text/csv"; values: Record<string, unknown> }> {
@@ -73,7 +73,7 @@ async function saveFile(env: StatementEnv, bytes: Uint8Array<ArrayBuffer>, conte
   if (!result.storageId) throw new Error("File storage returned no identifier");
   return result.storageId as Id<"_storage">;
 }
-export async function ingestPdf(env: StatementEnv, input: { bytes: Uint8Array<ArrayBuffer>; name: string; origin: "file" | "email"; actor?: StatementActor; companyId?: StatementCompanyId;
+export async function ingestPdf(env: StatementEnv, input: { bytes: Uint8Array<ArrayBuffer>; name: string; origin: "file" | "email"; actor?: StatementActor; companyId?: StatementCompanyId; financialAccountId?: string;
   sender?: string; subject?: string; messageId?: string; receivedAt?: string; emailRawStorageId?: Id<"_storage">; quarantined: boolean; sourceContext?: string; senderKnown?: boolean }) {
   if (new TextDecoder("ascii").decode(input.bytes.subarray(0, 5)) !== "%PDF-" || input.bytes.length > maximumFileBytes) throw new Error("A valid PDF no larger than 15 MB is required");
   const { bytes, name, ...metadata } = input;
@@ -90,15 +90,43 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
   if (!["GET", "HEAD"].includes(request.method) && request.headers.get("Origin") !== url.origin) return json({ message: "Open this action from the Statement Dashboard" }, 403);
   const convex = client(env), credentials = auth(env, actor), route = path.slice("/api/statements".length);
   try {
+    if (route === "/designs" && request.method === "GET") return json(JSON.parse(await convex.query(api.statementDesigns.list, credentials)));
+    if (route === "/designs" && request.method === "POST") { const input = await body(request), companyId = company(input.companyId); if (!companyId) throw new Error("Choose a company"); return json(await convex.mutation(api.statementDesigns.save, { ...credentials, companyId, style: string(input.style,100), accent: string(input.accent,7), locked: input.locked === true, expectedVersion: Number(input.expectedVersion), brandingAuthorized: input.brandingAuthorized === true,logoDataUrl:typeof input.logoDataUrl==="string"?string(input.logoDataUrl,180000):undefined })); }
+    if (route === "/library" && request.method === "GET") return json(JSON.parse(await convex.query(api.statementLibrary.page, { ...credentials, source: url.searchParams.get("source") === "generated" ? "generated" : "uploaded", cursor: url.searchParams.get("cursor") || undefined })));
+    if (route === "/library/actions" && request.method === "POST") { const input = await body(request); return json(JSON.parse(await convex.mutation(api.statementLibrary.action, { ...credentials, source: input.source as "generated"|"uploaded", ids: input.ids as string[], action: input.action as "cancel"|"not_downloaded"|"downloaded" }))); }
+    if (route === "/workspace/settings" && request.method === "GET") return json(JSON.parse(await convex.query(api.statementWorkspace.settings, credentials)));
+    if (route === "/workspace/policy" && request.method === "POST") { const input = await body(request); const companyId = company(input.companyId); if (!companyId) throw new Error("Choose a legal company"); return json(await convex.mutation(api.statementWorkspace.savePolicy, { ...credentials, companyId, financialAccountId: typeof input.financialAccountId === "string" && input.financialAccountId ? input.financialAccountId : undefined, settingsJson: JSON.stringify(input.settings), revision: Number(input.revision) })); }
+    if (route === "/workspace/account" && request.method === "POST") { const input = await body(request); const companyId = company(input.companyId); if (!companyId) throw new Error("Choose a legal company"); return json(await convex.mutation(api.statementWorkspace.saveAccount, { ...credentials, companyId, key: string(input.key,80), name: string(input.name,100), provider: string(input.provider,100), notes: string(input.notes ?? "",2000), historical: input.historical === true, verified: input.verified === true })); }
+    if (route === "/workspace/member" && request.method === "POST") { const input = await body(request); return json(await convex.mutation(api.statementWorkspace.saveMember, { ...credentials, memberActor: normalizeStatementActor(string(input.memberActor)), companyIds: (input.companyIds as unknown[]).map(c => { const id = company(c); if (!id) throw new Error("Invalid company"); return id; }), accountIds: input.accountIds as string[], permissions: input.permissions as string[], manage: input.manage === true })); }
+    if (route === "/merchants" && request.method === "GET") return json(JSON.parse(await convex.query(api.statementIntelligence.list, credentials)));
+    const merchant = /^\/merchants\/([a-zA-Z0-9]+)$/.exec(route);
+    if (merchant && request.method === "POST") { const input = await body(request); if (!["approve","discard","research"].includes(String(input.decision))) throw new Error("Invalid review action"); return json(await convex.mutation(api.statementIntelligence.review, { ...credentials, id: merchant[1] as Id<"statementMerchants">, decision: input.decision as "approve"|"discard"|"research", approvedJson: input.profile ? JSON.stringify(input.profile) : undefined, aliases: input.aliases as string[] | undefined })); }
+    if (route === "/notifications" && request.method === "GET") return json(JSON.parse(await convex.query(api.statementWorkspace.notifications, credentials)));
+    if (route === "/reminders" && request.method === "POST") { const input = await body(request); return json(await convex.mutation(api.statementWorkspace.remind, { ...credentials, transactionId: input.transactionId as Id<"statementTransactions">, dueAt: Number(input.dueAt), message: string(input.message,500) })); }
+    const notification = /^\/notifications\/([a-zA-Z0-9]+)$/.exec(route); if (notification && request.method === "POST") return json(await convex.mutation(api.statementWorkspace.readNotification, { ...credentials, id: notification[1] as Id<"statementNotifications"> }));
     if (route === "/bootstrap" && request.method === "GET") return json(await convex.query(api.statements.bootstrap, credentials));
-    if (route === "/transactions" && request.method === "GET") {
+    if (["/transactions","/transactions/export"].includes(route) && request.method === "GET") {
       const sort = url.searchParams.get("sort") ?? "date", order = url.searchParams.get("order") ?? "desc", offset = Number(url.searchParams.get("offset") ?? 0);
       if (!statementSortKeys.includes(sort as typeof statementSortKeys[number]) || !["asc", "desc"].includes(order) || !Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid table sort or page");
-      const selectedCompany = url.searchParams.get("companyId") === "unassigned" ? "unassigned" : company(url.searchParams.get("companyId"));
-      return json(await convex.query(api.statements.listTransactions, { ...credentials, companyId: selectedCompany, search: url.searchParams.get("search") || undefined,
+      const selectedCompany = url.searchParams.get("companyId") || "all";
+      const query = { ...credentials, exporting:route.endsWith("/export"), companyId: selectedCompany, search: url.searchParams.get("search") || undefined,
         status: url.searchParams.get("status") || undefined, currency: url.searchParams.get("currency") || undefined, direction: url.searchParams.get("direction") || undefined, source: url.searchParams.get("source") || undefined,
-        from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined, sort, order, offset, trashed: url.searchParams.get("trash") === "1" }));
+        from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined, sort, order, offset, limit: Number(url.searchParams.get("limit") || 50), ...Object.fromEntries(["financialAccountId", "card", "pdf", "address", "visibility", "amountFrom", "amountTo"].map(key => [key, url.searchParams.get(key) || undefined])), trashed: url.searchParams.get("trash") === "1" };
+      type Page=FunctionReturnType<typeof api.statements.listTransactions>;
+      const limit=query.exporting?20000:([10,25,50,100].includes(query.limit)?query.limit:50), sums=new Map<string,{inMinor:bigint;outMinor:bigint}>();let cursor:string|undefined,total=0,selected:Page["transactions"]=[];
+      const started=Date.now(),key=sort as typeof statementSortKeys[number],factor=order==="asc"?1:-1;
+      const compare=(a:Page["transactions"][number],b:Page["transactions"][number])=>{const av=key==="status"&&a.generatedInvoiceId?"ai_generated":a[key]??"",bv=key==="status"&&b.generatedInvoiceId?"ai_generated":b[key]??"";if(key==="amountMinor"){const x=BigInt(av)*10n**BigInt(8-statementCurrencyScale(a.currency)),y=BigInt(bv)*10n**BigInt(8-statementCurrencyScale(b.currency));return factor*(x<y?-1:x>y?1:0)||a._id.localeCompare(b._id);}return factor*String(av).localeCompare(String(bv))||a._id.localeCompare(b._id);};
+      do {
+        if(Date.now()-started>25000)throw new Error("The saved-data snapshot expired. Narrow the date range and retry; no incomplete totals are shown.");
+        const page=await convex.consistentQuery(api.statements.listTransactions,{...query,scan:true,scanCursor:cursor});total+=page.total;
+        if(query.exporting&&total>20000)throw new Error("Export supports 20,000 rows per snapshot. Narrow the date range; no partial file was exported.");
+        selected=[...selected,...page.transactions].sort(compare).slice(0,offset+limit);
+        for(const sum of page.totals){const value=sums.get(sum.currency)??{inMinor:0n,outMinor:0n};value.inMinor+=BigInt(sum.inMinor);value.outMinor+=BigInt(sum.outMinor);sums.set(sum.currency,value);}
+        if(page.scanDone)break;if(!page.scanCursor||page.scanCursor===cursor)throw new Error("Incomplete saved-data scan");cursor=page.scanCursor;
+      }while(true);
+      return json({transactions:selected.slice(offset,offset+limit),total,hasMore:total>offset+limit,offset,truncated:false,totals:[...sums].map(([currency,v])=>({currency,inMinor:String(v.inMinor),outMinor:String(v.outMinor)}))});
     }
+    if(route==="/transactions/export"&&request.method==="POST"){const input=await body(request);return json(await convex.query(api.statements.exportSelected,{...credentials,ids:input.ids as Id<"statementTransactions">[]}));}
     if (route === "/transactions" && request.method === "POST") {
       const input = await body(request);
       if (!Array.isArray(input.rows) || !input.rows.length || input.rows.length > 50) throw new Error("Enter between 1 and 50 transactions");
@@ -107,11 +135,11 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
     if (route === "/transactions/actions" && request.method === "POST") {
       const input = await body(request);
       if (!Array.isArray(input.ids) || !input.ids.length || input.ids.length > 50 || input.ids.some(id => typeof id !== "string")) throw new Error("Select between 1 and 50 transactions");
-      if (!["reconcile", "complete", "reopen", "trash", "restore"].includes(String(input.action))) throw new Error("Choose a valid transaction action");
+      if (!["reconcile", "complete", "done", "undo_done", "reopen", "trash", "restore", "forget", "undo_forget", "hide", "unhide", "request"].includes(String(input.action))) throw new Error("Choose a valid transaction action");
       return json(await convex.mutation(api.statements.transactionActions, { ...credentials, ids: input.ids as Id<"statementTransactions">[], action: input.action as "reconcile" | "complete" | "reopen" | "trash" | "restore", reason: typeof input.reason === "string" ? string(input.reason) : undefined }));
     }
-    const transaction = /^\/transactions\/([a-z0-9]+)$/.exec(route);
-    const transactionLinks = /^\/transactions\/([a-z0-9]+)\/links$/.exec(route);
+    const transaction = /^\/transactions\/([a-zA-Z0-9]+)$/.exec(route);
+    const transactionLinks = /^\/transactions\/([a-zA-Z0-9]+)\/links$/.exec(route);
     if (transactionLinks && request.method === "GET") return json(await convex.query(api.statements.listLinks, { ...credentials, transactionId: transactionLinks[1] as Id<"statementTransactions"> }));
     if (transaction && request.method === "PATCH") {
       const input = await body(request), expectedRevision = input.revision ?? input.expectedRevision;
@@ -120,8 +148,8 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
     }
     if (route === "/imports" && request.method === "GET") return json(await convex.query(api.statements.listImports, { ...credentials, cursor: url.searchParams.get("cursor") || undefined, companyId: url.searchParams.get("companyId") || undefined }));
     if (route === "/imports" && request.method === "POST") {
-      const file = await upload(request), companyId = company(file.values.companyId);
-      if (file.type === "application/pdf") { const saved = await ingestPdf(env, { bytes: file.bytes, name: file.name, origin: "file", actor, companyId, quarantined: false }); return json({ documentId: saved.id }, 202); }
+      const file = await upload(request), context = statementContext(String(file.values.companyId ?? "")), companyId = context.companyId ?? company(file.values.companyId);
+      if (file.type === "application/pdf") { const saved = await ingestPdf(env, { bytes: file.bytes, name: file.name, origin: "file", actor, companyId, financialAccountId: typeof file.values.financialAccountId==="string"&&file.values.financialAccountId?file.values.financialAccountId:context.financialAccountId, quarantined: false }); return json({ documentId: saved.id }, 202); }
       const csvText = new TextDecoder("utf-8", { fatal: true }).decode(file.bytes), parsed = parseStatementCsv(csvText, defaults(file.values), mapping(file.values.mapping));
       const storageId = await saveFile(env, file.bytes, "text/csv");
       const result = await convex.mutation(api.statements.stageImport, { ...credentials, fileName: file.name, contentHash: await statementHash(file.bytes), companyId, origin: "file", rows: parsed.rows,
@@ -129,7 +157,7 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
       const stored = await convex.query(api.statements.getImport, { ...credentials, id: result });
       return json({ import: stored, headers: parsed.headers, mapping: parsed.mapping, errors: parsed.errors }, 201);
     }
-    const imported = /^\/imports\/([a-z0-9]+)(?:\/(confirm|file))?$/.exec(route);
+    const imported = /^\/imports\/([a-zA-Z0-9]+)(?:\/(confirm|file))?$/.exec(route);
     if (imported) {
       const id = imported[1] as Id<"statementImports">;
       if (request.method === "POST" && imported[2] === "confirm") { const input = await body(request); return json(await convex.mutation(api.statements.confirmImport, { ...credentials, id, reviewed: input.reviewed === true })); }
@@ -162,43 +190,66 @@ export async function handleStatementApi(request: Request, env: StatementEnv, se
     if (route === "/documents" && request.method === "GET") return json(await convex.query(api.statements.listDocuments, { ...credentials, cursor: url.searchParams.get("cursor") || undefined, companyId: url.searchParams.get("companyId") || undefined }));
     if (route === "/documents" && request.method === "POST") {
       const file = await upload(request); if (file.type !== "application/pdf") throw new Error("Upload CSV files from Statements");
-      return json(await ingestPdf(env, { bytes: file.bytes, name: file.name, origin: "file", actor, companyId: company(file.values.companyId), quarantined: false }), 202);
+      return json(await ingestPdf(env, { bytes: file.bytes, name: file.name, origin: "file", actor, ...statementContext(String(file.values.companyId ?? "")), financialAccountId:typeof file.values.financialAccountId==="string"&&file.values.financialAccountId?file.values.financialAccountId:statementContext(String(file.values.companyId??"")).financialAccountId, quarantined: false }), 202);
     }
-    const document = /^\/documents\/([a-z0-9]+)(?:\/(file|email|retry|link|unlink))?$/.exec(route);
+    const document = /^\/documents\/([a-zA-Z0-9]+)(?:\/(file|email|retry|link|unlink|suggestions))?$/.exec(route);
     if (document) {
       const id = document[1] as Id<"statementDocuments">;
+      if(request.method==="GET"&&document[2]==="suggestions")return json(JSON.parse(await convex.query(api.statements.documentSuggestions,{...credentials,id})));
       if (request.method === "POST" && document[2] === "retry") { const input = await body(request); return json(await convex.mutation(api.statements.retryDocument, { ...credentials, id, releaseQuarantine: input.releaseQuarantine === true })); }
       if (request.method === "POST" && (document[2] === "link" || document[2] === "unlink")) { const input = await body(request); return json(await convex.mutation(api.statements.linkDocument, { ...credentials, id, transactionId: string(input.transactionId, 100) as Id<"statementTransactions">, amount: typeof input.amount === "string" ? string(input.amount, 40) : undefined, note: typeof input.note === "string" ? string(input.note) : undefined, unlink: document[2] === "unlink" || input.unlink === true })); }
       if (request.method === "PATCH" && !document[2]) {
         const input = await body(request);
         if (!["unknown", "invoice", "receipt", "bank_statement", "supporting"].includes(String(input.documentType))) throw new Error("Choose the document type");
-        return json(await convex.mutation(api.statements.reviewDocument, { ...credentials, id, companyId: company(input.companyId), documentType: input.documentType as "unknown" | "invoice" | "receipt" | "bank_statement" | "supporting", extracted: typeof input.extracted === "string" ? string(input.extracted, 300_000) : undefined,
+        return json(await convex.mutation(api.statements.reviewDocument, { ...credentials, id, companyId: company(input.companyId), financialAccountId: typeof input.financialAccountId === "string" && input.financialAccountId ? string(input.financialAccountId, 80) : undefined, documentType: input.documentType as "unknown" | "invoice" | "receipt" | "bank_statement" | "supporting", extracted: typeof input.extracted === "string" ? string(input.extracted, 300_000) : undefined,
           amount: typeof input.amount === "string" && input.amount ? string(input.amount, 40) : undefined, currency: typeof input.currency === "string" && input.currency ? string(input.currency, 8) : undefined, reviewed: input.reviewed === true }));
       }
       if (request.method === "GET") {
         if (document[2] && !["file", "email"].includes(document[2])) return json({ message: "Method not allowed" }, 405);
-        const stored = await convex.query(api.statements.getDocument, { ...credentials, id });
+        const stored = await convex.query(api.statements.getDocument, { ...credentials, id, metadataOnly:!document[2] });
         if (!stored) return json({ message: "Document not found" }, 404);
         if (!document[2]) return json(stored.document);
         const originalUrl = document[2] === "email" ? stored.emailUrl : stored.url;
         if (!originalUrl) return json({ message: "The original file is unavailable" }, 404);
         const response = await fetch(originalUrl, { signal: AbortSignal.timeout(30_000) });
         if (!response.ok) { await response.body?.cancel(); return json({ message: "The original file could not be loaded" }, 502); }
+        if (document[2] === "file" && url.searchParams.get("inline") !== "1") await convex.mutation(api.statementLibrary.action,{...credentials,source:"uploaded",ids:[id],action:"downloaded"});
         return new Response(response.body, { headers: { "Content-Type": document[2] === "email" ? "message/rfc822" : stored.document.contentType, "Content-Disposition": `${url.searchParams.get("inline") === "1" && document[2] !== "email" ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(document[2] === "email" ? "original-email.eml" : stored.document.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" } });
       }
     }
     if (route === "/cards" && request.method === "GET") return json(await convex.query(api.statements.listCards, credentials));
-    const card = /^\/cards\/([a-z0-9]+)$/.exec(route);
+    const card = /^\/cards\/([a-zA-Z0-9]+)$/.exec(route);
     if ((route === "/cards" && request.method === "POST") || (card && request.method === "PATCH")) {
       const input = await body(request), companyId = company(input.companyId); if (!companyId) throw new Error("Select a company");
-      return json(await convex.mutation(api.statements.saveCard, { ...credentials, ...(card ? { id: card[1] as Id<"statementCards"> } : {}), companyId, lastFour: string(input.lastFour, 4), label: typeof input.label === "string" ? string(input.label, 200) : "", source: typeof input.source === "string" ? string(input.source, 100) : undefined, account: typeof input.account === "string" ? string(input.account, 512) : undefined, active: input.active !== false }));
+      return json(await convex.mutation(api.statements.saveCard, { ...credentials, ...(card ? { id: card[1] as Id<"statementCards"> } : {}), companyId, financialAccountId: typeof input.financialAccountId === "string" && input.financialAccountId ? string(input.financialAccountId, 80) : undefined, lastFour: string(input.lastFour, 4), label: typeof input.label === "string" ? string(input.label, 200) : "", source: typeof input.source === "string" ? string(input.source, 100) : undefined, account: typeof input.account === "string" ? string(input.account, 512) : undefined, active: input.active !== false }));
     }
     if (card && request.method === "DELETE") return json(await convex.mutation(api.statements.removeCard, { ...credentials, id: card[1] as Id<"statementCards"> }));
-    if (route === "/address-book" && request.method === "GET") return json(await convex.query(api.statements.listAddresses, credentials));
-    const address = /^\/address-book\/([a-z0-9]+)$/.exec(route);
+    const reference = /^\/address-book\/([a-zA-Z0-9]+)\/references$/.exec(route);
+    if(reference) {
+      const contactId=reference[1] as Id<"statementAddresses">;
+      if(request.method==="GET")return json(JSON.parse(await convex.query(api.statements.contactReferences,{...credentials,contactId})));
+      if(request.method==="POST") {
+        await convex.query(api.statements.contactReferences,{...credentials,contactId});
+        const contentType=request.headers.get("Content-Type")??"";
+        if(!contentType.startsWith("multipart/form-data;"))throw new Error("Choose a reference file");
+        const form=await new Response(await boundedBytes(request.body,10*1024*1024+32000),{headers:{"Content-Type":contentType}}).formData(),file=form.get("file");
+        if(!file||typeof file==="string"||!["application/pdf","image/png","image/jpeg","image/webp"].includes(file.type)||file.size>10*1024*1024)throw new Error("Choose a PDF, PNG, JPEG or WebP under 10 MB");
+        const bytes=new Uint8Array(await file.arrayBuffer()),magic=[...bytes.slice(0,12)];
+        const valid=file.type==="application/pdf"?new TextDecoder().decode(bytes.slice(0,5))==="%PDF-":file.type==="image/png"?magic.slice(0,8).join() === "137,80,78,71,13,10,26,10":file.type==="image/jpeg"?magic[0]===255&&magic[1]===216&&magic[2]===255:new TextDecoder().decode(bytes.slice(0,4))==="RIFF"&&new TextDecoder().decode(bytes.slice(8,12))==="WEBP";
+        if(!valid)throw new Error("File content does not match its type");
+        const storageId=await saveFile(env,bytes,file.type);return json(await convex.mutation(api.statements.addContactReference,{...credentials,contactId,storageId,fileName:file.name.slice(0,250),contentType:file.type}));
+      }
+    }
+    const referenceFile=/^\/contact-references\/([a-zA-Z0-9]+)$/.exec(route);
+    if(referenceFile&&request.method==="GET"){
+      const stored=JSON.parse(await convex.query(api.statements.contactReferenceFile,{...credentials,id:referenceFile[1] as Id<"statementContactReferences">})),response=await fetch(stored.url,{signal:AbortSignal.timeout(30000)});
+      if(!response.ok)throw new Error("Reference unavailable");return new Response(response.body,{headers:{"Content-Type":stored.contentType,"Content-Disposition":`inline; filename*=UTF-8''${encodeURIComponent(stored.fileName)}`,"Cache-Control":"private, no-store","Content-Security-Policy":"sandbox; default-src 'none'","X-Content-Type-Options":"nosniff"}});
+    }
+    if (["/address-book","/address-book/export"].includes(route) && request.method === "GET") return json(await convex.query(api.statements.listAddresses, {...credentials,exporting:route.endsWith("/export")}));
+    const address = /^\/address-book\/([a-zA-Z0-9]+)$/.exec(route);
     if ((route === "/address-book" && request.method === "POST") || (address && request.method === "PATCH")) {
       const input = await body(request), companyId = input.companyId === "all" ? "all" : company(input.companyId); if (!companyId) throw new Error("Select a company");
-      return json(await convex.mutation(api.statements.saveAddress, { ...credentials, ...(address ? { id: address[1] as Id<"statementAddresses"> } : {}), companyId, name: string(input.name, 200), email: typeof input.email === "string" ? string(input.email, 254) : undefined,
+      return json(await convex.mutation(api.statements.saveAddress, { ...credentials, ...(address ? { id: address[1] as Id<"statementAddresses"> } : {}), companyId, financialAccountId: typeof input.financialAccountId === "string" && input.financialAccountId ? string(input.financialAccountId,80) : undefined, name: string(input.name, 200), email: typeof input.email === "string" ? string(input.email, 254) : undefined,
         addressLine1: typeof input.addressLine1 === "string" ? string(input.addressLine1, 250) : undefined, addressLine2: typeof input.addressLine2 === "string" ? string(input.addressLine2, 250) : undefined,
         city: typeof input.city === "string" ? string(input.city, 250) : undefined, postalCode: typeof input.postalCode === "string" ? string(input.postalCode, 250) : undefined,
         invoiceName: typeof input.invoiceName === "string" ? string(input.invoiceName, 250) : undefined, vat: typeof input.vat === "string" ? string(input.vat, 80) : undefined,

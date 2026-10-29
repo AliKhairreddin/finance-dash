@@ -1,5 +1,5 @@
 export const statementStatusLabels: Record<string, string> = {
-  ai_generated: "AI generated", pending: "Needs checking", reconciled: "Checked", completed: "Done", queued: "Waiting", processing: "Reading file", needs_review: "Needs checking", ready: "Ready", imported: "Added", importing: "Adding", failed: "Failed", duplicate: "Already saved", review: "Needs checking",
+  ai_generated: "AI generated", pending: "Needs checking", reconciled: "Checked", completed: "Completed", queued: "Waiting", processing: "Reading file", needs_review: "Needs checking", ready: "Ready", imported: "Added", importing: "Adding", failed: "Failed", duplicate: "Already saved", review: "Needs checking",
   syncing: "Updating", access_denied: "No access", access_removed: "Access removed", not_connected: "Not connected", connected: "Connected", reconnect_required: "Connect again", running: "Sending", succeeded: "Saved", uncertain: "Check result"
 };
 export const statementFieldNames: Record<string, string> = {

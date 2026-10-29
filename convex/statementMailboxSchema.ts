@@ -12,5 +12,5 @@ export const mailboxView = v.object({ id: v.string(), provider: mailboxProvider,
 export const statementMailboxTables = {
   statementMailboxes: defineTable(mailboxFields).index("by_provider_and_accountId", ["provider", "accountId"]).index("by_nextRunAt", ["nextRunAt"]),
   statementMailboxStates: defineTable({ hash: v.string(), provider: mailboxProvider, actor: v.string(), scanFrom: v.string(), verifier: v.string(), expiresAt: v.number() }).index("by_hash", ["hash"]).index("by_expiresAt", ["expiresAt"]),
-  statementMailboxMessages: defineTable({ mailboxId: v.id("statementMailboxes"), providerId: v.string(), documents: v.array(v.id("statementDocuments")), issue: v.optional(v.string()), processedAt: v.number() }).index("by_mailboxId_and_providerId", ["mailboxId", "providerId"])
+  statementMailboxMessages: defineTable({ mailboxId: v.id("statementMailboxes"), providerId: v.string(), documents: v.array(v.id("statementDocuments")), emailRawStorageId: v.optional(v.id("_storage")), issue: v.optional(v.string()), processedAt: v.number() }).index("by_mailboxId_and_providerId", ["mailboxId", "providerId"])
 };

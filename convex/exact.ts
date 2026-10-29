@@ -1,3 +1,4 @@
+import { fullStatementManagement } from "./statementAccess";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { query, mutation, internalQuery, internalMutation, type QueryCtx, type MutationCtx } from "./_generated/server";
@@ -14,7 +15,7 @@ async function access(ctx: QueryCtx | MutationCtx, args: { serviceToken: string;
   const actor = normalizeStatementActor(args.actor);
   const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", actor)).unique();
   // Exact is an explicitly shared accounting workspace for these three full-access members.
-  if (!member?.manage || !statementCompanies.every(c => member.companyIds.includes(c.id))) throw new ConvexError("Full Statements access is required for Exact");
+  if (!member || !fullStatementManagement(member)) throw new ConvexError("Full Statements access is required for Exact");
   return actor;
 }
 const connection = (ctx: QueryCtx | MutationCtx) => ctx.db.query("exactConnections").withIndex("by_key", q => q.eq("key", "primary")).unique();
@@ -253,7 +254,7 @@ export const operationState = internalMutation({ args: { token: v.string(), id: 
   if (args.state === "running") {
     await company(ctx, op.division);
     const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", op.actor)).unique();
-    if (!member?.manage || !statementCompanies.every(co => member.companyIds.includes(co.id))) throw new ConvexError("This user no longer has access to make changes in Exact");
+    if (!member || !fullStatementManagement(member)) throw new ConvexError("This user no longer has access to make changes in Exact");
   }
   await ctx.db.patch(op._id, { state: args.state, message: args.message, updatedAt: Date.now() });
   if (args.state !== "running") { await ctx.db.insert("statementAudit", { entityType: "exact", entityId: op._id, actor: op.actor, action: `change_${args.state}`, details: args.message ?? "", createdAt: new Date().toISOString() }); const ds = await dataset(ctx, op.division, op.kind === "attachment" ? "attachments" : op.kind); if (ds) await ctx.db.patch(ds._id, { nextRunAt: Date.now() }); }
