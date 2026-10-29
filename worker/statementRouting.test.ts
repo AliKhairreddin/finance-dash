@@ -21,7 +21,7 @@ test("statements host cannot route into finance or public financial hooks", asyn
 test("only the three named existing users can open statements", async () => {
   for (const username of ["ali", "ali m", "alaa"]) {
     const response = await routeStatementSurface(await request("statements.thatcanadian.dev", "/", username), env);
-    assert.equal(response?.status, 200); assert.equal(await response?.text(), "/statements.html");
+    assert.equal(response?.status, 200); assert.equal(await response?.text(), "/statements");
   }
   assert.equal((await routeStatementSurface(await request("statements.thatcanadian.dev", "/", "amin"), env))?.status, 403);
   assert.equal((await routeStatementSurface(new Request("https://statements.thatcanadian.dev/"), env))?.status, 303);
