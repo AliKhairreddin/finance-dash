@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { meritInvoiceLineDescription } from "./merit";
 import {
   applyPaymentState,
   buildRevenueDraft,
@@ -711,4 +712,27 @@ test("payment labels distinguish an explicitly exact match from the recorded $25
   assert.equal(paymentAllocationMatchLabel({ ...allocation, matchReason: undefined }), "Automatic match");
   assert.equal(paymentAllocationMatchLabel({ ...allocation, matchReason: "AI: matching company" }), "AI match");
   assert.equal(paymentAllocationMatchLabel({ ...allocation, mode: "manual" }), "Manual");
+});
+
+test("Kissterra drafts and exported Merit lines retain account identity with distinct period IDs", () => {
+  const accounts = [
+    ["1777", "Inch Media"], ["2230", "Inch Media - External"],
+    ["2036", "Inch Media (DCPL)"], ["2205", "Inch Media [Native]"], ["2074", "Dudu Media"]
+  ] as const;
+  const ids = new Set<string>();
+  for (const [accountId, name] of accounts) {
+    const rule: RevenuePartner = { ...partner, id: accountId === "1777" ? "revenue-kissterra" : `revenue-kissterra-${accountId}`,
+      name: `Kissterra — ${name} (Account ID: ${accountId})`, affiliateId: accountId };
+    const accountRun: RevenueRun = { ...run, partnerId: rule.id, partnerName: rule.name };
+    const invoice: Invoice = buildRevenueDraft(rule, accountRun, revenueProvider, "TEST", new Date("2026-07-13T09:00:00Z"));
+    const line: string = meritInvoiceLineDescription(invoice.description, invoice.periodStart, invoice.periodEnd);
+    assert.ok(invoice.description.includes(rule.name));
+    assert.ok(line.includes(rule.name));
+    assert.ok(line.length <= 150);
+    assert.equal(invoice.meritDeliveryStatus, "not-sent");
+    ids.add(invoice.id);
+    assert.equal(buildRevenueDraft(rule, accountRun, revenueProvider, "ANOTHER", new Date("2026-07-14T09:00:00Z")).id, invoice.id);
+    assert.throws(() => buildRevenueDraft(rule, { ...accountRun, revenue: 0 }, revenueProvider, "ZERO", new Date("2026-07-13T09:00:00Z")), /positive/);
+  }
+  assert.equal(ids.size, accounts.length);
 });

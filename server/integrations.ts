@@ -1,3 +1,4 @@
+import { fetchTuneTotals } from "../shared/tune";
 import { replacementRequest } from "../shared/meritReplacementRequest";
 import { fetchMercuryActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
 import crypto from "node:crypto";
@@ -752,32 +753,7 @@ export async function fetchTuneRevenue(
   params.append("filters[Stat.date][values][0]", period.periodStart);
   params.append("filters[Stat.date][values][1]", period.periodEnd);
 
-  const response = await fetchJson<{
-    response?: {
-      status?: number;
-      data?: unknown;
-      errorMessage?: string | null;
-      errors?: unknown[];
-    };
-  }>(`${apiBaseUrl}?${params.toString()}`, {
-    headers: {
-      Accept: "application/json"
-    }
-  });
-
-  if (response.response?.status === 0) {
-    throw new Error(response.response.errorMessage || "TUNE revenue request failed");
-  }
-
-  const rows = normalizeTuneRows(response.response?.data);
-  const totals = rows.reduce<{ revenue: number; clicks: number; conversions: number }>(
-    (sum, row) => ({
-      revenue: sum.revenue + tuneNumber(row, "payout"),
-      clicks: sum.clicks + tuneNumber(row, "clicks"),
-      conversions: sum.conversions + tuneNumber(row, "conversions")
-    }),
-    { revenue: 0, clicks: 0, conversions: 0 }
-  );
+  const totals = await fetchTuneTotals(`${apiBaseUrl}?${params.toString()}`, period);
 
   return {
     id: `revenue-${partner.id}-${period.periodStart}-${period.periodEnd}`,
@@ -875,22 +851,6 @@ export function fetchRevenuePartnerRevenue(partner: RevenuePartner, period: Reve
   return partner.source === "tune"
     ? fetchTuneRevenue(partner, period)
     : fetchQuinStreetRevenue(partner, period);
-}
-
-function normalizeTuneRows(data: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(data)) return data.filter(isRecord);
-  if (isRecord(data)) {
-    if (Array.isArray(data.data)) return data.data.filter(isRecord);
-    if (Array.isArray(data.Data)) return data.Data.filter(isRecord);
-  }
-  return [];
-}
-
-function tuneNumber(row: Record<string, unknown>, field: "payout" | "clicks" | "conversions"): number {
-  const stat = isRecord(row.Stat) ? row.Stat : {};
-  const value = stat[field] ?? row[`Stat.${field}`] ?? row[field];
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

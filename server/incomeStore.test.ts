@@ -562,7 +562,7 @@ test("manual pulls stay transient until preparing a draft persists the run and i
       return Response.json({
         response: {
           status: 1,
-          data: [{ Stat: { payout, clicks: "12", conversions: "4" } }]
+          data: { page: 1, count: 1, pageCount: 1, data: [{ Stat: { date: expectedPeriodStart, payout, clicks: "12", conversions: "4" } }], totals: { Stat: { payout, clicks: "12", conversions: "4" } } }
         }
       });
     };
@@ -710,7 +710,7 @@ test("current-week manual pulls are transient and cannot draft before the week c
       assert.equal(url.searchParams.get("data_start"), "2026-07-20");
       assert.equal(url.searchParams.get("data_end"), expectedPeriodEnd);
       assert.equal(url.searchParams.get("filters[Affiliate.id][values][0]"), "77");
-      return Response.json({ response: { status: 1, data: [{ Stat: { payout } }] } });
+      return Response.json({ response: { status: 1, data: { page: 1, count: 1, pageCount: 1, data: [{ Stat: { date: "2026-07-20", payout, clicks: "0", conversions: "0" } }], totals: { Stat: { payout, clicks: "0", conversions: "0" } } } } });
     };
 
     const store = await import("./store");
