@@ -53,7 +53,7 @@ export const deletedList = query({
 export const summary = query({ args: { serviceToken: v.string() }, returns: v.object({ pending: v.number(), approved: v.number(), capped: v.boolean() }), handler: async (ctx, a) => { authorize(a.serviceToken); const pending = await ctx.db.query("topUpRequests").withIndex("by_deleted_status", q => q.eq("deletedAt", undefined).eq("status", "pending")).take(1001); const approved = await ctx.db.query("topUpRequests").withIndex("by_deleted_status", q => q.eq("deletedAt", undefined).eq("status", "approved")).take(1001); return { pending: pending.length, approved: approved.length, capped: pending.length === 1001 || approved.length === 1001 }; } });
 export const get = query({ args: { serviceToken: v.string(), id: v.id("topUpRequests") }, returns: v.union(topUpRecord, v.null()), handler: async (ctx, a) => { authorize(a.serviceToken); return ctx.db.get(a.id); } });
 export const transition = mutation({
-  args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), action: v.union(v.literal("approve"), v.literal("adjust"), v.literal("paid")), actor: v.string(), amount: v.optional(v.number()) }, returns: topUpRecord,
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), action: v.union(v.literal("approve"), v.literal("adjust"), v.literal("paid"), v.literal("reject")), actor: v.string(), amount: v.optional(v.number()) }, returns: topUpRecord,
   handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.version !== a.version) throw new ConvexError("This request has changed. Refresh before acting.");
     const status = topUpTransition(r.status, a.action, r.draftStatus); const amount = a.action === "adjust" ? a.amount : r.amount;
     const prepareDraft = !isCryptoTopUp(r.currency) && ["Revolut", "Bank Transfer", ""].includes(r.paymentMethod);
@@ -69,6 +69,7 @@ export const transition = mutation({
     const at = now(); const version = r.version + 1;
     await ctx.db.patch(r._id, { status, amount, providerId, version, updatedAt: at, adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, adjustError: undefined,
       ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: prepareDraft ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
+      ...(a.action === "reject" ? { draftStatus: "not_applicable" } : {}),
       events: [...r.events, { at, actor: a.actor, action: a.action, amount }].slice(-200), notificationError: undefined });
     await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
     if (a.action === "approve" && prepareDraft) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
@@ -160,6 +161,31 @@ export const reconcileDraft = mutation({ args: { serviceToken: v.string(), id: v
   await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 });
   await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version }); return null;
 } });
+
+export const deleteBatch = mutation({
+  args: { serviceToken: v.string(), requests: v.array(v.object({ id: v.id("topUpRequests"), version: v.number() })), actor: v.string() },
+  returns: v.object({ deleted: v.number() }),
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    if (!a.requests.length || a.requests.length > 200 || new Set(a.requests.map(r => r.id)).size !== a.requests.length) throw new ConvexError("Select between 1 and 200 distinct requests.");
+    const records = await Promise.all(a.requests.map(async item => {
+      const r = await ctx.db.get(item.id);
+      if (!r || r.deletedAt || r.version !== item.version) throw new ConvexError("A selected request has changed. Refresh before deleting.");
+      if (["creating", "uncertain"].includes(r.draftStatus)) throw new ConvexError(`Reconcile the Revolut draft for request #${r.number} before deleting it.`);
+      return r;
+    }));
+    const at = now();
+    for (const r of records) {
+      const version = r.version + 1;
+      await ctx.db.patch(r._id, { deletedAt: at, deletedBy: a.actor, version, updatedAt: at,
+        adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, adjustError: undefined, notificationError: undefined,
+        events: [...r.events, { at, actor: a.actor, action: "deleted", amount: r.amount }].slice(-200) });
+      await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 });
+      await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
+    }
+    return { deleted: records.length };
+  }
+});
 
 export const setDeleted = mutation({
   args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), deleted: v.boolean(), actor: v.string() }, returns: topUpRecord,

@@ -292,3 +292,32 @@ test("an expired amount prompt clears instructions and updates the same card", a
   const saved = await db.ctx.db.get(r._id); assert.equal(saved.version, 3); assert.equal(saved.adjustPromptId, undefined);
   assert.equal(saved.telegramMessageId, 99); assert.ok(db.tables.get("topUpDeliveries")!.some(d => d.version === 3));
 });
+
+test("rejection closes a pending request without creating a supplier or payment draft", async () => {
+  const db = setup();
+  const saved = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  const rejected = await db.run(topUps.transition, { ...auth, id: saved._id, version: 1, action: "reject", actor: "Amin" });
+  assert.equal(rejected.status, "rejected"); assert.equal(rejected.draftStatus, "not_applicable");
+  assert.equal(rejected.events.at(-1).actor, "Amin"); assert.equal(rejected.events.at(-1).action, "reject");
+  assert.equal((await db.ctx.db.get("state")).providers.length, 0);
+  assert.equal(db.scheduled.filter((job: any) => getFunctionName(job[1]) === "topUpProcessing:draft").length, 0);
+  for (const action of ["approve", "adjust", "paid", "reject"]) await assert.rejects(db.run(topUps.transition, { ...auth, id: saved._id, version: 2, action, actor: "Amin" }), /changed/);
+  assert.match(topUpMessage(rejected, "", ""), /Rejected Topup Request/);
+});
+
+test("bulk deletion validates every version before changing rows and preserves invoices and history", async () => {
+  const db = setup();
+  const a = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  const b = await db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" }, documentId: "doc" });
+  const requests = [{ id: a._id, version: 1 }, { id: b._id, version: 1 }];
+  await db.ctx.db.patch(b._id, { draftStatus: "uncertain" });
+  await assert.rejects(db.run(topUps.deleteBatch, { ...auth, requests, actor: "Ali" }), /Reconcile/);
+  assert.equal((await db.ctx.db.get(a._id)).deletedAt, undefined);
+  await db.ctx.db.patch(b._id, { draftStatus: "awaiting_approval" });
+  await assert.rejects(db.run(topUps.deleteBatch, { ...auth, requests: [{ ...requests[0], version: 0 }, requests[1]], actor: "Ali" }), /changed/);
+  assert.equal((await db.ctx.db.get(b._id)).deletedAt, undefined);
+  assert.deepEqual(await db.run(topUps.deleteBatch, { ...auth, requests, actor: "Ali" }), { deleted: 2 });
+  for (const id of [a._id, b._id]) { const row = await db.ctx.db.get(id); assert.ok(row.deletedAt); assert.equal(row.documentId, "doc"); assert.equal(row.events.at(-1).action, "deleted"); }
+  assert.equal(db.deletedFiles.length, 0);
+  await assert.rejects(db.run(topUps.deleteBatch, { ...auth, requests, actor: "Ali" }), /changed/);
+});

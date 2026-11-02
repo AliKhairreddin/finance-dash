@@ -260,10 +260,6 @@ function EditableCashFlowSection({
           <tbody>
             {visibleLines.length > 0 ? visibleLines.map((item) => (
               <tr key={item.id}>
-                {item.id.startsWith("provider-balance-") ? <>
-                  <td>{item.name}</td><td className="amount">{Number.isFinite(item.amount) ? money(item.amount, item.currency) : "Awaiting reconciliation"}</td>
-                  <td>{item.currency}</td><td>Yes</td><td>—</td><td>{item.notes}</td><td><InfoPopover label={`${item.name} balance source`}>Calculated from provider funding, commissions, and assigned spend. Update this provider in Provider balances.</InfoPopover></td>
-                </> : <>
                 <td><Input aria-label={`${title} name`} value={item.name} onChange={(event) => update(item.id, { name: event.target.value })} /></td>
                 <td className="amount"><CashFlowAmountInput item={item} title={title} onChange={(patch) => update(item.id, patch)} /></td>
                 <td><Input aria-label={`${item.name || title} currency`} maxLength={12} value={item.currency} onChange={(event) => update(item.id, { currency: event.target.value.toUpperCase() })} /></td>
@@ -271,7 +267,6 @@ function EditableCashFlowSection({
                 <td><Input aria-label={`${item.name || title} due date`} type="date" value={item.dueDate ?? ""} onChange={(event) => update(item.id, { dueDate: event.target.value || undefined })} /></td>
                 <td><Input aria-label={`${item.name || title} notes`} maxLength={256} value={item.notes ?? ""} onChange={(event) => update(item.id, { notes: event.target.value || undefined })} /></td>
                 <td><Button className="icon-button destructive-icon-button" type="button" aria-label={`Remove ${item.name || "row"}`} onClick={() => onChange(lines.filter((lineItem) => lineItem.id !== item.id))}><Trash2 size={14} /></Button></td>
-                </>}
               </tr>
             )) : <tr><td colSpan={7}>No rows</td></tr>}
           </tbody>
@@ -433,8 +428,8 @@ export function CashFlowPositionView({
     } else if (selectedSnapshotId === "live") {
       const live = liveCashFlowDraft(dashboard, funding);
       setDraft(current => ({ ...current, ...Object.fromEntries(sectionDefinitions
-        .filter(section => section.key === "openBalances" || !dirtySections.current.has(section.key))
-        .map(section => [section.key, section.key === "openBalances" ? [...live.openBalances, ...current.openBalances.filter(item => !item.id.startsWith("provider-balance-"))] : live[section.key]])) }));
+        .filter(section => !dirtySections.current.has(section.key))
+        .map(section => [section.key, live[section.key]])) }));
     }
   }, [selectedSnapshotId, dashboard, funding]);
 
@@ -444,7 +439,7 @@ export function CashFlowPositionView({
     createdAt: selectedSnapshot?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  const usesProviderBalances = selectedSnapshotId === "live" || dirtySections.current.has("openBalances");
+  const usesProviderBalances = selectedSnapshotId === "live" && !dirtySections.current.has("openBalances");
   const providerIssue = usesProviderBalances ? fundingError || (fundingLoading || !funding ? "Loading provider balances…"
     : funding.providers.some(provider => provider.estimatedBalance === null) ? "Some provider balances await reconciliation. Review Provider balances before saving or exporting this snapshot." : null) : null;
   const invalidAmounts = Boolean(providerIssue) || sectionDefinitions.some(section => draft[section.key].some(invalidCashFlowLine));
@@ -461,6 +456,7 @@ export function CashFlowPositionView({
 
   async function save(section?: CashFlowSectionKey) {
     if (providerIssue && (!selectedSnapshot || !section || section === "openBalances")) { setSaveError(providerIssue); return; }
+    if ((section ? draft[section] : sectionDefinitions.flatMap(item => draft[item.key])).some(invalidCashFlowLine)) { setSaveError("Enter valid amounts for every row before saving."); return; }
     setSaving(true);
     setNotice(null);
     setSaveError(null);

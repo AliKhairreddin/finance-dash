@@ -51,16 +51,10 @@ test("Merit invoices and workflow-linked drafts cannot be deleted only from the 
       status: "open",
       externalId: "merit-invoice"
     })),
-    /Only local manual drafts/
+    /Only local drafts/
   );
-  assert.match(
-    blockReason(localDraft({ revenueRunIds: ["run-1"] })),
-    /revenue run/
-  );
-  assert.match(
-    blockReason(localDraft({ transactionId: "transaction-1" })),
-    /transaction/
-  );
+  assert.equal(dashboardInvoiceDeletionBlockReason(localDraft({ origin: "revenue", revenueRunIds: ["run-1"] }), []), undefined);
+  assert.equal(dashboardInvoiceDeletionBlockReason(localDraft({ transactionId: "transaction-1" }), []), undefined);
   assert.match(
     blockReason(localDraft({ meritCreationReservedAt: "2026-07-28T12:00:00.000Z" })),
     /in progress/
@@ -104,6 +98,6 @@ test("bulk deletion accepts only a non-empty batch of eligible dashboard drafts"
       ],
       []
     ),
-    /2026\/1307: Only local manual drafts/
+    /2026\/1307: Only local drafts/
   );
 });

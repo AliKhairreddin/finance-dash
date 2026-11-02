@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleTopUpTelegram, handlePublicTopUps, sendTopUpNotification, topUpSetup } from "./topUps";
+import { handleTopUpTelegram, handlePublicTopUps, refreshTopUpButtons, sendTopUpNotification, topUpSetup } from "./topUps";
 import { validatePaymentDetails } from "./topUpDrafts";
 const id = "request-abc";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
@@ -24,9 +24,23 @@ test("Amin, Ali M and Ali can approve using their configured numeric identities"
     });
   }
 });
+test("existing pending cards receive Reject controls without messages or financial mutations", async () => {
+  await mocked(async calls => {
+    assert.equal(await refreshTopUpButtons(env, id as never, 1), true);
+    assert.deepEqual(calls.map(c => c.path), ["topUps:get", "editMessageReplyMarkup"]);
+    assert.equal(calls[1].body.message_id, 7);
+    assert.equal(calls[1].body.reply_markup.inline_keyboard[0][2].callback_data, `tu:reject:${id}:1`);
+  }, { ...pending, telegramVersion: 1 });
+  for (const patch of [{ version: 2 }, { telegramVersion: 0 }, { status: "approved" }, { deletedAt: "now" }, { telegramMessageId: undefined }]) {
+    await mocked(async calls => {
+      assert.equal(await refreshTopUpButtons(env, id as never, 1), false);
+      assert.deepEqual(calls.map(c => c.path), ["topUps:get"]);
+    }, { ...pending, telegramVersion: 1, ...patch });
+  }
+});
 test("other accounts, spoofed usernames and callbacks from other groups cannot approve or adjust", async () => {
   await mocked(async calls => {
-    for (const action of ["approve", "adjust"]) {
+    for (const action of ["approve", "adjust", "reject"]) {
       const spoofed = callback(444, action); Object.assign(spoofed.callback_query.from, { username: "Amin", first_name: "Ali" });
       await handleTopUpTelegram(spoofed, env);
       await handleTopUpTelegram(callback(999, action), env);
@@ -76,7 +90,7 @@ test("another approver cannot answer someone else's amount prompt", async () => 
 });
 test("all approvers still reject stale request buttons", async () => {
   await mocked(async calls => {
-    for (const userId of [111, 222, 333]) for (const action of ["approve", "adjust"]) await handleTopUpTelegram(callback(userId, action), env);
+    for (const userId of [111, 222, 333]) for (const action of ["approve", "adjust", "reject"]) await handleTopUpTelegram(callback(userId, action), env);
     assert.equal(calls.filter(c => c.path === "topUps:transition" || c.path === "topUps:adjustmentPrompt" || c.path === "sendMessage").length, 0);
     assert.ok(calls.filter(c => c.path === "answerCallbackQuery").every(c => c.body.text.includes("out of date")));
   }, { ...pending, version: 2 });
@@ -84,7 +98,7 @@ test("all approvers still reject stale request buttons", async () => {
 test("notifications use real ID mentions, expiring invoice links and stage-specific buttons", async () => {
   await mocked(async calls => { await sendTopUpNotification(env, id as never, 1); const sent = calls.find(c => c.path === "editMessageText")!.body;
     assert.equal(sent.chat_id, "-5336756761"); assert.match(sent.text, /tg:\/\/user\?id=333/); assert.match(sent.text, /expires=\d+&amp;token=[a-f0-9]{64}/); assert.match(sent.text, /View Invoice \(pdf link\)/);
-    assert.deepEqual(sent.reply_markup.inline_keyboard[0].map((b: any) => b.text), ["Approve", "Adjust amount"]);
+    assert.deepEqual(sent.reply_markup.inline_keyboard[0].map((b: any) => b.text), ["Approve", "Adjust amount", "Reject"]);
   });
   await mocked(async calls => { await sendTopUpNotification(env, id as never, 2); const sent = calls.find(c => c.path === "editMessageText")!.body; assert.match(sent.text, /tg:\/\/user\?id=222/); assert.equal(sent.reply_markup.inline_keyboard[0][0].text, "Paid"); }, { ...pending, version: 2, status: "approved" });
 });
@@ -229,4 +243,19 @@ test("a created draft's review warning stays on the original request message", a
     assert.match(edit.text, /⚠️ Check recipient &amp; reference before sending/);
     assert.equal(edit.message_id, 7); assert.equal(calls.filter(c => c.path === "sendMessage").length, 0);
   }, { ...pending, version: 2, status: "approved", draftStatus: "created", draftWarning: "Check recipient & reference before sending" });
+});
+
+test("Amin can reject and rejected cards have no approval or paid buttons", async () => {
+  await mocked(async calls => {
+    await handleTopUpTelegram(callback(333, "reject"), env);
+    const args = calls.find(c => c.path === "topUps:transition")!.body.args[0];
+    assert.equal(args.actor, "Amin"); assert.equal(args.action, "reject");
+    assert.match(calls.find(c => c.path === "answerCallbackQuery")!.body.text, /rejected/);
+  });
+  await mocked(async calls => {
+    await sendTopUpNotification(env, id as never, 2);
+    const sent = calls.find(c => c.path === "editMessageText")!.body;
+    assert.deepEqual(sent.reply_markup.inline_keyboard, []); assert.match(sent.text, /Rejected Topup Request/);
+    assert.doesNotMatch(sent.text, /tg:\/\/user/);
+  }, { ...pending, version: 2, status: "rejected" });
 });

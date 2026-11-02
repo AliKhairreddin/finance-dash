@@ -1,3 +1,4 @@
+import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
 import { intelligenceTables } from "./statementIntelligenceSchema";
 import { topUpFields, topUpRecord } from "./topUpSchema";
 import { replacementFields } from "./meritReplacementSchema";
@@ -114,6 +115,7 @@ const provider = v.object({
 });
 
 const invoice = v.object({
+  meritCopy: v.optional(meritInvoiceCopy),
   id: v.string(),
   entity: v.optional(wiseEntity),
   providerId: v.optional(v.string()),
@@ -399,6 +401,7 @@ const revenueRun = v.object({
     v.literal("failed"),
     v.literal("skipped")
   ),
+  draftDeletedAt: v.optional(v.string()),
   invoiceId: v.optional(v.string()),
   externalInvoiceId: v.optional(v.string()),
   error: v.optional(v.string()),

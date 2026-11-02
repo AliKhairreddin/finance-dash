@@ -1,3 +1,4 @@
+import { meritCopyRequest } from "../shared/meritInvoiceCopy";
 import { fetchTuneTotals } from "../shared/tune";
 import { replacementRequest } from "../shared/meritReplacementRequest";
 import { fetchMercuryActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
@@ -540,7 +541,7 @@ export async function fetchMeritInvoices(persistedInvoices: Invoice[] = []): Pro
 
 export async function fetchMeritInvoiceCopyDetails(
   invoice: Invoice
-): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId">> {
+): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId" | "meritCopy">> {
   if (!invoice.externalId) throw new Error("Merit invoice ID is required to duplicate this invoice");
   return meritInvoiceCopyDetails(
     await fetchMeritJson<MeritInvoiceDetails>("/v2/getinvoice", {
@@ -659,7 +660,8 @@ export async function createMeritInvoice(
         Amount: taxAmount
       }
     ],
-    TotalAmount: invoice.amount
+    TotalAmount: invoice.amount,
+    ...(invoice.meritCopy ? meritCopyRequest(invoice.meritCopy) : {})
   });
 
   const externalId = response.InvoiceId ?? response.SIHId ?? response.Id;

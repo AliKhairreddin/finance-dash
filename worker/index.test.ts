@@ -652,6 +652,41 @@ test("Merit invoice creation rejects dashboard-only invoice number formats", asy
   }
 });
 
+test("Merit creation sends all copied lines with mixed taxes and new invoice identity", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return Response.json({ InvoiceId: "copied-invoice" });
+  };
+  try {
+    await createMeritInvoice(
+      { MERIT_API_ID: "api-id", MERIT_API_KEY: "api-key", MERIT_WRITES_ENABLED: "true" } as never,
+      {
+        documentType: "sales_invoice", customerName: "Copy test", amount: 230, currency: "USD",
+        issueDate: "2026-11-01", dueDate: "2026-12-01", description: "Copied services",
+        meritCopy: {
+          lines: [
+            { itemCode: "SERVICE", description: "Service", quantity: 2, price: 100, discountPercent: 10, discountAmount: 20, netAmount: 180, taxId: "zero", taxPercent: 0, taxAmount: 0, accountCode: "4000", departmentCode: "ADS", unit: "hours" },
+            { itemCode: "CONSULT", description: "Consulting", quantity: 5, price: 10, discountPercent: 0, discountAmount: 0, netAmount: 50, taxId: "standard", taxPercent: 20, taxAmount: 10, accountCode: "4010", departmentCode: "", unit: "hours" }
+          ],
+          netAmount: 230, taxAmount: 10, roundingAmount: 0.01, totalAmount: 240.01,
+          currency: "USD", departmentCode: "SALES", headerComment: "Header", footerComment: "Footer", contractNumber: "CON-1"
+        }
+      },
+      { id: "zero", code: "VAT0", name: "Zero", taxPct: 0 }, "2026/1440"
+    );
+    const rows = requestBody?.InvoiceRow as Array<Record<string, unknown>>;
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].Quantity, 2); assert.equal(rows[0].DiscountAmount, 20);
+    assert.equal(rows[1].GLAccountCode, "4010"); assert.equal(rows[1].TaxId, "standard");
+    assert.deepEqual(requestBody?.TaxAmount, [{ TaxId: "zero", Amount: 0 }, { TaxId: "standard", Amount: 10 }]);
+    assert.equal(requestBody?.InvoiceNo, "2026/1440");
+    assert.equal(requestBody?.TotalAmount, 230); assert.equal(requestBody?.RoundingAmount, 0.01);
+    assert.equal(requestBody?.Hcomment, "Header"); assert.equal(requestBody?.Payment, undefined);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Merit delivery uses the distinct email endpoint and never recreates the invoice", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; body: unknown }> = [];

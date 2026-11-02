@@ -1,3 +1,4 @@
+import { readMeritInvoiceCopy, type MeritInvoiceCopy } from "./meritInvoiceCopy";
 import type {
   Invoice,
   MeritCompanyComment,
@@ -14,6 +15,7 @@ export interface MeritInvoicePeriod {
 }
 
 export interface MeritInvoiceCopyDetails {
+  meritCopy?: MeritInvoiceCopy;
   amount: number;
   description: string;
   taxId: string;
@@ -37,8 +39,10 @@ export function meritInvoiceLineDescription(
 }
 
 export function meritInvoiceCopyDetails(value: unknown): MeritInvoiceCopyDetails {
-  if (!isRecord(value) || !Array.isArray(value.Lines) || value.Lines.length !== 1) {
-    throw new Error("Only single-line Merit invoices can be duplicated exactly");
+  if (!isRecord(value) || !Array.isArray(value.Lines) || !value.Lines.length) throw new Error("Merit invoice lines are unavailable");
+  if (value.Lines.length > 1) {
+    const meritCopy = readMeritInvoiceCopy(value);
+    return { amount: meritCopy.netAmount, description: meritCopy.lines.map(line => line.description).join("\n"), taxId: meritCopy.lines[0].taxId, meritCopy };
   }
   const line = value.Lines[0];
   if (!isRecord(line)) throw new Error("Merit invoice line details are unavailable");

@@ -1,3 +1,4 @@
+import { InvoiceCopyLines } from "./InvoiceCopyLines";
 import { MeritSyncButton, QuinStreetMonthlyReport } from "./IncomeSyncControls";
 import { PaymentTransactionPicker, paymentBankLabel } from "./PaymentTransactionPicker";
 import { DocumentCreateMenu } from "@/features/expenses/DocumentsView";
@@ -1482,6 +1483,7 @@ export function InvoiceEditorDialog({
   onClose: () => void;
   onSubmit: (payload: CreateInvoicePayload | UpdateInvoicePayload) => Promise<Invoice>;
 }) {
+  const meritCopy = invoice?.meritCopy ?? initialDraft?.meritCopy;
   const today = financeOperatingDate();
   const initialProviderId = invoice?.providerId ?? initialDraft?.providerId ?? "";
   const [providerId, setProviderId] = useState(initialProviderId);
@@ -1515,10 +1517,10 @@ export function InvoiceEditorDialog({
     setProviderId(nextId);
     const provider = clients.find((item) => item.id === nextId);
     if (!provider) return;
-    if (provider.defaultCurrency) setCurrency(provider.defaultCurrency);
+    if (provider.defaultCurrency && !meritCopy) setCurrency(provider.defaultCurrency);
     setDueDate(addDays(issueDate, provider.paymentTermsDays ?? 30));
     const rule = dashboard.revenuePartners.find((item) => item.providerId === provider.id);
-    setTaxId(rule?.defaultMeritTaxId ?? provider.defaultMeritTaxId ?? "");
+    if (!meritCopy) setTaxId(rule?.defaultMeritTaxId ?? provider.defaultMeritTaxId ?? "");
     if (!description && rule?.defaultMeritItemCode) setDescription(rule.defaultMeritItemCode);
   }
 
@@ -1541,7 +1543,8 @@ export function InvoiceEditorDialog({
         description: description.trim(),
         taxId: taxId || undefined,
         periodStart: periodStart || undefined,
-        periodEnd: periodEnd || undefined
+        periodEnd: periodEnd || undefined,
+        ...(meritCopy ? { meritCopy } : {})
       };
       if (invoice) await onSubmit(core);
       else await onSubmit({ ...core, documentType: initialDraft?.documentType ?? "sales_invoice" });
@@ -1587,10 +1590,10 @@ export function InvoiceEditorDialog({
           )}
           <div className="invoice-financial-grid">
             <div className="invoice-money-fields">
-              <div className="invoice-field"><label htmlFor="invoice-amount">Net amount</label><Input id="invoice-amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></div>
-              <div className="invoice-field"><label htmlFor="invoice-currency">Currency</label><Input id="invoice-currency" value={currency} maxLength={6} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></div>
+              <div className="invoice-field"><label htmlFor="invoice-amount">Net amount</label><Input id="invoice-amount" readOnly={!!meritCopy} type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></div>
+              <div className="invoice-field"><label htmlFor="invoice-currency">Currency</label><Input id="invoice-currency" readOnly={!!meritCopy} value={currency} maxLength={6} onChange={(event) => setCurrency(event.target.value.toUpperCase())} /></div>
             </div>
-            <div className="invoice-field">
+            {!meritCopy && <div className="invoice-field">
               <label htmlFor="invoice-tax">Merit tax</label>
               <SearchableSelect
                 id="invoice-tax"
@@ -1601,17 +1604,18 @@ export function InvoiceEditorDialog({
                 emptyMessage="No taxes found"
                 ariaLabel="Merit tax"
               />
-            </div>
+            </div>}
           </div>
           <div className="invoice-form-grid">
             <div className="invoice-field"><label htmlFor="invoice-issue-date">Issue date</label><Input id="invoice-issue-date" type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></div>
             <div className="invoice-field"><label htmlFor="invoice-due-date">Due date</label><Input id="invoice-due-date" type="date" min={issueDate} value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></div>
           </div>
-          <div className="invoice-form-grid">
+          {!meritCopy && <div className="invoice-form-grid">
             <div className="invoice-field"><label htmlFor="invoice-period-start">Service period start <Button className="text-link-button" type="button" onClick={() => { setPeriodStart(lastWeek.fromDate); setPeriodEnd(lastWeek.toDate); }}>Last week</Button></label><Input id="invoice-period-start" type="date" value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); setPeriodEnd(event.target.value ? addDays(event.target.value, 6) : ""); }} /></div>
             <div className="invoice-field"><label htmlFor="invoice-period-end">Service period end</label><Input id="invoice-period-end" type="date" min={periodStart || undefined} value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></div>
-          </div>
-          <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>
+          </div>}
+          {!meritCopy && <div className="invoice-field"><label htmlFor="invoice-description">Description / Merit item</label><Textarea id="invoice-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What this invoice covers" /></div>}
+          {meritCopy && <InvoiceCopyLines copy={meritCopy} />}
           {invoice?.externalId ? <div className="row-actions"><span>Save to Merit</span><InfoPopover label="saving invoice edits">Only unpaid invoices can be replaced. The original details and PDF are backed up first. The invoice number and dashboard links stay the same. Saving does not email the replacement.</InfoPopover></div> : <div className="income-callout"><CircleAlert size={16} /><span>{duplicateSourceInvoiceNumber ? "This copy has not been saved. Closing this window discards it. Saving creates one new dashboard draft; Merit remains unchanged until you choose a send action." : "Saving here creates or updates a dashboard draft only. Nothing is written to Merit until you choose a send action."}</span></div>}
         </div>
         <div className="modal-actions"><Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" className="primary-button" disabled={submitting || !selectedProvider || Number(amount) <= 0 || !currency.trim() || !issueDate || !dueDate || !description.trim()}>{submitting ? <Loader2 className="spin" size={16} /> : invoice ? <Check size={16} /> : <FilePlus2 size={16} />} {invoice?.externalId ? "Save to Merit" : invoice ? "Save changes" : duplicateSourceInvoiceNumber ? "Save dashboard draft" : "Save draft"}</Button></div>
@@ -1757,6 +1761,8 @@ function DeleteInvoiceDialog({
           <h2 id="delete-invoice-title">{singleInvoice ? `Remove ${singleInvoice.invoiceNumber}?` : `Remove ${invoiceCount} dashboard drafts?`}</h2>
         </div>
         <p className="confirmation-copy">This permanently removes {invoiceCount === 1 ? "the selected unsent draft" : `all ${invoiceCount} selected unsent drafts`} from the dashboard. Nothing will be deleted or changed in Merit because {invoiceCount === 1 ? "this draft has" : "these drafts have"} never been saved there.</p>
+        {invoices.some(invoice => invoice.origin === "revenue") && <p className="confirmation-copy">The revenue stays saved. Automatic drafting will remain off for this period until you explicitly create another draft.</p>}
+        {invoices.some(invoice => invoice.transactionId) && <p className="confirmation-copy">Linked bank transactions will be kept and unlinked from these drafts.</p>}
         {error && <div className="inline-error">{error}</div>}
         <div className="modal-actions">
           <Button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>Cancel</Button>

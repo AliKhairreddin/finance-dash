@@ -1,8 +1,9 @@
+import { meritCopyRequest, validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
 import { fetchTuneTotals } from "../shared/tune";
 import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { routeStatementSurface, statementsInbox } from "./statementRouting";
 import { receiveStatementEmail } from "./statements";
-import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, sendTopUpNotification, topUpSetup } from "./topUps";
+import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, topUpSetup } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
 import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
 import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
@@ -135,7 +136,6 @@ import {
   transactionBusinessCategory,
   transactionNeedsCategoryReview
 } from "../shared/categories";
-import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
 import { decodeMeritInvoicePdf, invoicePdfFileName } from "../shared/invoiceFiles";
 import { financeOperatingDate } from "../shared/operatingDate";
 import { quinStreetReportingBaseUrl, summarizeQuinStreetReport } from "../shared/quinstreet";
@@ -1801,7 +1801,7 @@ export async function fetchMeritInvoiceTaxSample(env: Env, invoice: Invoice): Pr
 export async function fetchMeritInvoiceCopyDetails(
   env: Env,
   invoice: Invoice
-): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId">> {
+): Promise<Pick<Invoice, "amount" | "description" | "periodStart" | "periodEnd" | "taxId" | "meritCopy">> {
   if (!invoice.externalId) throw new ApiError(409, "Merit invoice ID is required to duplicate this invoice");
   const detail = await fetchMeritJson<MeritInvoiceDetails>(env, "/v2/getinvoice", {
     Id: invoice.externalId,
@@ -2008,7 +2008,8 @@ export async function createMeritInvoice(
           Amount: taxAmount
         }
       ],
-      TotalAmount: payload.amount
+      TotalAmount: payload.amount,
+      ...(payload.meritCopy ? meritCopyRequest(payload.meritCopy) : {})
     }
   );
 
@@ -5736,6 +5737,7 @@ async function createInvoice(env: Env, payload: CreateInvoicePayload): Promise<I
     periodStart: cleanOptional(payload.periodStart),
     periodEnd: cleanOptional(payload.periodEnd),
     taxId: cleanOptional(payload.taxId) ?? (payload.documentType === "sales_invoice" ? selectedProvider?.defaultMeritTaxId : undefined),
+    ...(payload.meritCopy ? { meritCopy: validateMeritInvoiceCopy(payload.meritCopy, payload.amount, payload.currency) } : {}),
     createdAt,
     updatedAt: createdAt
   };
@@ -5774,19 +5776,7 @@ async function previewInvoiceDuplicate(env: Env, invoiceId: string): Promise<Cre
 }
 
 async function deleteInvoiceDrafts(env: Env, invoiceIds: string[]): Promise<Invoice[]> {
-  const state = await loadPersisted(env);
-  const requestedIds = [...new Set(invoiceIds.filter((invoiceId) => typeof invoiceId === "string" && invoiceId.trim()).map((invoiceId) => invoiceId.trim()))];
-  const selectedInvoices = requestedIds.map((invoiceId) => {
-    const invoice = state.invoices.find((item) => item.id === invoiceId);
-    if (!invoice) throw new ApiError(404, `Invoice not found: ${invoiceId}`);
-    return invoice;
-  });
-  const blockReason = dashboardInvoiceDeletionBatchBlockReason(selectedInvoices, state.paymentAllocations);
-  if (blockReason) throw new ApiError(409, blockReason);
-  const selectedIds = new Set(requestedIds);
-  state.invoices = state.invoices.filter((item) => !selectedIds.has(item.id));
-  await savePersisted(env, state);
-  return selectedInvoices;
+  return getConvexClient(env).mutation(api.invoiceDrafts.remove, { serviceToken: getConvexServiceToken(env), invoiceIds });
 }
 
 async function createManualReceivable(env: Env, payload: CreateManualReceivablePayload): Promise<LedgerItem> {
@@ -5947,6 +5937,7 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
     dueDate: payload.dueDate,
     description: payload.description.trim(),
     taxId: cleanOptional(payload.taxId),
+    ...((payload.meritCopy ?? invoice.meritCopy) ? { meritCopy: validateMeritInvoiceCopy((payload.meritCopy ?? invoice.meritCopy)!, payload.amount, payload.currency) } : {}),
     periodStart: cleanOptional(payload.periodStart),
     periodEnd: cleanOptional(payload.periodEnd),
     updatedAt: new Date().toISOString()
@@ -6196,6 +6187,7 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
         meritTaxes ??= await fetchMeritTaxes(env);
         const tax = meritTaxes.find((item) => item.id === current?.taxId);
         if (!tax) throw new ApiError(400, "The saved Merit tax rate is no longer available");
+        if (current.meritCopy) verifyMeritCopyTaxes(current.meritCopy, meritTaxes);
         const billingRule = current.billingRuleId
           ? state.revenuePartners.find((partner) => partner.id === current?.billingRuleId)
           : undefined;
@@ -6217,7 +6209,8 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
             description: current.description,
             taxId: current.taxId,
             periodStart: current.periodStart,
-            periodEnd: current.periodEnd
+            periodEnd: current.periodEnd,
+            meritCopy: current.meritCopy
           },
           tax,
           current.invoiceNumber,
@@ -6238,6 +6231,7 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
           meritStatus: "open",
           meritDeliveryStatus: "saved",
           externalId: created.externalId,
+          ...(current.meritCopy ? { amount: current.meritCopy.totalAmount } : {}),
           invoiceNumber: created.invoiceNumber,
           updatedAt: created.updatedAt
         };
@@ -6770,6 +6764,7 @@ async function automateClosedRevenuePeriod(
   periodEnd: string,
   scheduledAt: Date
 ): Promise<boolean> {
+  if (state.revenueRuns.some(run => run.partnerId === partner.id && run.periodStart === periodStart && run.periodEnd === periodEnd && run.draftDeletedAt)) return true;
   let run = await pullAutomatedRevenue(env, state, partner, periodStart, periodEnd, scheduledAt);
   if (run.status === "failed") {
     upsertFailedRevenueRun(state, run, scheduledAt);
@@ -8961,6 +8956,7 @@ export default {
       if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try {
         const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { id: import("../convex/_generated/dataModel").Id<"topUpRequests">; version: number; job: string; reextract?: boolean };
+        if (body.job === "refresh-buttons") return json({ ok: true, updated: await refreshTopUpButtons(env, body.id, body.version) });
         if (body.job === "notification") await sendTopUpNotification(env, body.id, body.version);
         else if (body.job === "draft") await prepareTopUpDraft(env, body.id, { reextract: body.reextract === true });
         else return json({ message: "Unknown job" }, { status: 400 });

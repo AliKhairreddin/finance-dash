@@ -55,6 +55,17 @@ export async function handlePublicTopUps(request: Request, env: WorkerEnv): Prom
     return json({ message: errorMessage(e, "Request could not be saved. Please try again.").slice(0, 400) }, 400);
   }
 }
+function topUpButtons(r: Pick<TopUpRequest, "_id" | "version" | "status" | "deletedAt">) {
+  return r.deletedAt ? [] : r.status === "pending" ? [[{ text: "Approve", callback_data: `tu:approve:${r._id}:${r.version}` }, { text: "Adjust amount", callback_data: `tu:adjust:${r._id}:${r.version}` }, { text: "Reject", callback_data: `tu:reject:${r._id}:${r.version}` }]] : r.status === "approved" ? [[{ text: "Paid", callback_data: `tu:paid:${r._id}:${r.version}` }]] : [];
+}
+/** Update controls on an already delivered pending card without sending a message or changing its status. */
+export async function refreshTopUpButtons(env: WorkerEnv, id: Id<"topUpRequests">, version: number): Promise<boolean> {
+  const r = await client(env).query(api.topUps.get, { ...auth(env), id });
+  if (!r || r.deletedAt || r.status !== "pending" || r.version !== version || r.telegramVersion !== version || !r.telegramMessageId) return false;
+  if (!group(env)) throw new Error("Top-up Telegram group is not configured");
+  await telegramApi(env, "editMessageReplyMarkup", { chat_id: group(env), message_id: r.telegramMessageId, reply_markup: { inline_keyboard: topUpButtons(r) } });
+  return true;
+}
 export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequests">, version: number): Promise<void> {
   const convex = client(env), current = await convex.query(api.topUps.get, { ...auth(env), id });
   if (!current || current.telegramVersion === version) return;
@@ -69,10 +80,10 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
     return;
   }
   const person = r.status === "pending" ? telegramPerson(env, "Amin") : telegramPerson(env, "Ali M");
-  const mention = `<a href="tg://user?id=${person.chatId}">${r.status === "pending" ? "@AminGhossein" : "@AliMUser"}</a>`;
+  const mention = r.status === "rejected" ? "" : `<a href="tg://user?id=${person.chatId}">${r.status === "pending" ? "@AminGhossein" : "@AliMUser"}</a>`;
   const link = r.documentId ? await invoiceLink(env, id) : "";
   const escaped = topUpMessage(r as TopUpRequest, link, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const buttons = r.deletedAt ? [] : r.status === "pending" ? [[{ text: "Approve", callback_data: `tu:approve:${id}:${version}` }, { text: "Adjust amount", callback_data: `tu:adjust:${id}:${version}` }]] : r.status === "approved" ? [[{ text: "Paid", callback_data: `tu:paid:${id}:${version}` }]] : [];
+  const buttons = topUpButtons(r);
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const adjustment = r.status === "pending" && r.adjustPromptId && (r.adjustExpiresAt ?? 0) > Date.now()
     ? `\n\n✏️ <a href="tg://user?id=${r.adjustUserId}">Adjusting amount</a>: reply to this request with the new amount in ${r.currency} within 10 minutes.${r.adjustError ? `\n${escape(r.adjustError)}` : ""}` : "";
@@ -95,16 +106,16 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
     let message = "Request updated", failed = false;
     try {
       if (String(cb.message?.chat.id) !== group(env)) throw new Error("Use the Top-Up Request group");
-      const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid"].includes(action)) throw new Error("Invalid action");
+      const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid", "reject"].includes(action)) throw new Error("Invalid action");
       const person = action === "paid" ? telegramPerson(env, "Ali M") : telegramTopUpApprover(env, String(cb.from.id));
-      if (!person || String(cb.from.id) !== person.chatId) throw new Error(action === "paid" ? "Only Ali M can confirm payment for this request" : "Only Amin, Ali M or Ali can approve or adjust this request");
+      if (!person || String(cb.from.id) !== person.chatId) throw new Error(action === "paid" ? "Only Ali M can confirm payment for this request" : "Only Amin, Ali M or Ali can approve, adjust or reject this request");
       const id = rawId as Id<"topUpRequests">, version = Number(rawVersion), convex = client(env); const r = await convex.query(api.topUps.get, { ...auth(env), id });
       if (!r || r.deletedAt || !r.telegramMessageId || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
       if (action === "adjust") {
         if (r.status !== "pending") throw new Error("Only pending requests can be adjusted");
         await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id, version, promptId: r.telegramMessageId, userId: person.chatId });
         message = `Reply to this request with the new amount in ${r.currency} within 10 minutes.`;
-      } else { await convex.mutation(api.topUps.transition, { ...auth(env), id, version, action: action as "approve" | "paid", actor: person.username }); message = action === "paid" ? "Marked paid in the dashboard" : "Approved. This request now has a Paid button for Ali M."; }
+      } else { await convex.mutation(api.topUps.transition, { ...auth(env), id, version, action: action as "approve" | "paid" | "reject", actor: person.username }); message = action === "paid" ? "Marked paid in the dashboard" : action === "reject" ? "Request rejected. No payment draft will be created." : "Approved. This request now has a Paid button for Ali M."; }
     } catch (e) { failed = true; message = errorMessage(e, "Could not update this request").slice(0, 190); }
     await telegramApi(env, "answerCallbackQuery", { callback_query_id: cb.id, text: message, show_alert: failed }); return true;
   }
@@ -125,6 +136,14 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
     const convex = client(env);
     if (request.method === "GET" && url.pathname === "/api/top-ups") return json(await convex.query(url.searchParams.get("deleted") === "true" ? api.topUps.deletedList : api.topUps.list, { ...auth(env), paginationOpts: { cursor: url.searchParams.get("cursor"), numItems: 200 } }));
     if (request.method === "GET" && url.pathname === "/api/top-ups/summary") return json(await convex.query(api.topUps.summary, auth(env)));
+    if (url.pathname === "/api/top-ups/delete-batch") {
+      const session = await getDashboardSession(request, env);
+      if (session?.role !== "administrator") return json({ message: "Administrator access required" }, 403);
+      if (request.method !== "POST") return json({ message: "Method not allowed" }, 405);
+      if (request.headers.get("Origin") !== url.origin) return json({ message: "Submit this action from the dashboard" }, 403);
+      const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 24_000)));
+      return json(await convex.mutation(api.topUps.deleteBatch, { ...auth(env), requests: body.requests, actor: session.username }));
+    }
     const match = /^\/api\/top-ups\/([^/]+)(?:\/(invoice|action|draft|draft-options|retry-notification|reconcile-draft|delete|restore))?$/.exec(url.pathname); if (!match) return json({ message: "Not found" }, 404); const id = match[1] as Id<"topUpRequests">;
     if (request.method === "GET" && match[2] === "invoice") return invoice(env, id);
     if (request.method === "GET" && !match[2]) return json(await convex.query(api.topUps.get, { ...auth(env), id }));

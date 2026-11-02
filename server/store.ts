@@ -1,3 +1,4 @@
+import { validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
 import { replaceLocalMeritInvoice, localInvoiceBackup, localReplacementRunning } from "./meritReplacement";
 import { assertUnpaidInvoice } from "../shared/meritReplacement";
 import { rejectZohoWiseCsvOverlap } from "../shared/zohoWise";
@@ -104,7 +105,7 @@ import {
   transactionBusinessCategory,
   transactionNeedsCategoryReview
 } from "../shared/categories";
-import { dashboardInvoiceDeletionBatchBlockReason } from "../shared/invoiceDeletion";
+import { dashboardInvoiceDeletionBatchBlockReason, unlinkDeletedInvoiceDrafts } from "../shared/invoiceDeletion";
 import { financeOperatingDate } from "../shared/operatingDate";
 import {
   maximumCashFlowLineIdLength,
@@ -1721,6 +1722,7 @@ export async function createInvoice(payload: CreateInvoicePayload): Promise<Invo
     periodStart: payload.periodStart ? normalizedDate(payload.periodStart, "Period start") : undefined,
     periodEnd: payload.periodEnd ? normalizedDate(payload.periodEnd, "Period end") : undefined,
     taxId: cleanOptional(payload.taxId) ?? (payload.documentType === "sales_invoice" ? selectedProvider?.defaultMeritTaxId : undefined),
+    ...(payload.meritCopy ? { meritCopy: validateMeritInvoiceCopy(payload.meritCopy, payload.amount, payload.currency) } : {}),
     createdAt,
     updatedAt: createdAt
   };
@@ -1775,6 +1777,10 @@ export async function deleteInvoiceDrafts(invoiceIds: string[]): Promise<Invoice
   if (blockReason) throw new Error(blockReason);
   const selectedIds = new Set(requestedIds);
   invoices = invoices.filter((item) => !selectedIds.has(item.id));
+  ({ revenueRuns, revenueAccruals } = unlinkDeletedInvoiceDrafts(selectedInvoices, revenueRuns, revenueAccruals, new Date().toISOString()));
+  for (const transaction of getKnownTransactions()) {
+    if (transaction.matchedInvoiceId && selectedIds.has(transaction.matchedInvoiceId)) updateStoredTransaction({ ...transaction, matchedInvoiceId: undefined, matchReason: undefined, confidence: undefined });
+  }
   await persist();
   return selectedInvoices;
 }
@@ -1812,6 +1818,7 @@ export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePay
     dueDate,
     description: payload.description.trim(),
     taxId: cleanOptional(payload.taxId),
+    ...((payload.meritCopy ?? existing.meritCopy) ? { meritCopy: validateMeritInvoiceCopy((payload.meritCopy ?? existing.meritCopy)!, payload.amount, payload.currency) } : {}),
     periodStart,
     periodEnd,
     sendError: undefined,
@@ -2187,7 +2194,8 @@ function mergeRevenueRun(run: RevenueRun): void {
       (item.status === "drafted" || item.status === "invoicing" || item.status === "invoiced")
   );
   if (protectedExisting) return;
-  revenueRuns = [run, ...revenueRuns.filter((item) => item.id !== run.id)].slice(0, 250);
+  const previous = revenueRuns.find(item => item.id === run.id);
+  revenueRuns = [{ ...run, ...(previous?.draftDeletedAt && run.status !== "drafted" ? { draftDeletedAt: previous.draftDeletedAt } : {}) }, ...revenueRuns.filter((item) => item.id !== run.id)].slice(0, 250);
 }
 
 function updateRevenueAccrual(
@@ -2253,7 +2261,7 @@ function draftRevenueRunInternal(run: RevenueRun, partner: RevenuePartner, autom
   const invoiceNumber = nextMeritInvoiceNumber(invoices, now.toISOString().slice(0, 10));
   const draft = buildRevenueDraft(automatic ? partner : { ...partner, autoDraft: true }, run, provider, invoiceNumber, now);
   invoices = [draft, ...invoices];
-  const { error: _error, ...withoutError } = run;
+  const { error: _error, draftDeletedAt: _deletedAt, ...withoutError } = run;
   const draftedRun: RevenueRun = { ...withoutError, status: "drafted", invoiceId: draft.id };
   revenueRuns = [draftedRun, ...revenueRuns.filter((item) => item.id !== run.id)].slice(0, 250);
   if (partner.billingCadence === "monthly") {
@@ -2366,7 +2374,7 @@ export async function runIncomeAutomation(now = new Date(), force = false): Prom
       try {
         const run = await fetchAutomationRevenue(partner, period, timezone);
         removeClosedRevenueAccrual(partner, run);
-        if (partner.autoDraft && run.status === "pulled" && run.revenue > 0) {
+        if (partner.autoDraft && !run.draftDeletedAt && run.status === "pulled" && run.revenue > 0) {
           draftRevenueRunInternal(run, partner, true, now);
         }
       } catch (error) {
@@ -2404,7 +2412,7 @@ export async function runIncomeAutomation(now = new Date(), force = false): Prom
       if ((!closedRun || closedRun.status === "failed") && !invoices.some((invoice) => invoice.id === closedInvoiceId)) {
         closedRun = await fetchAutomationRevenue(partner, closedPeriod, timezone);
       }
-      if (closedRun && partner.autoDraft && closedRun.status === "pulled" && closedRun.revenue > 0) {
+      if (closedRun && !closedRun.draftDeletedAt && partner.autoDraft && closedRun.status === "pulled" && closedRun.revenue > 0) {
         draftRevenueRunInternal(closedRun, partner, true, now);
       }
     } catch (error) {
@@ -2463,7 +2471,7 @@ function finalizeRevenueInvoiceState(invoice: Invoice): void {
   const runIds = new Set(invoice.revenueRunIds);
   revenueRuns = revenueRuns.map((run) => {
     if (!runIds.has(run.id)) return run;
-    const { error: _error, ...withoutError } = run;
+    const { error: _error, draftDeletedAt: _deletedAt, ...withoutError } = run;
     return {
       ...withoutError,
       status: "invoiced",
@@ -2534,6 +2542,10 @@ export async function sendInvoices(payload: SendInvoicesPayload): Promise<SendIn
         outcomes.push({ invoiceId, status: "failed", message: "Choose a current Merit tax rate" });
         continue;
       }
+      if (invoice.meritCopy) {
+        try { verifyMeritCopyTaxes(invoice.meritCopy, meritTaxes); }
+        catch (error) { outcomes.push({ invoiceId, status: "failed", message: (error as Error).message }); continue; }
+      }
       const itemCode = revenuePartners.find((partner) => partner.id === invoice?.billingRuleId)?.defaultMeritItemCode;
       const invoiceProvider = invoice.providerId
         ? providers.find((provider) => provider.id === invoice?.providerId)
@@ -2558,6 +2570,7 @@ export async function sendInvoices(payload: SendInvoicesPayload): Promise<SendIn
           status: "open",
           source: "merit",
           externalId: created.externalId,
+          ...(invoice.meritCopy ? { amount: invoice.meritCopy.totalAmount } : {}),
           invoiceNumber: created.invoiceNumber,
           meritStatus: "open",
           meritDeliveryStatus: "saved",

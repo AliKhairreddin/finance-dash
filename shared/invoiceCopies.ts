@@ -20,6 +20,7 @@ export function invoiceCopyPayload(source: Invoice, issueDate = financeOperating
     description: source.description,
     periodStart: source.periodStart,
     periodEnd: source.periodEnd,
-    taxId: source.taxId
+    taxId: source.taxId,
+    ...(source.meritCopy ? { meritCopy: source.meritCopy } : {})
   };
 }

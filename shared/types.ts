@@ -1,3 +1,4 @@
+import type { MeritInvoiceCopy } from "./meritInvoiceCopy";
 import type { Id } from "../convex/_generated/dataModel";
 export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "merit" | "manual" | "tune" | "quinstreet";
 
@@ -313,6 +314,7 @@ export interface RevenueRun {
   earningsPerClick?: number;
   earningsPerLead?: number;
   status: RevenueRunStatus;
+  draftDeletedAt?: string;
   invoiceId?: string;
   externalInvoiceId?: string;
   error?: string;
@@ -390,6 +392,7 @@ export interface TransactionReviewBootstrap {
 }
 
 export interface Invoice {
+  meritCopy?: MeritInvoiceCopy;
   entity?: WiseEntity;
   id: string;
   providerId?: string;
@@ -961,6 +964,7 @@ export interface ImportWiseStatementResult {
 }
 
 export interface CreateInvoicePayload {
+  meritCopy?: MeritInvoiceCopy;
   transactionId?: string;
   providerId?: string;
   documentType: InvoiceDocumentType;
@@ -1015,6 +1019,7 @@ export interface MatchExpensePaymentPayload {
 }
 
 export interface UpdateInvoicePayload {
+  meritCopy?: MeritInvoiceCopy;
   providerId?: string;
   customerName: string;
   amount: number;

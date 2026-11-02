@@ -10,7 +10,7 @@ export function validateTopUpAmount(amount: unknown, currency: string): number {
 }
 export const formatTopUpAmount = (amount: number, currency: string) => `${amount.toLocaleString("en-US", { maximumFractionDigits: topUpAmountDecimals(currency) })} ${currency}`;
 export const topUpMinimumExpectedThreeDaysSpend = 1000;
-export type TopUpStatus = "pending" | "approved" | "paid";
+export type TopUpStatus = "pending" | "approved" | "paid" | "rejected";
 export interface TopUpInput {
   submissionId: string; entity?: "dn" | "lmd"; priority: "Normal" | "Urgent";
   companyName: string; providerId?: string; commission?: string; team: string; member: string;
@@ -72,20 +72,21 @@ export function validateTopUpInput(value: unknown): TopUpInput {
     ...(!crypto && v.providerId ? { providerId: text("providerId", 200, true) } : {}), ...scenario, team: text("team", 120, true), member: text("member", 120, true),
     amount, currency, paymentMethod, wiseLink, notes: text("notes", 4000), bmNames: names("bmNames"), accountNames: names("accountNames") };
 }
-export function topUpTransition(status: TopUpStatus, action: "approve" | "adjust" | "paid", draftStatus: string): TopUpStatus {
+export function topUpTransition(status: TopUpStatus, action: "approve" | "adjust" | "paid" | "reject", draftStatus: string): TopUpStatus {
   if (action === "paid" && status === "approved" && !["creating", "uncertain"].includes(draftStatus)) return "paid";
   if (action === "approve" && status === "pending") return "approved";
+  if (action === "reject" && status === "pending") return "rejected";
   if (action === "adjust" && status === "pending") return "pending";
   throw new Error("This request has changed. Refresh before acting.");
 }
 export function topUpMessage(r: TopUpRequest, invoiceUrl: string, approver: string): string {
   const money = (n: number, c = r.currency) => formatTopUpAmount(n, c);
-  if (isCryptoTopUp(r.currency)) return [`🛒 ${r.events?.at(-1)?.action === "restored" ? "Restored" : r.status === "pending" ? "New" : r.status === "approved" ? "Approved" : "Paid"} Purchase Request #${r.number}`, "",
+  if (isCryptoTopUp(r.currency)) return [`🛒 ${r.events?.at(-1)?.action === "restored" ? "Restored" : r.status === "pending" ? "New" : r.status === "approved" ? "Approved" : r.status === "rejected" ? "Rejected" : "Paid"} Purchase Request #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"}`, "",
     `🏢 Recipient: ${r.companyName}`, `👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, ...(r.network ? [`🌐 Network: ${r.network}`] : []), `👛 Wallet: ${r.walletAddress}`, "",
     ...(r.documentId ? [`📎 View Invoice: ${invoiceUrl}`, ""] : []), ...(r.notes ? [`📝 Notes: ${r.notes}`, ""] : []),
     `📅 ${new Date(r.createdAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`, `📊 Status: ${r.status[0].toUpperCase() + r.status.slice(1)}`, approver].join("\n");
-  return [`💸 ${r.events?.at(-1)?.action === "restored" ? "Restored Topup Request" : r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : "Paid Topup Request"} #${r.number}`, "",
+  return [`💸 ${r.events?.at(-1)?.action === "restored" ? "Restored Topup Request" : r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : r.status === "rejected" ? "Rejected Topup Request" : "Paid Topup Request"} #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"} | 🏦 ${r.entity === "dn" ? "Digital Nudge OU" : "LoveMeDo BV"}`, "",
     `🏢 Company: ${r.companyName} | 👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, `💳 Open Balance: ${r.openBalance === undefined ? "—" : money(r.openBalance)}`,
     "", `📉 Last 3 days spend: ${r.lastThreeDaysSpend === undefined ? "—" : money(r.lastThreeDaysSpend, "USD")}`, "", `📈 Expected next 3 days spend: ${r.expectedThreeDaysSpend === undefined ? "—" : money(r.expectedThreeDaysSpend, "USD")}`, "",

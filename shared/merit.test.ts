@@ -65,7 +65,7 @@ test("Merit invoice copy details recover the single line, period, net amount, an
   );
   assert.throws(
     () => meritInvoiceCopyDetails({ Lines: [{ Description: "One" }, { Description: "Two" }] }),
-    /single-line/
+    /incomplete/
   );
 });
 
