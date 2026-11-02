@@ -14,6 +14,7 @@ import type {
   RevenueRun,
   Transaction
 } from "../shared/types";
+import { meritRevenueLinesRequest } from "../shared/kissterraBilling";
 import {
   normalizeAmexAccount,
   normalizeAmexTransactions,
@@ -661,6 +662,7 @@ export async function createMeritInvoice(
       }
     ],
     TotalAmount: invoice.amount,
+    ...(invoice.revenueLines ? meritRevenueLinesRequest(invoice, tax, code => configuredMeritItemCode(code, tax)) : {}),
     ...(invoice.meritCopy ? meritCopyRequest(invoice.meritCopy) : {})
   });
 

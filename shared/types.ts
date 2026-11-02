@@ -391,7 +391,18 @@ export interface TransactionReviewBootstrap {
   categories: TransactionCategory[];
 }
 
+export interface RevenueInvoiceLine {
+  accountId: string;
+  accountName: string;
+  billingRuleId: string;
+  revenueRunId: string;
+  description: string;
+  amount: number;
+  itemCode?: string;
+}
+
 export interface Invoice {
+  revenueLines?: RevenueInvoiceLine[];
   meritCopy?: MeritInvoiceCopy;
   entity?: WiseEntity;
   id: string;

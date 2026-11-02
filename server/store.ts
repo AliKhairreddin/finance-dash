@@ -1,4 +1,5 @@
 import { validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
+import { draftKissterraWeek, existingKissterraInvoices, isKissterraPartner, kissterraBillingPartners, validateRevenueInvoiceEdit } from "../shared/kissterraBilling";
 import { replaceLocalMeritInvoice, localInvoiceBackup, localReplacementRunning } from "./meritReplacement";
 import { assertUnpaidInvoice } from "../shared/meritReplacement";
 import { rejectZohoWiseCsvOverlap } from "../shared/zohoWise";
@@ -1788,6 +1789,7 @@ export async function deleteInvoiceDrafts(invoiceIds: string[]): Promise<Invoice
 export async function updateInvoice(invoiceId: string, payload: UpdateInvoicePayload): Promise<Invoice> {
   const existing = invoices.find((invoice) => invoice.id === invoiceId);
   if (!existing) throw new Error("Invoice not found");
+  validateRevenueInvoiceEdit(existing, payload);
   const editableLocalDraft = existing.status === "draft" && !existing.externalId;
   const editableOpenSalesInvoice = existing.documentType === "sales_invoice" && existing.status === "open";
   if (!editableLocalDraft && !editableOpenSalesInvoice) {
@@ -2285,6 +2287,12 @@ export async function draftRevenueRun(payload: DraftRevenueRunPayload): Promise<
     periodEnd: payload.periodEnd,
     timezone: payload.timezone
   });
+  if (isKissterraPartner(partner)) {
+    const invoice = await draftKissterraPeriod(period, new Date(), true);
+    await persist();
+    if (!invoice) throw new Error("No positive unbilled Kissterra revenue is available for this week");
+    return invoice;
+  }
   const run: RevenueRun = {
     ...(await fetchRevenuePartnerRevenue(partner, period)),
     ...(partner.teamId
@@ -2343,6 +2351,29 @@ function failedAutomationRevenueRun(
   });
 }
 
+async function draftKissterraPeriod(period: { periodStart: string; periodEnd: string }, now: Date, manual = false): Promise<Invoice | undefined> {
+  const partners = kissterraBillingPartners(revenuePartners, manual);
+  const state = { invoices, revenueRuns, revenueAccruals, providers };
+  const existing = existingKissterraInvoices(state, partners, period);
+  if (existing.length > 1) throw new Error("This Kissterra week already has multiple invoices; review existing invoices");
+  if (existing[0]) return existing[0];
+  if (!manual && revenueRuns.some(r => partners.some(p => p.id === r.partnerId) && r.periodStart === period.periodStart && r.periodEnd === period.periodEnd && r.draftDeletedAt)) return undefined;
+  const runs: RevenueRun[] = [];
+  for (const partner of partners) {
+    try {
+      const run = await fetchAutomationRevenue(partner, period, partner.timezone);
+      const { draftDeletedAt: _deletedAt, ...unmarked } = run;
+      runs.push(manual ? unmarked : run);
+    }
+    catch (error) { failedAutomationRevenueRun(partner, period, partner.timezone, error); }
+  }
+  const updated = { invoices, revenueRuns, revenueAccruals, providers };
+  const invoice = draftKissterraWeek(updated, partners, runs, period, now);
+  ({ invoices, revenueRuns, revenueAccruals } = updated);
+  for (const run of runs) removeClosedRevenueAccrual(partners.find(p => p.id === run.partnerId)!, run);
+  return invoice;
+}
+
 export async function runIncomeAutomation(now = new Date(), force = false): Promise<DashboardSnapshot> {
   if (!force && !isLebanonIncomeAutomationTime(now)) {
     throw new Error("Income automation only runs Monday at 09:00 Asia/Beirut");
@@ -2364,6 +2395,11 @@ export async function runIncomeAutomation(now = new Date(), force = false): Prom
   await persist();
 
   const errors: string[] = [];
+  const kissterra = kissterraBillingPartners(revenuePartners);
+  if (kissterra.length) {
+    try { await draftKissterraPeriod(previousCompletedWeek(now, kissterra[0].billingTimezone), now); }
+    catch (error) { errors.push(error instanceof Error ? error.message : "Kissterra weekly invoice failed"); }
+  }
   for (const partner of revenuePartners.filter((item) => item.enabled)) {
     const timezone = partner.billingTimezone;
     if (partner.billingCadence === "weekly") {
@@ -2371,15 +2407,17 @@ export async function runIncomeAutomation(now = new Date(), force = false): Prom
         now,
         timezone
       );
-      try {
-        const run = await fetchAutomationRevenue(partner, period, timezone);
-        removeClosedRevenueAccrual(partner, run);
-        if (partner.autoDraft && !run.draftDeletedAt && run.status === "pulled" && run.revenue > 0) {
-          draftRevenueRunInternal(run, partner, true, now);
+      if (!(isKissterraPartner(partner) && partner.autoDraft)) {
+        try {
+          const run = await fetchAutomationRevenue(partner, period, timezone);
+          removeClosedRevenueAccrual(partner, run);
+          if (partner.autoDraft && !run.draftDeletedAt && run.status === "pulled" && run.revenue > 0) {
+            draftRevenueRunInternal(run, partner, true, now);
+          }
+        } catch (error) {
+          failedAutomationRevenueRun(partner, period, timezone, error);
+          errors.push(`${partner.name}: ${error instanceof Error ? error.message : "weekly revenue failed"}`);
         }
-      } catch (error) {
-        failedAutomationRevenueRun(partner, period, timezone, error);
-        errors.push(`${partner.name}: ${error instanceof Error ? error.message : "weekly revenue failed"}`);
       }
 
       const accrualPeriod = currentWeekAccrualPeriod(now, timezone);

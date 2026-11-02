@@ -1,4 +1,5 @@
 import { meritCopyRequest, validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
+import { draftKissterraWeek, existingKissterraInvoices, isKissterraPartner, kissterraBillingPartners, meritRevenueLinesRequest, validateRevenueInvoiceEdit } from "../shared/kissterraBilling";
 import { fetchTuneTotals } from "../shared/tune";
 import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { routeStatementSurface, statementsInbox } from "./statementRouting";
@@ -1961,7 +1962,8 @@ export async function createMeritInvoice(
   tax: MeritTax,
   requestedInvoiceNumber: string,
   itemCode?: string,
-  provider?: Provider
+  provider?: Provider,
+  revenueLines?: Invoice["revenueLines"]
 ): Promise<Invoice> {
   assertMeritWriteConfiguration(env);
   const taxAmount = Number(((payload.amount * tax.taxPct) / 100).toFixed(2));
@@ -2009,6 +2011,7 @@ export async function createMeritInvoice(
         }
       ],
       TotalAmount: payload.amount,
+      ...(revenueLines ? meritRevenueLinesRequest({ ...payload, revenueLines }, tax, code => meritItemCode(env, tax, code)) : {}),
       ...(payload.meritCopy ? meritCopyRequest(payload.meritCopy) : {})
     }
   );
@@ -5916,6 +5919,7 @@ async function updateInvoice(env: Env, invoiceId: string, payload: UpdateInvoice
   const state = await loadPersisted(env);
   const invoice = state.invoices.find((item) => item.id === invoiceId);
   if (!invoice) throw new ApiError(404, "Invoice not found");
+  validateRevenueInvoiceEdit(invoice, payload);
   const editableLocalDraft = invoice.status === "draft" && !invoice.externalId;
   const editableOpenSalesInvoice = invoice.documentType === "sales_invoice" && invoice.status === "open";
   if (!editableLocalDraft && !editableOpenSalesInvoice) {
@@ -6069,6 +6073,12 @@ async function draftRevenueRun(env: Env, payload: DraftRevenueRunPayload): Promi
     periodEnd: payload.periodEnd,
     timezone: payload.timezone
   });
+  if (isKissterraPartner(partner)) {
+    const draft = await automateKissterraWeek(env, state, kissterraBillingPartners(state.revenuePartners, true), period, new Date(), true);
+    await savePersisted(env, state);
+    if (!draft) throw new ApiError(409, "No positive unbilled Kissterra revenue is available for this week");
+    return draft;
+  }
   const run: RevenueRun = {
     ...(await fetchRevenuePartnerRevenue(env, partner, period)),
     ...(partner.teamId
@@ -6215,7 +6225,8 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
           tax,
           current.invoiceNumber,
           billingRule?.defaultMeritItemCode,
-          provider
+          provider,
+          current.revenueLines
         );
         createdInMerit = created;
         const {
@@ -6849,6 +6860,23 @@ async function automateCurrentRevenueAccrual(
   return true;
 }
 
+export async function automateKissterraWeek(env: Env, state: PersistedState, partners: RevenuePartner[], period: { periodStart: string; periodEnd: string }, now: Date, manual = false): Promise<Invoice | undefined> {
+  const existing = existingKissterraInvoices(state, partners, period);
+  if (existing.length > 1) throw new Error("This Kissterra week already has multiple invoices; review existing invoices");
+  if (existing[0]) return existing[0];
+  if (!manual && state.revenueRuns.some(r => partners.some(p => p.id === r.partnerId) && r.periodStart === period.periodStart && r.periodEnd === period.periodEnd && r.draftDeletedAt)) return undefined;
+  const runs: RevenueRun[] = [];
+  for (const partner of partners) {
+    const run = await pullAutomatedRevenue(env, state, partner, period.periodStart, period.periodEnd, now);
+    runs.push(run);
+    if (run.status === "failed") upsertFailedRevenueRun(state, run, now);
+    else upsertRevenueRun(state, run);
+  }
+  const invoice = draftKissterraWeek(state, partners, runs, period, now);
+  for (const run of runs) removeClosedRevenueAccrual(state, partners.find(p => p.id === run.partnerId)!, run);
+  return invoice;
+}
+
 function periodKey(periodStart: string, periodEnd: string): string {
   return `${periodStart}:${periodEnd}`;
 }
@@ -6869,6 +6897,19 @@ export async function runIncomeAutomation(env: Env, scheduledAt: Date): Promise<
   try {
     const state = await loadPersisted(env);
     const failures: string[] = [];
+    const kissterra = kissterraBillingPartners(state.revenuePartners);
+    if (kissterra.length) {
+      const periods = new Map<string, { periodStart: string; periodEnd: string }>();
+      const current = previousCompletedWeek(scheduledAt, kissterra[0].billingTimezone);
+      periods.set(periodKey(current.periodStart, current.periodEnd), current);
+      for (const failed of state.revenueRuns.filter(r => r.status === "failed" && kissterra.some(p => p.id === r.partnerId && isClosedBillingPeriod(p, r, scheduledAt)))) {
+        periods.set(periodKey(failed.periodStart, failed.periodEnd), failed);
+      }
+      for (const period of periods.values()) {
+        try { await automateKissterraWeek(env, state, kissterra, period, scheduledAt); }
+        catch (error) { failures.push(error instanceof Error ? error.message : "Kissterra weekly invoice failed"); }
+      }
+    }
     for (const partner of state.revenuePartners.filter((item) => item.enabled)) {
       const closedPeriods = new Map<string, { periodStart: string; periodEnd: string }>();
       if (partner.billingCadence === "weekly") {
@@ -6895,6 +6936,7 @@ export async function runIncomeAutomation(env: Env, scheduledAt: Date): Promise<
         });
       }
       for (const period of closedPeriods.values()) {
+        if (isKissterraPartner(partner) && partner.autoDraft) continue;
         if (!(await automateClosedRevenuePeriod(env, state, partner, period.periodStart, period.periodEnd, scheduledAt))) {
           failures.push(`${partner.name} ${period.periodStart}–${period.periodEnd}`);
         }

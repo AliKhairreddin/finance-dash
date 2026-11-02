@@ -42,6 +42,7 @@ import type * as meritReplacements from "../meritReplacements.js";
 import type * as redtrack from "../redtrack.js";
 import type * as redtrackCache from "../redtrackCache.js";
 import type * as redtrackSchema from "../redtrackSchema.js";
+import type * as revenueInvoiceSchema from "../revenueInvoiceSchema.js";
 import type * as statementAccess from "../statementAccess.js";
 import type * as statementAutomation from "../statementAutomation.js";
 import type * as statementCapture from "../statementCapture.js";
@@ -104,6 +105,7 @@ declare const fullApi: ApiFromModules<{
   redtrack: typeof redtrack;
   redtrackCache: typeof redtrackCache;
   redtrackSchema: typeof redtrackSchema;
+  revenueInvoiceSchema: typeof revenueInvoiceSchema;
   statementAccess: typeof statementAccess;
   statementAutomation: typeof statementAutomation;
   statementCapture: typeof statementCapture;

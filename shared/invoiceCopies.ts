@@ -9,6 +9,7 @@ function paymentTermDays(source: Invoice): number {
 }
 
 export function invoiceCopyPayload(source: Invoice, issueDate = financeOperatingDate()): CreateInvoicePayload {
+  if (source.revenueLines && !source.meritCopy) throw new Error("This weekly revenue invoice already contains its account lines. Use the weekly billing run for a new period.");
   return {
     providerId: source.providerId,
     documentType: source.documentType,

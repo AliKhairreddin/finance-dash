@@ -1,4 +1,5 @@
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
+import { revenueInvoiceLine } from "./revenueInvoiceSchema";
 import { canonical } from "../shared/meritReplacement";
 import { requireSyncLease } from "./integrationSync";
 import { evaluateCashFlowAmount } from "../shared/cashFlow";
@@ -120,6 +121,7 @@ const provider = v.object({
 });
 
 export const invoice = v.object({
+  revenueLines: v.optional(v.array(revenueInvoiceLine)),
   meritCopy: v.optional(meritInvoiceCopy),
   id: v.string(),
   entity: v.optional(wiseEntity),

@@ -1,4 +1,5 @@
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
+import { revenueInvoiceLine } from "./revenueInvoiceSchema";
 import { intelligenceTables } from "./statementIntelligenceSchema";
 import { topUpFields, topUpRecord } from "./topUpSchema";
 import { replacementFields } from "./meritReplacementSchema";
@@ -115,6 +116,7 @@ const provider = v.object({
 });
 
 const invoice = v.object({
+  revenueLines: v.optional(v.array(revenueInvoiceLine)),
   meritCopy: v.optional(meritInvoiceCopy),
   id: v.string(),
   entity: v.optional(wiseEntity),
