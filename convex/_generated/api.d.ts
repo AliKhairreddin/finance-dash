@@ -35,6 +35,7 @@ import type * as managementReportUpload from "../managementReportUpload.js";
 import type * as manualBankSchema from "../manualBankSchema.js";
 import type * as manualBankTransactions from "../manualBankTransactions.js";
 import type * as mediaFunding from "../mediaFunding.js";
+import type * as mediaFundingSourceSchema from "../mediaFundingSourceSchema.js";
 import type * as mediaSpend from "../mediaSpend.js";
 import type * as meritInvoiceCopySchema from "../meritInvoiceCopySchema.js";
 import type * as meritReplacementSchema from "../meritReplacementSchema.js";
@@ -98,6 +99,7 @@ declare const fullApi: ApiFromModules<{
   manualBankSchema: typeof manualBankSchema;
   manualBankTransactions: typeof manualBankTransactions;
   mediaFunding: typeof mediaFunding;
+  mediaFundingSourceSchema: typeof mediaFundingSourceSchema;
   mediaSpend: typeof mediaSpend;
   meritInvoiceCopySchema: typeof meritInvoiceCopySchema;
   meritReplacementSchema: typeof meritReplacementSchema;
