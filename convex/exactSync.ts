@@ -1,3 +1,7 @@
+"use node";
+
+// Exact's OAuth endpoint requires the Node HTTP transport: the default Convex
+// runtime receives an empty 503 response for the same token request.
 import { v } from "convex/values";
 import { action, internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -58,6 +62,8 @@ export const finishAuthorization = action({ args: { serviceToken: v.string(), ac
     const message = stage === "token_exchange"
       ? httpStatus === 400 || httpStatus === 401
         ? "Exact rejected the connection credentials or approval code. Check the app credentials and callback URL, then start Connect Exact again."
+        : httpStatus !== null && httpStatus >= 500
+          ? "Exact's sign-in service is temporarily unavailable. Try Connect Exact again later."
         : "Exact could not complete the connection token exchange. Start Connect Exact again."
       : stage === "user_verification"
         ? "Exact approved the connection, but its user and company could not be verified. Start Connect Exact again."

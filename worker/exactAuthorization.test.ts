@@ -64,16 +64,19 @@ test("Exact authorization exchanges the code, verifies the user, and saves only 
   } finally { globalThis.fetch = original; }
 });
 
-test("Exact authorization reports the failing stage without exposing provider secrets or retrying the code", async () => {
+for (const failure of [
+  { status: 400, message: /Exact rejected the connection credentials or approval code/ },
+  { status: 503, message: /Exact's sign-in service is temporarily unavailable/ }
+]) test(`Exact authorization reports HTTP ${failure.status} without exposing secrets or retrying the code`, async () => {
   const t = await setup(), original = globalThis.fetch, originalError = console.error;
   const logs: unknown[][] = []; let calls = 0;
   console.error = (...args: unknown[]) => { logs.push(args); };
-  globalThis.fetch = async () => { calls++; return Response.json({ error: "invalid_grant", error_description: "private-code private-secret" }, { status: 400 }); };
+  globalThis.fetch = async () => { calls++; return Response.json({ error: "invalid_grant", error_description: "private-code private-secret" }, { status: failure.status }); };
   try {
-    await assert.rejects(t.action(api.exactSync.finishAuthorization, { ...auth, hash, code: "private-code" }), /Exact rejected the connection credentials or approval code/);
+    await assert.rejects(t.action(api.exactSync.finishAuthorization, { ...auth, hash, code: "private-code" }), failure.message);
     const status = await t.query(api.exact.status, auth);
     assert.equal(status.connected, false);
-    assert.match(status.error ?? "", /app credentials and callback URL/);
+    assert.match(status.error ?? "", failure.message);
     assert.equal(calls, 1);
     assert.match(JSON.stringify(logs), /token_exchange/);
     assert.equal(JSON.stringify({ logs, status }).includes("private-"), false);
