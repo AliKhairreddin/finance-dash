@@ -31,10 +31,10 @@ export function StatementExact({ revision }: { revision: number }) {
     void Promise.all([request<ExactConnectionStatus>("/status", { signal: abort.signal }), request<Operation[]>("/operations", { signal: abort.signal })]).then(([s, ops]) => { setStatus(s); setOperations(ops); }).catch(e => { if (!abort.signal.aborted) setError(e.message); }); return () => abort.abort();
   }, [tick, revision]);
   useEffect(() => { setPage(0); setData(null); setSelected(null); }, [kind, division]);
-  useEffect(() => { if (!status?.connected) { setData(null); setLoading(false); return; } const abort = new AbortController(); setLoading(true);
+  useEffect(() => { if (!status?.connected || !status.lastDiscoveryAt) { setData(null); setLoading(false); return; } const abort = new AbortController(); setLoading(true);
     void request<ExactPage>(`/records?kind=${kind}&division=${division}`, { signal: abort.signal }).then(setData).catch(e => { if (!abort.signal.aborted) { setData(null); setError(e.message); } }).finally(() => { if (!abort.signal.aborted) setLoading(false); }); return () => abort.abort();
-  }, [status?.connected, kind, division, tick, revision]);
-  useEffect(() => { if (!status?.connected) return; const active = operations.some(o => ["queued", "running"].includes(o.state)) || status.datasets.some(d => ["queued", "syncing"].includes(d.state)); const timeout = window.setTimeout(refresh, active ? 5000 : 60000); return () => window.clearTimeout(timeout); }, [status, operations, refresh]);
+  }, [status?.connected, status?.lastDiscoveryAt, kind, division, tick, revision]);
+  useEffect(() => { if (!status?.connected) return; const active = !status.lastDiscoveryAt || operations.some(o => ["queued", "running"].includes(o.state)) || status.datasets.some(d => ["queued", "syncing"].includes(d.state)); const timeout = window.setTimeout(refresh, active ? 5000 : 60000); return () => window.clearTimeout(timeout); }, [status, operations, refresh]);
   const companies = status?.companies ?? [];
   const rows = useMemo(() => (data?.records ?? []).filter(row => !search || Object.values(row.data).join(" ").toLowerCase().includes(search.toLowerCase()) || companies.find(c => c.division === row.division)?.name.toLowerCase().includes(search.toLowerCase())).sort((a, b) => sort.compare(exactValue(a, sort.sort, companies), exactValue(b, sort.sort, companies)) || a.id.localeCompare(b.id)), [data, search, companies, sort.sort, sort.order]);
   useEffect(() => setPage(0), [search, sort.sort, sort.order]);

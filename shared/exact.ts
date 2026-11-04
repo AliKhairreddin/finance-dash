@@ -59,7 +59,12 @@ export function exactInitialUrl(division: number, kind: ExactKind, cursor = "1")
 }
 export function exactSafeUrl(value: string, expectedPath: string): string {
   const url = new URL(value, exactOrigin);
-  if (url.origin !== exactOrigin || url.pathname !== expectedPath || url.username || url.password || url.hash) throw new Error("Exact returned an unsafe continuation URL");
+  // Exact emits lower-case area names in continuation links (for example,
+  // sync/documents/DocumentAttachments). Endpoint casing does not change scope.
+  if (url.origin !== exactOrigin || url.pathname.toLowerCase() !== expectedPath.toLowerCase() || url.username || url.password || url.hash) {
+    console.error("exact_continuation_rejected", { sameOrigin: url.origin === exactOrigin, path: /^\/api\/v1\/\d+\/[A-Za-z/]+$/.test(url.pathname) ? url.pathname : "unrecognized_path", expectedPath, hasCredentials: Boolean(url.username || url.password), hasFragment: Boolean(url.hash) });
+    throw new Error("Exact returned an unsafe continuation URL");
+  }
   return url.href;
 }
 export function exactRows(value: unknown): { rows: Record<string, unknown>[]; next: string | null } {

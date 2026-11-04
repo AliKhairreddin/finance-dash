@@ -15,6 +15,13 @@ test("Exact incomplete responses are never interpreted as zero records", () => {
   assert.throws(() => exactCursor(9007199254740992));
   assert.equal(exactCursor("9007199254740993"), "9007199254740993");
 });
+test("Exact accepts provider continuation casing while preserving company and resource boundaries", () => {
+  const expectedPath = "/api/v1/4103084/sync/Documents/DocumentAttachments";
+  const next = "https://start.exactonline.nl/api/v1/4103084/sync/documents/DocumentAttachments?$skiptoken=next";
+  assert.equal(exactSafeUrl(next, expectedPath), next);
+  assert.throws(() => exactSafeUrl(next.replace("4103084", "3503005"), expectedPath));
+  assert.throws(() => exactSafeUrl(next.replace("DocumentAttachments?", "Documents?"), expectedPath));
+});
 test("Exact record storage excludes unrequested private fields and requires stable identifiers", () => {
   assert.deepEqual(exactCleanRow("accounts", { ID: "abc", Timestamp: "20", Name: "Company", BSN: "private", Logo: "large" }), { ID: "abc", Timestamp: "20", Name: "Company" });
   assert.throws(() => exactCleanRow("accounts", { Timestamp: "20", Name: "Company" }));

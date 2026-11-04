@@ -178,7 +178,7 @@ export const saveConnection = internalMutation({ args: { token: v.string(), encr
 } });
 export const release = internalMutation({ args: { token: v.string(), delay: v.number(), error: v.optional(v.string()), reconnect: v.optional(v.boolean()) }, returns: v.null(), handler: async (ctx, args) => {
   const c = await connection(ctx); if (!c || c.leaseToken !== args.token) return null;
-  await ctx.db.patch(c._id, { leaseUntil: 0, leaseToken: undefined, nextAllowedAt: Date.now() + args.delay, ...(args.error ? { error: args.error } : {}), ...(args.reconnect ? { state: "reconnect_required" } : {}) });
+  await ctx.db.patch(c._id, { leaseUntil: 0, leaseToken: undefined, nextAllowedAt: Date.now() + args.delay, error: args.error, ...(args.reconnect ? { state: "reconnect_required" } : {}) });
   if (!args.reconnect) await ctx.scheduler.runAfter(Math.max(1300, args.delay), internal.exactSync.pump, {}); return null;
 } });
 export const work = internalQuery({ args: {}, returns: v.string(), handler: async ctx => {

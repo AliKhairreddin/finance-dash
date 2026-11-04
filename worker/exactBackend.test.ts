@@ -63,6 +63,21 @@ test("Exact leases serialize API callers and reject stale workers", async () => 
   assert.equal(await t.mutation(internal.exact.claim, { token: "another" }), null);
   await assert.rejects(t.mutation(internal.exact.saveConnection, { token: "stale", encryptedTokens: "secret", expiresAt: Date.now() }));
 });
+test("Successful Exact work clears the connection error while retaining failed dataset state", async () => {
+  const t = await setup();
+  await t.run(async ctx => {
+    const connection = await ctx.db.query("exactConnections").first();
+    await ctx.db.patch(connection!._id, { error: "Previous connection failure" });
+    await ctx.db.insert("exactDatasets", { division, kind: "transactions", generation: "empty", cursor: "1", state: "failed", error: "Transaction import failed", nextRunAt: 0, attempts: 1, pages: 0 });
+  });
+  await t.mutation(internal.exact.release, { token: "lease", delay: 1300 });
+  const status = await t.query(api.exact.status, auth);
+  assert.equal(status.error, undefined);
+  assert.equal(status.datasets[0].error, "Transaction import failed");
+  await t.run(async ctx => {
+    for (const job of await ctx.db.system.query("_scheduled_functions").take(10)) await ctx.scheduler.cancel(job._id);
+  });
+});
 test("Exact authorization state is actor-bound and single use", async () => {
   const t = await setup(), hash = "a".repeat(64);
   await t.mutation(api.exact.createOAuthState, { ...auth, hash });

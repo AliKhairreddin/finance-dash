@@ -136,6 +136,9 @@ export const pump = internalAction({ args: {}, returns: v.null(), handler: async
     await ctx.runMutation(internal.exact.release, { token, delay });
   } catch (error) {
     const http = error instanceof ExactHttpError ? error : null;
+    const validationErrors = ["Exact response is incomplete", "Exact returned an invalid page", "Invalid Exact page cursor", "Exact returned an invalid or imprecise timestamp", "Exact record has no reliable identifier", "Exact field exceeds supported size", "Exact returned a repeating page cursor", "Exact returned an unsafe continuation URL", "Exact API returned invalid JSON", "Exact API returned an empty response"];
+    const validation = error instanceof Error && (validationErrors.includes(error.message) || /^Exact API response exceeded \d+ bytes$/.test(error.message)) ? error.message : null;
+    console.error("exact_sync_failed", { work: work.type, kind: work.type === "dataset" ? work.dataset.kind : null, httpStatus: http?.status ?? null, validation });
     const message = http?.message ?? "Exact synchronization could not be completed. Saved records have been preserved.";
     delay = Math.max(http?.delay ?? 60_000, 60_000);
     if (work.type === "dataset") await ctx.runMutation(internal.exact.datasetFailed, { token, id: work.dataset._id, message, delay, denied: http?.status === 403 });
