@@ -10,7 +10,10 @@ type Work = { type: "none" } | { type: "discover"; connection: Doc<"exactConnect
 function encryptionKey() { const key = process.env.EXACT_ENCRYPTION_KEY; if (!key) throw new Error("Exact credential encryption is not configured"); return key; }
 function tokens(value: unknown): Tokens {
   const row = value as Partial<Tokens> | null;
-  if (!row || typeof row.access_token !== "string" || typeof row.refresh_token !== "string" || typeof row.expires_in !== "number" || row.expires_in < 1 || row.access_token.length > 10000 || row.refresh_token.length > 10000) throw new Error("Exact returned invalid authorization credentials");
+  if (!row || typeof row.access_token !== "string" || typeof row.refresh_token !== "string" || typeof row.expires_in !== "number" || row.expires_in < 1 || row.access_token.length > 10000 || row.refresh_token.length > 10000) {
+    console.error("exact_token_response_invalid", { accessTokenType: typeof row?.access_token, refreshTokenType: typeof row?.refresh_token, expiresInType: typeof row?.expires_in });
+    throw new Error("Exact returned invalid authorization credentials");
+  }
   return row as Tokens;
 }
 async function exchange(params: Record<string, string>) {
@@ -35,16 +38,32 @@ export const finishAuthorization = action({ args: { serviceToken: v.string(), ac
   const token = crypto.randomUUID();
   const claimed: string | null = await ctx.runMutation(internal.exact.claim, { token, connecting: true });
   if (!claimed) throw new Error("Exact is busy. Start the connection again in a moment");
+  let stage = "token_exchange";
   try {
     if (!args.code || args.code.length > 2000) throw new Error("Invalid Exact authorization code");
     const saved = await exchange({ grant_type: "authorization_code", code: args.code, redirect_uri: exactRedirectUri });
+    stage = "user_verification";
     const me = exactRows((await exactHttp(`${exactOrigin}/api/v1/current/Me?$select=UserID,FullName,CurrentDivision`, saved.access_token)).value).rows[0];
     if (!me || typeof me.UserID !== "string" || !Number.isSafeInteger(me.CurrentDivision)) throw new Error("Exact user identity could not be verified");
-    await ctx.runMutation(internal.exact.saveConnection, { token, encryptedTokens: await exactEncrypt(JSON.stringify(saved), encryptionKey()), expiresAt: Date.now() + saved.expires_in * 1000, userId: me.UserID, user: String(me.FullName ?? "Exact user"), currentDivision: Number(me.CurrentDivision) });
+    stage = "credential_encryption";
+    const encryptedTokens = await exactEncrypt(JSON.stringify(saved), encryptionKey());
+    stage = "connection_save";
+    await ctx.runMutation(internal.exact.saveConnection, { token, encryptedTokens, expiresAt: Date.now() + saved.expires_in * 1000, userId: me.UserID, user: String(me.FullName ?? "Exact user"), currentDivision: Number(me.CurrentDivision) });
+    stage = "sync_schedule";
     await ctx.runMutation(internal.exact.release, { token, delay: 1300 });
-  } catch {
-    await ctx.runMutation(internal.exact.release, { token, delay: 60_000, reconnect: true, error: "Exact connection could not be completed. Start a fresh authorization for the same Exact user." });
-    throw new Error("Exact connection could not be completed. Start Connect Exact again");
+  } catch (error) {
+    // Never log the exception, provider body, code, tokens, or request arguments.
+    const httpStatus = error instanceof ExactHttpError ? error.status : null;
+    console.error("exact_authorization_failed", { stage, httpStatus });
+    const message = stage === "token_exchange"
+      ? httpStatus === 400 || httpStatus === 401
+        ? "Exact rejected the connection credentials or approval code. Check the app credentials and callback URL, then start Connect Exact again."
+        : "Exact could not complete the connection token exchange. Start Connect Exact again."
+      : stage === "user_verification"
+        ? "Exact approved the connection, but its user and company could not be verified. Start Connect Exact again."
+        : "Exact approved the connection, but Statements could not save it. Contact the dashboard administrator before trying again.";
+    await ctx.runMutation(internal.exact.release, { token, delay: Math.max(60_000, error instanceof ExactHttpError ? error.delay : 0), reconnect: true, error: message });
+    throw new Error(message);
   }
   return null;
 } });
