@@ -22,7 +22,17 @@ export function emptyMediaFundingBillingSpend(): MediaFundingBillingSpend {
 }
 export type MediaFundingEntryType = "adjustment";
 
+export interface MediaFundingSourceReference {
+  url: string;
+  observedAt: string;
+  balances: { label: string; amount: number | null }[];
+  commissionTerms: string;
+  notes: string;
+}
+
 export interface MediaFundingProvider {
+  balanceVerified: boolean;
+  sourceReference?: MediaFundingSourceReference;
   id: string;
   companyProviderId: string;
   name: string;
@@ -138,6 +148,7 @@ export interface MediaFundingProviderSpendGroup {
 }
 
 export interface CreateMediaFundingProviderPayload {
+  balanceVerified: boolean;
   newSupplierName?: string;
   companyProviderId: string;
   defaultFeePercent: number;

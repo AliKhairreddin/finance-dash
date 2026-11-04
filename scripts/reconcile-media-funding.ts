@@ -35,7 +35,7 @@ for (const provider of overview.providers) {
   if (Math.abs(roundMediaFundingMoney(spend.card + spend.credit_line + spend.unclassified) - provider.spend) > 0.02) {
     throw new Error(`Billing classifications do not reconcile to account spend for provider ${provider.id}`);
   }
-  const expected = provider.bankFundingPaused || provider.excludedFundingCount > 0 || spend.unclassifiedRows > 0
+  const expected = !provider.balanceVerified || provider.bankFundingPaused || provider.excludedFundingCount > 0 || spend.unclassifiedRows > 0
     ? null : calculateMediaFundingBalance({ openingBalance: provider.openingBalance, netFunding: provider.netFunding, adjustments: provider.adjustments, spend: spend.credit_line });
   if (provider.estimatedBalance !== expected) throw new Error(`Credit-line balance verification failed for provider ${provider.id}`);
 }

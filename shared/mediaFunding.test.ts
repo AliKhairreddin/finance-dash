@@ -34,6 +34,7 @@ function provider(id: string, name: string): MediaFundingProvider {
   return {
     id,
     companyProviderId: `company-${id}`,
+    balanceVerified: true,
     name,
     defaultFeePercent: 0,
     currency: "USD",

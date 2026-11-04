@@ -1,4 +1,5 @@
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
+import { mediaFundingSourceReference } from "./mediaFundingSourceSchema";
 import { revenueInvoiceLine } from "./revenueInvoiceSchema";
 import { intelligenceTables } from "./statementIntelligenceSchema";
 import { topUpFields, topUpRecord } from "./topUpSchema";
@@ -1061,6 +1062,8 @@ export default defineSchema({
     updatedAt: v.string()
   }).index("by_key", ["key"]),
   mediaFundingProviders: defineTable({
+    balanceVerifiedAt: v.optional(v.string()),
+    sourceReference: v.optional(mediaFundingSourceReference),
     companyProviderId: v.string(),
     bankFundingPaused: v.optional(v.boolean()),
     defaultFeePercent: v.number(),

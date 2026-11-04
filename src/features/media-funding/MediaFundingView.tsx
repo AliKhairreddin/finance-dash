@@ -77,9 +77,9 @@ function providerAccent(providerId: string): number {
 function providerSortValue(provider: MediaFundingProvider, key: ProviderSortKey): number | string | undefined {
   if (key === "assignments") return provider.assignmentCount;
   if (key === "balance") return provider.estimatedBalance ?? undefined;
-  if (key === "fee") return provider.defaultFeePercent;
-  if (key === "funded") return provider.netFunding;
-  if (key === "opening") return provider.openingBalance;
+  if (key === "fee") return provider.balanceVerified ? provider.defaultFeePercent : undefined;
+  if (key === "funded") return provider.balanceVerified ? provider.netFunding : undefined;
+  if (key === "opening") return provider.balanceVerified ? provider.openingBalance : undefined;
   if (key === "creditLineSpend") return provider.billingSpend?.credit_line;
   return provider.name;
 }
@@ -265,9 +265,9 @@ export function MediaFundingView({
 
       <div className="media-spend-summary" aria-label="Provider balance summary">
         <article className="media-spend-summary-card total"><span className="media-spend-summary-icon"><WalletCards size={17} /></span><div><span>Estimated balance</span><strong>{data ? money(data.summary.estimatedBalance, data.currency) : "—"}</strong></div></article>
-        <article className="media-spend-summary-card"><span className="media-spend-summary-icon"><BanknoteArrowUp size={17} /></span><div><span>Net bank funding</span><strong>{data ? money(data.summary.netFunding, data.currency) : "—"}</strong></div></article>
+        <article className="media-spend-summary-card"><span className="media-spend-summary-icon"><BanknoteArrowUp size={17} /></span><div><span>Net bank funding</span><strong>{data ? money(data.providers.every(provider => provider.balanceVerified) ? data.summary.netFunding : null, data.currency) : "—"}</strong></div></article>
         <article className="media-spend-summary-card"><span className="media-spend-summary-icon"><BadgeDollarSign size={17} /></span><div><span>Assigned spend</span><strong>{data ? money(data.summary.spend, data.currency) : "—"}</strong></div></article>
-        <article className="media-spend-summary-card"><span className="media-spend-summary-icon"><ReceiptText size={17} /></span><div><span>Provider fees</span><strong>{data ? money(data.summary.fees, data.currency) : "—"}</strong></div></article>
+        <article className="media-spend-summary-card"><span className="media-spend-summary-icon"><ReceiptText size={17} /></span><div><span>Provider fees</span><strong>{data ? money(data.providers.every(provider => provider.balanceVerified) ? data.summary.fees : null, data.currency) : "—"}</strong></div></article>
       </div>
 
       <section className="panel media-funding-panel">
@@ -296,12 +296,12 @@ export function MediaFundingView({
               </tr></thead>
               <tbody>{providers.map((provider) => (
                 <tr className={selectedProviderId === provider.id ? "selected" : ""} key={provider.id}>
-                  <td><button className="bank-group-drilldown" onClick={() => setSelectedProviderId(provider.id)} type="button"><span><FundingProviderBadge provider={provider} /><small>{provider.bankFundingCount.toLocaleString()} bank payments · opening {dateLabel(provider.openingBalanceDate)}</small></span></button></td>
-                  <td className="amount">{provider.defaultFeePercent.toLocaleString(undefined, { maximumFractionDigits: 4 })}%</td>
-                  <td className="amount">{money(provider.openingBalance, provider.currency)}</td>
-                  <td className="amount">{money(provider.netFunding, provider.currency)}</td>
+                  <td><button className="bank-group-drilldown" onClick={() => setSelectedProviderId(provider.id)} type="button"><span><FundingProviderBadge provider={provider} /><small>{provider.bankFundingCount.toLocaleString()} bank payments{provider.balanceVerified ? ` · opening ${dateLabel(provider.openingBalanceDate)}` : " · balance unconfirmed"}</small></span></button></td>
+                  <td className="amount">{provider.balanceVerified ? `${provider.defaultFeePercent.toLocaleString(undefined, { maximumFractionDigits: 4 })}%` : "Unconfirmed"}</td>
+                  <td className="amount">{money(provider.balanceVerified ? provider.openingBalance : null, provider.currency)}</td>
+                  <td className="amount">{money(provider.balanceVerified ? provider.netFunding : null, provider.currency)}</td>
                   <td className="amount">{money(provider.billingSpend?.credit_line ?? null, provider.currency)}</td>
-                  <td className={`amount media-funding-balance ${(provider.estimatedBalance ?? 0) < 0 ? "negative" : ""}`}>{money(provider.estimatedBalance, provider.currency)}</td>
+                  <td className={`amount media-funding-balance ${(provider.estimatedBalance ?? 0) < 0 ? "negative" : ""}`}>{provider.balanceVerified ? money(provider.estimatedBalance, provider.currency) : "Needs confirmation"}</td>
                   <td className="amount">{provider.assignmentCount.toLocaleString()}</td>
                 </tr>
               ))}</tbody>
@@ -321,6 +321,19 @@ export function MediaFundingView({
               {onOpenBankFunding && <Button className="primary-button" onClick={() => onOpenBankFunding(selectedProvider.name, shiftFinanceOperatingDate(selectedProvider.openingBalanceDate, 1))} type="button"><ReceiptText size={14} /> Review bank funding</Button>}
             </div>
           </div>
+          {!selectedProvider.balanceVerified && (
+            <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>Confirm the opening balance, cutoff date and fee treatment to calculate this balance.</span></div>
+          )}
+          {selectedProvider.sourceReference && (
+            <InfoPopover label="central sheet reference">
+              <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+              <p><a href={selectedProvider.sourceReference.url} target="_blank" rel="noreferrer">Central sheet</a> · captured {dateLabel(selectedProvider.sourceReference.observedAt.slice(0, 10))}</p>
+              <p>Undated reported balances: {selectedProvider.sourceReference.balances.map(item => `${item.label}: ${item.amount === null ? "not supplied" : money(item.amount, selectedProvider.currency)}`).join("; ") || "not supplied"}.</p>
+              <p>Reported commission: {selectedProvider.sourceReference.commissionTerms || "not supplied"}</p>
+              <p>{selectedProvider.sourceReference.notes}</p>
+              </div>
+            </InfoPopover>
+          )}
           {selectedProvider.bankFundingPaused && (
             <div className="income-callout warning media-spend-alert" role="status"><CircleAlert size={17} /><span>Bank-payment matching is paused pending account-level reconciliation. Payments are excluded and the balance is unavailable.</span></div>
           )}
@@ -335,7 +348,7 @@ export function MediaFundingView({
           )}
           <div className="media-funding-detail-metrics">
             <div><span>Gross bank paid</span><strong>{money(selectedProvider.grossFunding, selectedProvider.currency)}</strong></div>
-            <div><span>Fees deducted</span><strong>{money(selectedProvider.fees, selectedProvider.currency)}</strong></div>
+            <div><span>Fees deducted</span><strong>{money(selectedProvider.balanceVerified ? selectedProvider.fees : null, selectedProvider.currency)}</strong></div>
             <div><span>Adjustments</span><strong>{money(selectedProvider.adjustments, selectedProvider.currency)}</strong></div>
             <div><span>Available</span><strong className={(selectedProvider.estimatedBalance ?? 0) < 0 ? "negative" : ""}>{money(selectedProvider.estimatedBalance, selectedProvider.currency)}</strong></div>
           </div>
@@ -469,6 +482,7 @@ function FundingProviderDialog({
     .sort((left, right) => left.name.localeCompare(right.name)), [companies, configuredCompanyIds, provider?.companyProviderId]);
   const [companyProviderId, setCompanyProviderId] = useState(provider?.companyProviderId ?? "");
   const [newSupplierName, setNewSupplierName] = useState("");
+  const [balanceVerified, setBalanceVerified] = useState(provider?.balanceVerified === true);
   const [feePercent, setFeePercent] = useState(provider ? String(provider.defaultFeePercent) : "0");
   const [openingBalance, setOpeningBalance] = useState(provider ? String(provider.openingBalance) : "0");
   const [openingBalanceDate, setOpeningBalanceDate] = useState(provider?.openingBalanceDate ?? coveredThrough ?? shiftFinanceOperatingDate(financeOperatingDate(), -1));
@@ -477,8 +491,8 @@ function FundingProviderDialog({
   const parsedFee = Number(feePercent);
   const parsedOpening = Number(openingBalance);
   const valid = (companyProviderId === "new" ? Boolean(newSupplierName.trim()) : Boolean(companyProviderId))
-    && Number.isFinite(parsedFee) && parsedFee >= 0 && parsedFee < 100
-    && Number.isFinite(parsedOpening) && parsedOpening >= 0
+    && feePercent.trim() !== "" && Number.isFinite(parsedFee) && parsedFee >= 0 && parsedFee < 100
+    && openingBalance.trim() !== "" && Number.isFinite(parsedOpening) && Math.abs(parsedOpening) <= 1_000_000_000
     && Boolean(openingBalanceDate) && openingBalanceDate <= financeOperatingDate();
 
   async function submit(event: FormEvent): Promise<void> {
@@ -486,7 +500,7 @@ function FundingProviderDialog({
     if (!valid) return;
     setSubmitting(true);
     setError(null);
-    const payload: CreateMediaFundingProviderPayload = { companyProviderId: companyProviderId === "new" ? "" : companyProviderId, ...(companyProviderId === "new" ? { newSupplierName: newSupplierName.trim() } : {}), defaultFeePercent: parsedFee, openingBalance: parsedOpening, openingBalanceDate };
+    const payload: CreateMediaFundingProviderPayload = { balanceVerified, companyProviderId: companyProviderId === "new" ? "" : companyProviderId, ...(companyProviderId === "new" ? { newSupplierName: newSupplierName.trim() } : {}), defaultFeePercent: parsedFee, openingBalance: parsedOpening, openingBalanceDate };
     try {
       if (provider) {
         await sendJson(`${apiBase}/media-funding/providers/${encodeURIComponent(provider.id)}`, "PATCH", payload);
@@ -509,14 +523,15 @@ function FundingProviderDialog({
         <label>Supplier company<NativeSelect value={companyProviderId} onValueChange={setCompanyProviderId}><NativeSelectOption value="">Choose supplier</NativeSelectOption>{!provider && <NativeSelectOption value="new">Add new supplier</NativeSelectOption>}{supplierCompanies.map((company) => <NativeSelectOption key={company.id} value={company.id}>{company.name}</NativeSelectOption>)}</NativeSelect></label>
         {companyProviderId === "new" && <label>Provider name<Input autoFocus maxLength={200} value={newSupplierName} onChange={event => setNewSupplierName(event.target.value)} /></label>}
         <div className="form-grid">
-          <label>Default fee %<Input min="0" max="99.99" step="0.0001" type="number" value={feePercent} onChange={(event) => setFeePercent(event.target.value)} /></label>
+          <label>Default fee %<Input min="0" max="99.99" step="0.0001" type="number" value={feePercent} onChange={(event) => { setFeePercent(event.target.value); setBalanceVerified(false); }} /></label>
           <label>Currency<Input disabled value="USD" /></label>
         </div>
         <div className="form-grid">
-          <label>Opening balance<Input min="0" step="0.01" type="number" value={openingBalance} onChange={(event) => setOpeningBalance(event.target.value)} /></label>
-          <label>Balance as of<CalendarDatePicker ariaLabel="Choose balance date" max={financeOperatingDate()} value={openingBalanceDate} onChange={setOpeningBalanceDate} /></label>
+          <label>Opening balance<Input step="0.01" type="number" value={openingBalance} onChange={(event) => { setOpeningBalance(event.target.value); setBalanceVerified(false); }} /></label>
+          <label>Balance as of<CalendarDatePicker ariaLabel="Choose balance date" max={financeOperatingDate()} value={openingBalanceDate} onChange={(value) => { setOpeningBalanceDate(value); setBalanceVerified(false); }} /></label>
         </div>
-        <InfoPopover label="provider balance calculation">The opening balance includes all payments, fees, and spend through this date. Starting the next day, matched bank funding and assigned LemonMax spend update the balance automatically. Changing the fee recalculates all included bank funding after the opening date.</InfoPopover>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}><input style={{ width: "auto" }} type="checkbox" checked={balanceVerified} onChange={event => setBalanceVerified(event.target.checked)} /> Opening balance, cutoff and funding fee verified</label>
+        <InfoPopover label="provider balance calculation">Confirm only a reconciled balance, including payments, fees, refunds and spend through the end of this date. The default fee is deducted from each later bank funding payment; leave unverified if fees vary by vertical or are billed separately. Starting the next day, matched bank funding and assigned LemonMax spend update the balance automatically. Changing the fee recalculates all included bank funding after the opening date.</InfoPopover>
         <div className="modal-actions"><Button className="secondary-button" disabled={submitting} onClick={onClose} type="button">Cancel</Button><Button className="primary-button" disabled={submitting || !valid} type="submit">{submitting ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Save provider</Button></div>
       </form>
     </div>,

@@ -1135,6 +1135,7 @@ async function createMediaFundingProvider(
       defaultFeePercent: payload.defaultFeePercent,
       openingBalance: payload.openingBalance,
       openingBalanceDate: payload.openingBalanceDate,
+      balanceVerified: payload.balanceVerified,
       createdAt: new Date().toISOString()
     });
     return { id };
@@ -1156,6 +1157,7 @@ async function updateMediaFundingProvider(
       defaultFeePercent: payload.defaultFeePercent,
       openingBalance: payload.openingBalance,
       openingBalanceDate: payload.openingBalanceDate,
+      balanceVerified: payload.balanceVerified,
       updatedAt: new Date().toISOString()
     });
   } catch (error) {

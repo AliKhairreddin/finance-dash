@@ -1,3 +1,4 @@
+import { mediaFundingSourceReference } from "./mediaFundingSourceSchema";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -40,6 +41,8 @@ const maximumProviderDays = 4_000;
 const maximumBankFundingTransactions = 8_000;
 
 const providerResult = v.object({
+  balanceVerified: v.boolean(),
+  sourceReference: v.optional(mediaFundingSourceReference),
   id: v.id("mediaFundingProviders"),
   companyProviderId: v.string(),
   name: v.string(),
@@ -119,7 +122,7 @@ const mutationResult = v.object({
 
 const assignmentTarget = v.object({
   scope: assignmentScope,
-  billingType,
+  billingType: v.optional(billingType),
   platform: v.string(),
   businessManagerId: v.string(),
   businessManagerName: v.optional(v.string()),
@@ -149,9 +152,9 @@ function requireFeePercent(value: number): void {
   }
 }
 
-function requireNonNegativeMoney(value: number, label: string): void {
-  if (!Number.isFinite(value) || value < 0 || value > 1_000_000_000) {
-    throw fundingError("INVALID_MEDIA_FUNDING", `${label} must be zero or greater`);
+function requireOpeningBalance(value: number, label: string): void {
+  if (!Number.isFinite(value) || Math.abs(value) > 1_000_000_000) {
+    throw fundingError("INVALID_MEDIA_FUNDING", `${label} must be a finite amount between -1 billion and 1 billion`);
   }
 }
 
@@ -605,6 +608,8 @@ export const listOverview = query({
         id: provider._id,
         companyProviderId: provider.companyProviderId,
         name: company.name,
+        balanceVerified: Boolean(provider.balanceVerifiedAt),
+        ...(provider.sourceReference ? { sourceReference: provider.sourceReference } : {}),
         defaultFeePercent: provider.defaultFeePercent,
         currency: provider.currency,
         openingBalance: provider.openingBalance,
@@ -619,7 +624,7 @@ export const listOverview = query({
         billingSpend,
         billingRebuildPending,
         needsReviewSpend,
-        estimatedBalance: provider.bankFundingPaused || funding.excluded > 0 || !billingSpend || billingSpend.unclassifiedRows > 0 ? null : calculateMediaFundingBalance({
+        estimatedBalance: !provider.balanceVerifiedAt || provider.bankFundingPaused || funding.excluded > 0 || !billingSpend || billingSpend.unclassifiedRows > 0 ? null : calculateMediaFundingBalance({
           openingBalance: provider.openingBalance,
           netFunding,
           adjustments: totals.adjustments,
@@ -697,6 +702,7 @@ export const createProvider = mutation({
     defaultFeePercent: v.number(),
     openingBalance: v.number(),
     openingBalanceDate: v.string(),
+    balanceVerified: v.boolean(),
     createdAt: v.string()
   },
   returns: v.id("mediaFundingProviders"),
@@ -717,7 +723,7 @@ export const createProvider = mutation({
         updatedAt: new Date(Math.max(Date.now(), Date.parse(state.updatedAt) + 1)).toISOString() });
     } else company = await requireCompanyProvider(ctx, args.companyProviderId);
     requireFeePercent(args.defaultFeePercent);
-    requireNonNegativeMoney(args.openingBalance, "Opening balance");
+    requireOpeningBalance(args.openingBalance, "Opening balance");
     requireIsoDate(args.openingBalanceDate, "Opening balance date");
     if (args.openingBalanceDate > financeOperatingDate()) {
       throw fundingError("INVALID_MEDIA_FUNDING", "Opening balance date cannot be in the future");
@@ -734,6 +740,7 @@ export const createProvider = mutation({
       currency: mediaFundingCurrency,
       openingBalance: roundMediaFundingMoney(args.openingBalance),
       openingBalanceDate: args.openingBalanceDate,
+      ...(args.balanceVerified ? { balanceVerifiedAt: args.createdAt } : {}),
       createdAt: args.createdAt,
       updatedAt: args.createdAt
     });
@@ -750,6 +757,7 @@ export const updateProvider = mutation({
     defaultFeePercent: v.number(),
     openingBalance: v.number(),
     openingBalanceDate: v.string(),
+    balanceVerified: v.boolean(),
     updatedAt: v.string()
   },
   returns: v.null(),
@@ -758,7 +766,7 @@ export const updateProvider = mutation({
     const provider = await requireProvider(ctx, args.providerId);
     const company = await requireCompanyProvider(ctx, args.companyProviderId);
     requireFeePercent(args.defaultFeePercent);
-    requireNonNegativeMoney(args.openingBalance, "Opening balance");
+    requireOpeningBalance(args.openingBalance, "Opening balance");
     requireIsoDate(args.openingBalanceDate, "Opening balance date");
     if (args.openingBalanceDate > financeOperatingDate()) {
       throw fundingError("INVALID_MEDIA_FUNDING", "Opening balance date cannot be in the future");
@@ -778,12 +786,68 @@ export const updateProvider = mutation({
       currency: mediaFundingCurrency,
       openingBalance: roundMediaFundingMoney(args.openingBalance),
       openingBalanceDate: args.openingBalanceDate,
+      balanceVerifiedAt: args.balanceVerified ? args.updatedAt : undefined,
       createdAt: provider.createdAt,
       updatedAt: args.updatedAt
     };
-    await ctx.db.replace(provider._id, next);
+    await ctx.db.patch(provider._id, next);
     await recalculateProviderTotals(ctx, { _id: provider._id, openingBalanceDate: next.openingBalanceDate }, args.updatedAt);
     return null;
+  }
+});
+
+export const saveSourceReference = mutation({
+  args: { serviceToken: v.string(), providerId: v.id("mediaFundingProviders"), expectedUpdatedAt: v.string(), reference: mediaFundingSourceReference, updatedAt: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const provider = await requireProvider(ctx, args.providerId);
+    if (provider.updatedAt !== args.expectedUpdatedAt) throw fundingError("MEDIA_FUNDING_CONFLICT", "Provider changed since the source review was prepared");
+    const reference = args.reference;
+    if (!reference.url.startsWith("https://docs.google.com/spreadsheets/d/") || reference.url.length > 500
+      || !Number.isFinite(Date.parse(reference.observedAt)) || !Number.isFinite(Date.parse(args.updatedAt))
+      || reference.balances.length > 20 || reference.commissionTerms.length > 4000 || reference.notes.length > 4000) {
+      throw fundingError("INVALID_MEDIA_FUNDING", "Invalid spreadsheet source reference");
+    }
+    for (const balance of reference.balances) {
+      if (!cleanLabel(balance.label)) throw fundingError("INVALID_MEDIA_FUNDING", "Reported balance needs a label");
+      if (balance.amount !== null) requireOpeningBalance(balance.amount, "Reported balance");
+    }
+    await ctx.db.patch(provider._id, { sourceReference: reference, updatedAt: args.updatedAt });
+    return null;
+  }
+});
+
+// Explicit reconciliation only: the user must establish that billing did not change historically.
+// Existing ownership, dates and nonempty classifications cannot be overwritten by this operation.
+export const classifyAssignmentHistory = mutation({
+  args: {
+    serviceToken: v.string(), providerId: v.id("mediaFundingProviders"),
+    accounts: v.array(v.object({ platform: v.string(), accountId: v.string(), billingType })),
+    updatedAt: v.string()
+  },
+  returns: mutationResult,
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await requireProvider(ctx, args.providerId);
+    if (args.accounts.length < 1 || args.accounts.length > 200 || !Number.isFinite(Date.parse(args.updatedAt))) {
+      throw fundingError("INVALID_MEDIA_FUNDING", "Select between 1 and 200 accounts with a valid timestamp");
+    }
+    const changes: Doc<"mediaFundingAssignments">[] = [];
+    const choices = new Map<string, "card" | "credit_line">();
+    for (const account of args.accounts) {
+      const key = mediaFundingTargetKey({ scope: "ad_account", platform: requireExternalId(account.platform, "Platform"), accountId: requireExternalId(account.accountId, "Account ID"), businessManagerId: "unused" });
+      if (choices.has(key)) throw fundingError("INVALID_MEDIA_FUNDING", "Duplicate account");
+      choices.set(key, account.billingType);
+      const history = await requireBoundedRows(ctx.db.query("mediaFundingAssignments").withIndex("by_target_and_effective_from", q => q.eq("targetKey", key)).take(maximumAssignmentsPerTarget + 1), maximumAssignmentsPerTarget, "Too much account history");
+      if (!history.length || history.some(item => item.providerId !== args.providerId || (item.billingType && item.billingType !== account.billingType))) {
+        throw fundingError("MEDIA_FUNDING_CONFLICT", "Account ownership or billing conflicts with the reviewed sheet");
+      }
+      changes.push(...history.filter(item => !item.billingType));
+    }
+    if (!changes.length) return {};
+    for (const item of changes) await ctx.db.patch(item._id, { billingType: choices.get(item.targetKey)!, updatedAt: args.updatedAt });
+    return requestBillingRebuild(ctx, new Set([args.providerId]), changes.map(item => item.effectiveFrom).sort()[0], args.updatedAt);
   }
 });
 
@@ -934,6 +998,7 @@ export const assignTargets = mutation({
   args: {
     serviceToken: v.string(),
     providerId: v.id("mediaFundingProviders"),
+    onlyUnassigned: v.optional(v.boolean()),
     effectiveFrom: v.string(),
     targets: v.array(assignmentTarget),
     updatedAt: v.string()
@@ -946,8 +1011,8 @@ export const assignTargets = mutation({
     if (args.targets.length === 0 || args.targets.length > 200) {
       throw fundingError("INVALID_MEDIA_FUNDING", "Select between 1 and 200 funding targets");
     }
-    if (args.targets.some((target) => target.billingType !== "card" && target.billingType !== "credit_line")) {
-      throw fundingError("INVALID_MEDIA_FUNDING", "Choose Card or Credit line for every selected target");
+    if (args.targets.some((target) => target.billingType !== undefined && target.billingType !== "card" && target.billingType !== "credit_line")) {
+      throw fundingError("INVALID_MEDIA_FUNDING", "Invalid account billing type");
     }
     const targetKeys = new Set<string>();
     const affectedProviders = new Set<Id<"mediaFundingProviders">>([args.providerId]);
@@ -1021,6 +1086,9 @@ export const assignTargets = mutation({
         maximumAssignmentsPerTarget,
         "This target has too much assignment history"
       );
+      if (args.onlyUnassigned && existingTargetAssignments.length) {
+        throw fundingError("MEDIA_FUNDING_CONFLICT", "Account was assigned after the import was prepared");
+      }
       for (const existing of existingTargetAssignments) {
         if (!assignmentOverlapsFrom(existing, args.effectiveFrom)) continue;
         affectedProviders.add(existing.providerId);
@@ -1035,7 +1103,7 @@ export const assignTargets = mutation({
       }
       await ctx.db.insert("mediaFundingAssignments", {
         providerId: args.providerId,
-        billingType: rawTarget.billingType,
+        ...(rawTarget.billingType ? { billingType: rawTarget.billingType } : {}),
         scope: target.scope,
         targetKey,
         businessManagerKey,

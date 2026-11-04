@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { backdateAssignmentHistory, billingRebuildStatus, prepareBillingRebuild, completeBillingRebuild, assignTargets, createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
+import { saveSourceReference, classifyAssignmentHistory, backdateAssignmentHistory, billingRebuildStatus, prepareBillingRebuild, completeBillingRebuild, assignTargets, createProvider, updateProvider, listSupplierCompanies, deleteAssignment, listOverview, listSpendAssignments, rebuildDate, setBankFundingPaused, setPaymentMethods } from "../convex/mediaFunding";
 import { emptyMediaFundingBillingSpend, resolveMediaFundingAssignment } from "../shared/mediaFunding";
 
 import { mediaSpendDates } from "../shared/mediaSpend";
@@ -8,7 +8,7 @@ import { database, call } from "./convexTestDb";
 const date = "2026-09-14", serviceToken = "funding-test", updatedAt = "2026-09-24T00:00:00Z";
 function seed() {
   return {
-    mediaFundingProviders: [{ _id: "meta", companyProviderId: "company", currency: "USD", openingBalance: 0, openingBalanceDate: "2026-01-01", defaultFeePercent: 0, createdAt: updatedAt, updatedAt }],
+    mediaFundingProviders: [{ _id: "meta", companyProviderId: "company", currency: "USD", balanceVerifiedAt: updatedAt, openingBalance: 0, openingBalanceDate: "2026-01-01", defaultFeePercent: 0, createdAt: updatedAt, updatedAt }],
     dashboardState: [{ _id: "dashboard", key: "default", providers: [{ id: "company", type: "supplier", name: "Meta" }] }],
     mediaFundingProviderTotals: [{ _id: "totals", providerId: "meta", spend: 0, adjustments: 0, billingSpend: emptyMediaFundingBillingSpend(), billingRevision: 0, updatedAt }],
     mediaSpendSyncState: [{ _id: "sync", key: "lemonmax", coveredThrough: date }],
@@ -124,15 +124,15 @@ test("business manager billing type is inherited by its accounts without inferri
   } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
 });
 
-test("assignment rejects missing or invalid billing choices before writing and still requires authorization", async () => {
+test("assignment rejects invalid billing choices before writing and still requires authorization", async () => {
   const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
   try {
     const ctx = database(seed());
     const before = structuredClone(ctx.tables);
     const target = { scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: "1" };
     const args = { serviceToken, providerId: "meta", effectiveFrom: date, updatedAt };
-    for (const billingType of [undefined, "cash", ""]) {
-      await assert.rejects(call(assignTargets, ctx, { ...args, targets: [{ ...target, billingType: "card" }, { ...target, accountId: "2", billingType }] }), /Choose Card or Credit line/);
+    for (const billingType of ["cash", ""]) {
+      await assert.rejects(call(assignTargets, ctx, { ...args, targets: [{ ...target, billingType: "card" }, { ...target, accountId: "2", billingType }] }), /Invalid account billing type/);
       assert.deepEqual(ctx.tables, before);
     }
     await assert.rejects(call(assignTargets, ctx, { ...args, serviceToken: "wrong", targets: [{ ...target, billingType: "card" }] }), /unauthorized/);
@@ -243,7 +243,7 @@ test("provider creation adds a supplier atomically and commissions feed cash-flo
     const ctx = database(seed());
     ctx.tables.dashboardState[0].updatedAt = updatedAt;
     const before = structuredClone(ctx.tables.bankTransactions);
-    const id = await call(createProvider, ctx, { serviceToken, companyProviderId: "", newSupplierName: "New agency", defaultFeePercent: 2, openingBalance: 0, openingBalanceDate: "2026-01-01", createdAt: updatedAt });
+    const id = await call(createProvider, ctx, { serviceToken, companyProviderId: "", newSupplierName: "New agency", defaultFeePercent: 2, openingBalance: 0, openingBalanceDate: "2026-01-01", balanceVerified: true, createdAt: updatedAt });
     const company = ctx.tables.dashboardState[0].providers.find((p: any) => p.name === "New agency");
     assert.equal(company.type, "supplier");
     assert.notEqual(ctx.tables.dashboardState[0].updatedAt, updatedAt);
@@ -259,7 +259,7 @@ test("provider creation adds a supplier atomically and commissions feed cash-flo
     assert.equal(provider.netFunding, 98000);
     assert.equal(provider.estimatedBalance, 78000);
     // Commission edits reprice the included funding without modifying the bank ledger.
-    await call(updateProvider, ctx, { serviceToken, providerId: id, companyProviderId: company.id, defaultFeePercent: 3, openingBalance: 0, openingBalanceDate: "2026-01-01", updatedAt });
+    await call(updateProvider, ctx, { serviceToken, providerId: id, companyProviderId: company.id, defaultFeePercent: 3, openingBalance: 0, openingBalanceDate: "2026-01-01", balanceVerified: true, updatedAt });
     provider = (await call(listOverview, ctx, { serviceToken })).providers.find((p: any) => p.id === id);
     assert.equal(provider.netFunding, 97000);
     assert.equal(ctx.tables.bankTransactions[1].amount, 100000);
@@ -354,7 +354,7 @@ test("backdated billing edits preserve opening-date boundaries and prevent incom
     overview = await call(listOverview, ctx, { serviceToken });
     assert.equal(overview.providers[0].estimatedBalance, 170);
     assert.deepEqual(overview.providers[0].billingSpend, { credit_line: 30, card: 20, unclassified: 0, unclassifiedRows: 0 });
-    await call(updateProvider, ctx, { serviceToken, providerId: "meta", companyProviderId: "company", defaultFeePercent: 0, openingBalance: 200, openingBalanceDate: "2026-09-15", updatedAt });
+    await call(updateProvider, ctx, { serviceToken, providerId: "meta", companyProviderId: "company", defaultFeePercent: 0, openingBalance: 200, openingBalanceDate: "2026-09-15", balanceVerified: true, updatedAt });
     assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, 170);
     assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].spend, 30);
   } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
@@ -365,7 +365,7 @@ test("reassigning credit-line spend updates both providers and changing it to ca
   try {
     const ctx = database(seed());
     ctx.tables.dashboardState[0].updatedAt = updatedAt;
-    const second = await call(createProvider, ctx, { serviceToken, companyProviderId: "", newSupplierName: "Second agency", defaultFeePercent: 0, openingBalance: 200, openingBalanceDate: "2026-01-01", createdAt: updatedAt });
+    const second = await call(createProvider, ctx, { serviceToken, companyProviderId: "", newSupplierName: "Second agency", defaultFeePercent: 0, openingBalance: 200, openingBalanceDate: "2026-01-01", balanceVerified: true, createdAt: updatedAt });
     const target = { scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: "3", billingType: "credit_line" };
     const args = { serviceToken, providerId: "meta", targets: [target], effectiveFrom: date, updatedAt };
     await finishRebuild(ctx, await call(assignTargets, ctx, args));
@@ -422,5 +422,49 @@ test("offsetting unclassified charges and refunds still block a misleading numer
     assert.equal(provider.needsReviewSpend, 0);
     assert.equal(provider.billingSpend.unclassifiedRows, 2);
     assert.equal(provider.estimatedBalance, null);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+
+test("unverified balances stay unknown, signed baselines require explicit verification, and references survive edits", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    delete ctx.tables.mediaFundingProviders[0].balanceVerifiedAt;
+    let provider = (await call(listOverview, ctx, { serviceToken })).providers[0];
+    assert.equal(provider.balanceVerified, false);
+    assert.equal(provider.estimatedBalance, null);
+    const reference = { url: "https://docs.google.com/spreadsheets/d/source/edit", observedAt: updatedAt,
+      balances: [{ label: "Reported", amount: -7917.72 }, { label: "Missing", amount: null }], commissionTerms: "4%; basis unknown", notes: "No cutoff date" };
+    await call(saveSourceReference, ctx, { serviceToken, providerId: "meta", expectedUpdatedAt: updatedAt, reference, updatedAt });
+    assert.equal(ctx.tables.mediaFundingProviders[0].openingBalance, 0);
+    assert.equal(ctx.tables.mediaFundingProviders[0].defaultFeePercent, 0);
+    await assert.rejects(call(saveSourceReference, ctx, { serviceToken: "wrong", providerId: "meta", expectedUpdatedAt: updatedAt, reference, updatedAt }), /unauthorized/i);
+    await assert.rejects(call(saveSourceReference, ctx, { serviceToken, providerId: "meta", expectedUpdatedAt: "stale", reference, updatedAt }), /changed/);
+    await call(updateProvider, ctx, { serviceToken, providerId: "meta", companyProviderId: "company", defaultFeePercent: 0, openingBalance: -1000, openingBalanceDate: "2026-01-01", balanceVerified: true, updatedAt });
+    provider = (await call(listOverview, ctx, { serviceToken })).providers[0];
+    assert.equal(provider.estimatedBalance, -900);
+    assert.deepEqual(provider.sourceReference, reference);
+    await call(updateProvider, ctx, { serviceToken, providerId: "meta", companyProviderId: "company", defaultFeePercent: 0, openingBalance: -1000, openingBalanceDate: "2026-01-01", balanceVerified: false, updatedAt });
+    assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, null);
+  } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
+});
+
+test("sheet billing reconciliation fills historical choices and refuses conflicting history", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    const original = structuredClone(ctx.tables.mediaFundingAssignments);
+    const args = { serviceToken, providerId: "meta", accounts: [{ platform: "Facebook", accountId: "1", billingType: "card" }], updatedAt };
+    await finishRebuild(ctx, await call(classifyAssignmentHistory, ctx, args));
+    assert.equal(ctx.tables.mediaFundingAssignments[0].billingType, "card");
+    assert.equal(ctx.tables.mediaFundingAssignments[0].effectiveFrom, original[0].effectiveFrom);
+    assert.equal(ctx.tables.mediaFundingAssignments[0].providerId, original[0].providerId);
+    assert.deepEqual(await call(classifyAssignmentHistory, ctx, args), {});
+    await assert.rejects(call(classifyAssignmentHistory, ctx, { ...args, accounts: [{ ...args.accounts[0], billingType: "credit_line" }] }), /conflicts/);
+    await assert.rejects(call(classifyAssignmentHistory, ctx, { ...args, serviceToken: "bad" }), /unauthorized/i);
+    const assignment = ctx.tables.mediaFundingAssignments[0];
+    await assert.rejects(call(assignTargets, ctx, { serviceToken, providerId: "meta", onlyUnassigned: true, targets: [{ scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: "1" }], effectiveFrom: "2026-01-01", updatedAt }), /assigned after/);
+    assert.deepEqual(ctx.tables.mediaFundingAssignments[0], assignment);
   } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
 });
