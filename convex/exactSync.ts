@@ -13,12 +13,14 @@ type Tokens = { access_token: string; refresh_token: string; expires_in: number 
 type Work = { type: "none" } | { type: "discover"; connection: Doc<"exactConnections"> } | { type: "dataset"; dataset: Doc<"exactDatasets"> } | { type: "operation"; operation: Doc<"exactOperations"> };
 function encryptionKey() { const key = process.env.EXACT_ENCRYPTION_KEY; if (!key) throw new Error("Exact credential encryption is not configured"); return key; }
 function tokens(value: unknown): Tokens {
-  const row = value as Partial<Tokens> | null;
-  if (!row || typeof row.access_token !== "string" || typeof row.refresh_token !== "string" || typeof row.expires_in !== "number" || row.expires_in < 1 || row.access_token.length > 10000 || row.refresh_token.length > 10000) {
+  const row = value as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown } | null;
+  // Exact returns expires_in as decimal text; persist a validated numeric duration.
+  const expiresIn = typeof row?.expires_in === "string" && /^[1-9]\d*$/.test(row.expires_in) ? Number(row.expires_in) : row?.expires_in;
+  if (!row || typeof row.access_token !== "string" || !row.access_token || typeof row.refresh_token !== "string" || !row.refresh_token || typeof expiresIn !== "number" || !Number.isSafeInteger(expiresIn) || expiresIn < 1 || row.access_token.length > 10000 || row.refresh_token.length > 10000) {
     console.error("exact_token_response_invalid", { accessTokenType: typeof row?.access_token, refreshTokenType: typeof row?.refresh_token, expiresInType: typeof row?.expires_in });
     throw new Error("Exact returned invalid authorization credentials");
   }
-  return row as Tokens;
+  return { access_token: row.access_token, refresh_token: row.refresh_token, expires_in: expiresIn };
 }
 async function exchange(params: Record<string, string>) {
   const clientId = process.env.EXACT_CLIENT_ID, clientSecret = process.env.EXACT_CLIENT_SECRET;

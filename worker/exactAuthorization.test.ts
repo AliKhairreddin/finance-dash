@@ -31,9 +31,9 @@ async function setup() {
   return t;
 }
 
-test("Exact authorization exchanges the code, verifies the user, and saves only encrypted tokens", async () => {
+for (const expiresIn of [600, "600"]) test(`Exact authorization accepts ${typeof expiresIn} token expiry and saves encrypted credentials`, async () => {
   const t = await setup(), original = globalThis.fetch, calls: string[] = [];
-  const credentials = { access_token: "private-access-token", refresh_token: "private-refresh-token", expires_in: 600 };
+  const credentials = { access_token: "private-access-token", refresh_token: "private-refresh-token", expires_in: expiresIn };
   globalThis.fetch = async (input, init) => {
     const url = String(input); calls.push(url);
     if (url.endsWith("/api/oauth2/token")) {
@@ -57,11 +57,26 @@ test("Exact authorization exchanges the code, verifies the user, and saves only 
       const connection = await ctx.db.query("exactConnections").first();
       assert.ok(connection?.encryptedTokens);
       assert.equal(JSON.stringify(connection).includes("private-"), false);
-      assert.deepEqual(JSON.parse(await exactDecrypt(connection.encryptedTokens, process.env.EXACT_ENCRYPTION_KEY!)), credentials);
+      assert.deepEqual(JSON.parse(await exactDecrypt(connection.encryptedTokens, process.env.EXACT_ENCRYPTION_KEY!)), { ...credentials, expires_in: 600 });
+      assert.ok(connection.expiresAt! > Date.now() + 590_000);
+      assert.ok(connection.expiresAt! <= Date.now() + 600_000);
       assert.equal(await ctx.db.query("exactOAuthStates").first(), null);
       for (const job of await ctx.db.system.query("_scheduled_functions").take(10)) await ctx.scheduler.cancel(job._id);
     });
   } finally { globalThis.fetch = original; }
+});
+
+for (const expiresIn of ["600 seconds", "0", "9007199254740993", -1, null]) test(`Exact authorization rejects invalid expiry ${JSON.stringify(expiresIn)}`, async () => {
+  const t = await setup(), original = globalThis.fetch, originalError = console.error;
+  let calls = 0;
+  console.error = () => undefined;
+  globalThis.fetch = async () => { calls++; return Response.json({ access_token: "private-access-token", refresh_token: "private-refresh-token", expires_in: expiresIn }); };
+  try {
+    await assert.rejects(t.action(api.exactSync.finishAuthorization, { ...auth, hash, code: "private-code" }), /could not complete the connection token exchange/);
+    assert.equal(calls, 1);
+    assert.equal((await t.query(api.exact.status, auth)).connected, false);
+    assert.equal(await t.run(async ctx => Boolean((await ctx.db.query("exactConnections").first())?.encryptedTokens)), false);
+  } finally { globalThis.fetch = original; console.error = originalError; }
 });
 
 for (const failure of [
