@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, ExternalLink, FileText, Loader2, RefreshCw, Trash2, Undo2 } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Loader2, RefreshCw, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -80,13 +80,30 @@ export function TopUpsView({ apiBase, administrator = false }: { apiBase: string
 }
 function TopUpDetail({ record: r, apiBase, administrator, onClose, onSaved }: { record: TopUpRequest; apiBase: string; administrator: boolean; onClose: () => void; onSaved: () => void }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(""); const [adjust, setAdjust] = useState(String(r.amount)); const [draftReview, setDraftReview] = useState(false); const [confirmDelete, setConfirmDelete] = useState(false);
+  const [walletCopied, setWalletCopied] = useState(false);
+  const [walletCopyError, setWalletCopyError] = useState("");
+  useEffect(() => {
+    if (!walletCopied) return;
+    const timer = window.setTimeout(() => setWalletCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [walletCopied]);
+  async function copyWalletAddress() {
+    if (!r.walletAddress?.trim()) return;
+    setWalletCopied(false); setWalletCopyError("");
+    try {
+      await navigator.clipboard.writeText(r.walletAddress);
+      setWalletCopied(true);
+    } catch {
+      setWalletCopyError("Could not copy the wallet address. Allow clipboard access in your browser and try again.");
+    }
+  }
   async function act(action: "approve" | "adjust" | "paid" | "reject") { setBusy(true); setError(""); try { await request(`${apiBase}/top-ups/${r._id}/action`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, version: r.version, ...(action === "adjust" ? { amount: Number(adjust) } : {}) }) }); onSaved(); } catch (e) { setError(e instanceof Error ? e.message : "Update failed"); } finally { setBusy(false); } }
   async function changeDeleted() { setBusy(true); setError(""); try { await request(`${apiBase}/top-ups/${r._id}/${r.deletedAt ? "restore" : "delete"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: r.version }) }); onSaved(); onClose(); } catch (e) { setError(e instanceof Error ? e.message : "Update failed"); } finally { setBusy(false); } }
   const crypto = isCryptoTopUp(r.currency);
   const values: [string, string][] = [["Request type", crypto ? "Purchase" : "Ad spend"], [crypto ? "Recipient" : "Company", r.companyName], ["Priority", r.priority], ["Member", r.member], ["Team", r.team], ["Amount", amount(r.amount, r.currency)], ["Status", title(r.status)],
     ...(crypto ? [["Network", r.network ?? "—"], ["Wallet address", r.walletAddress ?? "—"]] as [string, string][] : [["Send from", r.entity === "dn" ? "Digital Nudge OU" : "LoveMeDo BV"], ["Commission", r.commission ?? "—"], ["Open balance", amount(r.openBalance, r.currency)], ["Last three days spend", amount(r.lastThreeDaysSpend, "USD")], ["Expected next three days", amount(r.expectedThreeDaysSpend, "USD")], ["Payment method", r.paymentMethod || "Not specified"], ["BM names", r.bmNames.join(", ") || "—"], ["Account names", r.accountNames.join(", ") || "—"]] as [string, string][]),
     ["Submitted", new Date(r.createdAt).toLocaleString()], ["Original amount", amount(r.originalAmount, r.currency)]];
-  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}><DialogContent className="topup-detail"><DialogTitle>{crypto ? "Purchase" : "Ad spend"} request #{r.number}</DialogTitle><dl className="topup-detail-grid">{values.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}><DialogContent className="topup-detail"><DialogTitle>{crypto ? "Purchase" : "Ad spend"} request #{r.number}</DialogTitle><dl className="topup-detail-grid">{values.map(([key, value]) => key === "Wallet address" ? <div key={key} className="topup-wallet-detail"><dt>{key}</dt><dd><div className="topup-wallet-value"><span>{value}</span>{r.walletAddress?.trim() && <Button type="button" variant="outline" size="sm" aria-label="Copy wallet address" onClick={() => void copyWalletAddress()}>{walletCopied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}<span aria-live="polite">{walletCopied ? "Copied" : "Copy"}</span></Button>}</div>{walletCopyError && <p className="inline-error" role="alert">{walletCopyError}</p>}</dd></div> : <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
     {r.wiseLink && <p><a href={r.wiseLink} target="_blank" rel="noreferrer">Wise payment link <ExternalLink size={13} /></a></p>}{r.notes && <><h3>Notes</h3><p style={{ whiteSpace: "pre-wrap" }}>{r.notes}</p></>}
     {r.documentId && r.fileName && <div className="row-actions">{r.contentType === "application/pdf" ? <PdfPreviewButton sourceUrl={`${apiBase}/top-ups/${r._id}/invoice`} fileName={r.fileName} /> : <a href={`${apiBase}/top-ups/${r._id}/invoice`} target="_blank" rel="noreferrer">View invoice</a>}<a href={`/?page=documents&documentSearch=${encodeURIComponent(r.fileName)}`}><FileText size={14} /> View in Documents</a></div>}
     {r.notificationError && <p className="inline-error" role="alert">{r.notificationError} {administrator && <Button variant="link" onClick={() => { void request(`${apiBase}/top-ups/${r._id}/retry-notification`, { method: "POST" }).then(onSaved).catch(e => setError(String(e))); }}>Retry notification</Button>}</p>}

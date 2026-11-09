@@ -4,3 +4,4 @@
 .topup-requests .list-toolbar{flex-direction:row;flex-wrap:nowrap}.topup-requests .list-toolbar>.searchable-select{width:230px;flex:0 0 230px}.topup-detail .topup-draft-form select{width:100%;min-height:34px;border:1px solid var(--line);border-radius:8px;background:var(--control-bg);padding:6px 10px}@media(max-width:640px){.topup-requests .list-toolbar{flex-wrap:wrap}.topup-requests .list-toolbar>input{flex-basis:100%;max-width:none}.topup-requests .list-toolbar>.searchable-select{flex:1 1 200px;width:auto}}
 
 .topup-delete-actions{border-top:1px solid var(--border);padding-top:1rem}.topup-delete-actions p{margin-bottom:.75rem}
+.topup-wallet-detail{grid-column:1/-1}.topup-wallet-value{display:flex;align-items:flex-start;gap:10px}.topup-wallet-value>span{min-width:0;overflow-wrap:anywhere}
