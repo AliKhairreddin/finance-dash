@@ -1,4 +1,6 @@
 import { ConvexError, v } from "convex/values";
+import type { MutationCtx } from "./_generated/server";
+import type { Transaction } from "../shared/types";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { statementMember, requireScope } from "./statementAccess";
@@ -33,6 +35,11 @@ export const discovered = mutation({args:{serviceToken:v.string(),connectionKey:
 }});
 export const status=query({args:{serviceToken:v.string(),actor:v.string(),companyId:v.union(v.literal("lovemedo"),v.literal("digital-nudge"))},returns:v.string(),handler:async(ctx,a)=>{
  const member=await statementMember(ctx,a);requireScope(member,{companyId:a.companyId,...(a.companyId==="lovemedo"?{financialAccountId:"revolut-lmd"}:{})});
+ if(a.companyId==="lovemedo"){
+  const direct=await ctx.db.query("statementRevolutFeeds").withIndex("by_key",q=>q.eq("key","lmd")).unique();
+  if(!direct)return JSON.stringify({mode:"direct",accounts:[],discoveredAt:0,error:"",importedThrough:null,historyPending:false,coverageFrom:null,coverageThrough:null});
+  return JSON.stringify({mode:"direct",accounts:direct.accounts.map(row=>({id:row.id,name:row.name,currency:row.currency,owner:row.beneficiaries.join(" / "),balance:row.balance??null,syncedAt:row.syncedAt??null})),discoveredAt:direct.verifiedAt,error:direct.error??"",importedThrough:direct.lastSyncedAt?new Date(direct.lastSyncedAt).toISOString():null,historyPending:!direct.lastFullAt||Boolean(direct.full&&direct.checkpoint),coverageFrom:direct.coverageFrom??null,coverageThrough:direct.coverageThrough??null});
+ }
  const rows=await ctx.db.query("statementRevolutAccounts").withIndex("by_company",q=>q.eq("companyId",a.companyId)).take(1000);
  const states=await ctx.db.query("statementRevolutState").take(5);
  const accounts=await Promise.all(rows.filter(row=>states.some(s=>s.connectionKey===row.connectionKey&&s.discoveredAt===row.verifiedAt&&!s.error)).map(async row=>{const saved=await ctx.db.query("bankAccounts").withIndex("by_account_id",q=>q.eq("id",row.accountId)).unique();return {id:row.accountId,name:row.name,currency:row.currency,owner:row.beneficiaries.join(" / "),balance:saved?.connectionKey===row.connectionKey?saved.balance:null,syncedAt:saved?.syncedAt??null};}));
@@ -47,20 +54,24 @@ export const pump=internalMutation({args:{},returns:v.null(),handler:async(ctx)=
   const page=await ctx.db.query("bankTransactions").withIndex("by_source_connection_synced",q=>q.eq("source","revolut").eq("connectionKey",state.connectionKey).gte("syncedAt",state.scanSince).lte("syncedAt",until)).paginate({cursor:state.scanCursor,numItems:50});
   for(const bank of page.page){
    const mapping=mappings.find(m=>m.accountId===bank.accountId&&m.verifiedAt===state.discoveredAt);if(!mapping?.companyId)continue;
-   const row:StatementRow={companyId:mapping.companyId,...(mapping.companyId==="lovemedo"?{financialAccountId:"revolut-lmd"}:{}),date:bank.date.slice(0,10),description:bank.description,counterparty:bank.counterparty,source:"Revolut",account:bank.accountId,providerId:bank.id,amountMinor:statementAmountMinor(String(Math.abs(bank.amount)),bank.currency),currency:bank.currency,direction:bank.direction,reviewReasons:[],...(bank.reference?{reference:bank.reference}:{}),...(bank.cardLastFour?{cardLastFour:bank.cardLastFour}:{})};
-   const identity=statementIdentity(row)!,snapshot=JSON.stringify({...row,status:bank.status});
-   const old=await ctx.db.query("statementTransactions").withIndex("by_identity",q=>q.eq("identity",identity)).unique();
-   if(old){if(old.sourceSnapshot && old.sourceSnapshot!==snapshot){const links=await ctx.db.query("statementInvoiceTransactions").withIndex("by_transaction",q=>q.eq("transactionId",old._id)).take(201);
-    if(links.length>200)throw new ConvexError("Review document history before applying source correction");
-    for(const link of links){const invoice=await ctx.db.get(link.invoiceId);if(invoice&&!['discarded','cancelled','superseded'].includes(invoice.state)){await ctx.db.patch(invoice._id,{state:"stale",updatedAt:Date.now()});for(const doc of await ctx.db.query("statementDocuments").withIndex("by_generatedInvoiceId",q=>q.eq("generatedInvoiceId",invoice._id)).take(2))await ctx.db.patch(doc._id,{status:"needs_review",error:"Revolut source changed; review transaction and regenerate. Original PDF retained."});}}
-    await ctx.db.patch(old._id,{status:"pending",completedAt:undefined,completedBy:undefined,completionReason:undefined,doneAt:undefined,doneBy:undefined,financialRevision:(old.financialRevision??old.revision)+1,...(old.generatedInvoiceId?{documentState:"stale",generatedInvoiceState:undefined}:{}),sourceSnapshot:snapshot,sourceCorrectionJson:snapshot,reviewState:"unresolved",reviewReasons:[...new Set([...old.reviewReasons,"Revolut source changed. Review the correction before using this transaction."])],updatedAt:new Date().toISOString(),revision:old.revision+1});}continue;}
-   if(!["posted","settled"].includes(bank.status))continue;
-   const candidateKey=statementCandidateKey(row),candidates=await ctx.db.query("statementTransactions").withIndex("by_candidateKey",q=>q.eq("candidateKey",candidateKey)).take(1);
-   const reasons=candidates.length?["Possible overlap with an existing statement import; review both records"]:[];
-   await ctx.db.insert("statementTransactions",{...row,reviewReasons:reasons,identity,candidateKey,intakeKey:`revolut:${bank.id}`,origin:"api",status:"pending",reviewState:reasons.length?"unresolved":"pending",documentState:"missing",financialRevision:1,documentIds:[],revision:1,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),createdBy:"Revolut sync",sourceSnapshot:snapshot});
+   await saveRevolutStatementRow(ctx, bank, mapping.companyId);
   }
   await ctx.db.patch(state._id,{scanCursor:page.isDone?null:page.continueCursor,scanUntil:page.isDone?"":until,...(page.isDone?{scanSince:until}:{})});
   if(!page.isDone)await ctx.scheduler.runAfter(1000,internal.statementRevolut.pump,{});
  }
  return null;
 }});
+
+export async function saveRevolutStatementRow(ctx: MutationCtx, bank: Pick<Transaction, "id"|"accountId"|"date"|"description"|"counterparty"|"amount"|"currency"|"direction"|"status"|"reference"|"cardLastFour">, companyId: "lovemedo"|"digital-nudge"): Promise<void> {
+   const row:StatementRow={companyId,...(companyId==="lovemedo"?{financialAccountId:"revolut-lmd"}:{}),date:bank.date.slice(0,10),description:bank.description,counterparty:bank.counterparty,source:"Revolut",account:bank.accountId,providerId:bank.id,amountMinor:statementAmountMinor(String(Math.abs(bank.amount)),bank.currency),currency:bank.currency,direction:bank.direction,reviewReasons:[],...(bank.reference?{reference:bank.reference}:{}),...(bank.cardLastFour?{cardLastFour:bank.cardLastFour}:{})};
+   const identity=statementIdentity(row)!,snapshot=JSON.stringify({...row,status:bank.status});
+   const old=await ctx.db.query("statementTransactions").withIndex("by_identity",q=>q.eq("identity",identity)).unique();
+   if(old){if(old.sourceSnapshot && old.sourceSnapshot!==snapshot){const links=await ctx.db.query("statementInvoiceTransactions").withIndex("by_transaction",q=>q.eq("transactionId",old._id)).take(201);
+    if(links.length>200)throw new ConvexError("Review document history before applying source correction");
+    for(const link of links){const invoice=await ctx.db.get(link.invoiceId);if(invoice&&!['discarded','cancelled','superseded'].includes(invoice.state)){await ctx.db.patch(invoice._id,{state:"stale",updatedAt:Date.now()});for(const doc of await ctx.db.query("statementDocuments").withIndex("by_generatedInvoiceId",q=>q.eq("generatedInvoiceId",invoice._id)).take(2))await ctx.db.patch(doc._id,{status:"needs_review",error:"Revolut source changed; review transaction and regenerate. Original PDF retained."});}}
+    await ctx.db.patch(old._id,{status:"pending",completedAt:undefined,completedBy:undefined,completionReason:undefined,doneAt:undefined,doneBy:undefined,financialRevision:(old.financialRevision??old.revision)+1,...(old.generatedInvoiceId?{documentState:"stale",generatedInvoiceState:undefined}:{}),sourceSnapshot:snapshot,sourceCorrectionJson:snapshot,reviewState:"unresolved",reviewReasons:[...new Set([...old.reviewReasons,"Revolut source changed. Review the correction before using this transaction."])],updatedAt:new Date().toISOString(),revision:old.revision+1});}return;}
+   if(!["posted","settled"].includes(bank.status))return;
+   const candidateKey=statementCandidateKey(row),candidates=await ctx.db.query("statementTransactions").withIndex("by_candidateKey",q=>q.eq("candidateKey",candidateKey)).take(1);
+   const reasons=candidates.length?["Possible overlap with an existing statement import; review both records"]:[];
+   await ctx.db.insert("statementTransactions",{...row,reviewReasons:reasons,identity,candidateKey,intakeKey:`revolut:${bank.id}`,origin:"api",status:"pending",reviewState:reasons.length?"unresolved":"pending",documentState:"missing",financialRevision:1,documentIds:[],revision:1,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),createdBy:"Revolut sync",sourceSnapshot:snapshot});
+}

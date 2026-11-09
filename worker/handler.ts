@@ -1,4 +1,5 @@
 import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
+import { syncStatementRevolutLmd } from "./statementRevolutLmd";
 import { discoverStatementRevolut } from "./statementRevolut";
 import { savedSlashVirtualBalances, slashEntities, slashEntityLabel } from "../shared/slashEntities";
 import type { SlashEntity } from "../shared/types";
@@ -9060,6 +9061,10 @@ export default {
       if (request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({message:"Unauthorized"},{status:401});
       await discoverStatementRevolut(env); return json({checked:true});
     }
+    if (new URL(request.url).pathname === "/api/internal/revolut/lmd-sync") {
+      if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({message:"Unauthorized"},{status:401});
+      await syncStatementRevolutLmd(env); return json({checked:true});
+    }
     if (new URL(request.url).pathname === "/api/internal/revolut/authorize") return handleRevolutAuthorization(request, env);
     const publicTopUpResponse = await handlePublicTopUps(request, env);
     if (publicTopUpResponse) return publicTopUpResponse;
@@ -9216,6 +9221,12 @@ export default {
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
+        failures.push(error);
+      }
+      try {
+        await syncStatementRevolutLmd(env);
+      } catch(error) {
+        console.error(JSON.stringify({event:"statement_revolut_lmd_sync_failed",error:error instanceof Error?error.message:String(error)}));
         failures.push(error);
       }
       try {

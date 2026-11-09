@@ -127,6 +127,9 @@ interface __BaseEnv_WorkerEnv {
 	REVOLUT_ISSUER: string;
 	REVOLUT_PRIVATE_KEY_PEM: string;
 	REVOLUT_REFRESH_TOKEN: string;
+	REVOLUT_LMD_CLIENT_ID?: string;
+	REVOLUT_LMD_PRIVATE_KEY_PEM?: string;
+	REVOLUT_LMD_REFRESH_TOKEN?: string;
 	SLASH_API_KEY: string;
 	SLASH_CONNECTION_ID: string;
 	SLASH_LEGAL_ENTITY_ID: string;

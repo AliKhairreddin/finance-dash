@@ -60,6 +60,7 @@ import type * as statementMailboxSync from "../statementMailboxSync.js";
 import type * as statementMailboxes from "../statementMailboxes.js";
 import type * as statementProcessing from "../statementProcessing.js";
 import type * as statementRevolut from "../statementRevolut.js";
+import type * as statementRevolutFeed from "../statementRevolutFeed.js";
 import type * as statementSchema from "../statementSchema.js";
 import type * as statementWorkspace from "../statementWorkspace.js";
 import type * as statements from "../statements.js";
@@ -127,6 +128,7 @@ declare const fullApi: ApiFromModules<{
   statementMailboxes: typeof statementMailboxes;
   statementProcessing: typeof statementProcessing;
   statementRevolut: typeof statementRevolut;
+  statementRevolutFeed: typeof statementRevolutFeed;
   statementSchema: typeof statementSchema;
   statementWorkspace: typeof statementWorkspace;
   statements: typeof statements;

@@ -1,5 +1,17 @@
 # Revolut Business API setup
 
+## LMD connection for Statement
+
+LMD is a separate read-only Revolut authorization. Use a separate certificate titled `Statement — LMD`, with redirect `https://finance.thatcanadian.dev`, and request only `READ` using the setup helper below. Store the resulting credentials as Cloudflare secrets `REVOLUT_LMD_CLIENT_ID`, `REVOLUT_LMD_PRIVATE_KEY_PEM`, and `REVOLUT_LMD_REFRESH_TOKEN`. Do not replace the primary `REVOLUT_*` secrets: those belong to DN and its Finance connection.
+
+The LMD feed writes directly to Statement's `revolut-lmd` account. It verifies every account's legal beneficiary, uses a durable sync lease and pagination cursor, and never writes Finance bank tables or connection bindings. An initial scan requests history from 2015-01-01; subsequent runs refresh the most recent 35 days every 15 minutes, with full history reconciliation every 30 days. A run fetches at most three provider pages, continuing on the next scheduled run. Coverage is marked complete only once pagination finishes. Failed requests preserve saved balances, transactions, cursor and previous coverage, and defer retries for at least an hour or the provider's longer Retry-After interval. Source corrections require review.
+
+The service-authenticated `POST /api/internal/revolut/lmd-sync` checks the same lease and freshness interval as the scheduler. For deliberate historical reconciliation, an operator can call `statementRevolutFeed:reconcile` using the production service token, then trigger that route after the existing cooldown. Reconciliation never deletes saved records. Ordinary dashboard reloads only read Convex.
+
+Account setup requires Revolut's Manage API, Manage Integrations, and View Business permissions. A session with only the Accountant role may not expose API settings. Keep credentials outside the repository and supply secret values through protected files/stdin, never CLI arguments or logs.
+
+## DN / primary connection
+
 The standard banking setup requests the Revolut Business API `READ` scope. Top-up payment drafts require `READ,WRITE`; the setup helper supports `npm run revolut:setup -- --drafts`. Neither mode requests `PAY`. It generates a fresh RS256 client assertion inside the Worker whenever it refreshes the 40-minute access token.
 
 ## 1. Generate the certificate

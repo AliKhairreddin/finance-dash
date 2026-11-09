@@ -32,6 +32,21 @@ test("MZS Bouw shows its Rompslomp connection inside transactions",async({page})
   await expect(page.getByLabel("Rompslomp API token")).toBeVisible();
   await page.screenshot({path:"output/playwright/company-rompslomp.png",fullPage:true});
 });
+test("LMD shows saved balances and incomplete history without claiming DN coverage",async({page})=>{
+  await page.route("**/api/statements/revolut?companyId=lovemedo",route=>route.fulfill({json:{mode:"direct",accounts:[{id:"fixture-eur",name:"Main",currency:"EUR",owner:"LoveMeDo B.V.",balance:1234.56,syncedAt:"2026-11-01T12:00:00Z"}],error:"LMD Revolut returned HTTP 429; saved data retained.",discoveredAt:1,importedThrough:null,historyPending:true,coverageFrom:null,coverageThrough:null}}));
+  await page.goto("/statements?company=revolut-lmd");
+  const panel=page.locator("details").filter({has:page.locator("summary",{hasText:"Revolut · 1 connected accounts"})});
+  await panel.locator("summary").click();
+  await expect(panel.getByRole("cell",{name:"LoveMeDo B.V.",exact:true})).toBeVisible();
+  await expect(panel.getByRole("cell",{name:"1,234.56",exact:true})).toBeVisible();
+  await expect(panel.getByText("History synchronization in progress",{exact:true})).toBeVisible();
+  await expect(panel.getByText("LMD Revolut returned HTTP 429; saved data retained.",{exact:true})).toBeVisible();
+  await panel.getByRole("button",{name:/Saved balance/}).click();
+  await expect(page).toHaveURL(/revolutAccountsSort=balance/);
+  await panel.getByRole("button",{name:/Saved balance/}).click();
+  await expect(page).toHaveURL(/revolutAccountsOrder=desc/);
+  await page.screenshot({path:"output/playwright/lmd-revolut-saved-feed.png",fullPage:true});
+});
 test("nine workspaces, account filtering, sorting and responsive layouts", async ({
   page,
 }) => {
