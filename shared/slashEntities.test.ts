@@ -10,7 +10,9 @@ const options = { baseUrl: "https://api.slash.test", apiKey: "test", legalEntity
 function source(requests: string[], unavailable?: string): typeof fetch {
   return async (input, init) => {
     const url = new URL(String(input));
-    const entity = new Headers(init?.headers).get("x-legal-entity");
+    const headers = new Headers(init?.headers);
+    if (!headers.get("user-agent")) return new Response("Forbidden", { status: 403 });
+    const entity = headers.get("x-legal-entity");
     requests.push(`${entity}:${url.pathname}:${url.searchParams.get("cursor") ?? ""}`);
     if (url.pathname === "/legal-entity") return Response.json({ items: slashEntities.map(e => ({ id: e.id, name: e.legalName })), metadata: {} });
     if (entity === unavailable) return Response.json({ message: "Forbidden" }, { status: 403 });

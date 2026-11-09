@@ -330,7 +330,7 @@ export interface SlashLegalEntity { id: string; name: string; entity: SlashEntit
 
 export async function fetchSelectedSlashEntities({ baseUrl, apiKey, legalEntityId, fetcher = fetch }: SlashVirtualAccountOptions): Promise<SlashLegalEntity[]> {
   const available = await fetchAllSlashPages(fetcher, new URL("/legal-entity", baseUrl),
-    { Accept: "application/json", "X-API-Key": apiKey }, value => {
+    slashHeaders(apiKey), value => {
       const row = requiredRecord(value, "legal entity");
       return { id: requiredString(row.id, "legal entity.id", maximumSlashProviderIdLength), name: requiredString(row.name, "legal entity.name") };
     }, 100, 10);
@@ -941,12 +941,12 @@ function requiredAccountBalance(
   return balance;
 }
 
-function slashHeaders(apiKey: string, legalEntityId: string): HeadersInit {
+function slashHeaders(apiKey: string, legalEntityId?: string): HeadersInit {
   return {
     Accept: "application/json",
     "User-Agent": "finance-dash/1.0 (+https://finance.thatcanadian.dev)",
     "X-API-Key": apiKey,
-    "x-legal-entity": legalEntityId
+    ...(legalEntityId ? { "x-legal-entity": legalEntityId } : {})
   };
 }
 
