@@ -15,6 +15,7 @@ import type {
   Transaction
 } from "../shared/types";
 import { meritRevenueLinesRequest } from "../shared/kissterraBilling";
+import { slashAccountOwnership } from "./slashAccountOwnership";
 import {
   normalizeAmexAccount,
   normalizeAmexTransactions,
@@ -331,7 +332,7 @@ export async function fetchSlashActivity(
   const transactions: Transaction[] = [];
   let checkpoint: string | undefined;
   for (let batch = 0; batch < 100; batch += 1) {
-    const result = await fetchSlashEntitiesActivityBatch({ baseUrl, apiKey, legalEntityId, ...(checkpoint ? { checkpoint } : { dateRange }) });
+    const result = await fetchSlashEntitiesActivityBatch({ baseUrl, apiKey, legalEntityId, accountOwnership: slashAccountOwnership, ...(checkpoint ? { checkpoint } : { dateRange }) });
     transactions.push(...result.transactions);
     if (result.complete) return { accounts: result.accounts, transactions };
     checkpoint = result.nextCheckpoint!;

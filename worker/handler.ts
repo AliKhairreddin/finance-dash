@@ -310,10 +310,10 @@ import {
 } from "../shared/bankConnectionIdentity";
 import {
   bankProviderOAuthFetchPolicy,
-  fetchBankProvider,
-  readBoundedResponseText
+  fetchBankProvider
 } from "../shared/boundedHttp";
 import { ConvexHttpClient } from "convex/browser";
+import { slashAccountOwnership } from "../server/slashAccountOwnership";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -3761,6 +3761,7 @@ async function syncSlashActivity(
       ?? requestedRange
       ?? incrementalBankDateRange(await bankSyncState(env, "slash", connectionKey));
     const activity = await fetchSlashEntitiesActivityBatch({
+      accountOwnership: slashAccountOwnership,
       baseUrl: env.SLASH_BASE_URL,
       apiKey: env.SLASH_API_KEY,
       legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
@@ -8962,35 +8963,6 @@ export default {
       if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
       try {
         const entities = await fetchSelectedSlashEntities({ baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID });
-        if (request.method === "GET" && new URL(request.url).searchParams.get("inspect") === "balances") {
-          const diagnostics = [];
-          for (const entity of entities) {
-            const headers = { Accept: "application/json", "User-Agent": "finance-dash/1.0 (+https://finance.thatcanadian.dev)", "X-API-Key": env.SLASH_API_KEY, "x-legal-entity": entity.id };
-            const read = async (path: string) => {
-              const response = await fetchBankProvider(fetch, new URL(path, env.SLASH_BASE_URL), { headers }, { provider: "Slash" });
-              if (!response.ok) throw new Error(`Slash diagnostic request failed (${response.status})`);
-              return JSON.parse(await readBoundedResponseText(response, "Slash")) as Record<string, unknown>;
-            };
-            const directory = await read(`/account?filter:legalEntityId=${encodeURIComponent(entity.id)}`);
-            if (!Array.isArray(directory.items) || directory.items.length > 20) throw new Error("Slash diagnostic account directory exceeded its bound");
-            const accounts = [];
-            const lookups = new Map<string, unknown>();
-            for (const item of directory.items as Array<Record<string, unknown>>) {
-              const balances = await read(`/account/${encodeURIComponent(String(item.id))}/balance`);
-              for (const balance of (balances.balances ?? []) as Array<Record<string, unknown>>) {
-                if (lookups.has(String(balance.accountId))) continue;
-                try {
-                  const account = await read(`/account/${encodeURIComponent(String(balance.accountId))}`);
-                  lookups.set(String(balance.accountId), { id: account.id, name: account.name, type: account.type, fields: Object.keys(account) });
-                } catch (error) { lookups.set(String(balance.accountId), { error: error instanceof Error ? error.message : "Lookup failed" }); }
-              }
-              const filteredBalances = await read(`/account/${encodeURIComponent(String(item.id))}/balance?filter:legalEntityId=${encodeURIComponent(entity.id)}&filter:accountId=${encodeURIComponent(String(item.id))}`);
-              accounts.push({ id: item.id, name: item.name, type: item.type, status: item.status, balanceTypes: item.balances, fields: Object.keys(item), balances, filteredBalances });
-            }
-            diagnostics.push({ entity: entity.entity, accounts, metadata: directory.metadata, lookups: Object.fromEntries(lookups) });
-          }
-          return json({ diagnostics });
-        }
         const connectionKey = await requireBankConnectionKey(env, "slash");
         const complete = request.method === "POST" ? await syncSlashActivity(env, defaultBankDateRange(), "entity-setup") : undefined;
         const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, { serviceToken: getConvexServiceToken(env), connections: [{ source: "slash", connectionKey }] });

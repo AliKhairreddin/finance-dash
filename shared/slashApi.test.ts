@@ -236,6 +236,7 @@ test("Slash virtual-account reads retain the provider's live balances", async ()
   const requests: Array<{ url: URL; headers: Headers }> = [];
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
+    if (url.pathname === "/account") return Response.json({ items: [{ id: "account-platinum", name: "Business Platinum", status: "open", type: "charge_card", balances: ["cash", "credit"] }], metadata: {} });
     requests.push({ url, headers: new Headers(init?.headers) });
     if (!url.searchParams.has("cursor")) {
       return Response.json({

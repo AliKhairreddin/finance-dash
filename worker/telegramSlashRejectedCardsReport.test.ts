@@ -97,7 +97,9 @@ function sourceFetcher(requests: string[]): typeof fetch {
     const entity = new Headers(init?.headers).get("x-legal-entity");
     assert.ok(["test-entity", "coveragebird", "coveragepro"].includes(entity!));
     if (entity !== "test-entity") return Response.json({ items: [], metadata: {} });
+    if (url.pathname === "/account") return Response.json({ items: [{ id: account.accountId, name: "Operating", status: "open", type: "charge_card", balances: ["cash", "credit"] }], metadata: {} });
     if (url.pathname === "/transaction") {
+      assert.equal(url.searchParams.get("filter:legalEntityId"), "test-entity");
       const period = slashPreviousDayReportPeriod(asOf);
       assert.equal(url.searchParams.get("filter:from_date"), String(period.fromTime));
       assert.equal(url.searchParams.get("filter:to_date"), String(period.toTime - 1));
@@ -114,9 +116,12 @@ function sourceFetcher(requests: string[]): typeof fetch {
         ], metadata: { nextCursor: "next" } });
     }
     if (url.pathname === "/card/card") return Response.json({ ...card, pan: "must-never-retain", cvv: "secret-cvv" });
-    if (url.pathname === "/virtual-account") return Response.json({
+    if (url.pathname === "/virtual-account") {
+      assert.equal(url.searchParams.get("filter:accountId"), account.accountId);
+      return Response.json({
       items: [{ virtualAccount: account, balance: { amountCents: 100000 } }], metadata: {}
-    });
+      });
+    }
     throw new Error(`Unexpected read: ${url.pathname}`);
   };
 }

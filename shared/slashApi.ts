@@ -327,6 +327,7 @@ export interface SlashActivityBatchResult extends SlashActivityResult {
 }
 
 export interface SlashLegalEntity { id: string; name: string; entity: SlashEntity }
+export type SlashAccountOwnership = Readonly<Record<SlashEntity, { readonly groupIds: readonly string[]; readonly accountIds: readonly string[] }>>;
 
 export async function fetchSelectedSlashEntities({ baseUrl, apiKey, legalEntityId, fetcher = fetch }: SlashVirtualAccountOptions): Promise<SlashLegalEntity[]> {
   const available = await fetchAllSlashPages(fetcher, new URL("/legal-entity", baseUrl),
@@ -345,7 +346,7 @@ export async function fetchSelectedSlashEntities({ baseUrl, apiKey, legalEntityI
 }
 
 /** One frozen, resumable lane across the complete selected entity set. */
-export async function fetchSlashEntitiesActivityBatch(options: SlashActivityBatchOptions): Promise<SlashActivityBatchResult> {
+export async function fetchSlashEntitiesActivityBatch(options: SlashActivityBatchOptions & { accountOwnership: SlashAccountOwnership }): Promise<SlashActivityBatchResult> {
   if (options.checkpoint && options.dateRange) throw new Error("Slash sync accepts either a date range or a checkpoint, not both");
   const fetcher = options.fetcher ?? fetch;
   const entities = await fetchSelectedSlashEntities(options);
@@ -363,8 +364,12 @@ export async function fetchSlashEntitiesActivityBatch(options: SlashActivityBatc
   }
   // Validate every entity before registering the new account set or writing any balance.
   const snapshots = [];
+  const knownIds = Object.values(options.accountOwnership).flatMap(scope => [...scope.accountIds]);
+  if (new Set(knownIds).size !== knownIds.length) throw new Error("Slash account ownership contains overlapping identities");
   for (const entity of entities) {
-    const snapshot = await fetchSlashAccountSnapshot(fetcher, options.baseUrl, slashHeaders(options.apiKey, entity.id));
+    const snapshot = await fetchSlashAccountSnapshot(fetcher, options.baseUrl, slashHeaders(options.apiKey, entity.id), {
+      ...options.accountOwnership[entity.entity], knownIds
+    });
     if (!snapshot.accounts.length) throw new Error(`${entity.name} has no accessible open accounts`);
     snapshot.accounts = snapshot.accounts.map(account => ({ ...account, slashEntity: entity.entity, name: `${slashEntityLabel(entity.entity)} · ${account.name}` }));
     snapshots.push(snapshot);
@@ -713,6 +718,8 @@ async function fetchSlashPage<T>(
   headers: HeadersInit,
   parseItem: (item: unknown) => T
 ): Promise<SlashPage<T>> {
+  const entityId = new Headers(headers).get("x-legal-entity");
+  if (entityId && (url.pathname === "/account" || url.pathname === "/transaction")) url.searchParams.set("filter:legalEntityId", entityId);
   const response = await fetchBankProvider(fetcher, url, { headers }, { provider: "Slash" });
   const text = await readBoundedResponseText(response, "Slash");
   if (!response.ok) {
@@ -811,16 +818,20 @@ async function fetchAllSlashPages<T>(
 async function fetchSlashVirtualAccountBalances(
   fetcher: typeof fetch,
   baseUrl: string,
-  headers: HeadersInit
+  headers: HeadersInit,
+  directory?: SlashAccount[]
 ): Promise<SlashVirtualAccountBalance[]> {
-  const accounts = await fetchAllSlashPages(
-    fetcher,
-    new URL("/virtual-account", baseUrl),
-    headers,
-    parseSlashVirtualAccount,
-    maximumSlashVirtualAccounts,
-    maximumSlashVirtualAccountPages
-  );
+  const groups = directory ?? await fetchAllSlashPages(fetcher, new URL("/account", baseUrl), headers, parseSlashAccount, maximumSlashAccounts, maximumSlashAccountPages);
+  const accounts: SlashVirtualAccountBalance[] = [];
+  for (const group of groups.filter(account => account.status === "open")) {
+    const url = new URL("/virtual-account", baseUrl);
+    url.searchParams.set("filter:accountId", group.id);
+    url.searchParams.set("filter:includeClosedAccounts", "true");
+    const rows = await fetchAllSlashPages(fetcher, url, headers, parseSlashVirtualAccount, maximumSlashVirtualAccounts, maximumSlashVirtualAccountPages);
+    if (rows.some(account => account.accountId !== group.id)) throw new Error("Slash virtual accounts do not match the requested account group");
+    accounts.push(...rows);
+    if (accounts.length > maximumSlashVirtualAccounts) throw new Error("Slash virtual account directory exceeded its bound");
+  }
   if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
     throw new Error("Slash API response contains duplicate virtual account IDs");
   }
@@ -1015,23 +1026,25 @@ function normalizeSlashTransaction(
 async function fetchSlashAccountSnapshot(
   fetcher: typeof fetch,
   baseUrl: string,
-  headers: HeadersInit
+  headers: HeadersInit,
+  ownership?: { readonly groupIds: readonly string[]; readonly accountIds: readonly string[]; readonly knownIds: readonly string[] }
 ): Promise<{
   accounts: AccountBalance[];
   accountIdentityByKey: Map<string, SlashAccountIdentity>;
   virtualAccountDirectory: Map<string, SlashVirtualAccount>;
 }> {
-  const [slashAccounts, slashVirtualAccountBalances] = await Promise.all([
-    fetchAllSlashPages(
+  const slashAccounts = await fetchAllSlashPages(
       fetcher,
       new URL("/account", baseUrl),
       headers,
       parseSlashAccount,
       maximumSlashAccounts,
       maximumSlashAccountPages
-    ),
-    fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers)
-  ]);
+    );
+  if (ownership && (slashAccounts.some(account => !ownership.groupIds.includes(account.id)) || ownership.groupIds.some(id => !slashAccounts.some(account => account.id === id)))) {
+    throw new Error("Slash account groups changed; verify the entity ownership directory before syncing");
+  }
+  const slashVirtualAccountBalances = await fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers, slashAccounts);
   const slashVirtualAccounts = slashVirtualAccountBalances.map(account => ({ ...slashVirtualAccountMetadata(account), balance: account.balance }));
   const slashAccountIds = new Set(slashAccounts.map((account) => account.id));
   const unknownVirtualAccount = slashVirtualAccounts.find((account) => !slashAccountIds.has(account.accountId));
@@ -1050,7 +1063,8 @@ async function fetchSlashAccountSnapshot(
     const balances = await Promise.all(batch.map(async (account) => {
       const balanceUrl = new URL(`/account/${encodeURIComponent(account.id)}/balance`, baseUrl);
       const accountBalances = await fetchSlashBalances(fetcher, balanceUrl, headers);
-      return [account.id, accountBalances] as const;
+      if (ownership && accountBalances.some(balance => !ownership.knownIds.includes(balance.accountId))) throw new Error("Slash returned an unverified account identity; verify the entity ownership directory before syncing");
+      return [account.id, ownership ? accountBalances.filter(balance => ownership.accountIds.includes(balance.accountId) && account.balances.includes(balance.type)) : accountBalances] as const;
     }));
     for (const [groupId, accountBalances] of balances) {
       balancesByGroupId.set(groupId, accountBalances);

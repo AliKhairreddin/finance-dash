@@ -6,13 +6,19 @@ import { createBankAnalyticsAccumulator } from "./analytics";
 import type { AccountBalance, Transaction } from "./types";
 
 const now = Date.parse("2026-11-09T12:00:00Z");
-const options = { baseUrl: "https://api.slash.test", apiKey: "test", legalEntityId: "mojo", now, dateRange: { fromDate: "2026-11-01", toDate: "2026-11-09" } };
+const options = { baseUrl: "https://api.slash.test", apiKey: "test", legalEntityId: "mojo", now, dateRange: { fromDate: "2026-11-01", toDate: "2026-11-09" }, accountOwnership: {
+  mojo: { groupIds: ["mojo-group"], accountIds: ["mojo-account"] },
+  coveragebird: { groupIds: ["coveragebird-group"], accountIds: ["coveragebird-account"] },
+  coveragepro: { groupIds: ["coveragepro-group"], accountIds: ["coveragepro-account"] }
+} };
 function source(requests: string[], unavailable?: string): typeof fetch {
   return async (input, init) => {
     const url = new URL(String(input));
     const headers = new Headers(init?.headers);
     if (!headers.get("user-agent")) return new Response("Forbidden", { status: 403 });
     const entity = headers.get("x-legal-entity");
+    if (url.pathname === "/account" || url.pathname === "/transaction") assert.equal(url.searchParams.get("filter:legalEntityId"), entity);
+    if (url.pathname === "/virtual-account") assert.equal(url.searchParams.get("filter:accountId"), `${entity}-group`);
     requests.push(`${entity}:${url.pathname}:${url.searchParams.get("cursor") ?? ""}`);
     if (url.pathname === "/legal-entity") return Response.json({ items: slashEntities.map(e => ({ id: e.id, name: e.legalName })), metadata: {} });
     if (entity === unavailable) return Response.json({ message: "Forbidden" }, { status: 403 });
@@ -51,6 +57,20 @@ test("failed entity validation writes no transactions or replacement accounts", 
   await assert.rejects(fetchSelectedSlashEntities({ ...options, fetcher: async () => Response.json({ items: [{ id: "mojo", name: "Mojo Labs LLC" }], metadata: {} }) }), /COVERAGEBIRD LLC/);
 });
 
+test("combined balance responses are separated by verified entity IDs and unknown identities stop writes", async () => {
+  const standard = source([]);
+  const balances = slashEntities.map((entity, index) => ({ accountId: `${entity.id}-account`, type: "debit", available: { amountCents: (index + 1) * 10000 }, posted: { amountCents: (index + 1) * 10000 }, timestamp: new Date(now).toISOString() }));
+  const fetcher: typeof fetch = (input, init) => new URL(String(input)).pathname.endsWith("/balance")
+    ? Promise.resolve(Response.json({ balances })) : standard(input, init);
+  const result = await fetchSlashEntitiesActivityBatch({ ...options, fetcher });
+  assert.deepEqual(result.accounts.map(account => [account.slashEntity, account.balance]), [["mojo", 100], ["coveragebird", 200], ["coveragepro", 300]]);
+  let writes = 0;
+  const unknown: typeof fetch = (input, init) => new URL(String(input)).pathname.endsWith("/balance")
+    ? Promise.resolve(Response.json({ balances: [...balances, { ...balances[0], accountId: "unverified" }] })) : standard(input, init);
+  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: unknown, onAccountsDiscovered: () => { writes++; }, onTransactionPage: () => { writes++; } }), /unverified account identity/);
+  assert.equal(writes, 0);
+});
+
 test("Slash groups preserve multiple underlying cash, debit, and credit accounts", async () => {
   const standard = source([]);
   const rows = [
@@ -63,13 +83,15 @@ test("Slash groups preserve multiple underlying cash, debit, and credit accounts
   ].map((row, index) => ({ ...row, available: { amountCents: (index + 1) * 100 }, posted: { amountCents: (index + 1) * 100 }, timestamp: new Date(now).toISOString() }));
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
+    if (url.pathname === "/account" && new Headers(init?.headers).get("x-legal-entity") === "mojo") return Response.json({ items: [{ id: "mojo-group", name: "Operating", status: "open", type: "debit", balances: ["cash", "credit", "debit"] }], metadata: {} });
     if (url.pathname === "/account/mojo-group/balance") return Response.json({ balances: rows });
     if (url.pathname === "/transaction" && new Headers(init?.headers).get("x-legal-entity") === "mojo") return Response.json({
       items: rows.map((row, index) => ({ id: `tx-${index}`, accountId: row.accountId, accountSubtype: row.type === "credit" ? "credit" : "cash", date: "2026-11-08T12:00:00Z", description: "Receipt", amountCents: 100, status: "posted" })), metadata: {}
     });
     return standard(input, init);
   };
-  const result = await fetchSlashEntitiesActivityBatch({ ...options, fetcher });
+  const multiOptions = { ...options, accountOwnership: { ...options.accountOwnership, mojo: { groupIds: ["mojo-group"], accountIds: rows.map(row => row.accountId) } } };
+  const result = await fetchSlashEntitiesActivityBatch({ ...multiOptions, fetcher });
   const mojoAccounts = result.accounts.filter(account => account.slashEntity === "mojo");
   assert.equal(mojoAccounts.length, 6);
   assert.equal(mojoAccounts.reduce((sum, account) => sum + account.balance, 0), 21);
@@ -77,11 +99,11 @@ test("Slash groups preserve multiple underlying cash, debit, and credit accounts
   let writes = 0;
   const duplicate: typeof fetch = (input, init) => new URL(String(input)).pathname === "/account/mojo-group/balance"
     ? Promise.resolve(Response.json({ balances: [...rows, rows[0]] })) : fetcher(input, init);
-  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: duplicate, onAccountsDiscovered: () => { writes++; } }), /duplicate account balance identities/);
+  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...multiOptions, fetcher: duplicate, onAccountsDiscovered: () => { writes++; } }), /duplicate account balance identities/);
   assert.equal(writes, 0);
   const ambiguous: typeof fetch = (input, init) => new URL(String(input)).pathname === "/transaction"
     ? Promise.resolve(Response.json({ items: [{ id: "ambiguous", accountId: "mojo-group", accountSubtype: "cash", date: "2026-11-08T12:00:00Z", description: "Receipt", amountCents: 100, status: "posted" }], metadata: {} })) : fetcher(input, init);
-  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: ambiguous, onTransactionPage: () => { writes++; } }), /unknown account mojo-group/);
+  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...multiOptions, fetcher: ambiguous, onTransactionPage: () => { writes++; } }), /unknown account mojo-group/);
   assert.equal(writes, 0);
 });
 
