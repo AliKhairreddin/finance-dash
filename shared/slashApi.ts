@@ -765,7 +765,7 @@ async function fetchSlashBalances(
   }
   const balances = payload.balances.map(parseSlashBalance);
   if (new Set(balances.map((balance) => balance.type)).size !== balances.length) {
-    throw new Error("Slash API response contains duplicate balance types");
+    throw new Error(`Slash API response contains duplicate balance types for ${url.pathname}: ${balances.map(balance => `${balance.type}/${balance.accountId}`).join(", ")}`);
   }
   return balances;
 }
