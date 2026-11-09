@@ -8974,11 +8974,20 @@ export default {
             const directory = await read(`/account?filter:legalEntityId=${encodeURIComponent(entity.id)}`);
             if (!Array.isArray(directory.items) || directory.items.length > 20) throw new Error("Slash diagnostic account directory exceeded its bound");
             const accounts = [];
+            const lookups = new Map<string, unknown>();
             for (const item of directory.items as Array<Record<string, unknown>>) {
               const balances = await read(`/account/${encodeURIComponent(String(item.id))}/balance`);
-              accounts.push({ id: item.id, name: item.name, type: item.type, status: item.status, balanceTypes: item.balances, fields: Object.keys(item), balances });
+              for (const balance of (balances.balances ?? []) as Array<Record<string, unknown>>) {
+                if (lookups.has(String(balance.accountId))) continue;
+                try {
+                  const account = await read(`/account/${encodeURIComponent(String(balance.accountId))}`);
+                  lookups.set(String(balance.accountId), { id: account.id, name: account.name, type: account.type, fields: Object.keys(account) });
+                } catch (error) { lookups.set(String(balance.accountId), { error: error instanceof Error ? error.message : "Lookup failed" }); }
+              }
+              const filteredBalances = await read(`/account/${encodeURIComponent(String(item.id))}/balance?filter:legalEntityId=${encodeURIComponent(entity.id)}&filter:accountId=${encodeURIComponent(String(item.id))}`);
+              accounts.push({ id: item.id, name: item.name, type: item.type, status: item.status, balanceTypes: item.balances, fields: Object.keys(item), balances, filteredBalances });
             }
-            diagnostics.push({ entity: entity.entity, accounts, metadata: directory.metadata });
+            diagnostics.push({ entity: entity.entity, accounts, metadata: directory.metadata, lookups: Object.fromEntries(lookups) });
           }
           return json({ diagnostics });
         }
