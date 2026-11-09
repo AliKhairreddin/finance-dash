@@ -1,4 +1,5 @@
-import type { AccountBalance, Transaction } from "./types";
+import type { AccountBalance, MercuryEntity, Transaction } from "./types";
+import { mercuryEntities, mercuryEntityFromLegalName, mercuryEntityLabel } from "./mercuryEntities";
 import { bankProviderTransactionId } from "./providerIdentity";
 import { assertBankAccountInput, assertBankTransactionInput } from "./bankRecordValidation";
 import { decodeBankSyncCheckpoint, encodeBankSyncCheckpoint, type BankSyncCheckpoint } from "./bankSyncCheckpoint";
@@ -13,6 +14,7 @@ type Cursor = { phase: "created" | "posted"; after?: string };
 
 export interface MercuryActivityOptions {
   apiToken: string;
+  expectedEntity?: MercuryEntity;
   dateRange?: DateRange;
   checkpoint?: BankSyncCheckpoint;
   pageBudget?: number;
@@ -71,7 +73,7 @@ async function get(options: MercuryActivityOptions, path: string, params: URLSea
   return record(await readBoundedResponseJson(response, "Mercury"), path);
 }
 
-async function accounts(options: MercuryActivityOptions): Promise<{ balances: AccountBalance[]; openedOn: string }> {
+export async function fetchMercuryAccounts(options: MercuryActivityOptions): Promise<{ balances: AccountBalance[]; openedOn: string }> {
   const result: AccountBalance[] = [];
   const openingDates: string[] = [];
   const seen = new Set<string>();
@@ -87,8 +89,10 @@ async function accounts(options: MercuryActivityOptions): Promise<{ balances: Ac
       if (accountIds.has(providerId)) throw new Error("Mercury returned duplicate accounts");
       accountIds.add(providerId);
       if (!["checking", "savings"].includes(text(row.kind, "account kind"))) throw new Error("Mercury returned an unsupported account kind; cash balances were not updated");
+      const mercuryEntity = mercuryEntityFromLegalName(text(row.legalBusinessName, "legal business name"));
+      if (options.expectedEntity && mercuryEntity !== options.expectedEntity) throw new Error("Mercury token does not belong to the configured business");
       const account: AccountBalance = {
-        id: `mercury-${providerId}`, name: text(row.name, "account name", 512), source: "mercury",
+        id: `mercury-${providerId}`, name: `${mercuryEntityLabel(mercuryEntity)} · ${text(row.name, "account name", 400)}`, source: "mercury", mercuryEntity,
         balance: amount(row.currentBalance, "current balance"), currency: "USD",
         updatedAt: new Date(options.now ?? Date.now()).toISOString(), status: "live"
       };
@@ -126,6 +130,7 @@ export function normalizeMercuryTransaction(row: RecordValue, accountMap: Map<st
   const transaction: Transaction = {
     id: bankProviderTransactionId("mercury", [providerAccountId, providerId]), source: "mercury",
     accountId: account.id, accountName: account.name,
+    mercuryEntity: account.mercuryEntity,
     date: timestamp(row.postedAt ?? row.createdAt, "transaction date").slice(0, 10),
     ...(optionalText(row.externalMemo, "memo") ? { reference: optionalText(row.externalMemo, "memo") } : {}),
     description, rawName: counterparty, counterparty,
@@ -141,11 +146,14 @@ export function normalizeMercuryTransaction(row: RecordValue, accountMap: Map<st
 }
 
 export async function fetchMercuryActivityBatch(options: MercuryActivityOptions) {
+  return fetchMercuryBatch(options, await fetchMercuryAccounts(options));
+}
+
+async function fetchMercuryBatch(options: MercuryActivityOptions, discoveredAccounts: Awaited<ReturnType<typeof fetchMercuryAccounts>>) {
   const budget = options.pageBudget ?? 5;
   if (!Number.isInteger(budget) || budget < 1 || budget > 10) throw new Error("Mercury sync page budget must be between 1 and 10");
   const now = options.now ?? Date.now();
   const checkpoint = options.checkpoint ? decodeBankSyncCheckpoint(options.checkpoint, "mercury") : undefined;
-  const discoveredAccounts = await accounts(options);
   const discovered = discoveredAccounts.balances;
   const range = options.dateRange ?? { fromDate: discoveredAccounts.openedOn, toDate: new Date(now).toISOString().slice(0, 10) };
   const start = checkpoint?.windowStart ?? `${range.fromDate}T00:00:00.000Z`;
@@ -193,6 +201,64 @@ export async function fetchMercuryActivity(options: MercuryActivityOptions) {
   let checkpoint: string | undefined;
   for (let attempt = 0; attempt < 100; attempt++) {
     const result = await fetchMercuryActivityBatch({ ...options, checkpoint, collectTransactions: true });
+    for (const row of result.transactions) transactions.set(row.id, row);
+    if (result.complete) return { accounts: result.accounts, transactions: [...transactions.values()] };
+    checkpoint = result.nextCheckpoint!;
+  }
+  throw new Error("Mercury transaction pagination exceeded its safety limit");
+}
+
+export interface MercuryEntitiesOptions extends Omit<MercuryActivityOptions, "apiToken" | "expectedEntity"> {
+  connections: Array<{ entity: MercuryEntity; apiToken: string }>;
+}
+
+/** Validate the complete business directory before emitting any saved-data writes. */
+export async function fetchMercuryEntitiesActivityBatch(options: MercuryEntitiesOptions) {
+  const budget = options.pageBudget ?? 5;
+  if (!Number.isInteger(budget) || budget < 1 || budget > 10) throw new Error("Mercury sync page budget must be between 1 and 10");
+  if (options.connections.length !== mercuryEntities.length
+    || new Set(options.connections.map(item => item.apiToken.trim())).size !== mercuryEntities.length
+    || mercuryEntities.some(entity => options.connections.filter(item => item.entity === entity.id).length !== 1)) {
+    throw new Error("Mercury requires one distinct token for each configured business");
+  }
+  const connections = mercuryEntities.map(entity => options.connections.find(item => item.entity === entity.id)!);
+  const discovered: Awaited<ReturnType<typeof fetchMercuryAccounts>>[] = [];
+  for (const connection of connections) discovered.push(await fetchMercuryAccounts({ ...options, apiToken: connection.apiToken, expectedEntity: connection.entity }));
+  const allAccounts = discovered.flatMap(item => item.balances);
+  if (new Set(allAccounts.map(account => account.id)).size !== allAccounts.length) throw new Error("Mercury business accounts overlap");
+  const checkpoint = options.checkpoint ? decodeBankSyncCheckpoint(options.checkpoint, "mercury") : undefined;
+  const range = checkpoint ? { fromDate: checkpoint.windowStart.slice(0, 10), toDate: new Date(Date.parse(checkpoint.windowEnd) - dayMs).toISOString().slice(0, 10) }
+    : options.dateRange ?? { fromDate: discovered.map(item => item.openedOn).sort()[0], toDate: new Date(options.now ?? Date.now()).toISOString().slice(0, 10) };
+  const cursor: { entityIndex: number; checkpoint?: string } = checkpoint ? JSON.parse(checkpoint.cursor) : { entityIndex: 0 };
+  if (!Number.isInteger(cursor.entityIndex) || cursor.entityIndex < 0 || cursor.entityIndex >= connections.length
+    || (cursor.checkpoint !== undefined && typeof cursor.checkpoint !== "string")) throw new Error("Invalid Mercury business sync cursor");
+  await options.onAccountsDiscovered?.(allAccounts);
+  let pagesFetched = 0;
+  let providerTransactionsRead = 0;
+  const transactions = new Map<string, Transaction>();
+  while (cursor.entityIndex < connections.length && pagesFetched < budget) {
+    const connection = connections[cursor.entityIndex];
+    const result = await fetchMercuryBatch({ ...options, apiToken: connection.apiToken, expectedEntity: connection.entity,
+      dateRange: range, checkpoint: cursor.checkpoint, pageBudget: budget - pagesFetched,
+      onAccountsDiscovered: undefined }, discovered[cursor.entityIndex]);
+    pagesFetched += result.pagesFetched;
+    providerTransactionsRead += result.providerTransactionsRead;
+    for (const row of result.transactions) transactions.set(row.id, row);
+    if (!result.complete) { cursor.checkpoint = result.nextCheckpoint!; break; }
+    cursor.entityIndex++;
+    delete cursor.checkpoint;
+  }
+  const complete = cursor.entityIndex === connections.length;
+  return { accounts: allAccounts, transactions: [...transactions.values()], complete, pagesFetched, providerTransactionsRead, dateRange: range,
+    nextCheckpoint: complete ? null : encodeBankSyncCheckpoint({ provider: "mercury", windowStart: `${range.fromDate}T00:00:00.000Z`,
+      windowEnd: new Date(Date.parse(`${range.toDate}T00:00:00.000Z`) + dayMs).toISOString(), cursor: JSON.stringify(cursor) }) };
+}
+
+export async function fetchMercuryEntitiesActivity(options: MercuryEntitiesOptions) {
+  const transactions = new Map<string, Transaction>();
+  let checkpoint: string | undefined;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const result = await fetchMercuryEntitiesActivityBatch({ ...options, checkpoint, collectTransactions: true });
     for (const row of result.transactions) transactions.set(row.id, row);
     if (result.complete) return { accounts: result.accounts, transactions: [...transactions.values()] };
     checkpoint = result.nextCheckpoint!;

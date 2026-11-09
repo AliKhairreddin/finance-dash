@@ -1,3 +1,4 @@
+import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { slashEntityLabel } from "../shared/slashEntities";
 import { slashReportDateIfDue } from "./telegramSlashReport";
 import type { AccountBalance, FxRate } from "../shared/types";
@@ -78,7 +79,8 @@ export function buildTelegramCashReport(input: {
     if (account.source === "wise" && account.wiseEntity !== "dn" && account.wiseEntity !== "lmd") {
       throw new Error("Wise balance company is unavailable; cash report could not be grouped");
     }
-    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? "Mercury" : "Revolut";
+    if (account.source === "mercury" && !account.mercuryEntity) throw new Error("Mercury balance company is unavailable; cash report could not be grouped");
+    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : "Revolut";
     add(group, account.currency, account.balance);
   }
   for (const account of slashAccounts) add(account.slashEntity ? `Slash · ${slashEntityLabel(account.slashEntity)}` : "Slash", account.currency, account.balance);
@@ -141,9 +143,14 @@ export function buildTelegramCashReport(input: {
 }
 
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
-  const text = message.split("\n").filter((line) =>
-    /^(Wise LMD|Wise DN|Revolut|Slash(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))?|Mercury) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
-  ).join("\n");
+  const totals = new Map<string, number | null>();
+  for (const line of message.split("\n")) {
+    const match = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
+    if (match && totals.get(match[1]) !== null) totals.set(match[1], (totals.get(match[1]) ?? 0) + Number(match[2].replaceAll(",", "")));
+    const unavailable = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))? — USD total unavailable$/u.exec(line);
+    if (unavailable) totals.set(unavailable[1], null);
+  }
+  const text = [...totals].map(([name, total]) => total === null ? `${name} — USD total unavailable` : `${name} ≈ ${amountLabel(total, "USD")}`).join("\n");
   return text && text.length <= 256 ? { label: "Copy bank totals", text } : undefined;
 }
 

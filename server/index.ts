@@ -1,3 +1,4 @@
+import { mercuryEntities } from "../shared/mercuryEntities";
 import { slashEntities } from "../shared/slashEntities";
 import type { SlashEntity } from "../shared/types";
 import { recoverInvoiceReplacement, downloadInvoiceBackup } from "./store";
@@ -610,6 +611,8 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       throw new ClientRequestError("Transaction limit must be between 1 and 200");
     }
     const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
+    const mercuryEntity = request.query.mercuryEntity;
+    if (mercuryEntity !== undefined && !mercuryEntities.some(entity => entity.id === mercuryEntity)) throw new Error("Mercury entity filter is invalid");
     const slashEntity = request.query.slashEntity;
     if (slashEntity !== undefined && !slashEntities.some(entity => entity.id === slashEntity)) throw new Error("Slash entity filter is invalid");
     const wiseEntity = request.query.wiseEntity;
@@ -643,6 +646,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       ...(source ? { source } : {}),
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
+      ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
       ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),
       ...(accountId ? { accountId } : {}),
       ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),

@@ -3,7 +3,7 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
 import { exactOrigin, exactRedirectUri, isExactKind, exactWriteKinds, type ExactWriteKind } from "../shared/exact";
-import { normalizeStatementActor } from "../shared/statements";
+import { normalizeStatementActor, isStatementCompany } from "../shared/statements";
 import { boundedBytes } from "./documentIntake";
 import { statementHash } from "./statements";
 import { readBoundedResponseJson } from "../shared/boundedHttp";
@@ -12,7 +12,13 @@ type Env = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN">;
 const base = "/api/statements/exact";
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" } });
 const stateCookie = (state: string, age = 600) => `__Host-exact-state=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
-const redirect = (result: string) => new Response(null, { status: 303, headers: { Location: `/?view=exact&exactResult=${result}`, "Set-Cookie": stateCookie("", 0), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+const workspaceCookie = (companyId: string, age=600) => `__Host-exact-company=${companyId}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
+const redirect = (result: string, request?: Request) => {
+  const companyId=request?.headers.get("Cookie")?.split(";").map(c=>c.trim()).find(c=>c.startsWith("__Host-exact-company="))?.slice("__Host-exact-company=".length);
+  const workspace=isStatementCompany(companyId)?`&company=${companyId === "lovemedo"?"revolut-lmd":companyId}`:"";
+  const headers=new Headers({Location:`/?view=transactions&accounting=exact&exactResult=${result}${workspace}`,"Cache-Control":"no-store","Referrer-Policy":"no-referrer"});
+  headers.append("Set-Cookie",stateCookie("",0));headers.append("Set-Cookie",workspaceCookie("",0));return new Response(null,{status:303,headers});
+};
 function division(value: unknown): number { const n = Number(value); if (!Number.isSafeInteger(n) || n < 1) throw new Error("Choose an authorized Exact company"); return n; }
 async function body(request: Request): Promise<Record<string, unknown>> { const result = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 64000))); if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Invalid request"); return result; }
 // The dashboard keeps a Strict session cookie. Exact's cross-site return first
@@ -22,7 +28,7 @@ export function exactCallbackLanding(request: Request): Response | null {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== new URL(exactRedirectUri).origin || url.pathname !== `${base}/callback` || url.searchParams.get("resume") === "1") return null;
   const state = url.searchParams.get("state"), cookie = request.headers.get("Cookie")?.split(";").map(x => x.trim()).find(x => x.startsWith("__Host-exact-state="))?.slice("__Host-exact-state=".length);
-  if (!state || state.length !== 72 || state !== cookie || !url.searchParams.get("code") || url.searchParams.has("error")) return redirect("authorization_failed");
+  if (!state || state.length !== 72 || state !== cookie || !url.searchParams.get("code") || url.searchParams.has("error")) return redirect("authorization_failed", request);
   const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Connecting Exact</title><body><form action="${base}/callback" method="get"><input type="hidden" name="state" value="${escape(state)}"><input type="hidden" name="code" value="${escape(url.searchParams.get("code")!)}"><input type="hidden" name="resume" value="1"><p>Finishing your Exact connection…</p><button type="submit">Continue to Statements</button></form><script nonce="${nonce}">document.forms[0].submit()</script></body></html>`;
@@ -36,21 +42,24 @@ export async function handleExactApi(request: Request, env: Env, session: Dashbo
   try {
     if (path === "/status" && request.method === "GET") return json(await client.query(api.exact.status, auth));
     if (path === "/records" && request.method === "GET") { const kind = url.searchParams.get("kind"); if (!isExactKind(kind) || kind === "deleted") throw new Error("Choose an Exact view"); const selected = url.searchParams.get("division"); return json(await client.query(api.exact.records, { ...auth, kind, division: selected && selected !== "all" ? division(selected) : undefined })); }
+    if (path === "/workspace" && request.method === "POST") { const input = await body(request); if (!isStatementCompany(input.companyId)) throw new Error("Choose a company"); return json(await client.mutation(api.exact.linkWorkspace, { ...auth, companyId: input.companyId, division: division(input.division) })); }
     if (path === "/operations" && request.method === "GET") return json(await client.query(api.exact.operations, auth));
     if (path === "/connect" && request.method === "POST") {
       if (url.origin !== new URL(exactRedirectUri).origin) throw new Error("Connect Exact from statements.thatcanadian.dev");
+      const input = await body(request); if (!isStatementCompany(input.companyId)) throw new Error("Choose a company before connecting Exact");
       const clientId = await client.query(api.exact.authorizationClient, auth);
       const state = crypto.randomUUID() + crypto.randomUUID();
       await client.mutation(api.exact.createOAuthState, { ...auth, hash: await statementHash(new TextEncoder().encode(state)) });
       const destination = new URL("/api/oauth2/auth", exactOrigin);
       destination.search = new URLSearchParams({ client_id: clientId, redirect_uri: exactRedirectUri, response_type: "code", state }).toString();
-      return Response.json({ url: destination.href }, { headers: { "Set-Cookie": stateCookie(state), "Cache-Control": "no-store" } });
+      const headers=new Headers({"Cache-Control":"no-store"});headers.append("Set-Cookie",stateCookie(state));headers.append("Set-Cookie",workspaceCookie(input.companyId));
+      return Response.json({ url: destination.href }, { headers });
     }
     if (path === "/callback" && request.method === "GET") {
       const state = url.searchParams.get("state"), cookie = request.headers.get("Cookie")?.split(";").map(x => x.trim()).find(x => x.startsWith("__Host-exact-state="))?.slice("__Host-exact-state=".length);
-      if (url.origin !== new URL(exactRedirectUri).origin || !state || state.length !== 72 || !cookie || state !== cookie || !url.searchParams.get("code") || url.searchParams.has("error")) return redirect("authorization_failed");
+      if (url.origin !== new URL(exactRedirectUri).origin || !state || state.length !== 72 || !cookie || state !== cookie || !url.searchParams.get("code") || url.searchParams.has("error")) return redirect("authorization_failed", request);
       await client.action(api.exactSync.finishAuthorization, { ...auth, hash: await statementHash(new TextEncoder().encode(state)), code: url.searchParams.get("code")! });
-      return redirect("connected");
+      return redirect("connected", request);
     }
     if (path === "/sync" && request.method === "POST") { const input = await body(request); await client.mutation(api.exact.resync, { ...auth, division: input.division && input.division !== "all" ? division(input.division) : undefined, full: input.full === true }); return json({ queued: true }, 202); }
     if (path === "/operations" && request.method === "POST") {
@@ -75,7 +84,7 @@ export async function handleExactApi(request: Request, env: Env, session: Dashbo
     }
     return json({ message: "Exact route not found" }, 404);
   } catch (error) {
-    if (path === "/callback") return redirect("authorization_failed");
+    if (path === "/callback") return redirect("authorization_failed", request);
     const raw = error instanceof Error ? error.message : "Exact request failed";
     const safe = /Uncaught ConvexError: ([^\n]+)/.exec(raw)?.[1] ?? (raw.startsWith("[CONVEX") ? "The Exact request failed. Please try again" : raw.split("\n")[0]);
     const message = safe.slice(0, 300);

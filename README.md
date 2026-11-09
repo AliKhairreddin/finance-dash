@@ -58,6 +58,16 @@ Recent activity uses the existing three-day overlap; history remains saved and c
 
 The service-token-protected `/api/internal/slash/entities` endpoint verifies access and saved balances with GET; `?preview=cash` previews the report without sending Telegram messages. POST intentionally synchronizes the recent 45-day window using a resumable setup lane. This endpoint does not reveal credentials or execute payments. Production remains on `famous-oyster-878`.
 
+## Mercury entities
+
+Banks → Mercury offers All entities, Mojo Labs LLC, CoverageBird (CoverageBird LLC), and CoverageBird Pro (CoveragePro LLC). The URL remembers the entity and scopes balances, transactions, groups, account filters, and period metrics. The existing `MERCURY_API_TOKEN` belongs to Mojo; `MERCURY_COVERAGEBIRD_API_TOKEN` and `MERCURY_COVERAGEPRO_API_TOKEN` belong to the other businesses. Tokens need only Fetch Depository Accounts and Fetch Transactions. They remain Cloudflare secrets. `MERCURY_CONNECTION_ID=mojo-labs` retains the existing ledger binding; it is not a company filter.
+
+The five-minute bank sync reads and validates every entity's full account list and `legalBusinessName` before saving balances. All entities share the existing lease and a bounded ten-page transaction budget, with per-entity creation/posted-time cursors. Failed access, overlapping accounts, unknown owners, or incomplete pagination cannot certify complete coverage. Recent activity uses the existing three-day overlap; saved history is reused and explicit history sync reconciles corrections. Ordinary reloads serve Convex data. The additive metadata migration tags historical transactions by verified immutable account ID in batches of 200, preserving amounts, IDs, categories, matches, and ownership. Account-set changes invalidate coverage without deleting history; setup includes a deliberate reconciliation from Mojo's account-opening date.
+
+Telegram `/cash`, weekly bank totals, and `/balances mercury` use the saved balances automatically. Cash reports require all three verified business snapshots no older than 30 minutes and show each Mercury business and the combined bank total; the copy button consolidates provider totals to fit Telegram's 256-character limit. Credit and treasury accounts are outside this existing cash-ledger integration's scope.
+
+The service-token-protected `/api/internal/mercury/entities` endpoint reads saved accounts with GET. POST intentionally syncs a bounded recent window, or an explicit `fromDate`/`toDate` reconciliation window, using a resumable setup lane. POST with `action=migrate` continues metadata-only backfill without rereading Mercury. `preview=cash` previews the Telegram report without sending messages. Production remains on `famous-oyster-878`.
+
 ## Architecture
 
 ```mermaid
@@ -339,3 +349,17 @@ Invoices has a **Sync with Merit** control. Production manual and scheduled impo
 QuinStreet month-to-date reports are stored separately in `quinstreetMonthlyReports`, one report per enabled rule and Monday coverage period, retained as historical reporting snapshots. Each Monday at 09:00 Asia/Beirut (with five-minute catch-up for missing reports), the report covers the 1st through the previous Sunday in the rule's billing timezone. **Refresh QuinStreet** deliberately reconciles corrections, with the same five-minute request cooldown. A failed refresh retains the saved report and reports the error. These cumulative reports do not alter weekly invoice periods, create invoices, or add duplicate receivables.
 
 Hetarth's existing media-spend role can create supplier/provider setups, edit commissions/opening balances, and manage account assignments in **Provider balances**. Its supplier directory exposes names and IDs only; other finance pages and bank-ledger editing remain restricted. Commissions are deducted from gross funding: a $100,000 payment at 2% adds $98,000 of spendable credit. Changing the rate recalculates included funding after the opening balance date. New live cash-flow snapshots include the saved provider balance after assigned credit-line spend; saved historical snapshots keep their recorded values. Pending reconciliation or unconverted funding must not be saved as a zero balance.
+
+### Statement accounting connections
+
+Exact appears under Transactions for the selected company. Authorized Exact legal names are matched to AMG, AR-TEC and LoveMeDo, with an explicit administrator mapping for other names. Its existing saved-data sync and confirmed draft/document writes remain in use.
+
+Revolut company ownership is checked daily using bank-detail beneficiaries. The verified fiat accounts are imported from the existing Finance bank ledger every five minutes, without downloading history on page loads. Only settled/posted payments are added. Unverified accounts are excluded; possible duplicate imports and provider corrections require review. The available history is the history already synchronized into Finance. The current connection identifies Digital Nudge; LMD requires its own authorization.
+
+MZS Bouw's Rompslomp view saves sales invoices and expenses in Convex. A token must identify KVK 89354907. Configure `ROMPSLOMP_ENCRYPTION_KEY` in production Convex before connecting. Tokens stay encrypted server-side. The recent 90 days refresh every six hours, full history reconciles weekly, and explicit refresh is bounded to 15 minutes. Complete pagination is required before replacing saved data; failures preserve the previous snapshot. The snapshot is limited to 5,000 records per resource and 800 KB combined, with a visible error if exceeded.
+
+Customer invoices require a saved legal issuer, tax and date policy. Generation uses saved evidence without a model request; outgoing payments produce internal expense records. Company templates have distinct layouts and version history. Existing issued PDFs are retained.
+
+### Flex and Slash notifications
+
+Flex is a manual transaction ledger in Finance, with `/flex <company> <amount>` for authorized Telegram users (USD by default). Flex has no API integration, live balance or rejection/balance alerts. `SLASH_SPEND_NOTIFICATIONS_ENABLED=false` stops automatic Slash card-decline/recovery, low-balance, daily balance/funding and daily rejection messages, including queued deliveries. Cashback reports and unrelated cash reports retain their existing schedule.

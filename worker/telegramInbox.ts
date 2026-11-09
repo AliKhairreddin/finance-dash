@@ -80,7 +80,7 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
       if (!prepared) {
         const command = item.update.message?.text?.trim().split(/\s/)[0].replace(/^[\\/]/, "").split("@")[0].toLowerCase();
         const action = financeTelegramCommands.some(c => c.command === command && c.access === "action");
-        const idempotentAction = command === "kraken" || command === "trust";
+        const idempotentAction = command === "kraken" || command === "trust" || command === "flex";
         await this.serialize(async () => {
           const current = await this.ctx.storage.get<QueuedUpdate[]>("queue") ?? [];
           await this.ctx.storage.put("queue", current.map(row => row.update.updateId === item.update.updateId ? { ...row, started: true, attempts: row.attempts + 1 } : row));

@@ -1113,3 +1113,21 @@ export async function revolutDraftApi(options: RevolutActivityBatchOptions) {
     }
   };
 }
+
+/** Read company ownership from bank details; account display names do not identify legal ownership. */
+export async function fetchRevolutAccountOwners(options: RevolutActivityBatchOptions) {
+  const fetcher = options.fetcher ?? fetch;
+  const token = await fetchRevolutAccessToken({ ...options, fetcher, now: options.now ?? Date.now() });
+  const base = revolutBaseUrl(options.environment), headers = { Authorization: `Bearer ${token}` };
+  const accounts = await fetchRevolutJson<Array<{id:string; name:string; currency:string; state:string}>>(fetcher, `${base}/accounts`, {headers});
+  if (!Array.isArray(accounts) || !accounts.length || accounts.length > 1000) throw new Error("Incomplete Revolut account directory");
+  const result: Array<{id:string;name:string;currency:string;beneficiaries:string[]}> = [];
+  for (const account of accounts) {
+    if (!account.id || !account.currency) throw new Error("Invalid Revolut account");
+    // Crypto accounts have no bank beneficiary; they remain unassigned.
+    const details = /^(BTC|ETH|USDC|USDT)$/.test(account.currency) ? [] : await fetchRevolutJson<Array<{beneficiary?:string}>>(fetcher, `${base}/accounts/${encodeURIComponent(account.id)}/bank-details`, {headers});
+    if (!Array.isArray(details)) throw new Error("Incomplete Revolut ownership details");
+    result.push({id:`revolut-${account.id}`,name:account.name || `Revolut ${account.currency}`,currency:account.currency,beneficiaries:[...new Set(details.map(d=>d.beneficiary?.trim()).filter((n):n is string=>Boolean(n)))]});
+  }
+  return result;
+}

@@ -271,6 +271,7 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
   }
 
   async deliverCashReport(date: string, username: string, message: string, kind: CashReportKind): Promise<boolean> {
+    if (["daily-slash", "daily-slash-rejected-cards"].includes(kind) && this.env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") return false;
     return this.serialize(async () => {
       const recipient = cashReportRecipient(this.env, username, kind);
       return deliverCashReportParts(this.ctx.storage, date, message, (part, index, parts) =>

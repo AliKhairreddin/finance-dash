@@ -18,7 +18,7 @@ const decline: SlashCardAlertTransaction = { id: "decline", cardId: "card", acco
   date: "2026-09-30T12:00:00Z", authorizedAt: "2026-09-30T11:59:00Z", amountCents: -12500,
   description: "Meta", status: "failed", detailedStatus: "declined", declineReason: "Spending limit" };
 const approval: SlashCardAlertTransaction = { ...decline, id: "new-payment", authorizedAt: "2026-09-30T12:01:00Z", status: "pending", detailedStatus: "pending", declineReason: undefined };
-const baseEnv = { SLASH_BASE_URL: "https://api.slash.test", SLASH_API_KEY: "test-key", SLASH_LEGAL_ENTITY_ID: "entity",
+const baseEnv = { SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", SLASH_BASE_URL: "https://api.slash.test", SLASH_API_KEY: "test-key", SLASH_LEGAL_ENTITY_ID: "entity",
   PUBLIC_APP_URL: "https://finance.example", TELEGRAM_BOT_TOKEN: "test",
   TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333" }),
   TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M", TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin",
@@ -197,3 +197,14 @@ test("a failed recipient cannot prevent the other recipient from receiving a mul
   assert.equal((await store.storage.list({ prefix: "pending:" })).size, 0);
   assert.equal(store.alarm(), null);
 });
+
+ test("disabled Slash alerts ignore new jobs and stop already queued alarms", async t => {
+  const store = memoryStorage();
+  await store.storage.put("event-job", { event, attempts: 0 });
+  await store.storage.setAlarm(Date.now());
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; throw new Error("Unexpected upstream request"); });
+  const job = new SlashCardAlerts({ storage: store.storage }, { ...baseEnv, SLASH_SPEND_NOTIFICATIONS_ENABLED: "false" } as unknown as WorkerEnv);
+  await job.receive(event); await job.observe(decline); await job.alarm();
+  assert.equal(calls, 0); assert.equal(store.alarm(), null);
+ });

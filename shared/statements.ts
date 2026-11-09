@@ -25,7 +25,7 @@ export interface StatementWorkflow {
 }
 export type StatementActor = "Ali" | "Ali M" | "Alaa";
 export type StatementStatus = "pending" | "reconciled" | "completed";
-export type StatementOrigin = "manual" | "file" | "email";
+export type StatementOrigin = "manual" | "file" | "email" | "api";
 export const statementSortKeys = ["date", "companyId", "description", "counterparty", "reference", "source", "account", "cardLastFour", "amountMinor", "currency", "direction", "origin", "status", "generatedInvoiceNumber"] as const;
 export type StatementSortKey = typeof statementSortKeys[number];
 export interface StatementTransactionInput {
@@ -37,6 +37,7 @@ export interface StatementRow extends Omit<StatementTransactionInput, "amount" |
   amountMinor: string; feeMinor?: string; balanceMinor?: string; reviewReasons: string[];
 }
 export interface StatementTransaction extends StatementRow, StatementWorkflow {
+  sourceCorrectionJson?: string;
   _id: string; origin: StatementOrigin; status: StatementStatus; documentIds: string[];
   revision: number; createdAt: string; updatedAt: string; createdBy: string; importId?: string;
   deletedAt?: string;

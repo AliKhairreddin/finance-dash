@@ -1,3 +1,4 @@
+export type MercuryEntity = "mojo" | "coveragebird" | "coveragepro";
 export type SlashEntity = "mojo" | "coveragebird" | "coveragepro";
 import type { MeritInvoiceCopy } from "./meritInvoiceCopy";
 import type { Id } from "../convex/_generated/dataModel";
@@ -68,6 +69,7 @@ export interface AccountBalance {
   name: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  mercuryEntity?: MercuryEntity;
   slashEntity?: SlashEntity;
   slashAccountSubtype?: SlashAccountSubtype;
   slashVirtualAccounts?: SlashVirtualAccount[];
@@ -575,6 +577,7 @@ export interface Transaction {
   providerLegacyId?: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  mercuryEntity?: MercuryEntity;
   slashEntity?: SlashEntity;
   slashAccountSubtype?: SlashAccountSubtype;
   slashVirtualAccountId?: string;
@@ -953,6 +956,7 @@ export interface BankPeriodMetrics {
   /** Operating activity only; internal transfers and capital movements are excluded. */
   sources: BankPeriodSourceMetrics[];
   wiseEntities: BankPeriodWiseEntityMetrics[];
+  mercuryEntities: Array<{ mercuryEntity: MercuryEntity; moneyIn: BankPeriodDirectionMetrics; moneyOut: BankPeriodDirectionMetrics }>;
   slashEntities: Array<{ slashEntity: SlashEntity; moneyIn: BankPeriodDirectionMetrics; moneyOut: BankPeriodDirectionMetrics; cashback: BankPeriodSlashCashbackMetrics }>;
   slashCashback: BankPeriodSlashCashbackMetrics;
 }

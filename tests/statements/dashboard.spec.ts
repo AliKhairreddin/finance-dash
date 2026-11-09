@@ -8,6 +8,30 @@ test.beforeEach(async ({ page }) => {
       : route.abort();
   });
 });
+test("Exact stays in company transactions and switches its source division with the workspace", async ({page}) => {
+  const divisions:string[]=[];
+  await page.route("**/api/statements/exact/**", async route=>{
+    const url=new URL(route.request().url());
+    if(url.pathname.endsWith("/status"))return route.fulfill({json:{configured:true,connected:true,state:"connected",lastDiscoveryAt:Date.now(),companies:[{division:1,name:"AMG-Holding B.V.",workspaceCompanyId:"amg-holding",active:true,currency:"EUR",code:"1"},{division:2,name:"AR-TEC Engineering & Innovations B.V.",workspaceCompanyId:"artec",active:true,currency:"EUR",code:"2"}],datasets:[]}});
+    if(url.pathname.endsWith("/operations"))return route.fulfill({json:[]});
+    if(url.pathname.endsWith("/records")){divisions.push(url.searchParams.get("division")!);return route.fulfill({json:{records:[],datasets:[],truncated:false}});}
+    return route.fulfill({status:404,json:{message:"Unexpected request"}});
+  });
+  await page.goto("/statements?company=amg-holding&accounting=exact");
+  await expect(page.getByRole("navigation",{name:"Statement pages"}).getByRole("button",{name:"Exact",exact:true})).toHaveCount(0);
+  await expect(page.getByText("AMG-Holding B.V.",{exact:true}).first()).toBeVisible();
+  await expect.poll(()=>divisions.at(-1)).toBe("1");
+  await page.getByRole("navigation",{name:"Company and account workspaces"}).getByRole("button",{name:"Artec",exact:true}).click();
+  await expect.poll(()=>divisions.at(-1)).toBe("2");
+  await page.screenshot({path:"output/playwright/company-exact.png",fullPage:true});
+});
+
+test("MZS Bouw shows its Rompslomp connection inside transactions",async({page})=>{
+  await page.goto("/statements?company=mzs-bouw&accounting=rompslomp");
+  await expect(page.getByRole("heading",{name:"Rompslomp · MZS Bouw"})).toBeVisible();
+  await expect(page.getByLabel("Rompslomp API token")).toBeVisible();
+  await page.screenshot({path:"output/playwright/company-rompslomp.png",fullPage:true});
+});
 test("nine workspaces, account filtering, sorting and responsive layouts", async ({
   page,
 }) => {
@@ -18,7 +42,7 @@ test("nine workspaces, account filtering, sorting and responsive layouts", async
   await expect(nav.getByRole("button")).toHaveCount(9);
   await expect(
     page
-      .getByRole("button", { name: "Generate AI Invoice", exact: true })
+      .getByRole("button", { name: "Create invoice / document", exact: true })
       .first(),
   ).toBeVisible();
   await nav.getByRole("button", { name: "Revolut LMD", exact: true }).click();
@@ -54,11 +78,11 @@ test("one click creates a saved internal document and repeated requests reuse it
   await page.goto("/statements?company=artec&search=Synthetic%20hosting%2015");
   await expect(
     page
-      .getByRole("button", { name: "Generate AI Invoice", exact: true })
+      .getByRole("button", { name: "Create invoice / document", exact: true })
       .first(),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Generate AI Invoice", exact: true })
+    .getByRole("button", { name: "Create invoice / document", exact: true })
     .first()
     .click();
   await expect(
@@ -82,7 +106,7 @@ test("one click creates a saved internal document and repeated requests reuse it
   );
   await page.getByRole("button", { name: "Close Document saved" }).click();
   await page
-    .getByRole("button", { name: "Generate AI Invoice", exact: true })
+    .getByRole("button", { name: "Create invoice / document", exact: true })
     .first()
     .click();
   await expect(
@@ -99,7 +123,7 @@ test("missing company facts use one compact correction form", async ({
 }) => {
   await page.goto("/statements?company=artec&search=Unresolved%20Merchant");
   await page
-    .getByRole("button", { name: "Generate AI Invoice", exact: true })
+    .getByRole("button", { name: "Create invoice / document", exact: true })
     .first()
     .click();
   await expect(page.getByRole("group", { name: "Legal issuer" })).toBeVisible();
@@ -241,7 +265,7 @@ test("regeneration saves a new version while preserving the original PDF", async
 }) => {
   await page.goto("/statements?company=artec&search=Synthetic%20hosting%2014");
   await page
-    .getByRole("button", { name: "Generate AI Invoice", exact: true })
+    .getByRole("button", { name: "Create invoice / document", exact: true })
     .first()
     .click();
   await expect(

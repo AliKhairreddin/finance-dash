@@ -244,6 +244,7 @@ const transactionCategoryRule = v.object({
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
+const mercuryEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
 const slashEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const slashVirtualAccount = v.object({
@@ -259,6 +260,7 @@ const transaction = v.object({
   id: v.string(),
   source: dataSource,
   wiseEntity: v.optional(wiseEntity),
+  mercuryEntity: v.optional(mercuryEntity),
   slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccountId: v.optional(v.string()),
@@ -328,6 +330,7 @@ const accountBalance = v.object({
   name: v.string(),
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
+  mercuryEntity: v.optional(mercuryEntity),
   slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
@@ -735,6 +738,7 @@ export default defineSchema({
     .index("by_source", ["source"])
     .index("by_source_connection", ["source", "connectionKey"])
     .index("by_source_slash_entity", ["source", "slashEntity"])
+    .index("by_source_mercury_entity", ["source", "mercuryEntity"])
     .index("by_source_connection_card_metadata_version_date_id", [
       "source",
       "connectionKey",
@@ -749,6 +753,7 @@ export default defineSchema({
       "date",
       "id"
     ])
+    .index("by_source_connection_synced", ["source", "connectionKey", "syncedAt"])
     .index("by_source_connection_date_id", ["source", "connectionKey", "date", "id"])
     .index("by_source_connection_direction_date_id", ["source", "connectionKey", "direction", "date", "id"])
     .index("by_source_connection_status_date_id", ["source", "connectionKey", "status", "date", "id"])

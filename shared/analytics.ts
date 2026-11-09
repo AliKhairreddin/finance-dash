@@ -1,5 +1,6 @@
+import { mercuryEntities as mercuryEntityDirectory } from "./mercuryEntities";
 import { slashEntities as slashEntityDirectory } from "./slashEntities";
-import type { SlashEntity } from "./types";
+import type { SlashEntity, MercuryEntity } from "./types";
 import { isReviewOnlyTransactionCategory, transactionBusinessCategory } from "./categories";
 import { isInternalTransferTransaction, isNonOperatingMovementTransaction } from "./transactionPresentation";
 import type {
@@ -68,7 +69,7 @@ export type BankPeriodSlashCashbackState = [
 ];
 
 export interface BankAnalyticsAccumulatorState {
-  version: 5;
+  version: 6;
   fromDate: string;
   toDate: string;
   configurationFingerprint: string;
@@ -96,6 +97,7 @@ export interface BankAnalyticsAccumulatorState {
   merchantOther: BankAnalyticsAggregateState;
   bankPeriodSources: [BankTransactionSource, BankPeriodActivityState][];
   bankPeriodWiseEntities: [WiseEntity, BankPeriodActivityState][];
+  bankPeriodMercuryEntities: [MercuryEntity, BankPeriodActivityState][];
   bankPeriodSlashCashback: BankPeriodSlashCashbackState;
   bankPeriodSlashEntities: [SlashEntity, BankPeriodActivityState, BankPeriodSlashCashbackState][];
   reviewSamples: BankAnalyticsReviewSample[];
@@ -624,6 +626,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   const providerAggregates = new Map<string, MutableAggregate>();
   const relationshipAggregates = new Map<BankAnalyticsRelationship, MutableAggregate>();
   const bankPeriodSources = new Map<BankTransactionSource, MutableBankPeriodActivity>();
+  const bankPeriodMercuryEntities = new Map<MercuryEntity, MutableBankPeriodActivity>();
   const bankPeriodWiseEntities = new Map<WiseEntity, MutableBankPeriodActivity>();
   const bankPeriodSlashEntities = new Map<SlashEntity, { activity: MutableBankPeriodActivity; cashback: MutableBankPeriodSlashCashback }>();
   let bankPeriodSlashCashback = emptyBankPeriodSlashCashback();
@@ -667,7 +670,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       throw new Error(`Analytics accumulator state exceeds ${bankAnalyticsLimits.serializedStateBytes} bytes`);
     }
     if (
-      state.version !== 5
+      state.version !== 6
       || state.fromDate !== fromDate
       || state.toDate !== toDate
       || state.unmatchedMerchantRowLimit !== merchantRowLimit
@@ -737,6 +740,21 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       bankPeriodWiseEntities.set(
         row[0],
         restoreBankPeriodActivityState(row[1], knownCurrencies, `Analytics bank-period Wise entity ${row[0]}`)
+      );
+    }
+    if (!Array.isArray(state.bankPeriodMercuryEntities) || state.bankPeriodMercuryEntities.length > mercuryEntityDirectory.length) {
+      throw new Error("Analytics bank-period Mercury entity state exceeds its hard cardinality limit");
+    }
+    for (const row of state.bankPeriodMercuryEntities) {
+      if (!Array.isArray(row) || row.length !== 2 || !mercuryEntityDirectory.some(entity => entity.id === row[0])) {
+        throw new Error("Analytics bank-period Mercury entity state contains an invalid row");
+      }
+      if (bankPeriodMercuryEntities.has(row[0])) {
+        throw new Error("Analytics bank-period Mercury entity state contains a duplicate entity");
+      }
+      bankPeriodMercuryEntities.set(
+        row[0],
+        restoreBankPeriodActivityState(row[1], knownCurrencies, `Analytics bank-period Mercury entity ${row[0]}`)
       );
     }
     if (!Array.isArray(state.bankPeriodSlashEntities) || state.bankPeriodSlashEntities.length > slashEntityDirectory.length) throw new Error("Invalid Slash entity analytics state");
@@ -892,6 +910,9 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       || sumPeriodTransactions(bankPeriodWiseEntities.values())
         > (bankPeriodSources.get("wise")?.moneyIn.transactionCount ?? 0)
           + (bankPeriodSources.get("wise")?.moneyOut.transactionCount ?? 0)
+      || sumPeriodTransactions(bankPeriodMercuryEntities.values())
+        > (bankPeriodSources.get("mercury")?.moneyIn.transactionCount ?? 0)
+          + (bankPeriodSources.get("mercury")?.moneyOut.transactionCount ?? 0)
       || bankPeriodSlashCashback.eligiblePurchaseCount
         > (bankPeriodSources.get("slash")?.moneyOut.transactionCount ?? 0)
           + (bankPeriodSources.get("slash")?.moneyIn.transactionCount ?? 0)
@@ -985,6 +1006,19 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       if (!transaction.teamId) entityDirection.unassignedOwnerTransactionCount += 1;
       incrementMoney(entityDirection.volume, transaction.currency, transaction.amount);
       bankPeriodWiseEntities.set(transaction.wiseEntity, entityActivity);
+    }
+
+    if (source === "mercury" && transaction.mercuryEntity) {
+      if (!mercuryEntityDirectory.some(entity => entity.id === transaction.mercuryEntity)) {
+        throw new Error(`Transaction ${transaction.id} has unsupported Mercury entity ${transaction.mercuryEntity}`);
+      }
+      const entityActivity = bankPeriodMercuryEntities.get(transaction.mercuryEntity) ?? emptyBankPeriodActivity();
+      const entityDirection = transaction.direction === "in" ? entityActivity.moneyIn : entityActivity.moneyOut;
+      entityDirection.transactionCount += 1;
+      if (!needsReview) entityDirection.categorizedTransactionCount += 1;
+      if (!transaction.teamId) entityDirection.unassignedOwnerTransactionCount += 1;
+      incrementMoney(entityDirection.volume, transaction.currency, transaction.amount);
+      bankPeriodMercuryEntities.set(transaction.mercuryEntity, entityActivity);
     }
 
     if (source !== "slash") return;
@@ -1138,7 +1172,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, aggregate]) => [key, aggregateState(aggregate)]);
     const state: BankAnalyticsAccumulatorState = {
-      version: 5,
+      version: 6,
       fromDate,
       toDate,
       configurationFingerprint: expectedConfigurationFingerprint,
@@ -1176,6 +1210,9 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
       bankPeriodWiseEntities: [...bankPeriodWiseEntities]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([wiseEntity, activity]) => [wiseEntity, bankPeriodActivityState(activity)]),
+      bankPeriodMercuryEntities: [...bankPeriodMercuryEntities]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([mercuryEntity, activity]) => [mercuryEntity, bankPeriodActivityState(activity)]),
       bankPeriodSlashCashback: bankPeriodSlashCashbackState(bankPeriodSlashCashback),
       bankPeriodSlashEntities: [...bankPeriodSlashEntities].sort(([a], [b]) => a.localeCompare(b)).map(([entity, metrics]) => [entity, bankPeriodActivityState(metrics.activity), bankPeriodSlashCashbackState(metrics.cashback)]),
       reviewSamples: reviewSamples.map((sample) => ({ ...sample })),
@@ -1252,6 +1289,10 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
         wiseEntity,
         ...finalizeBankPeriodActivity(activity)
       })).sort((left, right) => left.wiseEntity.localeCompare(right.wiseEntity)),
+      mercuryEntities: [...bankPeriodMercuryEntities].map(([mercuryEntity, activity]) => ({
+        mercuryEntity,
+        ...finalizeBankPeriodActivity(activity)
+      })).sort((left, right) => left.mercuryEntity.localeCompare(right.mercuryEntity)),
       slashEntities: [...bankPeriodSlashEntities].map(([slashEntity, metrics]) => ({ slashEntity, ...finalizeBankPeriodActivity(metrics.activity), cashback: {
         eligiblePurchaseCount: metrics.cashback.eligiblePurchaseCount, earned: currencyTotals(metrics.cashback.earned), eligibleSpend: currencyTotals(metrics.cashback.eligibleSpend), credited: currencyTotals(metrics.cashback.credited)
       } })).sort((a, b) => a.slashEntity.localeCompare(b.slashEntity)),

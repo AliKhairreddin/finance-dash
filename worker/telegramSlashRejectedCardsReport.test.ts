@@ -224,7 +224,7 @@ function deliveryHarness() {
 
 test("daily rejection delivery retries unfinished recipients, handles DST, and stays separate from cashback", async () => {
   const harness = deliveryHarness();
-  const deliveryEnv = { ...env, TELEGRAM_OTP_STATE: harness.binding };
+  const deliveryEnv = { ...env, SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", TELEGRAM_OTP_STATE: harness.binding };
   let builds = 0;
   const build = async () => { builds++; return "Rejection report"; };
   assert.equal(await sendTelegramCashReportIfDue(deliveryEnv as never, asOf - 1, build, "daily-slash-rejected-cards"), 0);
@@ -247,7 +247,7 @@ test("daily rejection delivery retries unfinished recipients, handles DST, and s
 
 test("a failed Slash read does not mark either recipient delivered and can retry", async () => {
   const harness = deliveryHarness();
-  const deliveryEnv = { ...env, TELEGRAM_OTP_STATE: harness.binding };
+  const deliveryEnv = { ...env, SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", TELEGRAM_OTP_STATE: harness.binding };
   await assert.rejects(sendTelegramCashReportIfDue(deliveryEnv as never, asOf, async () => { throw new Error("Slash unavailable"); }, "daily-slash-rejected-cards"));
   assert.equal(harness.deliveries.length, 0);
   assert.equal(await sendTelegramCashReportIfDue(deliveryEnv as never, asOf + 60_000, async () => "Rejection report", "daily-slash-rejected-cards"), 2);
@@ -277,7 +277,7 @@ test("minute cron dispatches rejected cards to Ali and Ali M once independently 
   const harness = deliveryHarness();
   const original = globalThis.fetch;
   const requests: string[] = [];
-  const deliveryEnv = { ...env, TELEGRAM_OTP_STATE: {
+  const deliveryEnv = { ...env, SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", TELEGRAM_OTP_STATE: {
     getByName(name: string) {
       const stub = harness.binding.getByName(name);
       return name.startsWith("telegram-slash-report:") || name.startsWith("telegram-slash-cashback-report:")

@@ -1,6 +1,6 @@
 import { financeOperatingDate } from "./operatingDate";
 
-export const manualBankSources = [{ id: "kraken", label: "Kraken" }, { id: "trust", label: "Trust" }] as const;
+export const manualBankSources = [{ id: "kraken", label: "Kraken" }, { id: "trust", label: "Trust" }, { id: "flex", label: "Flex" }] as const;
 export type ManualBankSource = typeof manualBankSources[number]["id"];
 export const manualBankSortKeys = ["date", "companyName", "amount", "currency", "direction", "createdBy"] as const;
 export type ManualBankSortKey = typeof manualBankSortKeys[number];
@@ -26,7 +26,7 @@ export interface ManualBankPage {
 }
 
 export function isManualBankSource(value: unknown): value is ManualBankSource {
-  return value === "kraken" || value === "trust";
+  return manualBankSources.some(source => source.id === value);
 }
 
 export function validateManualBankRequestId(value: unknown): string {
@@ -49,7 +49,7 @@ export function validateManualBankFields(input: ManualBankFields): ManualBankFie
 
 export function parseManualBankCommand(args: string, sentAt: number): ManualBankFields {
   const match = args.trim().match(/^(.+?)\s+((?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,8})?)$/u);
-  if (!match) throw new Error("Use /kraken <company name> <amount> or /trust <company name> <amount>. Example: /kraken Acme Ltd 1250. Payments default to USDC and out; no date is needed.");
+  if (!match) throw new Error("Use /kraken <company name> <amount> /trust <company name> <amount> or /flex <company name> <amount>. Example: /flex Acme Ltd 1250. Flex defaults to USD; Kraken/Trust to USDC. Payments default to out; no date is needed.");
   if (!Number.isSafeInteger(sentAt) || sentAt <= 0 || !Number.isFinite(new Date(sentAt * 1000).getTime())) throw new Error("The Telegram message date is missing or invalid. Send a new command.");
   return validateManualBankFields({ companyName: match[1], amount: Number(match[2].replaceAll(",", "")), currency: "USDC", direction: "out", date: financeOperatingDate(sentAt * 1000) });
 }

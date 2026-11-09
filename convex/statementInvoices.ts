@@ -152,7 +152,8 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   if(rows.some(r=>r!.reviewReasons.length))throw new ConvexError("Resolve the transaction review issues before generation");
   const policies = await ctx.db.query("statementPolicies").withIndex("by_company", q => q.eq("companyId", companyId)).take(100);
   const legalPolicy = policies.find(p => !p.financialAccountId), policy = legalPolicy ? JSON.parse(legalPolicy.settingsJson) : {};
-  const documentType = first.direction === "in" && policy.salesInvoiceApproved === true ? "sales_invoice" : "internal_support";
+  const documentType = first.direction === "in" ? "sales_invoice" : "internal_support";
+  if (documentType === "sales_invoice" && policy.salesInvoiceApproved !== true) throw new ConvexError("Set up sales invoices for this company in Settings: legal name, address, tax rate and invoice date policy are required.");
   if (documentType === "sales_invoice" && (!policy.legalName?.trim() || !policy.legalAddress?.trim() || !policy.taxPolicy?.trim() || !/^\d{1,3}(?:\.\d{1,2})?$/.test(policy.taxRate ?? "") || Number(policy.taxRate) > 100 || !["transaction", "generation"].includes(policy.invoiceDatePolicy))) throw new ConvexError("Complete the approved legal issuer, tax and document-date policy in Settings");
   const businessKey = JSON.stringify([documentType, companyId, first.financialAccountId ?? null, rows.map(r => [r!._id, r!.financialRevision ?? r!.revision]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
   const active = await ctx.db.query("statementInvoices").withIndex("by_businessKey", q => q.eq("businessKey", businessKey)).order("desc").take(100);
@@ -177,7 +178,7 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   const example = null;
   let design = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", issuerKey)).unique();
   if (!design) {
-    const template = ["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : "corporate";
+    const template = ["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : defaultInvoiceDesign(issuerKey,sellerName).template!;
     const designJson=JSON.stringify({...defaultInvoiceDesign(issuerKey,sellerName),template});
     const id = await ctx.db.insert("statementInvoiceDesigns", { issuerKey, designJson,version:1,style:template,brandingAuthorized:false,createdAt: Date.now() });
     await ctx.db.insert("statementTemplateVersions",{companyId,version:1,style:template,designJson,brandingAuthorized:false,actor:member.actor,createdAt:Date.now()});design = (await ctx.db.get(id))!;

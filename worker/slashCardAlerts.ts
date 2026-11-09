@@ -34,6 +34,7 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
     return configuration ? fetchSlashWebhook({ ...this.options(), webhookId: configuration.webhook.id }) : null;
   }
   async receive(value: SlashCardWebhookEvent): Promise<void> {
+    if (this.env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") return;
     const event = parseSlashCardWebhookEvent(value);
     await this.serialize(() => this.ctx.storage.transaction(async (storage) => {
       const current = await storage.get<EventJob>("event-job");
@@ -46,6 +47,7 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
     }));
   }
   async observe(transaction: SlashCardAlertTransaction): Promise<void> {
+    if (this.env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") return;
     await this.serialize(() => this.ctx.storage.transaction(async (storage) => {
       const previous = await storage.get<SlashCardAlertState>("card-state");
       const seenKey = `decline:${transaction.id}`;
@@ -64,6 +66,7 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
     }));
   }
   async alarm(): Promise<void> {
+    if (this.env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") { await this.ctx.storage.deleteAlarm(); return; }
     await this.serialize(async () => {
       // A persisted watchdog survives interruptions during provider reads or Telegram sends.
       await this.ctx.storage.setAlarm(Date.now() + 60_000);

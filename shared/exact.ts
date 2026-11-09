@@ -22,7 +22,7 @@ export const exactKinds = Object.keys(exactResources) as ExactKind[];
 export const exactVisibleKinds = exactKinds.filter(kind => kind !== "deleted");
 export const isExactKind = (value: unknown): value is ExactKind => typeof value === "string" && exactKinds.includes(value as ExactKind);
 export type ExactData = Record<string, string | number | boolean | null>;
-export interface ExactCompany { division: number; name: string; code: string; currency: string; active: boolean }
+export interface ExactCompany { division: number; name: string; code: string; currency: string; active: boolean; workspaceCompanyId?: string }
 export interface ExactDataset { division: number; kind: ExactKind; state: string; lastCompletedAt?: number; error?: string; nextRunAt: number }
 export interface ExactConnectionStatus { configured: boolean; connected: boolean; state: string; error?: string; user?: string; lastDiscoveryAt?: number; companies: ExactCompany[]; datasets: ExactDataset[] }
 export interface ExactRecord { id: string; division: number; kind: ExactKind; providerId: string; parentId: string; data: ExactData; updatedAt: number }

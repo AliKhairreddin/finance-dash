@@ -30,12 +30,12 @@ test("Kraken and Trust commands accept both Alis, preserve message identity, and
   try {
     const commandEnv = { ...(env as unknown as Record<string, unknown>), CONVEX_URL: "https://ledger-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test", PUBLIC_APP_URL: "https://finance.example" } as never;
     const sentAt = Date.parse("2026-10-14T02:30:00Z") / 1000;
-    for (const [text, user, source] of [["/Kraken Acme Ltd 1,250.50", ali, "kraken"], ["\\Trust Acme Ltd 500", { ...ali, username: "Ali M", normalizedUsername: "ali m" }, "trust"]] as const) {
+    for (const [text, user, source] of [["/Kraken Acme Ltd 1,250.50", ali, "kraken"], ["\\Trust Acme Ltd 500", { ...ali, username: "Ali M", normalizedUsername: "ali m" }, "trust"], ["/flex Acme Ltd 25", ali, "flex"]] as const) {
       const reply = await handleTelegramCommand(commandEnv, user, "administrator", text, { updateId: 99, sentAt });
       assert.match(reply as string, /Recorded in/);
       const input = calls.at(-1)!;
       assert.equal(input.path, "manualBankTransactions:createFromTelegram");
-      assert.equal(input.args[0].currency, "USDC");
+      assert.equal(input.args[0].currency, source === "flex" ? "USD" : "USDC");
       assert.equal(input.args[0].direction, "out");
       assert.equal(input.args[0].date, "2026-10-13");
       assert.equal(input.args[0].source, source);
@@ -44,7 +44,7 @@ test("Kraken and Trust commands accept both Alis, preserve message identity, and
     }
     assert.match(await handleTelegramCommand(commandEnv, amin, "read-only", "/kraken Acme 5", { updateId: 100, sentAt }) as string, /Access denied/);
     assert.match(await handleTelegramCommand(commandEnv, ali, "administrator", "/trust Acme 5", { updateId: 100 }) as string, /message date is missing/);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
   } finally { globalThis.fetch = originalFetch; }
 });
 

@@ -18,10 +18,10 @@ test("Exact OAuth callback requires matching browser state and cleans the callba
   const original = globalThis.fetch; let calls = 0; globalThis.fetch = async () => { calls++; return result(null); };
   try {
     const state = "a".repeat(72);
-    for (const cookie of ["", "__Host-exact-state=wrong"]) { const response = await handleExactApi(new Request(`${origin}/api/statements/exact/callback?state=${state}&code=private`, { headers: { Cookie: cookie } }), env, session); assert.equal(response?.status, 303); assert.equal(response?.headers.get("Location"), "/?view=exact&exactResult=authorization_failed"); }
+    for (const cookie of ["", "__Host-exact-state=wrong"]) { const response = await handleExactApi(new Request(`${origin}/api/statements/exact/callback?state=${state}&code=private`, { headers: { Cookie: cookie } }), env, session); assert.equal(response?.status, 303); assert.equal(response?.headers.get("Location"), "/?view=transactions&accounting=exact&exactResult=authorization_failed"); }
     assert.equal(calls, 0);
     const response = await handleExactApi(new Request(`${origin}/api/statements/exact/callback?state=${state}&code=private`, { headers: { Cookie: `__Host-exact-state=${state}` } }), env, session);
-    assert.equal(calls, 1); assert.equal(response?.headers.get("Location"), "/?view=exact&exactResult=connected"); assert.match(response?.headers.get("Set-Cookie") ?? "", /Max-Age=0/);
+    assert.equal(calls, 1); assert.equal(response?.headers.get("Location"), "/?view=transactions&accounting=exact&exactResult=connected"); assert.match(response?.headers.get("Set-Cookie") ?? "", /Max-Age=0/);
   } finally { globalThis.fetch = original; }
 });
 

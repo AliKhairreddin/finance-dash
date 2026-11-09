@@ -18,6 +18,8 @@ import { invoiceHtml } from "../worker/statementInvoicePdf";
 process.env.CONVEX_SERVICE_TOKEN = "isolated-statement-fixture";
 const auth = { serviceToken: process.env.CONVEX_SERVICE_TOKEN, actor: "Ali" };
 const modules = {
+  "../convex/statementRevolut.ts": () => import("../convex/statementRevolut"),
+  "../convex/rompslomp.ts": () => import("../convex/rompslomp"),
   "../convex/statementMailboxes.ts": () =>
     import("../convex/statementMailboxes"),
   "../convex/statementCapture.ts": () => import("../convex/statementCapture"),
@@ -167,7 +169,7 @@ globalThis.fetch = async (input, init) => {
 };
 const browser = await chromium.launch({ headless: true });
 const env = {
-  CONVEX_URL: "http://127.0.0.1:8797",
+  CONVEX_URL: "http://127.0.0.1:8796",
   CONVEX_SERVICE_TOKEN: auth.serviceToken,
   OPENROUTER_API_KEY: "",
 } as StatementEnv;
@@ -176,7 +178,7 @@ const server = http.createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const data = Buffer.concat(chunks),
-      url = new URL(req.url ?? "/", "http://127.0.0.1:8797");
+      url = new URL(req.url ?? "/", "http://127.0.0.1:8796");
     if (url.pathname === "/api/query_ts") {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ ts: "isolated-fixture" }));
@@ -300,7 +302,7 @@ const server = http.createServer(async (req, res) => {
     );
   }
 });
-await new Promise<void>((resolve) => server.listen(8797, "127.0.0.1", resolve));
+await new Promise<void>((resolve) => server.listen(8796, "127.0.0.1", resolve));
 const vite = await createServer({
   envDir: false,
   server: {
@@ -308,7 +310,7 @@ const vite = await createServer({
     port: 5179,
     strictPort: true,
     watch: { ignored: ["**/output/**"] },
-    proxy: { "/api": "http://127.0.0.1:8797" },
+    proxy: { "/api": "http://127.0.0.1:8796" },
   },
 });
 await vite.listen();

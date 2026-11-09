@@ -1,6 +1,6 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
-import { statementActor } from "./statementSchema";
+import { statementActor, statementCompany } from "./statementSchema";
 
 export const exactKind = v.union(v.literal("accounts"), v.literal("invoices"), v.literal("purchases"), v.literal("transactions"), v.literal("receivables"), v.literal("payables"), v.literal("documents"), v.literal("documentTypes"), v.literal("attachments"), v.literal("glAccounts"), v.literal("journals"), v.literal("vatCodes"), v.literal("items"), v.literal("deleted"));
 export const exactData = v.record(v.string(), v.union(v.string(), v.number(), v.boolean(), v.null()));
@@ -9,6 +9,7 @@ export const exactDatasetFields = { division: v.number(), kind: exactKind, gener
 export const exactRecordFields = { division: v.number(), kind: exactKind, generation: v.string(), providerId: v.string(), parentId: v.string(), data: exactData, deleted: v.boolean(), updatedAt: v.number() };
 export const exactOperationFields = { requestId: v.string(), actor: statementActor, division: v.number(), kind: v.union(v.literal("accounts"), v.literal("invoices"), v.literal("purchases"), v.literal("documents"), v.literal("attachment")), method: v.union(v.literal("POST"), v.literal("PUT")), providerId: v.optional(v.string()), payloadJson: v.string(), expectedModified: v.optional(v.string()), state: v.union(v.literal("queued"), v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("uncertain")), message: v.optional(v.string()), createdAt: v.number(), updatedAt: v.number() };
 export const exactTables = {
+  exactWorkspaceLinks: defineTable({ companyId: statementCompany, division: v.number() }).index("by_company", ["companyId"]).index("by_division", ["division"]),
   exactConnections: defineTable({ key: v.string(), state: v.string(), encryptedTokens: v.optional(v.string()), expiresAt: v.optional(v.number()), userId: v.optional(v.string()), user: v.optional(v.string()), currentDivision: v.optional(v.number()), lastDiscoveryAt: v.optional(v.number()), error: v.optional(v.string()), leaseToken: v.optional(v.string()), leaseUntil: v.number(), nextAllowedAt: v.number(), discoveryPage: v.optional(v.string()), discoveryRun: v.optional(v.number()), discoveryFinalizing: v.optional(v.boolean()), resyncRun: v.optional(v.number()) }).index("by_key", ["key"]),
   exactOAuthStates: defineTable({ hash: v.string(), actor: statementActor, expiresAt: v.number() }).index("by_hash", ["hash"]).index("by_expiresAt", ["expiresAt"]),
   exactCompanies: defineTable(exactCompanyFields).index("by_division", ["division"]),

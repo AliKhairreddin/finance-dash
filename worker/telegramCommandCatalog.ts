@@ -63,6 +63,7 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "teams", description: "List teams", access: "read", input: "tap" },
   { command: "health", description: "Show integration health", access: "read", input: "tap" },
   { command: "amex", description: "Import Amex PDF or CSV statements", access: "action", input: "tap" },
+  { command: "flex", description: "Record a manual Flex payment", access: "action", input: "required", arguments: "<company name> <amount>", example: "/flex Acme Ltd 1250" },
   { command: "kraken", description: "Record an outgoing Kraken transaction", access: "action", input: "required", arguments: "<company name> <amount>", example: "/kraken Acme Ltd 1250" },
   { command: "trust", description: "Record an outgoing Trust transaction", access: "action", input: "required", arguments: "<company name> <amount>", example: "/trust Acme Ltd 500" },
   { command: "sync", description: "Run bank and Merit synchronization", access: "action", input: "required", arguments: "CONFIRM", example: "/sync CONFIRM" },

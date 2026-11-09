@@ -1,3 +1,5 @@
+import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
+import { discoverStatementRevolut } from "./statementRevolut";
 import { savedSlashVirtualBalances, slashEntities, slashEntityLabel } from "../shared/slashEntities";
 import type { SlashEntity } from "../shared/types";
 import { meritCopyRequest, validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
@@ -15,7 +17,7 @@ import { handleManualBankApi } from "./manualBankTransactions";
 import { isManualBankSource, parseManualBankCommand } from "../shared/manualBankTransactions";
 import { handleCompanyDocumentApi, receiveContractEmail, recognizeContract } from "./companyDocuments";
 import { contractsInbox } from "../shared/companyDocuments";
-import { fetchMercuryActivityBatch } from "../shared/mercuryApi";
+import { fetchMercuryEntitiesActivityBatch } from "../shared/mercuryApi";
 import { handleRedTrackApi } from "./redtrack";
 import { handleWagnerSpendApi } from "../shared/wagnerSpendApi";
 import { wagnerSpendStore } from "../shared/wagnerSpendStore";
@@ -450,7 +452,7 @@ async function bankStorageConnectionDirectory(env: Env): Promise<Array<{
 }
 
 function bankSourceConfigured(env: Env, source: BankTransactionSource): boolean {
-  if (source === "mercury") return Boolean(env.MERCURY_API_TOKEN?.trim() && env.MERCURY_CONNECTION_ID?.trim());
+  if (source === "mercury") return Boolean(mercuryTokenNames.every(name => env[name]?.trim()) && env.MERCURY_CONNECTION_ID?.trim());
   if (source === "wise") {
     return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim() && env.ZOHO_CLIENT_ID?.trim() && env.ZOHO_CLIENT_SECRET?.trim() && env.ZOHO_REFRESH_TOKEN?.trim());
   }
@@ -2236,6 +2238,7 @@ interface TransactionPageOptions {
   source?: BankTransactionSource;
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
+  mercuryEntity?: import("../shared/types").MercuryEntity;
   slashEntity?: SlashEntity;
   accountId?: string;
   category?: string;
@@ -2336,6 +2339,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
   return Boolean(
     options.search
     || options.wiseEntity
+    || options.mercuryEntity
     || options.slashEntity
     || options.accountId
     || options.slashVirtualAccountId
@@ -2406,6 +2410,7 @@ function filterAndSortActivity(
   const search = normalizedActivityText(options.search);
   const rows = transactions.filter((transaction) => {
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
+    if (options.mercuryEntity && transaction.mercuryEntity !== options.mercuryEntity) return false;
     if (options.slashEntity && transaction.slashEntity !== options.slashEntity) return false;
     if (options.accountId && transaction.accountId !== options.accountId) return false;
     if (options.slashVirtualAccountId && (transaction.source !== "slash" || transaction.slashVirtualAccountId !== options.slashVirtualAccountId)) return false;
@@ -3144,7 +3149,7 @@ function integrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS", "ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN"].filter((name) => !env[name as keyof Env]);
   const wiseBalanceIssue = wiseNeeds.length === 0 ? bankIssues.wise ?? wiseActivity?.balanceIssue : undefined;
 
-  const mercuryNeeds = ["MERCURY_API_TOKEN", "MERCURY_CONNECTION_ID"].filter((name) => !env[name as keyof Env]);
+  const mercuryNeeds = [...mercuryTokenNames, "MERCURY_CONNECTION_ID"].filter((name) => !env[name as keyof Env]);
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
     "REVOLUT_ISSUER",
@@ -3698,6 +3703,7 @@ async function syncMercuryActivity(
   laneKey = "live",
   pageBudget = 10
 ): Promise<boolean> {
+  laneKey = `${laneKey}:mercury-entities-v1`;
   const connectionKey = await requireBankConnectionKey(env, "mercury");
   return withBankSyncLease(env, "mercury", connectionKey, async (lease) => {
     const storedCheckpoint = await bankSyncCheckpoint(env, "mercury", connectionKey, laneKey);
@@ -3709,8 +3715,8 @@ async function syncMercuryActivity(
     const range = storedCheckpoint
       ?? requestedRange
       ?? await bankSyncState(env, "mercury", connectionKey).then(state => state ? incrementalBankDateRange(state) : undefined);
-    const activity = await fetchMercuryActivityBatch({
-      apiToken: env.MERCURY_API_TOKEN,
+    const activity = await fetchMercuryEntitiesActivityBatch({
+      connections: mercuryConnections(env),
       ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range }),
       pageBudget,
       collectTransactions: false,
@@ -3738,6 +3744,10 @@ async function syncMercuryActivity(
       lease,
       activity
     );
+    await getConvexClient(env).mutation(api.banking.assignMercuryEntities, {
+      serviceToken: getConvexServiceToken(env), connectionKey,
+      accounts: activity.accounts.map(account => ({ id: account.id, entity: account.mercuryEntity! }))
+    });
     return activity.complete;
   });
 }
@@ -3981,6 +3991,7 @@ async function syncLatestBankActivity(
 }
 
 async function checkSlashVirtualAccountBalanceAlerts(env: Env): Promise<number> {
+  if (env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") return 0;
   if (
     !env.SLASH_API_KEY?.trim()
     || !env.SLASH_LEGAL_ENTITY_ID?.trim()
@@ -4093,6 +4104,7 @@ export async function getTelegramCashReport(env: Env): Promise<string> {
     serviceToken: getConvexServiceToken(env), connections
   });
   const slashAccounts = savedSlashVirtualBalances(accounts);
+  if (connections.some(connection => connection.source === "mercury")) assertSavedMercuryBalances(accounts);
   for (const { source } of connections) {
     if (!accounts.some((account) => account.source === source && account.status === "live")) {
       throw new ApiError(503, `${source} bank balances are unavailable; cash report cannot be totaled`);
@@ -4445,8 +4457,13 @@ async function getSnapshot(
   ) {
     bankIssues.amex ??= "No saved Amex activity yet. The next automatic refresh will create the initial 45-day cache.";
   }
-  if (bankSourceConfigured(env, "mercury") && !state.bankSyncStates.mercury) {
-    bankIssues.mercury ??= "No saved Mercury activity yet. Sync to load account balances and transactions.";
+  if (bankSourceConfigured(env, "mercury")) {
+    const missingEntities = mercuryEntities.filter(entity => !state.bankAccounts.some(account => account.source === "mercury" && account.mercuryEntity === entity.id));
+    if (missingEntities.length > 0) {
+      bankIssues.mercury ??= `Mercury balances are pending for ${missingEntities.map(entity => entity.label).join(", ")}.`;
+    } else if (!state.bankSyncStates.mercury) {
+      bankIssues.mercury ??= "No saved Mercury activity yet. Sync to load account balances and transactions.";
+    }
   }
   const wise: WiseActivityResult = {
     ...emptyWiseActivity(),
@@ -7052,6 +7069,8 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const order = url.searchParams.get("order") ?? "desc";
   if (order !== "asc" && order !== "desc") throw new ApiError(400, "Transaction order is invalid");
+  const mercuryEntity = url.searchParams.get("mercuryEntity");
+  if (mercuryEntity !== null && !mercuryEntities.some(entity => entity.id === mercuryEntity)) throw new ApiError(400, "Mercury entity filter is invalid");
   const slashEntity = url.searchParams.get("slashEntity");
   if (slashEntity !== null && !slashEntities.some(entity => entity.id === slashEntity)) throw new ApiError(400, "Slash entity filter is invalid");
   const wiseEntity = url.searchParams.get("wiseEntity");
@@ -7105,6 +7124,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(source ? { source } : {}),
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
+    ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
     ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),
     ...(accountId ? { accountId } : {}),
     ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
@@ -8907,11 +8927,12 @@ export async function handleTelegramCommand(
         if (!args) return telegramMissingInput(definition);
         if (!context || !Number.isSafeInteger(context.updateId) || context.updateId < 0) throw new ApiError(400, "Send this command as a new Telegram message.");
         const fields = parseManualBankCommand(args, context.sentAt!);
+        if (command === "flex") fields.currency = "USD";
         const result = await getConvexClient(env).mutation(api.manualBankTransactions.createFromTelegram, {
           serviceToken: getConvexServiceToken(env), source: command, ...fields,
           intakeKey: `telegram:${user.chatId}:${context.updateId}`, sentAt: context.sentAt!, createdBy: user.normalizedUsername === "ali" ? "Ali" : "Ali M"
         });
-        const label = command === "kraken" ? "Kraken" : "Trust";
+        const label = command === "kraken" ? "Kraken" : command === "flex" ? "Flex" : "Trust";
         return result.duplicate
           ? `✅ This Telegram transaction is already recorded in ${label}.\n\n${new URL(`/?page=banks&bankView=${command}`, env.PUBLIC_APP_URL)}`
           : `✅ Recorded in ${label}\n\n${fields.companyName}\nOut: ${fields.amount} ${fields.currency}\nDate: ${fields.date}\n\nEdit in Banks → ${label}:\n${new URL(`/?page=banks&bankView=${command}`, env.PUBLIC_APP_URL)}`;
@@ -8958,6 +8979,21 @@ export default {
     const statementResponse = await routeStatementSurface(request, env);
     if (statementResponse) return statementResponse;
     if (new URL(request.url).pathname === "/api/slash/card-events") return handleSlashCardWebhook(request, env);
+    if (new URL(request.url).pathname === "/api/internal/mercury/entities") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
+      try {
+        const url = new URL(request.url);
+        const connectionKey = await requireBankConnectionKey(env, "mercury");
+        const complete = request.method === "POST" && url.searchParams.get("action") !== "migrate"
+          ? await syncMercuryActivity(env, url.searchParams.has("fromDate") || url.searchParams.has("toDate")
+            ? parseSlashTransactionDateRange(url.searchParams.get("fromDate"), url.searchParams.get("toDate")) : defaultBankDateRange(), "entity-setup") : undefined;
+        const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, { serviceToken: getConvexServiceToken(env), connections: [{ source: "mercury", connectionKey }] });
+        const migration = request.method === "POST" && accounts.length > 0 && accounts.every(account => account.mercuryEntity)
+          ? await getConvexClient(env).mutation(api.banking.assignMercuryEntities, { serviceToken: getConvexServiceToken(env), connectionKey, accounts: accounts.map(account => ({ id: account.id, entity: account.mercuryEntity! })) }) : undefined;
+        return json({ accounts, complete, migration, ...(url.searchParams.get("preview") === "cash" ? { cashReport: await getTelegramCashReport(env) } : {}) });
+      } catch (error) { return json({ message: error instanceof Error ? error.message : "Mercury entity verification failed" }, { status: 502 }); }
+    }
     if (new URL(request.url).pathname === "/api/internal/slash/entities") {
       if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
@@ -9019,6 +9055,10 @@ export default {
       if (!env.CONVEX_SERVICE_TOKEN || request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       try { const { id } = await request.json() as { id: string }; return json(await extractDocument(env, id)); }
       catch (error) { console.error(JSON.stringify({ event: "document_extraction_failed", error: error instanceof Error ? error.message : String(error) })); return json({ message: "Document extraction failed" }, { status: error instanceof DocumentExtractionError && error.status === 429 ? 429 : 502, ...(error instanceof DocumentExtractionError && error.retryAfterSeconds ? { headers: { "Retry-After": String(error.retryAfterSeconds) } } : {}) }); }
+    }
+    if (new URL(request.url).pathname === "/api/internal/revolut/statement-discovery") {
+      if (request.method !== "POST" || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({message:"Unauthorized"},{status:401});
+      await discoverStatementRevolut(env); return json({checked:true});
     }
     if (new URL(request.url).pathname === "/api/internal/revolut/authorize") return handleRevolutAuthorization(request, env);
     const publicTopUpResponse = await handlePublicTopUps(request, env);
@@ -9090,7 +9130,7 @@ export default {
         failures.push(error);
       }
       try {
-        await sendTelegramCashReportIfDue(env, controller.scheduledTime, () => getTelegramSlashReport(env), "daily-slash");
+        if (env.SLASH_SPEND_NOTIFICATIONS_ENABLED === "true") await sendTelegramCashReportIfDue(env, controller.scheduledTime, () => getTelegramSlashReport(env), "daily-slash");
       } catch (error) {
         console.error(JSON.stringify({ event: "telegram_slash_report_failed", scheduledTime: controller.scheduledTime, error: error instanceof Error ? error.message : String(error) }));
         failures.push(error);
@@ -9103,7 +9143,7 @@ export default {
         failures.push(error);
       }
       try {
-        await sendTelegramCashReportIfDue(env, controller.scheduledTime,
+        if (env.SLASH_SPEND_NOTIFICATIONS_ENABLED === "true") await sendTelegramCashReportIfDue(env, controller.scheduledTime,
           () => getTelegramSlashRejectedCardsReport(env, controller.scheduledTime), "daily-slash-rejected-cards");
       } catch (error) {
         console.error(JSON.stringify({ event: "telegram_slash_rejected_cards_report_failed", scheduledTime: controller.scheduledTime, error: error instanceof Error ? error.message : String(error) }));
@@ -9176,6 +9216,12 @@ export default {
           scheduledTime: controller.scheduledTime,
           error: error instanceof Error ? error.message : String(error)
         }));
+        failures.push(error);
+      }
+      try {
+        await discoverStatementRevolut(env);
+      } catch(error) {
+        console.error(JSON.stringify({event:"statement_revolut_discovery_failed",error:error instanceof Error?error.message:String(error)}));
         failures.push(error);
       }
       try {

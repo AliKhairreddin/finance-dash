@@ -8,7 +8,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { InfoPopover } from "@/components/ui/finance-visuals";
 import { SortableTableHead, type TableSortDirection } from "@/components/ui/sortable-table-head";
 import { useUrlState } from "@/lib/url-state";
-import { manualBankSortKeys, validateManualBankFields, type ManualBankFields, type ManualBankPage, type ManualBankSource, type ManualBankSortKey, type ManualBankTransaction } from "../../../shared/manualBankTransactions";
+import { manualBankSources, manualBankSortKeys, validateManualBankFields, type ManualBankFields, type ManualBankPage, type ManualBankSource, type ManualBankSortKey, type ManualBankTransaction } from "../../../shared/manualBankTransactions";
 import { financeOperatingDate } from "../../../shared/operatingDate";
 
 const columns: Array<{ key: ManualBankSortKey; label: string }> = [
@@ -19,7 +19,7 @@ const columns: Array<{ key: ManualBankSortKey; label: string }> = [
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 
 export function ManualBankTransactions({ source }: { source: ManualBankSource }) {
-  const label = source === "kraken" ? "Kraken" : "Trust";
+  const label = manualBankSources.find(item => item.id === source)!.label;
   const [sort, setSort] = useUrlState<ManualBankSortKey>(`${source}Sort`, "date", { allowedValues: manualBankSortKeys });
   const [order, setOrder] = useUrlState<TableSortDirection>(`${source}Order`, "desc", { allowedValues: ["asc", "desc"] });
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
@@ -55,13 +55,14 @@ export function ManualBankTransactions({ source }: { source: ManualBankSource })
   return <section className="panel wide-panel">
     <div className="panel-header">
       <div className="flex items-center gap-2"><h3>Transactions</h3><InfoPopover label={`${label} transactions`}>
-        Add transactions here or, for Ali and Ali M, send /{source} Acme Ltd 1250 in Telegram. Payments default to USDC and out. Company, amount, currency, direction, and date are editable. New dashboard entries default to today; Telegram entries use the message date in Eastern time. Deleted entries retain their audit history. These manual records are kept in this ledger and do not change bank balances, holdings, or bank analytics.
+        Add transactions here or, for Ali and Ali M, send /{source} Acme Ltd 1250 in Telegram. Payments default to {source === "flex" ? "USD" : "USDC"} and out. Company, amount, currency, direction, and date are editable. New dashboard entries default to today; Telegram entries use the message date in Eastern time. Deleted entries retain their audit history. These manual records are kept in this ledger and do not change bank balances, holdings, or bank analytics.
       </InfoPopover></div>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon-sm" aria-label="Refresh transactions" title="Refresh transactions" disabled={loading} onClick={reload}><RefreshCw size={14} /></Button>
         <Button onClick={() => setEditing("new")}><Plus size={14} /> Add transaction</Button>
       </div>
     </div>
+    {source === "flex" && <div className="status-pill">Manual entries · Live balances and alerts unavailable</div>}
     {error && <div role="alert" className="income-callout warning">{error}<Button variant="outline" onClick={reload}>Retry</Button></div>}
     <div ref={tableWrap} className="table-wrap" aria-busy={loading}>
       <table className="data-table">
@@ -94,7 +95,7 @@ export function ManualBankTransactions({ source }: { source: ManualBankSource })
 function ManualBankEditor({ source, row, onClose, onSaved }: { source: ManualBankSource; row?: ManualBankTransaction; onClose: () => void; onSaved: () => void }) {
   const [companyName, setCompanyName] = useState(row?.companyName ?? "");
   const [amount, setAmount] = useState(row ? String(row.amount) : "");
-  const [currency, setCurrency] = useState(row?.currency ?? "USDC");
+  const [currency, setCurrency] = useState(row?.currency ?? (source === "flex" ? "USD" : "USDC"));
   const [date, setDate] = useState(() => row?.date ?? financeOperatingDate(Date.now()));
   const [direction, setDirection] = useState<ManualBankFields["direction"]>(row?.direction ?? "out");
   // Keep the same identity when retrying after an uncertain network response.
@@ -115,7 +116,7 @@ function ManualBankEditor({ source, row, onClose, onSaved }: { source: ManualBan
     finally { setSaving(false); }
   }
   return <Dialog open onOpenChange={open => { if (!open && !saving) onClose(); }}>
-    <DialogContent showCloseButton={!saving}><DialogHeader><DialogTitle>{row ? "Edit" : "Add"} {source === "kraken" ? "Kraken" : "Trust"} transaction</DialogTitle></DialogHeader>
+    <DialogContent showCloseButton={!saving}><DialogHeader><DialogTitle>{row ? "Edit" : "Add"} {manualBankSources.find(item => item.id === source)!.label} transaction</DialogTitle></DialogHeader>
       <form onSubmit={submit} className="grid gap-4">
         <div className="grid gap-2"><Label htmlFor="manual-company">Company</Label><Input id="manual-company" value={companyName} maxLength={200} required onChange={event => setCompanyName(event.target.value)} /></div>
         <div className="grid grid-cols-2 gap-3">
@@ -147,7 +148,7 @@ function ManualBankDelete({ row, onClose, onDeleted }: { row: ManualBankTransact
   }
   return <Dialog open onOpenChange={open => { if (!open && !deleting) onClose(); }}>
     <DialogContent showCloseButton={!deleting}>
-      <DialogHeader><DialogTitle>Delete {row.source === "kraken" ? "Kraken" : "Trust"} transaction?</DialogTitle>
+      <DialogHeader><DialogTitle>Delete {manualBankSources.find(item => item.id === row.source)!.label} transaction?</DialogTitle>
         <DialogDescription>Remove {row.companyName} · {row.amount.toLocaleString("en-US", { maximumFractionDigits: 8 })} {row.currency} · {row.date} from this ledger?</DialogDescription>
       </DialogHeader>
       {error && <p role="alert" className="danger-text">{error}</p>}

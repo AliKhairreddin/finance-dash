@@ -294,7 +294,7 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
   try {
     const reply = await handleTelegramCommand(env as never, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/cash");
     assert.ok(typeof reply !== "string" && "messages" in reply);
-    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Wise DN ≈ USD 100.00\nRevolut ≈ USD 120.00\nSlash · Mojo Labs LLC ≈ USD 1,200.00\nSlash · CoverageBird ≈ USD 0.00\nSlash · CoverageBird Pro ≈ USD 0.00" });
+    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Wise DN ≈ USD 100.00\nRevolut ≈ USD 120.00\nSlash ≈ USD 1,200.00" });
     assert.equal(reply.messages.length, 1);
     assert.match(reply.messages[0], /Bank total ≈ USD 1,420\.00/u);
     assert.match(reply.messages[0], /Slash · Mojo Labs LLC ≈ USD 1,200\.00\n• USD 1,200\.00/u);

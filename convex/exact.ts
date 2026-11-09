@@ -1,10 +1,11 @@
+import { exactWorkspaceCompany } from "../shared/exactWorkspace";
 import { fullStatementManagement } from "./statementAccess";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { query, mutation, internalQuery, internalMutation, type QueryCtx, type MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { exactData, exactKind, exactCompanyFields, exactDatasetFields, exactRecordFields } from "./exactSchema";
-import { statementActor } from "./statementSchema";
+import { statementActor, statementCompany } from "./statementSchema";
 import { exactKinds, exactResources, exactDeleteKinds, exactWritePayload, exactGuid, type ExactWriteKind, type ExactKind } from "../shared/exact";
 import { normalizeStatementActor, statementCompanies } from "../shared/statements";
 
@@ -33,13 +34,14 @@ async function lease(ctx: MutationCtx, token: string) {
 const publicDataset = (row: Doc<"exactDatasets">) => ({ division: row.division, kind: row.kind, state: row.state, lastCompletedAt: row.lastCompletedAt, error: row.error, nextRunAt: row.nextRunAt });
 const datasetView = v.object({ division: v.number(), kind: exactKind, state: v.string(), lastCompletedAt: v.optional(v.number()), error: v.optional(v.string()), nextRunAt: v.number() });
 const configured = () => Boolean(process.env.EXACT_CLIENT_ID && process.env.EXACT_CLIENT_SECRET && process.env.EXACT_ENCRYPTION_KEY);
-export const status = query({ args: auth, returns: v.object({ configured: v.boolean(), connected: v.boolean(), state: v.string(), error: v.optional(v.string()), user: v.optional(v.string()), lastDiscoveryAt: v.optional(v.number()), companies: v.array(v.object({ division: v.number(), name: v.string(), code: v.string(), currency: v.string(), active: v.boolean() })), datasets: v.array(datasetView) }), handler: async (ctx, args) => {
+export const status = query({ args: auth, returns: v.object({ configured: v.boolean(), connected: v.boolean(), state: v.string(), error: v.optional(v.string()), user: v.optional(v.string()), lastDiscoveryAt: v.optional(v.number()), companies: v.array(v.object({ division: v.number(), name: v.string(), code: v.string(), currency: v.string(), active: v.boolean(), workspaceCompanyId: v.optional(statementCompany) })), datasets: v.array(datasetView) }), handler: async (ctx, args) => {
   await access(ctx, args); const c = await connection(ctx);
   const companies = await ctx.db.query("exactCompanies").take(1001);
   if (companies.length > 1000) throw new ConvexError("Exact company scope exceeds the supported 1,000-company limit");
   const datasets = await ctx.db.query("exactDatasets").take(14001);
+  const links = await ctx.db.query("exactWorkspaceLinks").take(100);
   return { configured: configured(), connected: c?.state === "connected", state: c?.state ?? "not_connected", error: c?.error, user: c?.user, lastDiscoveryAt: c?.lastDiscoveryAt,
-    companies: companies.filter(x => x.active).map(({ division, name, code, currency, active }) => ({ division, name, code, currency, active })), datasets: datasets.map(publicDataset) };
+    companies: companies.filter(x => x.active).map(({ division, name, code, currency, active }) => ({ division, name, code, currency, active, workspaceCompanyId: links.find(link => link.division === division)?.companyId ?? exactWorkspaceCompany(name) })), datasets: datasets.map(publicDataset) };
 } });
 export const records = query({ args: { ...auth, division: v.optional(v.number()), kind: exactKind }, returns: v.object({ records: v.array(v.object({ id: v.string(), division: v.number(), kind: exactKind, providerId: v.string(), parentId: v.string(), data: exactData, updatedAt: v.number() })), truncated: v.boolean(), datasets: v.array(datasetView) }), handler: async (ctx, args) => {
   await access(ctx, args); const c = await connection(ctx);
@@ -260,3 +262,19 @@ export const operationState = internalMutation({ args: { token: v.string(), id: 
   if (args.state !== "running") { await ctx.db.insert("statementAudit", { entityType: "exact", entityId: op._id, actor: op.actor, action: `change_${args.state}`, details: args.message ?? "", createdAt: new Date().toISOString() }); const ds = await dataset(ctx, op.division, op.kind === "attachment" ? "attachments" : op.kind); if (ds) await ctx.db.patch(ds._id, { nextRunAt: Date.now() }); }
   return null;
 } });
+
+export const linkWorkspace = mutation({
+  args: { ...auth, companyId: statementCompany, division: v.number() }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await access(ctx, args); const selected = await company(ctx, args.division);
+    const identified = exactWorkspaceCompany(selected.name);
+    if (identified && identified !== args.companyId) throw new ConvexError("The Exact legal company belongs to a different workspace");
+    const linked = await ctx.db.query("exactWorkspaceLinks").withIndex("by_division", q => q.eq("division", args.division)).unique();
+    if (linked && linked.companyId !== args.companyId) throw new ConvexError("This Exact company is already linked to another workspace");
+    const old = await ctx.db.query("exactWorkspaceLinks").withIndex("by_company", q => q.eq("companyId", args.companyId)).unique();
+    if (old) await ctx.db.patch(old._id, { division: args.division });
+    else await ctx.db.insert("exactWorkspaceLinks", { companyId: args.companyId, division: args.division });
+    await ctx.db.insert("statementAudit", { entityType: "exact", entityId: args.companyId, actor, action: "company_linked", details: String(args.division), createdAt: new Date().toISOString() });
+    return null;
+  }
+});

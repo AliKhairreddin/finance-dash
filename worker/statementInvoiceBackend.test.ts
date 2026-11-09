@@ -12,6 +12,7 @@ async function setup() {
   const fixture = await t.run(async ctx => {
     await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: [...statementPermissions], accountIds: [] });
     await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false, permissions: [...statementPermissions], accountIds: [] });
+    for (const companyId of ["amg-holding", "artec"] as const) await ctx.db.insert("statementPolicies", {companyId,settingsJson:JSON.stringify({salesInvoiceApproved:true,legalName:companyId==="amg-holding"?"AMG Holding":"Artec",legalAddress:"Test street",taxPolicy:"Test VAT policy",taxRate:"21",invoiceDatePolicy:"transaction"}),revision:1,actor:"Ali",updatedAt:new Date().toISOString()});
     const storageId = await ctx.storage.store(new Blob(["%PDF-sample"], { type: "application/pdf" }));
     const templateId = await ctx.db.insert("statementInvoiceTemplates", { companyId: "amg-holding", issuerKey: "our:amg-holding", issuerName: "AMG Holding", storageId, fileName: "test.pdf", layoutJson: JSON.stringify({ headerPercent: 10, footerPercent: 10, sellerDetails: "Test seller", paymentDetails: "" }), approved: true, createdAt: Date.now(), actor: "Ali", model: "saved/model" });
     const base = { date: "2026-10-26", description: "Test service", source: "Test bank", amountMinor: "12100", currency: "EUR", direction: "in" as const, reviewReasons: [], origin: "manual" as const, status: "pending" as const, documentIds: [], revision: 1, createdAt: "2026-10-26", updatedAt: "2026-10-26", createdBy: "Ali", candidateKey: "test", intakeKey: "test" };
@@ -62,17 +63,17 @@ const pair = { ours: { name: "AMG Holding", address: "Our street 1, Amsterdam", 
 test("automatic numbers are unique, skip existing numbers, preserve retries, and use transaction dates", async () => {
   const { t, input, other } = await setup();
   await t.run(async ctx => { await ctx.db.patch(input.ids[0], { date: "2026-09-24" }); });
-  const draft = { ...JSON.parse(input.draftJson), date: "", number: "AMG-2026-000001" };
+  const draft = { ...JSON.parse(input.draftJson), date: "", number: "AMG-INV-2026-000001" };
   await t.mutation(api.statementInvoices.begin, { ...input, draftJson: JSON.stringify(draft) });
   const create = { ...input, requestId: crypto.randomUUID(), draftJson: JSON.stringify({ ...draft, number: "" }) };
   const id = await t.mutation(api.statementInvoices.begin, create);
   assert.equal(await t.mutation(api.statementInvoices.begin, create), id);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
-  assert.equal(row.number, "AMG-SUP-2026-000001"); assert.equal(row.draft.date, "2026-09-24");
+  assert.equal(row.number, "AMG-INV-2026-000001"); assert.equal(row.draft.date, "2026-09-24");
   const next = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID() });
   assert.equal(next, id);
   const artec = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [other], plainDetailsJson: JSON.stringify({ ...pair, ours: { ...pair.ours, name: "Artec" } }) });
-  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: artec })).number, "ARTEC-SUP-2026-000001");
+  assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: artec })).number, "ARTEC-INV-2026-000001");
   await t.run(async ctx => { await ctx.db.patch(other, { companyId: "amg-holding", date: "2026-09-25" }); });
   await assert.rejects(t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [...input.ids, other] }), /already belongs/);
 });
@@ -215,4 +216,11 @@ test("shared contacts require full management rights and duplicate imports canno
   await assert.rejects(t.mutation(api.statements.saveAddress, { ...fields, id: localId, actor: "Alaa" }));
   await t.mutation(api.statements.saveAddress, { ...fields, id, reviewNote: "Check VAT" });
   assert.equal((await t.query(api.statements.listAddresses, auth)).find(a => a._id === id)?.reviewNote, "Check VAT");
+});
+
+test("incoming payments require sales invoice setup instead of silently generating supporting records", async () => {
+ const {t,input}=await setup();
+ await t.run(async ctx=>{for(const p of await ctx.db.query("statementPolicies").collect())await ctx.db.delete(p._id)});
+ await assert.rejects(t.mutation(api.statementInvoices.begin,input),/Set up sales invoices/);
+ assert.equal((await t.run(ctx=>ctx.db.query("statementInvoices").collect())).length,0);
 });

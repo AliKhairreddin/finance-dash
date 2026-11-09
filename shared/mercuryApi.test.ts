@@ -12,7 +12,7 @@ import type { CashFlowLine } from "./types";
 
 const accountId = "00000000-0000-4000-8000-000000000001";
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const account = { id: accountId, name: "Mercury Checking", type: "mercury", kind: "checking", currentBalance: 1281.29, createdAt: "2025-09-05T16:44:03Z" };
+const account = { legalBusinessName: "Mojo Labs LLC", id: accountId, name: "Mercury Checking", type: "mercury", kind: "checking", currentBalance: 1281.29, createdAt: "2025-09-05T16:44:03Z" };
 const transaction = (n: number, patch: Record<string, unknown> = {}) => ({
   id: id(n), accountId, amount: 100, status: "sent", kind: "other", counterpartyName: "Client",
   createdAt: "2026-10-01T12:00:00Z", postedAt: "2026-10-02T12:00:00Z", ...patch
@@ -89,7 +89,7 @@ test("Mercury cash and settled operating transactions participate in totals, Ana
   assert.equal(analytics.bankPeriod.sources.find(row => row.source === "mercury")?.moneyOut.transactionCount, 1);
   assert.equal(analytics.sources.find(row => row.source === "mercury")?.transactionCount, 2);
   const report = buildTelegramCashReport({ accounts: activity.accounts.map(row => ({ ...row, syncedAt: row.updatedAt })), slashAccounts: [], rates: [], asOf: "2026-10-06T12:00:00Z" });
-  assert.match(report, /Mercury ≈ USD 1,281\.29/);
+  assert.match(report, /Mercury · Mojo Labs LLC ≈ USD 1,281\.29/);
   assert.match(cashReportCopyButton(report)!.text, /Mercury ≈ USD 1,281\.29/);
 });
 

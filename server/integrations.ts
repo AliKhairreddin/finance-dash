@@ -1,7 +1,8 @@
+import { mercuryConnections, mercuryTokenNames } from "../shared/mercuryEntities";
 import { meritCopyRequest } from "../shared/meritInvoiceCopy";
 import { fetchTuneTotals } from "../shared/tune";
 import { replacementRequest } from "../shared/meritReplacementRequest";
-import { fetchMercuryActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
+import { fetchMercuryEntitiesActivity as fetchMercuryApiActivity } from "../shared/mercuryApi";
 import crypto from "node:crypto";
 import type {
   AccountBalance,
@@ -148,7 +149,7 @@ export function getIntegrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS"].filter((name) => !process.env[name]);
   const activeWiseIssue = wiseNeeds.length === 0 ? wiseBalanceIssue : undefined;
 
-  const mercuryNeeds = ["MERCURY_API_TOKEN", "MERCURY_CONNECTION_ID"].filter((name) => !process.env[name]);
+  const mercuryNeeds = [...mercuryTokenNames, "MERCURY_CONNECTION_ID"].filter((name) => !process.env[name]);
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
     "REVOLUT_ISSUER",
@@ -866,8 +867,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function fetchMercuryActivity(dateRange?: { fromDate: string; toDate: string }) {
-  if (!process.env.MERCURY_API_TOKEN) return { accounts: [], transactions: [] };
-  return fetchMercuryApiActivity({ apiToken: process.env.MERCURY_API_TOKEN, dateRange });
+  if (mercuryTokenNames.some(name => !process.env[name])) return { accounts: [], transactions: [] };
+  return fetchMercuryApiActivity({ connections: mercuryConnections(process.env), dateRange });
 }
 
 export const requestMeritReplacement = (path: string, payload: unknown) => replacementRequest(meritUrl, path, payload);

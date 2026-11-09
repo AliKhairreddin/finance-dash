@@ -26,7 +26,7 @@ test("all scheduled reports allow copying and cash has one button for individual
         async put<T>(key: string, value: T) { data.set(key, structuredClone(value)); }
       };
       const state = new TelegramOtpState({ storage } as DurableObjectState, {
-        TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111" }),
+        SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111" }),
         TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali", TELEGRAM_SLASH_REPORT_RECIPIENTS: "Ali",
         TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS: "Ali", TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS: "Ali"
       } as WorkerEnv);
@@ -54,7 +54,7 @@ test("a scheduled cash retry copies the saved amounts even when the newly built 
     async put<T>(key: string, value: T) { data.set(key, structuredClone(value)); }
   };
   const state = new TelegramOtpState({ storage } as DurableObjectState, {
-    TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111" }), TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali"
+    SLASH_SPEND_NOTIFICATIONS_ENABLED: "true", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111" }), TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali"
   } as WorkerEnv);
   let fail = true;
   const payloads: Array<Record<string, unknown>> = [];
@@ -72,4 +72,9 @@ test("a scheduled cash retry copies the saved amounts even when the newly built 
     assert.deepEqual(payloads[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Wise LMD ≈ USD 100.00\nSlash ≈ USD 200.00" } }]] });
     assert.ok(payloads.slice(1).every((payload) => payload.reply_markup === undefined));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("disabled Slash balance and rejection deliveries cannot send queued reports", async () => {
+ const state=new TelegramOtpState({storage:{async get(){throw new Error("Should not read queued reports")}}} as unknown as DurableObjectState,{SLASH_SPEND_NOTIFICATIONS_ENABLED:"false"} as WorkerEnv);
+ for(const kind of ["daily-slash","daily-slash-rejected-cards"] as const)assert.equal(await state.deliverCashReport("2026-11-09","Ali","saved message",kind),false);
 });

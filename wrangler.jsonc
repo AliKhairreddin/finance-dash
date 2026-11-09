@@ -60,6 +60,7 @@
     "REVOLUT_ISSUER": "finance.thatcanadian.dev",
     "SLASH_BASE_URL": "https://api.slash.com",
     "SLASH_CONNECTION_ID": "primary",
+    "SLASH_SPEND_NOTIFICATIONS_ENABLED": "false",
     "SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD": "10000",
     "SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES": "Primary Account,Wagner,Reservation Account",
     "SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS": "Amin,Ali,Ali M",
