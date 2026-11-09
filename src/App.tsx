@@ -4321,7 +4321,7 @@ function BanksView({
           bankActivitySummary={bankActivitySummary}
           isLoadingBankActivitySummary={isLoadingBankActivitySummary}
           bankActivitySummaryError={bankActivitySummaryError}
-          periodActivity={periodSourceById.get(activeBank) ?? null}
+          periodActivity={activeBank === "mercury" ? mercuryPeriodActivity : periodSourceById.get(activeBank) ?? null}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
