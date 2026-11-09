@@ -110,6 +110,7 @@ export function assertBankAccountInput(account: AccountBalance): void {
     assertBoundedString(virtualAccount.name, "account.slashVirtualAccounts.name", 512, true);
     assertBoundedString(virtualAccount.accountId, "account.slashVirtualAccounts.accountId", 1_024, true);
     assertBoundedString(virtualAccount.closedAt, "account.slashVirtualAccounts.closedAt", 64);
+    if (virtualAccount.balance !== undefined) assertFiniteAmount(virtualAccount.balance, "account.slashVirtualAccounts.balance");
   }
   if (!/^[A-Z0-9]{3,8}$/.test(account.currency)) {
     throw new Error("account.currency must be a 3-8 character uppercase currency code");

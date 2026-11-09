@@ -244,8 +244,10 @@ const transactionCategoryRule = v.object({
 const transactionCategoryDirection = v.union(v.literal("in"), v.literal("out"), v.literal("both"));
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
+const slashEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const slashVirtualAccount = v.object({
+  balance: v.optional(v.number()),
   id: v.string(),
   name: v.string(),
   accountId: v.string(),
@@ -257,6 +259,7 @@ const transaction = v.object({
   id: v.string(),
   source: dataSource,
   wiseEntity: v.optional(wiseEntity),
+  slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccountId: v.optional(v.string()),
   slashVirtualAccountName: v.optional(v.string()),
@@ -325,6 +328,7 @@ const accountBalance = v.object({
   name: v.string(),
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
+  slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
   balance: v.number(),
@@ -730,6 +734,7 @@ export default defineSchema({
     .index("by_connection_key", ["connectionKey"])
     .index("by_source", ["source"])
     .index("by_source_connection", ["source", "connectionKey"])
+    .index("by_source_slash_entity", ["source", "slashEntity"])
     .index("by_source_connection_card_metadata_version_date_id", [
       "source",
       "connectionKey",

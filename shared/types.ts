@@ -1,3 +1,4 @@
+export type SlashEntity = "mojo" | "coveragebird" | "coveragepro";
 import type { MeritInvoiceCopy } from "./meritInvoiceCopy";
 import type { Id } from "../convex/_generated/dataModel";
 export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "merit" | "manual" | "tune" | "quinstreet";
@@ -54,6 +55,7 @@ export interface DashboardSession {
 }
 
 export interface SlashVirtualAccount {
+  balance?: number;
   id: string;
   name: string;
   accountId: string;
@@ -66,6 +68,7 @@ export interface AccountBalance {
   name: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  slashEntity?: SlashEntity;
   slashAccountSubtype?: SlashAccountSubtype;
   slashVirtualAccounts?: SlashVirtualAccount[];
   balance: number;
@@ -572,6 +575,7 @@ export interface Transaction {
   providerLegacyId?: string;
   source: DataSource;
   wiseEntity?: WiseEntity;
+  slashEntity?: SlashEntity;
   slashAccountSubtype?: SlashAccountSubtype;
   slashVirtualAccountId?: string;
   slashVirtualAccountName?: string;
@@ -949,6 +953,7 @@ export interface BankPeriodMetrics {
   /** Operating activity only; internal transfers and capital movements are excluded. */
   sources: BankPeriodSourceMetrics[];
   wiseEntities: BankPeriodWiseEntityMetrics[];
+  slashEntities: Array<{ slashEntity: SlashEntity; moneyIn: BankPeriodDirectionMetrics; moneyOut: BankPeriodDirectionMetrics; cashback: BankPeriodSlashCashbackMetrics }>;
   slashCashback: BankPeriodSlashCashbackMetrics;
 }
 

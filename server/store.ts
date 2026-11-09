@@ -2875,6 +2875,7 @@ type LocalTransactionPageOptions = {
   source?: BankTransactionSource;
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
+  slashEntity?: import("../shared/types").SlashEntity;
   accountId?: string;
   category?: string;
   team?: string;
@@ -2975,6 +2976,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.source || transaction.source === options.source)
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
+      && (!options.slashEntity || transaction.slashEntity === options.slashEntity)
       && (!options.accountId || transaction.accountId === options.accountId)
       && (!options.slashVirtualAccountId || (transaction.source === "slash" && transaction.slashVirtualAccountId === options.slashVirtualAccountId))
       && (!options.category || transactionBusinessCategory(transaction.category) === options.category)

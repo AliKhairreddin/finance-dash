@@ -1,3 +1,4 @@
+import { slashEntities } from "../shared/slashEntities";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -24,7 +25,7 @@ test("the webhook inbox persists the bank totals button and retries the saved re
     TELEGRAM_COMMAND_ADMIN_USERS: "Ali", TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin",
     CONVEX_URL: "https://cash-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test",
     WISE_CONNECTION_ID: "primary", WISE_ENVIRONMENT: "production", REVOLUT_CONNECTION_ID: "primary", REVOLUT_ENVIRONMENT: "production",
-    SLASH_BASE_URL: "https://api.slash.com", SLASH_API_KEY: "test", SLASH_LEGAL_ENTITY_ID: "test"
+    SLASH_CONNECTION_ID: "primary", SLASH_BASE_URL: "https://api.slash.com", SLASH_API_KEY: "test", SLASH_LEGAL_ENTITY_ID: "test"
   } as WorkerEnv;
   const originalFetch = globalThis.fetch;
   let queries = 0;
@@ -37,7 +38,8 @@ test("the webhook inbox persists the bank totals button and retries the saved re
       return Response.json({ status: "success", value: [
         { id: "lmd", source: "wise", wiseEntity: "lmd", name: "LMD", balance: 100, currency: "USD", status: "live" },
         { id: "dn", source: "wise", wiseEntity: "dn", name: "DN", balance: 200, currency: "USD", status: "live" },
-        { id: "revolut", source: "revolut", name: "Main", balance: 300, currency: "USD", status: "live" }
+        { id: "revolut", source: "revolut", name: "Main", balance: 300, currency: "USD", status: "live" },
+        ...slashEntities.map(entity => ({ id: entity.id, name: entity.label, source: "slash", slashEntity: entity.id, syncedAt: new Date().toISOString(), status: "live", currency: "USD", balance: entity.id === "mojo" ? 400 : 0, slashVirtualAccounts: [{ id: entity.id, name: "Primary", accountId: entity.id, accountType: "primary", balance: entity.id === "mojo" ? 400 : 0 }] }))
       ] });
     }
     if (url.pathname === "/virtual-account") return Response.json({ items: [{ virtualAccount: { id: "primary", name: "Primary", accountId: "parent", accountType: "primary" }, balance: { amountCents: 40000 } }], metadata: { count: 1 } });
@@ -60,7 +62,7 @@ test("the webhook inbox persists the bank totals button and retries the saved re
     assert.equal(queries, 1);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].protect_content, undefined);
-    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Wise LMD ≈ USD 100.00\nWise DN ≈ USD 200.00\nRevolut ≈ USD 300.00\nSlash ≈ USD 400.00" } }]] });
+    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Wise LMD ≈ USD 100.00\nWise DN ≈ USD 200.00\nRevolut ≈ USD 300.00\nSlash · Mojo Labs LLC ≈ USD 400.00\nSlash · CoverageBird ≈ USD 0.00\nSlash · CoverageBird Pro ≈ USD 0.00" } }]] });
     assert.equal(values.has("reply:1"), false);
   } finally { globalThis.fetch = originalFetch; }
 });

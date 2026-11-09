@@ -1,3 +1,5 @@
+import { slashEntities, slashEntityLabel, slashEntityViews, type SlashEntityView } from "../shared/slashEntities";
+import type { SlashEntity } from "../shared/types";
 import { TopUpsView, useTopUpSummary } from "@/features/top-ups/TopUpsView";
 import { ManualBankTransactions } from "@/features/banking/ManualBankTransactions";
 import { isManualBankSource, manualBankSources, type ManualBankSource } from "../shared/manualBankTransactions";
@@ -249,6 +251,7 @@ type TransactionPageRequest = {
   source?: BankSource;
   direction?: "in" | "out";
   wiseEntity?: WiseEntity;
+  slashEntity?: SlashEntity;
   accountId?: string;
   category?: string;
   team?: string;
@@ -701,6 +704,7 @@ function App() {
   const [allBankSource, setAllBankSource] = useUrlState<"all" | BankSource>("allBankSource", "all", {
     allowedValues: ["all", ...bankSources.map((source) => source.id)]
   });
+  const [slashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
   const [wiseEntityView, setWiseEntityView] = useUrlState<WiseEntityView>(
     "wiseEntity",
     "all",
@@ -817,6 +821,7 @@ function App() {
           : source === "slash"
             ? slashDateRange
             : allBankDateRange;
+    const slashEntity = !isTransactionReviewer && source === "slash" && slashEntityView !== "all" ? slashEntityView : undefined;
     const wiseEntity = !isTransactionReviewer && source === "wise" && wiseEntityView !== "all" ? wiseEntityView : undefined;
     const accountId = bankAccountFilter === "all" ? undefined : bankAccountFilter;
     const slashVirtualAccountId = !isTransactionReviewer && source === "slash" && slashVirtualAccountFilter !== "all"
@@ -832,6 +837,7 @@ function App() {
       ...(source ? { source } : {}),
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
+      ...(slashEntity ? { slashEntity } : {}),
       ...(accountId ? { accountId } : {}),
       ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
       ...(category ? { category } : {}),
@@ -864,6 +870,7 @@ function App() {
     transactionSortKey,
     wiseDateRange,
     wiseEntityView,
+    slashEntityView,
     isTransactionReviewer
   ]);
   transactionPageRequestRef.current = transactionPageRequest;
@@ -1072,6 +1079,7 @@ function App() {
     if (request.source) query.set("source", request.source);
     if (request.direction) query.set("direction", request.direction);
     if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
+    if (request.slashEntity) query.set("slashEntity", request.slashEntity);
     if (request.accountId) query.set("accountId", request.accountId);
     if (request.slashVirtualAccountId) query.set("slashVirtualAccountId", request.slashVirtualAccountId);
     if (request.category) query.set("category", request.category);
@@ -3748,6 +3756,8 @@ function BanksView({
   onDeleteHolding: (holdingId: string) => Promise<void>;
   onRefreshRates: () => Promise<void>;
 }) {
+  const [slashEntityView, setSlashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
+  const [, setSlashVirtualAccount] = useSlashVirtualAccountFilter();
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false);
   const [bankNavigationOpen, setBankNavigationOpen] = useState(false);
 
@@ -3764,6 +3774,7 @@ function BanksView({
       source.id,
       dashboard.accounts.filter((account) =>
         account.source === source.id
+        && (source.id !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)
         && hasNonZeroAccountBalance(account)
         && (
           source.id !== "wise"
@@ -3825,7 +3836,9 @@ function BanksView({
   const allTabPeriodTransactionCount = allTabPeriodActivity
     ? allTabPeriodActivity.moneyIn.transactionCount + allTabPeriodActivity.moneyOut.transactionCount
     : null;
-  const activePeriodActivity = activeSource?.id === "wise"
+  const slashPeriodEntity = bankPeriodMetrics?.slashEntities.find(entity => entity.slashEntity === slashEntityView);
+  const slashPeriodActivity = slashEntityView === "all" ? periodSourceById.get("slash") ?? null : slashPeriodEntity ?? null;
+  const activePeriodActivity = activeSource?.id === "slash" ? slashPeriodActivity : activeSource?.id === "wise"
     ? wisePeriodActivity
     : activeSource
       ? periodSourceById.get(activeSource.id) ?? null
@@ -3833,7 +3846,7 @@ function BanksView({
   const activePeriodTransactionCount = activePeriodActivity
     ? activePeriodActivity.moneyIn.transactionCount + activePeriodActivity.moneyOut.transactionCount
     : null;
-  const slashAccounts = dashboard.accounts.filter((account) => account.source === "slash");
+  const slashAccounts = dashboard.accounts.filter(account => account.source === "slash" && (slashEntityView === "all" || account.slashEntity === slashEntityView));
   const slashCashBalance = sumCurrencyTotals(
     slashAccounts.filter((account) => account.slashAccountSubtype === "cash"),
     (account) => account.balance
@@ -3843,7 +3856,7 @@ function BanksView({
     (account) => account.balance
   );
   const periodSlashCashback = periodMetricsReady && bankPeriodMetrics
-    ? bankPeriodMetrics.slashCashback
+    ? slashEntityView === "all" ? bankPeriodMetrics.slashCashback : slashPeriodEntity?.cashback ?? { eligiblePurchaseCount: 0, earned: {}, eligibleSpend: {}, credited: {} }
     : null;
   const cashbackEarnedUsd = periodSlashCashback
     ? convertCurrencyTotalsToUsd(periodSlashCashback.earned, dashboard.fxRates)
@@ -3861,6 +3874,7 @@ function BanksView({
   const detailAccounts = activeSource
     ? dashboard.accounts.filter((account) =>
       account.source === activeSource.id
+      && (activeSource.id !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)
       && (
         activeSource.id !== "wise"
         || wiseEntityView === "all"
@@ -3869,7 +3883,7 @@ function BanksView({
     )
     : [];
   const activeBankLabel = activeSource
-    ? activeSource.id === "wise" && wiseEntityView !== "all"
+    ? activeSource.id === "slash" && slashEntityView !== "all" ? `Slash · ${slashEntityLabel(slashEntityView)}` : activeSource.id === "wise" && wiseEntityView !== "all"
       ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
       : activeSource.label
     : activeBank === "holdings"
@@ -3878,7 +3892,7 @@ function BanksView({
 
   useEffect(() => {
     setBankDetailsOpen(false);
-  }, [activeBank, wiseEntityView]);
+  }, [activeBank, wiseEntityView, slashEntityView]);
 
   const headerMetrics = activeBank === "all" ? (
     <>
@@ -4068,6 +4082,17 @@ function BanksView({
             : <BankSyncStatus backgroundSync={backgroundSync} integrationStatuses={relevantIntegrationStatuses} />}
           <div className="bank-header-controls">
             {activeBank === "amex" && <AmexStatementImport onImported={onStatementImported} />}
+            {activeBank === "slash" && (
+              <NativeSelect aria-label="Slash entity" value={slashEntityView} onValueChange={value => {
+                setSlashEntityView(value as SlashEntityView);
+                setBankAccountFilter("all");
+                setSlashVirtualAccount("all");
+                onClearBankGroup();
+              }}>
+                <NativeSelectOption value="all">All entities</NativeSelectOption>
+                {slashEntities.map(entity => <NativeSelectOption key={entity.id} value={entity.id}>{entity.label}</NativeSelectOption>)}
+              </NativeSelect>
+            )}
             {activeBank === "wise" && (
               <NativeSelect
                 aria-label="Wise entity"
@@ -4326,7 +4351,7 @@ function BanksView({
           bankActivitySummary={bankActivitySummary}
           isLoadingBankActivitySummary={isLoadingBankActivitySummary}
           bankActivitySummaryError={bankActivitySummaryError}
-          periodActivity={periodSourceById.get("slash") ?? null}
+          periodActivity={slashPeriodActivity}
           periodMetricsError={bankPeriodMetricsError}
           periodMetricsLoading={isLoadingBankPeriodMetrics}
           periodMetricsReady={periodMetricsReady}
@@ -4590,6 +4615,7 @@ function BankReconciliationView({
   rangeControls,
   tableFooter
 }: BankReconciliationViewProps) {
+  const [slashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
   const [slashVirtualAccount, setSlashVirtualAccount] = useSlashVirtualAccountFilter();
   const sourceLabel = bankSourceLabel(source);
   const teamsById = useMemo(() => new Map(dashboard.teams.map((team) => [team.id, team])), [dashboard.teams]);
@@ -4617,10 +4643,10 @@ function BankReconciliationView({
   const statementAccounts = useAmexStatementAccounts(source === "amex");
   const accountOptions = [...new Map([
     ...statementAccounts.map(account => [account.id, account] as const),
-    ...dashboard.accounts.filter(account => account.source === source).map(account => [account.id, { id: account.id, name: account.name }] as const),
+    ...dashboard.accounts.filter(account => account.source === source && (source !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)).map(account => [account.id, { id: account.id, name: account.name }] as const),
     ...rows.filter(row => row.accountId).map(row => [row.accountId!, { id: row.accountId!, name: row.accountName }] as const)
   ]).values()].sort((left, right) => left.name.localeCompare(right.name));
-  const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts);
+  const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts.filter(account => slashEntityView === "all" || account.slashEntity === slashEntityView));
   const activeFilters: ActiveFilter[] = [
     ...(source === "slash" && slashVirtualAccount !== "all" ? [{
       key: "virtual-account",

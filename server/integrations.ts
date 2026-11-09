@@ -41,7 +41,7 @@ import {
   type RevolutTransactionDateRange
 } from "../shared/revolutApi";
 import {
-  fetchSlashActivityForLegalEntity,
+  fetchSlashEntitiesActivityBatch,
   type SlashTransactionDateRange
 } from "../shared/slashApi";
 import {
@@ -328,12 +328,15 @@ export async function fetchSlashActivity(
   const legalEntityId = process.env.SLASH_LEGAL_ENTITY_ID?.trim();
   const baseUrl = process.env.SLASH_BASE_URL?.trim();
   if (!apiKey || !legalEntityId || !baseUrl) return { accounts: [], transactions: [] };
-  return fetchSlashActivityForLegalEntity({
-    baseUrl,
-    apiKey,
-    legalEntityId,
-    dateRange
-  });
+  const transactions: Transaction[] = [];
+  let checkpoint: string | undefined;
+  for (let batch = 0; batch < 100; batch += 1) {
+    const result = await fetchSlashEntitiesActivityBatch({ baseUrl, apiKey, legalEntityId, ...(checkpoint ? { checkpoint } : { dateRange }) });
+    transactions.push(...result.transactions);
+    if (result.complete) return { accounts: result.accounts, transactions };
+    checkpoint = result.nextCheckpoint!;
+  }
+  throw new Error("Slash multi-entity sync exceeded its bounded page budget");
 }
 
 async function fetchAmexAccessToken(): Promise<string | undefined> {

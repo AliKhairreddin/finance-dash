@@ -1,3 +1,4 @@
+import { slashEntities } from "../shared/slashEntities";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FxRate } from "../shared/types";
@@ -260,7 +261,7 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
     CONVEX_URL: "https://cash-test.convex.cloud", CONVEX_SERVICE_TOKEN: "test-service-token",
     WISE_CONNECTION_ID: "primary", WISE_ENVIRONMENT: "production",
     REVOLUT_CONNECTION_ID: "primary", REVOLUT_ENVIRONMENT: "production",
-    SLASH_BASE_URL: "https://api.slash.com", SLASH_API_KEY: "test-slash-key", SLASH_LEGAL_ENTITY_ID: "test-entity",
+    SLASH_CONNECTION_ID: "primary", SLASH_BASE_URL: "https://api.slash.com", SLASH_API_KEY: "test-slash-key", SLASH_LEGAL_ENTITY_ID: "test-entity",
     COINBASE_SPOT_PRICES_URL: "https://api.coinbase.com/v2/prices",
     TELEGRAM_COMMAND_ADMIN_USERS: "Ali,Ali M", TELEGRAM_COMMAND_READ_ONLY_USERS: "Amin"
   };
@@ -272,7 +273,8 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
       assert.equal(body.path, "banking:getCashReportAccounts");
       return Response.json({ status: "success", value: [account(),
         account({ id: "eur", source: "revolut", currency: "EUR", balance: 100 }),
-        account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 2 })] });
+        account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 2 }),
+        ...slashEntities.map(entity => account({ id: entity.id, source: "slash", slashEntity: entity.id, syncedAt: new Date().toISOString(), balance: entity.id === "mojo" ? 1200 : 0, slashVirtualAccounts: [{ id: entity.id, name: "Primary", accountId: entity.id, accountType: "primary", balance: entity.id === "mojo" ? 1200 : 0 }] }))] });
     }
     if (url.pathname === "/virtual-account") {
       const headers = new Headers(init?.headers);
@@ -292,15 +294,15 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
   try {
     const reply = await handleTelegramCommand(env as never, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/cash");
     assert.ok(typeof reply !== "string" && "messages" in reply);
-    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Wise DN ≈ USD 100.00\nRevolut ≈ USD 120.00\nSlash ≈ USD 1,200.00" });
+    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Wise DN ≈ USD 100.00\nRevolut ≈ USD 120.00\nSlash · Mojo Labs LLC ≈ USD 1,200.00\nSlash · CoverageBird ≈ USD 0.00\nSlash · CoverageBird Pro ≈ USD 0.00" });
     assert.equal(reply.messages.length, 1);
     assert.match(reply.messages[0], /Bank total ≈ USD 1,420\.00/u);
-    assert.match(reply.messages[0], /Slash ≈ USD 1,200\.00\n• USD 1,200\.00/u);
+    assert.match(reply.messages[0], /Slash · Mojo Labs LLC ≈ USD 1,200\.00\n• USD 1,200\.00/u);
     assert.match(reply.messages[0], /Crypto \(separate\)\n• BTC 2\.00000000 ≈ USD 160,000\.00/u);
     assert.doesNotMatch(reply.messages[0].split("\n\nCrypto (separate)\n")[0], /BTC|Bitcoin|160,000|Wagner/u);
     assert.ok(requests.includes("/v2/prices/EUR-USD/spot"));
     assert.ok(requests.includes("/v2/prices/BTC-USD/spot"));
-    assert.equal(requests.filter((path) => path === "/virtual-account").length, 2);
+    assert.equal(requests.filter((path) => path === "/virtual-account").length, 0);
     cryptoQuoteUnavailable = true;
     const reportWithoutCryptoQuote = await getTelegramCashReport(env as never);
     assert.match(reportWithoutCryptoQuote, /Bank total ≈ USD 1,420\.00/u);

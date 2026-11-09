@@ -1,3 +1,4 @@
+import { slashEntityLabel } from "../shared/slashEntities";
 import { slashReportDateIfDue } from "./telegramSlashReport";
 import type { AccountBalance, FxRate } from "../shared/types";
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
@@ -80,7 +81,7 @@ export function buildTelegramCashReport(input: {
     const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? "Mercury" : "Revolut";
     add(group, account.currency, account.balance);
   }
-  for (const account of slashAccounts) add("Slash", account.currency, account.balance);
+  for (const account of slashAccounts) add(account.slashEntity ? `Slash · ${slashEntityLabel(account.slashEntity)}` : "Slash", account.currency, account.balance);
   for (const account of cryptoAccounts) {
     if (!Number.isFinite(account.balance)) throw new Error("Invalid crypto balance");
     const asset = account.currency.toUpperCase();
@@ -141,7 +142,7 @@ export function buildTelegramCashReport(input: {
 
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
   const text = message.split("\n").filter((line) =>
-    /^(Wise LMD|Wise DN|Revolut|Slash|Mercury) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
+    /^(Wise LMD|Wise DN|Revolut|Slash(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))?|Mercury) (?:≈ USD -?[\d,]+\.\d{2}|— USD total unavailable)$/u.test(line)
   ).join("\n");
   return text && text.length <= 256 ? { label: "Copy bank totals", text } : undefined;
 }

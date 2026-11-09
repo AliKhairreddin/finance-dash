@@ -46,6 +46,16 @@ Cash Flow Open invoices supports editing manual receivables, selecting visible i
 
 The Telegram `/pending_invoices` command lists unpaid sales invoices (including drafts) with outstanding amounts after allocations, in due-date order. `/slash_report` reads exact rolling 24-hour card activity and current virtual-account balances directly from Slash. The same report is delivered daily at 13:00 `Asia/Beirut` only to `TELEGRAM_SLASH_REPORT_RECIPIENTS` (Amin, Ali, and Ali M), with per-recipient retry state separate from the existing weekly cash report. It reports posted spend, pending charges, refunds, and suggested account funding for one further day of gross card activity (three days on Friday to reach Monday) plus the configured `SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD` reserve per open account. Saturday and Sunday reports show projected funding gaps for the remaining two or one days until Monday, and explain that bank transfers resume Monday. Weekdays are evaluated in Beirut time. The `/slash_report` command uses the same recipient restriction. It does not execute transfers or card repayments.
 
+## Slash entities
+
+Banks → Slash offers All entities, Mojo Labs LLC, CoverageBird (COVERAGEBIRD LLC), and CoverageBird Pro (COVERAGEPRO LLC). The entity selection is saved in the URL and scopes balances, transactions, groups, period activity, cashback, and account filters. The existing user-scoped `SLASH_API_KEY` accesses the three explicitly selected legal entities; `SLASH_LEGAL_ENTITY_ID` continues to identify Mojo and must match its discovery result. Additional entities are never imported automatically.
+
+The five-minute sync saves all three entities' account balances, virtual-account balances, and transaction pages in Convex. It validates every entity's account snapshot before replacing saved balances, uses a shared connection lease and a bounded multi-entity cursor, and marks a date range covered only after every entity finishes. Missing access or incomplete responses preserve saved data and surface a sync failure. Historical transactions retain their document/provider IDs, categories, matches, and ownership. The additive entity migration matches existing immutable account IDs in batches of 200. A new account set invalidates coverage without deleting history.
+
+Recent activity uses the existing three-day overlap; history remains saved and can be reconciled deliberately with the existing transaction history sync. Ordinary reloads read Convex. `/cash`, weekly bank totals, and `/balances slash` use saved virtual-account balances (deduplicated across cash/credit parents), include all three entities, and reject missing or over-30-minute-old snapshots. Daily funding, cashback, and rejected-card reports read each entity's exact reporting window and label each entity separately. Existing Mojo card webhooks and named balance-alert rules remain scoped to Mojo.
+
+The service-token-protected `/api/internal/slash/entities` endpoint verifies access and saved balances with GET; `?preview=cash` previews the report without sending Telegram messages. POST intentionally synchronizes the recent 45-day window using a resumable setup lane. This endpoint does not reveal credentials or execute payments. Production remains on `famous-oyster-878`.
+
 ## Architecture
 
 ```mermaid

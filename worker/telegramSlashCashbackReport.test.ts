@@ -1,3 +1,4 @@
+import { slashEntities } from "../shared/slashEntities";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchSlashCashbackActivity, type SlashCard, type SlashTransaction, type SlashVirtualAccountBalance } from "../shared/slashApi";
@@ -123,7 +124,9 @@ function sourceFetcher(requests: string[]): typeof fetch {
     requests.push(url.pathname);
     const headers = new Headers(init?.headers);
     assert.equal(headers.get("X-API-Key"), "test-key");
-    assert.equal(headers.get("x-legal-entity"), "test-entity");
+    if (url.pathname === "/legal-entity") return Response.json({ items: slashEntities.map(entity => ({ id: entity.id === "mojo" ? "test-entity" : entity.id, name: entity.legalName })), metadata: {} });
+    assert.ok(["test-entity", "coveragebird", "coveragepro"].includes(headers.get("x-legal-entity")!));
+    if (headers.get("x-legal-entity") !== "test-entity") return Response.json({ items: [], metadata: {} });
     assert.ok(!init?.method || init.method === "GET");
     if (url.pathname === "/transaction") {
       const period = slashPreviousDayReportPeriod(asOf);
@@ -151,7 +154,7 @@ test("live report follows all transaction pages, de-duplicates, resolves card na
     assert.match(result, /Posted spend: \$200.00 · 2 purchases/);
     assert.match(result, /Meta ads · Card ••1234/);
     assert.match(result, /Cashback not reported: 1 purchases/);
-    assert.deepEqual(requests.filter((path) => path === "/transaction"), ["/transaction", "/transaction"]);
+    assert.deepEqual(requests.filter((path) => path === "/transaction"), ["/transaction", "/transaction", "/transaction", "/transaction"]);
     assert.equal(requests.filter((path) => path === "/card/card").length, 1);
     assert.doesNotMatch(result, /must never be retained/);
     globalThis.fetch = async () => Response.json({ error: "unavailable" }, { status: 403 });
@@ -251,6 +254,6 @@ test("minute cron dispatches the cashback report and repeats neither recipient o
     for (const time of [asOf, asOf + 60_000]) await worker.scheduled({ scheduledTime: time, cron: "* * * * *", noRetry() {} }, deliveryEnv as never);
     assert.deepEqual(harness.deliveries.map((row) => row.username), ["Ali", "Ali M"]);
     assert.ok(harness.deliveries.every((row) => row.kind === "daily-slash-cashback" && row.message.includes("2026-09-14")));
-    assert.equal(requests.filter((path) => path === "/transaction").length, 2);
+    assert.equal(requests.filter((path) => path === "/transaction").length, 4);
   } finally { globalThis.fetch = original; }
 });

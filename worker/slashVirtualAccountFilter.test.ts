@@ -10,6 +10,7 @@ import worker from "./handler";
 const baseTransaction: Transaction = {
   id: "primary",
   source: "slash",
+  slashEntity: "mojo",
   accountId: "parent-account",
   accountName: "Slash USD",
   date: "2026-06-10",
@@ -30,7 +31,7 @@ const baseTransaction: Transaction = {
 const transactions: Transaction[] = [
   baseTransaction,
   { ...baseTransaction, id: "wagner-1", amount: 20, slashVirtualAccountId: "va-wagner", slashVirtualAccountName: "Wagner" },
-  { ...baseTransaction, id: "unknown", amount: 400, slashVirtualAccountId: undefined, slashVirtualAccountName: "Wagner" },
+  { ...baseTransaction, id: "unknown", slashEntity: "coveragebird", amount: 400, slashVirtualAccountId: undefined, slashVirtualAccountName: "Wagner" },
   { ...baseTransaction, id: "wagner-2", amount: 30, slashVirtualAccountId: "va-wagner", slashVirtualAccountName: "Wagner" },
   { ...baseTransaction, id: "other-bank", source: "revolut", amount: 700, slashVirtualAccountId: "va-wagner" }
 ];
@@ -103,6 +104,13 @@ test("Slash virtual account filtering scopes pages, groups, cards and drill-down
     assert.ok(detail.transactions.every((transaction) => transaction.slashVirtualAccountId === "va-wagner"));
   }
 
+  const bird = await page("source=slash&slashEntity=coveragebird&sort=amount&order=asc");
+  assert.deepEqual(bird.transactions.map(transaction => transaction.id), ["unknown"]);
+  assert.equal((await page("source=slash&slashEntity=coveragepro")).totalCount, 0);
+  const birdSummaryResponse = await request("/summary", "source=slash&slashEntity=coveragebird");
+  const birdSummary = await birdSummaryResponse.json() as BankActivitySummary;
+  assert.deepEqual(birdSummary.merchantGroups[0].spend, { USD: 400 });
+  assert.equal((await request("", "slashEntity=not-an-entity")).status, 400);
   const invalid = await request("", `slashVirtualAccountId=${"x".repeat(257)}`);
   assert.equal(invalid.status, 400);
 });

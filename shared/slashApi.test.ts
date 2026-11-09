@@ -139,7 +139,8 @@ test("Slash activity uses the user-scoped entity header, paginates, and maps cur
       id: "virtual-primary",
       name: "Primary",
       accountId: "account-debit",
-      accountType: "primary"
+      accountType: "primary",
+      balance: 1250
     }],
     balance: 1250,
     currency: "USD",
@@ -362,9 +363,9 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       source: "slash",
       slashAccountSubtype: "cash",
       slashVirtualAccounts: [
-        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary" },
-        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default" },
-        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default" }
+        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary", balance: 0 },
+        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default", balance: 0 },
+        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default", balance: 0 }
       ],
       balance: 0,
       currency: "USD",
@@ -377,9 +378,9 @@ test("Slash charge-card accounts use the available credit balance", async () => 
       source: "slash",
       slashAccountSubtype: "credit",
       slashVirtualAccounts: [
-        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary" },
-        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default" },
-        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default" }
+        { id: "virtual-primary", name: "Primary", accountId: "account-platinum", accountType: "primary", balance: 0 },
+        { id: "virtual-wagner", name: "Wagner", accountId: "account-platinum", accountType: "default", balance: 0 },
+        { id: "virtual-reservation", name: "Reservation", accountId: "account-platinum", accountType: "default", balance: 0 }
       ],
       balance: 66_551.98,
       currency: "USD",

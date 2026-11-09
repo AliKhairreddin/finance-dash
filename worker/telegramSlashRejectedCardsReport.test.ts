@@ -1,3 +1,4 @@
+import { slashEntities } from "../shared/slashEntities";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchSlashRejectedCardActivity, type SlashCard, type SlashRejectedCardTransaction, type SlashVirtualAccountBalance } from "../shared/slashApi";
@@ -92,7 +93,10 @@ function sourceFetcher(requests: string[]): typeof fetch {
     requests.push(url.pathname);
     assert.ok(!init?.method || init.method === "GET");
     assert.equal(new Headers(init?.headers).get("X-API-Key"), "test-key");
-    assert.equal(new Headers(init?.headers).get("x-legal-entity"), "test-entity");
+    if (url.pathname === "/legal-entity") return Response.json({ items: slashEntities.map(entity => ({ id: entity.id === "mojo" ? "test-entity" : entity.id, name: entity.legalName })), metadata: {} });
+    const entity = new Headers(init?.headers).get("x-legal-entity");
+    assert.ok(["test-entity", "coveragebird", "coveragepro"].includes(entity!));
+    if (entity !== "test-entity") return Response.json({ items: [], metadata: {} });
     if (url.pathname === "/transaction") {
       const period = slashPreviousDayReportPeriod(asOf);
       assert.equal(url.searchParams.get("filter:from_date"), String(period.fromTime));
@@ -128,7 +132,7 @@ test("live rejected cards report reads every page, resolves labels once and excl
     assert.match(result, /Reason: Insufficient funds/);
     assert.match(result, /Reason: Not provided by Slash/);
     assert.doesNotMatch(result, /must-never-retain|secret-cvv/);
-    assert.equal(requests.filter((path) => path === "/transaction").length, 2);
+    assert.equal(requests.filter((path) => path === "/transaction").length, 4);
     assert.equal(requests.filter((path) => path === "/card/card").length, 1);
     globalThis.fetch = async () => Response.json({ error: "unavailable" }, { status: 403 });
     await assert.rejects(getTelegramSlashRejectedCardsReport(env as never, asOf), /403/);
@@ -169,6 +173,7 @@ test("Ali and Ali M can run the rejected cards command on demand", async () => {
   const original = globalThis.fetch;
   let reads = 0;
   globalThis.fetch = async (input) => {
+    if (new URL(String(input)).pathname === "/legal-entity") return Response.json({ items: slashEntities.map(entity => ({ id: entity.id === "mojo" ? "test-entity" : entity.id, name: entity.legalName })), metadata: {} });
     assert.equal(new URL(String(input)).pathname, "/transaction");
     reads++;
     return Response.json({ items: [], metadata: {} });
@@ -178,7 +183,7 @@ test("Ali and Ali M can run the rejected cards command on demand", async () => {
       const reply = await handleTelegramCommand(env as never, { username, normalizedUsername: username.toLowerCase(), chatId: username === "Ali" ? "111" : "222" }, "administrator", "/rejected_cards");
       assert.match(String(reply), /No rejected Slash card payments/);
     }
-    assert.equal(reads, 2);
+    assert.equal(reads, 6);
   } finally { globalThis.fetch = original; }
 });
 
@@ -279,6 +284,6 @@ test("minute cron dispatches rejected cards to Ali and Ali M once independently 
     for (const time of [asOf, asOf + 60_000]) await worker.scheduled({ scheduledTime: time, cron: "* * * * *", noRetry() {} }, deliveryEnv as never);
     assert.deepEqual(harness.deliveries.map((row) => row.username), ["Ali", "Ali M"]);
     assert.ok(harness.deliveries.every((row) => row.kind === "daily-slash-rejected-cards" && row.message.includes("2026-09-14")));
-    assert.equal(requests.filter((path) => path === "/transaction").length, 2);
+    assert.equal(requests.filter((path) => path === "/transaction").length, 4);
   } finally { globalThis.fetch = original; }
 });

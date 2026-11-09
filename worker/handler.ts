@@ -1,3 +1,5 @@
+import { savedSlashVirtualBalances, slashEntities, slashEntityLabel } from "../shared/slashEntities";
+import type { SlashEntity } from "../shared/types";
 import { meritCopyRequest, validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
 import { draftKissterraWeek, existingKissterraInvoices, isKissterraPartner, kissterraBillingPartners, meritRevenueLinesRequest, validateRevenueInvoiceEdit } from "../shared/kissterraBilling";
 import { fetchTuneTotals } from "../shared/tune";
@@ -182,7 +184,8 @@ import {
   fetchRevolutActivityBatch
 } from "../shared/revolutApi";
 import {
-  fetchSlashActivityBatch,
+  fetchSlashEntitiesActivityBatch,
+  fetchSelectedSlashEntities,
   fetchSlashVirtualAccountBalancesForLegalEntity,
   parseSlashTransactionDateRange,
   type SlashTransactionDateRange
@@ -2232,6 +2235,7 @@ interface TransactionPageOptions {
   source?: BankTransactionSource;
   direction?: Transaction["direction"];
   wiseEntity?: "dn" | "lmd";
+  slashEntity?: SlashEntity;
   accountId?: string;
   category?: string;
   team?: string;
@@ -2331,6 +2335,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
   return Boolean(
     options.search
     || options.wiseEntity
+    || options.slashEntity
     || options.accountId
     || options.slashVirtualAccountId
     || options.category
@@ -2400,6 +2405,7 @@ function filterAndSortActivity(
   const search = normalizedActivityText(options.search);
   const rows = transactions.filter((transaction) => {
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
+    if (options.slashEntity && transaction.slashEntity !== options.slashEntity) return false;
     if (options.accountId && transaction.accountId !== options.accountId) return false;
     if (options.slashVirtualAccountId && (transaction.source !== "slash" || transaction.slashVirtualAccountId !== options.slashVirtualAccountId)) return false;
     if (options.category && transactionBusinessCategory(transaction.category) !== options.category) return false;
@@ -2572,6 +2578,7 @@ function requireBankAnalyticsSnapshot(
     || !isRecord(value.unmatchedMerchants)
     || !isRecord(value.bankPeriod)
     || !Array.isArray(value.bankPeriod.sources)
+    || !Array.isArray(value.bankPeriod.slashEntities)
     || !Array.isArray(value.bankPeriod.wiseEntities)
     || !isRecord(value.bankPeriod.slashCashback)
   ) {
@@ -3740,6 +3747,7 @@ async function syncSlashActivity(
   laneKey = "live",
   pageBudget = 10
 ): Promise<boolean> {
+  laneKey = `${laneKey}:slash-entities-v1`;
   const connectionKey = await requireBankConnectionKey(env, "slash");
   return withBankSyncLease(env, "slash", connectionKey, async (lease) => {
     const storedCheckpoint = await bankSyncCheckpoint(env, "slash", connectionKey, laneKey);
@@ -3751,7 +3759,7 @@ async function syncSlashActivity(
     const range = storedCheckpoint
       ?? requestedRange
       ?? incrementalBankDateRange(await bankSyncState(env, "slash", connectionKey));
-    const activity = await fetchSlashActivityBatch({
+    const activity = await fetchSlashEntitiesActivityBatch({
       baseUrl: env.SLASH_BASE_URL,
       apiKey: env.SLASH_API_KEY,
       legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
@@ -3782,6 +3790,10 @@ async function syncSlashActivity(
       lease,
       activity
     );
+    await getConvexClient(env).mutation(api.banking.assignSlashEntities, {
+      serviceToken: getConvexServiceToken(env), connectionKey,
+      accounts: activity.accounts.map(account => ({ id: account.id, entity: account.slashEntity! }))
+    });
     return activity.complete;
   });
 }
@@ -4040,43 +4052,45 @@ function telegramAlertDefaults(env: Env): {
   };
 }
 
+async function slashReportsForEntities(env: Env, build: (options: { baseUrl: string; apiKey: string; legalEntityId: string }) => Promise<string>): Promise<string> {
+  const options = { baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID };
+  const entities = await fetchSelectedSlashEntities(options);
+  const parts: string[] = [];
+  for (const entity of entities) parts.push(`${slashEntityLabel(entity.entity)}\n${await build({ ...options, legalEntityId: entity.id })}`);
+  return parts.join("\n\n");
+}
+
 export async function getTelegramSlashReport(env: Env): Promise<string> {
   const asOf = Date.now();
-  const options = { baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID };
-  const [accounts, transactions] = await Promise.all([
-    fetchSlashVirtualAccountBalancesForLegalEntity(options),
-    fetchSlashDailyCardActivity({ ...options, now: asOf })
-  ]);
-  return buildTelegramSlashReport({ accounts, transactions, asOf, reserveUsd: Number(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD) });
+  return slashReportsForEntities(env, async options => {
+    const [accounts, transactions] = await Promise.all([
+      fetchSlashVirtualAccountBalancesForLegalEntity(options), fetchSlashDailyCardActivity({ ...options, now: asOf })
+    ]);
+    return buildTelegramSlashReport({ accounts, transactions, asOf, reserveUsd: Number(env.SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD) });
+  });
 }
 
 export async function getTelegramSlashCashbackReport(env: Env, asOf = Date.now()): Promise<string> {
-  const activity = await fetchSlashCashbackActivity({
-    baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
-    ...slashPreviousDayReportPeriod(asOf)
+  return slashReportsForEntities(env, async options => {
+    const activity = await fetchSlashCashbackActivity({ ...options, ...slashPreviousDayReportPeriod(asOf) });
+    return buildTelegramSlashCashbackReport({ ...activity, asOf });
   });
-  return buildTelegramSlashCashbackReport({ ...activity, asOf });
 }
 
 export async function getTelegramSlashRejectedCardsReport(env: Env, asOf = Date.now()): Promise<string> {
-  const activity = await fetchSlashRejectedCardActivity({
-    baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID,
-    ...slashPreviousDayReportPeriod(asOf)
+  return slashReportsForEntities(env, async options => {
+    const activity = await fetchSlashRejectedCardActivity({ ...options, ...slashPreviousDayReportPeriod(asOf) });
+    return buildTelegramSlashRejectedCardsReport({ ...activity, asOf });
   });
-  return buildTelegramSlashRejectedCardsReport({ ...activity, asOf });
 }
 
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
-    .filter((connection) => connection.source === "wise" || connection.source === "revolut" || connection.source === "mercury");
-  const [accounts, slashAccounts] = await Promise.all([
-    getConvexClient(env).query(api.banking.getCashReportAccounts, {
-      serviceToken: getConvexServiceToken(env), connections
-    }),
-    fetchSlashVirtualAccountBalancesForLegalEntity({
-      baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID
-    })
-  ]);
+    .filter(connection => ["wise", "revolut", "mercury", "slash"].includes(connection.source));
+  const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, {
+    serviceToken: getConvexServiceToken(env), connections
+  });
+  const slashAccounts = savedSlashVirtualBalances(accounts);
   for (const { source } of connections) {
     if (!accounts.some((account) => account.source === source && account.status === "live")) {
       throw new ApiError(503, `${source} bank balances are unavailable; cash report cannot be totaled`);
@@ -7036,6 +7050,8 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const order = url.searchParams.get("order") ?? "desc";
   if (order !== "asc" && order !== "desc") throw new ApiError(400, "Transaction order is invalid");
+  const slashEntity = url.searchParams.get("slashEntity");
+  if (slashEntity !== null && !slashEntities.some(entity => entity.id === slashEntity)) throw new ApiError(400, "Slash entity filter is invalid");
   const wiseEntity = url.searchParams.get("wiseEntity");
   if (wiseEntity !== null && wiseEntity !== "dn" && wiseEntity !== "lmd") {
     throw new ApiError(400, "Transaction Wise entity is invalid");
@@ -7087,6 +7103,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(source ? { source } : {}),
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
+    ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),
     ...(accountId ? { accountId } : {}),
     ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
     ...(category ? { category } : {}),
@@ -8431,13 +8448,12 @@ async function telegramReadCommand(
       throw new ApiError(400, telegramHelp.balances);
     }
     if (filter === "slash") {
-      const accounts = await fetchSlashVirtualAccountBalancesForLegalEntity({
-        baseUrl: env.SLASH_BASE_URL,
-        apiKey: env.SLASH_API_KEY,
-        legalEntityId: env.SLASH_LEGAL_ENTITY_ID
+      const stored = await getConvexClient(env).query(api.banking.getCashReportAccounts, {
+        serviceToken: getConvexServiceToken(env), connections: [{ source: "slash", connectionKey: await requireBankConnectionKey(env, "slash") }]
       });
+      const accounts = savedSlashVirtualBalances(stored);
       return telegramList("🏦 Slash virtual-account balances", accounts.filter((account) => !account.closedAt).map((account) =>
-        `${account.name}: ${telegramMoney(account.balance, account.currency)}`
+        `${slashEntityLabel(account.slashEntity!)} · ${account.name}: ${telegramMoney(account.balance, account.currency)}`
       ), "No open Slash virtual accounts.");
     }
     const lines = filter === "holdings"
@@ -8940,6 +8956,19 @@ export default {
     const statementResponse = await routeStatementSurface(request, env);
     if (statementResponse) return statementResponse;
     if (new URL(request.url).pathname === "/api/slash/card-events") return handleSlashCardWebhook(request, env);
+    if (new URL(request.url).pathname === "/api/internal/slash/entities") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
+      try {
+        const entities = await fetchSelectedSlashEntities({ baseUrl: env.SLASH_BASE_URL, apiKey: env.SLASH_API_KEY, legalEntityId: env.SLASH_LEGAL_ENTITY_ID });
+        const connectionKey = await requireBankConnectionKey(env, "slash");
+        const complete = request.method === "POST" ? await syncSlashActivity(env, defaultBankDateRange(), "entity-setup") : undefined;
+        const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, { serviceToken: getConvexServiceToken(env), connections: [{ source: "slash", connectionKey }] });
+        const migration = request.method === "POST" && accounts.every(account => account.slashEntity)
+          ? await getConvexClient(env).mutation(api.banking.assignSlashEntities, { serviceToken: getConvexServiceToken(env), connectionKey, accounts: accounts.map(account => ({ id: account.id, entity: account.slashEntity! })) }) : undefined;
+        return json({ entities, accounts, complete, migration, ...(new URL(request.url).searchParams.get("preview") === "cash" ? { cashReport: await getTelegramCashReport(env) } : {}) });
+      } catch (error) { return json({ message: error instanceof Error ? error.message : "Slash entity verification failed" }, { status: 502 }); }
+    }
     if (new URL(request.url).pathname === "/api/internal/slash/card-alerts") {
       if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       if (request.method !== "POST" && request.method !== "GET") return json({ message: "Method not allowed" }, { status: 405 });

@@ -1,4 +1,5 @@
-import type { AccountBalance, SlashAccountSubtype, SlashVirtualAccount, Transaction } from "./types";
+import { slashEntities, slashEntityLabel } from "./slashEntities";
+import type { SlashEntity, AccountBalance, SlashAccountSubtype, SlashVirtualAccount, Transaction } from "./types";
 import {
   decodeBankSyncCheckpoint,
   encodeBankSyncCheckpoint,
@@ -95,6 +96,7 @@ export interface SlashActivityResult {
 }
 
 export interface SlashVirtualAccountBalance extends SlashVirtualAccount {
+  slashEntity?: SlashEntity;
   balance: number;
   currency: "USD";
 }
@@ -322,6 +324,83 @@ export interface SlashActivityBatchResult extends SlashActivityResult {
   complete: boolean;
   pagesFetched: number;
   providerTransactionsRead: number;
+}
+
+export interface SlashLegalEntity { id: string; name: string; entity: SlashEntity }
+
+export async function fetchSelectedSlashEntities({ baseUrl, apiKey, legalEntityId, fetcher = fetch }: SlashVirtualAccountOptions): Promise<SlashLegalEntity[]> {
+  const available = await fetchAllSlashPages(fetcher, new URL("/legal-entity", baseUrl),
+    { Accept: "application/json", "X-API-Key": apiKey }, value => {
+      const row = requiredRecord(value, "legal entity");
+      return { id: requiredString(row.id, "legal entity.id", maximumSlashProviderIdLength), name: requiredString(row.name, "legal entity.name") };
+    }, 100, 10);
+  const selected = slashEntities.map(entity => {
+    const matches = available.filter(row => row.name.trim().toLowerCase() === entity.legalName.toLowerCase());
+    if (matches.length !== 1) throw new Error(`Slash API access to ${entity.legalName} could not be verified`);
+    if (entity.id === "mojo" && matches[0].id !== legalEntityId) throw new Error("Slash Mojo Labs entity does not match the existing connection");
+    return { ...matches[0], entity: entity.id };
+  });
+  if (new Set(selected.map(entity => entity.id)).size !== selected.length) throw new Error("Slash returned duplicate legal entities");
+  return selected;
+}
+
+/** One frozen, resumable lane across the complete selected entity set. */
+export async function fetchSlashEntitiesActivityBatch(options: SlashActivityBatchOptions): Promise<SlashActivityBatchResult> {
+  if (options.checkpoint && options.dateRange) throw new Error("Slash sync accepts either a date range or a checkpoint, not both");
+  const fetcher = options.fetcher ?? fetch;
+  const entities = await fetchSelectedSlashEntities(options);
+  const decoded = options.checkpoint ? decodeBankSyncCheckpoint(options.checkpoint, "slash") : undefined;
+  const window = decoded ?? slashTransactionWindow(options.dateRange, options.now ?? Date.now());
+  let nextEntity = 0;
+  let entityCheckpoint: string | undefined;
+  if (decoded) {
+    const saved = requiredRecord(JSON.parse(decoded.cursor), "entity checkpoint");
+    if (saved.version !== 1 || JSON.stringify(saved.entityIds) !== JSON.stringify(entities.map(entity => entity.id))
+      || !Number.isInteger(saved.nextEntity) || Number(saved.nextEntity) < 0 || Number(saved.nextEntity) >= entities.length
+      || (saved.entityCheckpoint !== null && typeof saved.entityCheckpoint !== "string")) throw new Error("Slash entity checkpoint does not match the selected entities");
+    nextEntity = Number(saved.nextEntity);
+    entityCheckpoint = typeof saved.entityCheckpoint === "string" ? saved.entityCheckpoint : undefined;
+  }
+  // Validate every entity before registering the new account set or writing any balance.
+  const snapshots = [];
+  for (const entity of entities) {
+    const snapshot = await fetchSlashAccountSnapshot(fetcher, options.baseUrl, slashHeaders(options.apiKey, entity.id));
+    if (!snapshot.accounts.length) throw new Error(`${entity.name} has no accessible open accounts`);
+    snapshot.accounts = snapshot.accounts.map(account => ({ ...account, slashEntity: entity.entity, name: `${slashEntityLabel(entity.entity)} · ${account.name}` }));
+    snapshots.push(snapshot);
+  }
+  const accounts = snapshots.flatMap(snapshot => snapshot.accounts);
+  if (new Set(accounts.map(account => account.id)).size !== accounts.length) throw new Error("Slash entities returned overlapping account identities");
+  await options.onAccountsDiscovered?.(accounts);
+  const transactions: Transaction[] = [];
+  const budget = slashSyncPageBudget(options.pageBudget);
+  let pagesFetched = 0;
+  let providerTransactionsRead = 0;
+  while (nextEntity < entities.length && pagesFetched < budget) {
+    const entity = entities[nextEntity];
+    const result = await fetchSlashActivityBatchWithSnapshot({
+      baseUrl: options.baseUrl, apiKey: options.apiKey, legalEntityId: entity.id, fetcher,
+      ...(entityCheckpoint ? { checkpoint: entityCheckpoint } : {}),
+      pageBudget: budget - pagesFetched, collectTransactions: false,
+      onTransactionPage: async page => {
+        const tagged = page.map(transaction => {
+          const { providerLegacyId, ...fields } = transaction;
+          return { ...fields, ...(entity.entity === "mojo" ? { providerLegacyId } : {}), slashEntity: entity.entity, accountName: `${slashEntityLabel(entity.entity)} · ${transaction.accountName}` };
+        });
+        if (options.collectTransactions !== false) transactions.push(...tagged);
+        await options.onTransactionPage?.(tagged);
+      }
+    }, snapshots[nextEntity], window);
+    pagesFetched += result.pagesFetched;
+    providerTransactionsRead += result.providerTransactionsRead;
+    entityCheckpoint = result.nextCheckpoint ?? undefined;
+    if (!result.complete) break;
+    nextEntity += 1;
+  }
+  const complete = nextEntity === entities.length;
+  return { accounts, transactions, complete, pagesFetched, providerTransactionsRead,
+    nextCheckpoint: complete ? null : encodeBankSyncCheckpoint({ provider: "slash", windowStart: window.windowStart, windowEnd: window.windowEnd,
+      cursor: JSON.stringify({ version: 1, entityIds: entities.map(entity => entity.id), nextEntity, entityCheckpoint: entityCheckpoint ?? null }) }) };
 }
 
 interface SlashTransactionOptions {
@@ -953,7 +1032,7 @@ async function fetchSlashAccountSnapshot(
     ),
     fetchSlashVirtualAccountBalances(fetcher, baseUrl, headers)
   ]);
-  const slashVirtualAccounts = slashVirtualAccountBalances.map(slashVirtualAccountMetadata);
+  const slashVirtualAccounts = slashVirtualAccountBalances.map(account => ({ ...slashVirtualAccountMetadata(account), balance: account.balance }));
   const slashAccountIds = new Set(slashAccounts.map((account) => account.id));
   const unknownVirtualAccount = slashVirtualAccounts.find((account) => !slashAccountIds.has(account.accountId));
   if (unknownVirtualAccount) {
@@ -1030,7 +1109,11 @@ async function fetchSlashAccountSnapshot(
   return { accounts, accountIdentityByKey, virtualAccountDirectory };
 }
 
-export async function fetchSlashActivityBatch({
+export async function fetchSlashActivityBatch(options: SlashActivityBatchOptions): Promise<SlashActivityBatchResult> {
+  return fetchSlashActivityBatchWithSnapshot(options);
+}
+
+async function fetchSlashActivityBatchWithSnapshot({
   baseUrl,
   apiKey,
   legalEntityId,
@@ -1042,7 +1125,7 @@ export async function fetchSlashActivityBatch({
   onAccountsDiscovered,
   onTransactionPage,
   collectTransactions = true
-}: SlashActivityBatchOptions): Promise<SlashActivityBatchResult> {
+}: SlashActivityBatchOptions, snapshot?: Awaited<ReturnType<typeof fetchSlashAccountSnapshot>>, frozenWindow?: { windowStart: string; windowEnd: string }): Promise<SlashActivityBatchResult> {
   if (checkpoint && dateRange) {
     throw new Error("Slash sync accepts either a date range or a checkpoint, not both");
   }
@@ -1055,9 +1138,10 @@ export async function fetchSlashActivityBatch({
         windowStart: decodedCheckpoint.windowStart,
         windowEnd: decodedCheckpoint.windowEnd
       }
-    : slashTransactionWindow(dateRange, now);
+    : frozenWindow ?? slashTransactionWindow(dateRange, now);
+  if (frozenWindow && (window.windowStart !== frozenWindow.windowStart || window.windowEnd !== frozenWindow.windowEnd)) throw new Error("Slash entity checkpoint window does not match the sync lane");
   const headers = slashHeaders(apiKey, legalEntityId);
-  const { accounts, accountIdentityByKey, virtualAccountDirectory } = await fetchSlashAccountSnapshot(
+  const { accounts, accountIdentityByKey, virtualAccountDirectory } = snapshot ?? await fetchSlashAccountSnapshot(
     fetcher,
     baseUrl,
     headers

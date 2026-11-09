@@ -1,3 +1,5 @@
+import { slashEntities } from "../shared/slashEntities";
+import type { SlashEntity } from "../shared/types";
 import { recoverInvoiceReplacement, downloadInvoiceBackup } from "./store";
 import { handleManualBankApi } from "../worker/manualBankTransactions";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
@@ -608,6 +610,8 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       throw new ClientRequestError("Transaction limit must be between 1 and 200");
     }
     const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
+    const slashEntity = request.query.slashEntity;
+    if (slashEntity !== undefined && !slashEntities.some(entity => entity.id === slashEntity)) throw new Error("Slash entity filter is invalid");
     const wiseEntity = request.query.wiseEntity;
     if (wiseEntity !== undefined && wiseEntity !== "dn" && wiseEntity !== "lmd") {
       throw new ClientRequestError("Transaction Wise entity is invalid");
@@ -639,6 +643,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       ...(source ? { source } : {}),
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
+      ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),
       ...(accountId ? { accountId } : {}),
       ...(slashVirtualAccountId ? { slashVirtualAccountId } : {}),
       ...(category ? { category } : {}),

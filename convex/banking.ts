@@ -1,3 +1,4 @@
+import { slashEntityLabel } from "../shared/slashEntities";
 import type { Doc } from "./_generated/dataModel";
 import { wiseDescriptionReference } from "../shared/bankReferences";
 import { mutation, query, type MutationCtx } from "./_generated/server";
@@ -40,8 +41,10 @@ const bankSource = v.union(
 const bankConnection = v.object({ source: bankSource, connectionKey: v.string() });
 const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
 const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
+const slashEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
 const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
 const slashVirtualAccount = v.object({
+  balance: v.optional(v.number()),
   id: v.string(),
   name: v.string(),
   accountId: v.string(),
@@ -80,6 +83,7 @@ const transaction = v.object({
   id: v.string(),
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
+  slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccountId: v.optional(v.string()),
   slashVirtualAccountName: v.optional(v.string()),
@@ -181,6 +185,7 @@ const account = v.object({
   name: v.string(),
   source: bankSource,
   wiseEntity: v.optional(wiseEntity),
+  slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
   balance: v.number(),
@@ -1163,6 +1168,26 @@ export const getCashReportAccounts = query({
       return accounts.map(({ _id: _id, _creationTime: _creationTime, connectionKey: _connectionKey, ...item }) => item);
     }));
     return rows.flat();
+  }
+});
+
+/** Tag historical rows only after their immutable account IDs match a verified entity snapshot. */
+export const assignSlashEntities = mutation({
+  args: { serviceToken: v.string(), connectionKey: v.string(), accounts: v.array(v.object({ id: v.string(), entity: slashEntity })) },
+  returns: v.object({ updated: v.number(), done: v.boolean() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await assertBankConnectionBinding(ctx, "slash", args.connectionKey);
+    if (args.accounts.length > maximumBankAccountsPerSource || new Set(args.accounts.map(account => account.id)).size !== args.accounts.length) throw new Error("Invalid Slash entity account directory");
+    const entities = new Map(args.accounts.map(account => [account.id, account.entity]));
+    const rows = await ctx.db.query("bankTransactions").withIndex("by_source_slash_entity", q => q.eq("source", "slash").eq("slashEntity", undefined)).take(200);
+    for (const row of rows) {
+      const entity = row.accountId ? entities.get(row.accountId) : undefined;
+      if (!entity || row.connectionKey !== args.connectionKey) throw new Error("Historical Slash transaction does not match a verified entity account");
+      await ctx.db.patch(row._id, { slashEntity: entity, accountName: `${slashEntityLabel(entity)} · ${row.accountName}` });
+    }
+    if (rows.length) await bumpLedgerRevision(ctx, rows.map(row => row.date));
+    return { updated: rows.length, done: rows.length < 200 };
   }
 });
 
