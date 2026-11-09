@@ -51,6 +51,40 @@ test("failed entity validation writes no transactions or replacement accounts", 
   await assert.rejects(fetchSelectedSlashEntities({ ...options, fetcher: async () => Response.json({ items: [{ id: "mojo", name: "Mojo Labs LLC" }], metadata: {} }) }), /COVERAGEBIRD LLC/);
 });
 
+test("Slash groups preserve multiple underlying cash, debit, and credit accounts", async () => {
+  const standard = source([]);
+  const rows = [
+    { accountId: "mojo-account", type: "debit" },
+    { accountId: "mojo-debit-2", type: "debit" },
+    { accountId: "mojo-cash-1", type: "cash" },
+    { accountId: "mojo-cash-2", type: "cash" },
+    { accountId: "mojo-credit-1", type: "credit" },
+    { accountId: "mojo-credit-2", type: "credit" }
+  ].map((row, index) => ({ ...row, available: { amountCents: (index + 1) * 100 }, posted: { amountCents: (index + 1) * 100 }, timestamp: new Date(now).toISOString() }));
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/account/mojo-group/balance") return Response.json({ balances: rows });
+    if (url.pathname === "/transaction" && new Headers(init?.headers).get("x-legal-entity") === "mojo") return Response.json({
+      items: rows.map((row, index) => ({ id: `tx-${index}`, accountId: row.accountId, accountSubtype: row.type === "credit" ? "credit" : "cash", date: "2026-11-08T12:00:00Z", description: "Receipt", amountCents: 100, status: "posted" })), metadata: {}
+    });
+    return standard(input, init);
+  };
+  const result = await fetchSlashEntitiesActivityBatch({ ...options, fetcher });
+  const mojoAccounts = result.accounts.filter(account => account.slashEntity === "mojo");
+  assert.equal(mojoAccounts.length, 6);
+  assert.equal(mojoAccounts.reduce((sum, account) => sum + account.balance, 0), 21);
+  assert.deepEqual(new Set(result.transactions.filter(tx => tx.slashEntity === "mojo").map(tx => tx.accountId)), new Set(mojoAccounts.map(account => account.id)));
+  let writes = 0;
+  const duplicate: typeof fetch = (input, init) => new URL(String(input)).pathname === "/account/mojo-group/balance"
+    ? Promise.resolve(Response.json({ balances: [...rows, rows[0]] })) : fetcher(input, init);
+  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: duplicate, onAccountsDiscovered: () => { writes++; } }), /duplicate account balance identities/);
+  assert.equal(writes, 0);
+  const ambiguous: typeof fetch = (input, init) => new URL(String(input)).pathname === "/transaction"
+    ? Promise.resolve(Response.json({ items: [{ id: "ambiguous", accountId: "mojo-group", accountSubtype: "cash", date: "2026-11-08T12:00:00Z", description: "Receipt", amountCents: 100, status: "posted" }], metadata: {} })) : fetcher(input, init);
+  await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: ambiguous, onTransactionPage: () => { writes++; } }), /unknown account mojo-group/);
+  assert.equal(writes, 0);
+});
+
 test("saved balances deduplicate parent cash and credit and reject missing or stale entities", async () => {
   const { accounts } = await fetchSlashEntitiesActivityBatch({ ...options, fetcher: source([]) });
   const duplicated: AccountBalance[] = [...accounts, { ...accounts[0], id: "credit", slashAccountSubtype: "credit" }];

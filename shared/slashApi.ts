@@ -764,8 +764,8 @@ async function fetchSlashBalances(
     throw new Error(`Slash API response exceeded ${maximumSlashBalancesPerAccount} balances per account`);
   }
   const balances = payload.balances.map(parseSlashBalance);
-  if (new Set(balances.map((balance) => balance.type)).size !== balances.length) {
-    throw new Error(`Slash API response contains duplicate balance types for ${url.pathname}: ${balances.map(balance => `${balance.type}/${balance.accountId}`).join(", ")}`);
+  if (new Set(balances.map(balance => `${balance.accountId}:${balance.type === "credit" ? "credit" : "cash"}`)).size !== balances.length) {
+    throw new Error(`Slash API response contains duplicate account balance identities for ${url.pathname}`);
   }
   return balances;
 }
@@ -1044,15 +1044,6 @@ async function fetchSlashAccountSnapshot(
     slashVirtualAccounts.map((account) => [account.id, account])
   );
   const openAccounts = slashAccounts.filter((item) => item.status === "open");
-  const accountBalanceRows = openAccounts.reduce(
-    (total, account) => total + (account.type === "debit" ? 1 : 2),
-    0
-  );
-  if (accountBalanceRows > maximumSlashAccountBalanceRows) {
-    throw new Error(
-      `Slash account snapshot exceeded ${maximumSlashAccountBalanceRows} balance rows`
-    );
-  }
   const balancesByGroupId = new Map<string, SlashBalance[]>();
   for (let index = 0; index < openAccounts.length; index += slashBalanceFetchConcurrency) {
     const batch = openAccounts.slice(index, index + slashBalanceFetchConcurrency);
@@ -1064,6 +1055,9 @@ async function fetchSlashAccountSnapshot(
     for (const [groupId, accountBalances] of balances) {
       balancesByGroupId.set(groupId, accountBalances);
     }
+  }
+  if ([...balancesByGroupId.values()].reduce((total, balances) => total + balances.length, 0) > maximumSlashAccountBalanceRows) {
+    throw new Error(`Slash account snapshot exceeded ${maximumSlashAccountBalanceRows} balance rows`);
   }
   const accountIdentityByKey = new Map<string, SlashAccountIdentity>();
   const groupIdByAccountId = new Map<string, string>();
@@ -1079,17 +1073,19 @@ async function fetchSlashAccountSnapshot(
         }
         groupIdByAccountId.set(balance.accountId, account.id);
       }
-      const accountBalances: Array<{ apiType: SlashBalanceType; subtype: SlashAccountSubtype; label: string }> =
-        account.type === "debit"
-          ? [{ apiType: "debit", subtype: "cash", label: "Cash" }]
-          : [
-              { apiType: "cash", subtype: "cash", label: "Cash" },
-              { apiType: "credit", subtype: "credit", label: "Credit" }
-            ];
-      return accountBalances.map(({ apiType, subtype, label }) => {
-        const balance = requiredAccountBalance(account, balances, apiType);
+      for (const type of account.balances) requiredAccountBalance(account, balances, type);
+      // A group can span several underlying bank accounts, each with its own
+      // balance. Preserve every account identity instead of selecting one per type.
+      const accountBalances = [...balances].sort((a, b) => Number(a.type === "credit") - Number(b.type === "credit"));
+      return accountBalances.map(balance => {
+        const subtype: SlashAccountSubtype = balance.type === "credit" ? "credit" : "cash";
+        const label = subtype === "credit" ? "Credit" : "Cash";
         const identity = { accountId: balance.accountId, accountName: account.name };
-        accountIdentityByKey.set(`${subtype}:${account.id}`, identity);
+        // Group-scoped transactions can only be resolved when that group has
+        // exactly one underlying account of the requested subtype.
+        if (balances.filter(row => (row.type === "credit" ? "credit" : "cash") === subtype).length === 1) {
+          accountIdentityByKey.set(`${subtype}:${account.id}`, identity);
+        }
         accountIdentityByKey.set(`${subtype}:${balance.accountId}`, identity);
         return {
           id: `slash-${balance.accountId}-${subtype}`,
