@@ -145,9 +145,9 @@ export function buildTelegramCashReport(input: {
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
   const totals = new Map<string, number | null>();
   for (const line of message.split("\n")) {
-    const match = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
+    const match = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · [^\n]+)? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
     if (match && totals.get(match[1]) !== null) totals.set(match[1], (totals.get(match[1]) ?? 0) + Number(match[2].replaceAll(",", "")));
-    const unavailable = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · (?:Mojo Labs LLC|CoverageBird|CoverageBird Pro))? — USD total unavailable$/u.exec(line);
+    const unavailable = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · [^\n]+)? — USD total unavailable$/u.exec(line);
     if (unavailable) totals.set(unavailable[1], null);
   }
   const text = [...totals].map(([name, total]) => total === null ? `${name} — USD total unavailable` : `${name} ≈ ${amountLabel(total, "USD")}`).join("\n");

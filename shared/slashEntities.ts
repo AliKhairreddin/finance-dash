@@ -1,12 +1,9 @@
 import type { AccountBalance, SlashEntity } from "./types";
 import type { SlashVirtualAccountBalance } from "./slashApi";
+import { bankLegalEntities } from "./bankLegalEntities";
 
 export type SlashEntityView = "all" | SlashEntity;
-export const slashEntities = [
-  { id: "mojo", label: "Mojo Labs LLC", legalName: "Mojo Labs LLC" },
-  { id: "coveragebird", label: "CoverageBird", legalName: "COVERAGEBIRD LLC" },
-  { id: "coveragepro", label: "CoverageBird Pro", legalName: "COVERAGEPRO LLC" }
-] as const;
+export const slashEntities = bankLegalEntities.map(entity => ({ ...entity, label: entity.legalName }));
 export const slashEntityViews: SlashEntityView[] = ["all", ...slashEntities.map(entity => entity.id)];
 export function slashEntityLabel(entity: SlashEntity): string {
   return slashEntities.find(item => item.id === entity)!.label;

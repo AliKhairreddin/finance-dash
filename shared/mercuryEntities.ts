@@ -1,10 +1,7 @@
 import type { AccountBalance, MercuryEntity } from "./types";
+import { bankLegalEntities } from "./bankLegalEntities";
 
-export const mercuryEntities = [
-  { id: "mojo", label: "Mojo Labs LLC", legalName: "Mojo Labs LLC" },
-  { id: "coveragebird", label: "CoverageBird", legalName: "CoverageBird LLC" },
-  { id: "coveragepro", label: "CoverageBird Pro", legalName: "CoveragePro LLC" }
-] as const;
+export const mercuryEntities = bankLegalEntities.map(entity => ({ ...entity, label: entity.legalName }));
 export type MercuryEntityView = "all" | MercuryEntity;
 export const mercuryEntityViews: MercuryEntityView[] = ["all", ...mercuryEntities.map(entity => entity.id)];
 export const mercuryTokenNames = ["MERCURY_API_TOKEN", "MERCURY_COVERAGEBIRD_API_TOKEN", "MERCURY_COVERAGEPRO_API_TOKEN"] as const;

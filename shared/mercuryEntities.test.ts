@@ -74,8 +74,8 @@ test("entity analytics survive checkpoint restoration and Telegram totals includ
   const report = buildTelegramCashReport({ accounts: result.accounts.map(row => ({ ...row, syncedAt: row.updatedAt })), slashAccounts: [], rates: [], asOf: "2026-11-09T12:00:00Z" });
   assert.match(report, /Bank total ≈ USD 300\.00/);
   assert.match(report, /Mercury · Mojo Labs LLC ≈ USD 0\.00/);
-  assert.match(report, /Mercury · CoverageBird ≈ USD 100\.00/);
-  assert.match(report, /Mercury · CoverageBird Pro ≈ USD 200\.00/);
+  assert.match(report, /Mercury · CoverageBird LLC ≈ USD 100\.00/);
+  assert.match(report, /Mercury · CoveragePro LLC ≈ USD 200\.00/);
   assert.equal(cashReportCopyButton(report)?.text, "Mercury ≈ USD 300.00");
   const saved = result.accounts.map(row => ({ ...row, syncedAt: row.updatedAt }));
   assert.doesNotThrow(() => assertSavedMercuryBalances(saved, options.now));

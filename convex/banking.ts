@@ -1215,6 +1215,47 @@ export const assignMercuryEntities = mutation({
   }
 });
 
+/** One-time metadata repair for the original, incorrect company display labels. */
+export const repairEntityAccountNames = mutation({
+  args: {
+    serviceToken: v.string(), connectionKey: v.string(),
+    source: v.union(v.literal("mercury"), v.literal("slash")),
+    entity: v.union(v.literal("coveragebird"), v.literal("coveragepro")),
+    paginationOpts: paginationOptsValidator
+  },
+  returns: v.object({ accountsUpdated: v.number(), transactionsUpdated: v.number(), isDone: v.boolean(), continueCursor: v.string() }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    await assertBankConnectionBinding(ctx, args.source, args.connectionKey);
+    if (args.paginationOpts.numItems < 1 || args.paginationOpts.numItems > maximumMaintenanceBatchSize) throw new Error("Invalid label repair batch size");
+    const label = args.source === "mercury" ? mercuryEntityLabel(args.entity) : slashEntityLabel(args.entity);
+    const original = args.entity === "coveragepro" ? "CoverageBird Pro" : "CoverageBird";
+    const corrected = (name: string) => {
+      if (name.startsWith(`${label} · `)) return name;
+      if (!name.startsWith(`${original} · `)) throw new Error("Unexpected bank account label; repair stopped");
+      return `${label}${name.slice(original.length)}`;
+    };
+    const accounts = args.paginationOpts.cursor === null
+      ? await ctx.db.query("bankAccounts").withIndex("by_source_connection", q => q.eq("source", args.source).eq("connectionKey", args.connectionKey)).take(maximumBankAccountsPerSource + 1)
+      : [];
+    if (accounts.length > maximumBankAccountsPerSource) throw new Error("Bank account directory exceeds repair limit");
+    const accountUpdates = accounts.filter(row => (args.source === "mercury" ? row.mercuryEntity : row.slashEntity) === args.entity)
+      .map(row => ({ row, name: corrected(row.name) })).filter(item => item.name !== item.row.name);
+    const rows = await (args.source === "mercury"
+      ? ctx.db.query("bankTransactions").withIndex("by_source_mercury_entity", q => q.eq("source", "mercury").eq("mercuryEntity", args.entity))
+      : ctx.db.query("bankTransactions").withIndex("by_source_slash_entity", q => q.eq("source", "slash").eq("slashEntity", args.entity)))
+      .paginate(args.paginationOpts);
+    const transactionUpdates = rows.page.map(row => {
+      if (row.connectionKey !== args.connectionKey) throw new Error("Bank account label belongs to another connection");
+      return { row, accountName: corrected(row.accountName) };
+    }).filter(item => item.accountName !== item.row.accountName);
+    for (const { row, name } of accountUpdates) await ctx.db.patch(row._id, { name });
+    for (const { row, accountName } of transactionUpdates) await ctx.db.patch(row._id, { accountName });
+    if (accountUpdates.length || transactionUpdates.length) await bumpLedgerRevision(ctx, transactionUpdates.map(item => item.row.date));
+    return { accountsUpdated: accountUpdates.length, transactionsUpdated: transactionUpdates.length, isDone: rows.isDone, continueCursor: rows.continueCursor };
+  }
+});
+
 export const getActivityMetadata = query({
   args: {
     serviceToken: v.string(),

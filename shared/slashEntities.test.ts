@@ -54,7 +54,7 @@ test("failed entity validation writes no transactions or replacement accounts", 
   await assert.rejects(fetchSlashEntitiesActivityBatch({ ...options, fetcher: source([], "coveragebird"), onAccountsDiscovered: () => { writes++; }, onTransactionPage: () => { writes++; } }), /403/);
   assert.equal(writes, 0);
   await assert.rejects(fetchSelectedSlashEntities({ ...options, legalEntityId: "wrong", fetcher: source([]) }), /existing connection/);
-  await assert.rejects(fetchSelectedSlashEntities({ ...options, fetcher: async () => Response.json({ items: [{ id: "mojo", name: "Mojo Labs LLC" }], metadata: {} }) }), /COVERAGEBIRD LLC/);
+  await assert.rejects(fetchSelectedSlashEntities({ ...options, fetcher: async () => Response.json({ items: [{ id: "mojo", name: "Mojo Labs LLC" }], metadata: {} }) }), /CoverageBird LLC/);
 });
 
 test("combined balance responses are separated by verified entity IDs and unknown identities stop writes", async () => {
