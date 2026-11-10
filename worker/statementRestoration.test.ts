@@ -224,7 +224,7 @@ test("fresh request IDs and different users converge on one document; LMD number
   assert.equal(a.draft.customer, "Synthetic Merchant");
   assert.match(
     invoiceHtml(a.draft, a.layout, false),
-    /Not a supplier-issued invoice/,
+    /Prepared internally; not issued by the supplier/,
   );
 });
 test("completion, Done, forgotten and visibility remain independent and reversible", async () => {
@@ -457,7 +457,7 @@ test("regeneration versions retain immutable PDFs and form an auditable chain", 
     2,
   );
 });
-test("sales invoices require an explicit issuer, tax and date policy, with a separate legal sequence", async () => {
+test("sales invoices use approved identity and explicit per-generation tax and date choices", async () => {
   const { t } = await fixture();
   await assert.rejects(
     t.mutation(api.statementWorkspace.savePolicy, {
@@ -466,7 +466,7 @@ test("sales invoices require an explicit issuer, tax and date policy, with a sep
       revision: 0,
       settingsJson: JSON.stringify({ salesInvoiceApproved: true }),
     }),
-    /policy/,
+    /legal name and address/,
   );
   await t.mutation(api.statementWorkspace.savePolicy, {
     ...auth,
@@ -476,9 +476,7 @@ test("sales invoices require an explicit issuer, tax and date policy, with a sep
       salesInvoiceApproved: true,
       legalName: "LoveMeDo B.V.",
       legalAddress: "SYNTHETIC registered office",
-      taxPolicy: "Synthetic explicitly approved rate",
-      taxRate: "9",
-      invoiceDatePolicy: "transaction",
+      vat: "NL-TEST",
     }),
   });
   const ids = await t.mutation(api.statements.createTransactions, {
@@ -486,7 +484,8 @@ test("sales invoices require an explicit issuer, tax and date policy, with a sep
     requestId: crypto.randomUUID(),
     rows: [{ ...entry("amex-lmd"), direction: "in" }],
   });
-  const id = await t.mutation(api.statementInvoices.begin, begin(ids)),
+  await assert.rejects(t.mutation(api.statementInvoices.begin, begin(ids)), /Choose the tax treatment/);
+  const id = await t.mutation(api.statementInvoices.begin, { ...begin(ids), generationOptionsJson: JSON.stringify({ taxTreatment: "vat", taxRate: "9", taxNote: "", datePolicy: "transaction" }) }),
     row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
   assert.equal(row.documentType, "sales_invoice");
   assert.equal(row.draft.lines[0].taxPercent, "9");

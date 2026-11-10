@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applySavedInvoiceDetails, savedInvoiceDetails, matchingInvoiceAddress, invoiceTotals, invoiceLayout, validateInvoiceDraft, validateInvoiceAi, type InvoiceDraft } from "./statementInvoices";
+import { applySavedInvoiceDetails, savedInvoiceDetails, matchingInvoiceAddress, invoiceTotals, invoiceLayout, validateInvoiceDraft, validateInvoiceAi, validateInvoiceGenerationOptions, type InvoiceDraft } from "./statementInvoices";
 const draft: InvoiceDraft = { number: "TEST-1", date: "2026-10-26", dueDate: "", customer: "Test Customer", customerAddress: "Test address", notes: "", currency: "EUR", taxMode: "included", lines: [{ transactionId: "one", description: "Service", amount: "121.00", taxPercent: "21" }] };
 test("invoice totals preserve exact money for inclusive, added, zero and three-decimal tax", () => {
   assert.deepEqual(invoiceTotals(draft), { net: "100.00", tax: "21.00", total: "121.00", lines: [{ net: "100.00", tax: "21.00", total: "121.00" }] });
@@ -13,6 +13,17 @@ test("invoice drafts reject invalid dates, duplicate selections, negative money 
   assert.throws(() => validateInvoiceDraft({ ...draft, date: "2026-02-30" }));
   assert.throws(() => validateInvoiceDraft({ ...draft, lines: [draft.lines[0], draft.lines[0]] }));
   for (const line of [{ ...draft.lines[0], amount: "-1" }, { ...draft.lines[0], taxPercent: "" }, { ...draft.lines[0], taxPercent: "101" }]) assert.throws(() => validateInvoiceDraft({ ...draft, lines: [line] }));
+});
+test("generation requires explicit tax/date choices and preserves the selected tax treatment", () => {
+  const options = { taxTreatment: "vat", taxRate: "21", taxNote: "", datePolicy: "transaction" };
+  for (const input of [undefined, {}, { ...options, datePolicy: "" }, { ...options, taxTreatment: "" }, { ...options, taxRate: "101" }, { ...options, taxTreatment: "no_vat" }]) assert.throws(() => validateInvoiceGenerationOptions(input));
+  const reverse = validateInvoiceGenerationOptions({ ...options, taxTreatment: "reverse_charge" });
+  assert.equal(reverse.taxRate, "0");
+  assert.match(reverse.taxNote, /reverse charged/);
+  assert.throws(() => validateInvoiceDraft({ ...draft, generationOptions: reverse }), /Line tax/);
+  const checked = validateInvoiceDraft({ ...draft, generationOptions: reverse, lines: [{ ...draft.lines[0], taxPercent: "0" }] });
+  assert.deepEqual(checked.generationOptions, reverse);
+  assert.equal(invoiceTotals(checked).total, "121.00");
 });
 test("AI cannot drop, duplicate or substitute selected invoice rows", () => {
   assert.deepEqual(validateInvoiceAi({ lines: [{ transactionId: "one", description: "New description", amount: "99999" }] }, ["one"]), [{ transactionId: "one", description: "New description" }]);

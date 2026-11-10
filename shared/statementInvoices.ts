@@ -3,7 +3,16 @@ import { statementAmountDecimal, statementAmountMinor } from "./statements";
 
 export type InvoiceTemplateLayout = { headerPercent: number; footerPercent: number; sellerDetails: string; paymentDetails: string; design?: InvoiceDesign; copy?: InvoiceCopyLayout };
 export type InvoiceLine = { transactionId: string; description: string; amount: string; taxPercent: string };
-export type InvoiceDraft = { documentType?: "internal_support" | "sales_invoice"; taxAssessment?: "unassessed" | "configured"; number: string; date: string; dueDate: string; customer: string; customerAddress: string; customerVat?: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
+export type InvoiceGenerationOptions = { taxTreatment: "vat" | "reverse_charge" | "no_vat"; taxRate: string; taxNote: string; datePolicy: "transaction" | "generation" };
+export function validateInvoiceGenerationOptions(value: unknown): InvoiceGenerationOptions {
+  const options = value as InvoiceGenerationOptions;
+  if (!options || !["vat", "reverse_charge", "no_vat"].includes(options.taxTreatment)) throw new Error("Choose the tax treatment before generation");
+  if (!["transaction", "generation"].includes(options.datePolicy)) throw new Error("Choose the invoice date before generation");
+  if (options.taxTreatment === "vat" && (!/^\d{1,3}(?:\.\d{1,2})?$/.test(options.taxRate) || Number(options.taxRate) > 100)) throw new Error("Enter a VAT percentage from 0 to 100");
+  const taxNote = options.taxTreatment === "reverse_charge" ? "VAT reverse charged to the customer." : invoiceText(options.taxNote ?? "", "tax note", 500, options.taxTreatment === "no_vat");
+  return { taxTreatment: options.taxTreatment, taxRate: options.taxTreatment === "vat" ? options.taxRate : "0", taxNote, datePolicy: options.datePolicy };
+}
+export type InvoiceDraft = { generationOptions?: InvoiceGenerationOptions; documentType?: "internal_support" | "sales_invoice"; taxAssessment?: "unassessed" | "configured"; number: string; date: string; dueDate: string; customer: string; customerAddress: string; customerVat?: string; notes: string; currency: string; taxMode: "included" | "added"; lines: InvoiceLine[] };
 export type InvoiceCompanyDetails = { name: string; address: string; vat: string };
 export type InvoicePairDetails = { ours: InvoiceCompanyDetails; other: InvoiceCompanyDetails; description: string };
 export type InvoicePairProfile = { details: InvoicePairDetails; revision: number; updatedAt: number };
@@ -78,6 +87,10 @@ export function validateInvoiceDraft(value: unknown): InvoiceDraft {
   if (new Set(result.lines.map(l => l.transactionId)).size !== result.lines.length) throw new Error("A transaction can appear only once in this invoice");
   if (result.dueDate && result.dueDate < result.date) throw new Error("The due date must be on or after the invoice date");
   if (v.customerVat !== undefined) result.customerVat = invoiceText(v.customerVat, "customer VAT number", 80);
+  if (v.generationOptions !== undefined) {
+    result.generationOptions = validateInvoiceGenerationOptions(v.generationOptions);
+    if (result.lines.some(line => Number(line.taxPercent) !== Number(result.generationOptions!.taxRate))) throw new Error("Line tax must match the selected tax treatment");
+  }
   return result;
 }
 export function invoiceTotals(draft: InvoiceDraft) {

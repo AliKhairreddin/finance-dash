@@ -16,7 +16,7 @@ import { invoiceAi } from "./statementInvoiceAi";
 import { validateInvoiceAi } from "../shared/statementInvoices";
 import { handleCaptureDevice, routeReceiptCapture } from "./receiptCapture";
 import { handleMailboxApi, mailboxCallbackLanding } from "./statementMailboxes";
-import { verifyInvoiceCopy } from "./statementInvoiceVerification";
+import { verifyInvoiceCopy, verifyExpenseInvoice } from "./statementInvoiceVerification";
 import { defaultInvoiceDesign } from "../shared/statementInvoiceDesign";
 import { statementCompanies } from "../shared/statements";
 import { handleStatementResearch } from "./statementResearch";
@@ -49,6 +49,7 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (url.pathname === "/api/internal/statements/verify-invoice") {
     if (request.method !== "POST" || !env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, 401);
     try {
+      if (url.searchParams.get("layout") === "expense") return new Response(await verifyExpenseInvoice(env), { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Invoice-Model": "approved-evidence", "X-Invoice-Total": "121.00" } });
       const client = new ConvexHttpClient(env.CONVEX_URL), settings = await client.query(api.statements.processingSettings, { serviceToken: env.CONVEX_SERVICE_TOKEN }), aiSettings = JSON.parse(settings.aiSettingsJson);
       if (aiSettings?.provider !== "openrouter" || !aiSettings.model) throw new Error("Saved model unavailable");
       if (url.searchParams.get("layout") === "copy") {

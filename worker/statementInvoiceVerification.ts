@@ -3,6 +3,22 @@ import { invoiceLayout, type InvoiceDraft } from "../shared/statementInvoices";
 import { invoiceCopyPrompt, invoiceCopySchema } from "./statementInvoiceCopy";
 import { invoiceAi } from "./statementInvoiceAi";
 import { inspectInvoiceExample, renderInvoicePdf } from "./statementInvoicePdf";
+import { expenseInvoiceDesign } from "../shared/statementInvoiceDesign";
+
+// Exercise the deployed evidence-only renderer without AI or financial writes.
+export async function verifyExpenseInvoice(env: Pick<WorkerEnv, "BROWSER">) {
+  return renderInvoicePdf(env, null, {
+    headerPercent: 0, footerPercent: 0,
+    sellerDetails: "Synthetic Buyer Ltd\nExample Street 1\nExample City",
+    paymentDetails: "", design: expenseInvoiceDesign("Synthetic Hosting Ltd", []),
+  }, {
+    documentType: "internal_support", taxAssessment: "unassessed",
+    number: "SYNTHETIC-EXPENSE-001", date: "2026-01-15", dueDate: "",
+    customer: "Synthetic Hosting Ltd", customerAddress: "Example Street 2\nExample City",
+    notes: "Synthetic verification only. No financial records were created.", currency: "EUR", taxMode: "included",
+    lines: [{ transactionId: "synthetic", description: "Synthetic hosting service", amount: "121.00", taxPercent: "0" }],
+  }, false);
+}
 
 // Fixed synthetic data only. This smoke check does not write financial records.
 export async function verifyInvoiceCopy(env: Pick<WorkerEnv, "BROWSER" | "OPENROUTER_API_KEY">, model: string) {

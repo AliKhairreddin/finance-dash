@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultInvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
 import { statementCompanies } from "./statements";
 
 test("issuer designs distinguish our companies and resolve supplier aliases across buyers", () => {
@@ -26,4 +26,19 @@ test("copied example layouts reject overlaps and out-of-page or incomplete mappi
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map((f, i) => i === 1 ? { ...f, y: 30 } : f) }), /overlap/);
   assert.throws(() => validateInvoiceCopy({ ...copy, fields: copy.fields.map(f => ({ ...f, x: 200 })) }), /outside the page/);
   assert.throws(() => validateInvoiceCopy({ ...copy, columns: copy.columns.map(c => ({ ...c, x: 30 })) }), /overlap/);
+});
+test("expense designs resolve approved aliases, remain stable and distinguish suppliers", () => {
+  const contact = { name: "Synthetic Hosting", invoiceName: "Synthetic Hosting Ltd", address: "Test street", aliases: ["SYNTHETIC HOSTING CARD"] };
+  const design = expenseInvoiceDesign(contact.aliases[0], [contact]);
+  assert.deepEqual(design, expenseInvoiceDesign(contact.invoiceName, [contact]));
+  assert.equal(design.key, "expense:supplier:synthetic hosting ltd");
+  assert.equal(design.logoPath, undefined);
+  assert.equal(design.source, undefined);
+  const signatures = new Set(Array.from({ length: 200 }, (_, i) => {
+    const d = expenseInvoiceDesign(`Synthetic supplier ${i}`, []);
+    validateInvoiceDesign(d);
+    return JSON.stringify([d.template, d.accent, d.style, d.font]);
+  }));
+  assert.equal(signatures.size, 200);
+  assert.notEqual(expenseInvoiceDesign(contact.aliases[0], [{ ...contact, reviewNote: "Wrong identity" }]).key, design.key);
 });

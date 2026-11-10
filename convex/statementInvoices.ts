@@ -5,9 +5,9 @@ import { mutation, query, internalMutation, type QueryCtx, type MutationCtx } fr
 import type { Id, Doc } from "./_generated/dataModel";
 import { statementCompany } from "./statementSchema";
 import { normalizeStatementActor, statementAmountDecimal } from "../shared/statements";
-import { invoiceLayout, invoiceSelectionLimit, invoiceText, validateInvoiceDraft, validateInvoiceAi, type InvoiceDraft, invoiceCompanyKey, validateInvoicePair, plainInvoiceParties, invoiceTotals } from "../shared/statementInvoices";
+import { invoiceLayout, invoiceSelectionLimit, invoiceText, validateInvoiceDraft, validateInvoiceAi, type InvoiceDraft, invoiceCompanyKey, validateInvoicePair, plainInvoiceParties, invoiceTotals, validateInvoiceGenerationOptions } from "../shared/statementInvoices";
 import { paginationOptsValidator } from "convex/server";
-import { defaultInvoiceDesign, invoiceIssuerKey } from "../shared/statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, invoiceIssuerKey } from "../shared/statementInvoiceDesign";
 import { statementCompanies } from "../shared/statements";
 const auth = { serviceToken: v.string(), actor: v.string() };
 async function access(ctx: QueryCtx | MutationCtx, a: { serviceToken: string; actor: string }, companyId?: string) {
@@ -130,9 +130,12 @@ export const setup = query({ args: { ...auth, ids: v.array(v.id("statementTransa
   const approvedMerchants = merchants.filter(m => m.approvedJson && m.financialAccountId === first.financialAccountId).map(m => { const p = JSON.parse(m.approvedJson!); return { name: m.name, invoiceName: p.canonicalName, address: p.address, description: p.description, aliases: m.aliases }; });
   const uniqueAddresses = new Map<string, typeof addresses[number]>();
   for (const address of addresses) if (!uniqueAddresses.has(invoiceCompanyKey(address.name))) uniqueAddresses.set(invoiceCompanyKey(address.name), address);
+  const policyRow = (await ctx.db.query("statementPolicies").withIndex("by_company", q => q.eq("companyId", companyId)).take(100)).find(p => !p.financialAccountId);
+  const policy = policyRow ? JSON.parse(policyRow.settingsJson) : {};
+  const legalIssuer = policy.legalName?.trim() && policy.legalAddress?.trim() ? { name: policy.legalName, address: policy.legalAddress, vat: policy.vat ?? "" } : null;
   const sellerName = first.direction === "out" ? first.counterparty ?? "" : statementCompanies.find(c => c.id === companyId)!.name;
   const example = await exampleFor(ctx, await access(ctx, a), invoiceIssuerKey(sellerName, companyId, first.direction, await addressesFor(ctx, companyId)));
-  return JSON.stringify({ companyId, direction: first.direction, hasExample: example?.approved === true, exampleIssuer: example?.issuerName, profiles: profiles.slice(0, 100).map(p => ({ details: JSON.parse(p.detailsJson), revision: p.revision, updatedAt: p.updatedAt })), profilesTruncated: profiles.length > 100, addresses: [...approvedMerchants, ...[...uniqueAddresses.values()].map(a => ({ name: a.name, invoiceName: a.invoiceName, vat: a.vat, description: a.description, aliases: a.aliases, reviewNote: a.reviewNote, address: [a.addressLine1, a.addressLine2, [a.postalCode, a.city].filter(Boolean).join(" "), a.country].filter(Boolean).join("\n") }))], sources: rows.map(r => ({ transactionId: r!._id, description: r!.description, counterparty: r!.counterparty ?? "" })) });
+  return JSON.stringify({ companyId, legalIssuer, direction: first.direction, hasExample: example?.approved === true, exampleIssuer: example?.issuerName, profiles: profiles.slice(0, 100).map(p => ({ details: JSON.parse(p.detailsJson), revision: p.revision, updatedAt: p.updatedAt })), profilesTruncated: profiles.length > 100, addresses: [...approvedMerchants, ...[...uniqueAddresses.values()].map(a => ({ name: a.name, invoiceName: a.invoiceName, vat: a.vat, description: a.description, aliases: a.aliases, reviewNote: a.reviewNote, address: [a.addressLine1, a.addressLine2, [a.postalCode, a.city].filter(Boolean).join(" "), a.country].filter(Boolean).join("\n") }))], sources: rows.map(r => ({ transactionId: r!._id, description: r!.description, counterparty: r!.counterparty ?? "" })) });
 } });
 export const get = query({ args: { ...auth, id: v.id("statementInvoices"), download: v.optional(v.boolean()) }, returns: v.string(), handler: async (ctx, a) => {
   requirePermission(await access(ctx, a), a.download ? "download" : "documents");
@@ -142,7 +145,7 @@ export const get = query({ args: { ...auth, id: v.id("statementInvoices"), downl
   if (example && !templateUrl) throw new ConvexError("The saved example PDF is missing");
   return JSON.stringify({ ...row, draft: JSON.parse(row.draftJson), sources: JSON.parse(row.sourceJson), layout: JSON.parse(row.plainLayoutJson ?? example!.layoutJson), templateUrl, pdfUrl: row.storageId ? await ctx.storage.getUrl(row.storageId) : null });
 } });
-export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.array(v.id("statementTransactions")), draftJson: v.string(), instructions: v.string(), plainDetailsJson: v.optional(v.string()), remember: v.optional(v.boolean()), profileRevision: v.optional(v.number()), regenerate: v.optional(v.boolean()) }, returns: v.id("statementInvoices"), handler: async (ctx, a) => {
+export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.array(v.id("statementTransactions")), draftJson: v.string(), generationOptionsJson: v.optional(v.string()), instructions: v.string(), plainDetailsJson: v.optional(v.string()), remember: v.optional(v.boolean()), profileRevision: v.optional(v.number()), regenerate: v.optional(v.boolean()) }, returns: v.id("statementInvoices"), handler: async (ctx, a) => {
   const member = await access(ctx, a); requirePermission(member, "generate");
   if (!/^[a-f0-9-]{36}$/i.test(a.requestId) || !a.ids.length || a.ids.length > invoiceSelectionLimit || new Set(a.ids).size !== a.ids.length) throw new ConvexError(`Choose 1–${invoiceSelectionLimit} different transactions`);
   const previous = await ctx.db.query("statementInvoices").withIndex("by_request", q => q.eq("requestId", a.requestId)).unique();
@@ -153,11 +156,18 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   const policies = await ctx.db.query("statementPolicies").withIndex("by_company", q => q.eq("companyId", companyId)).take(100);
   const legalPolicy = policies.find(p => !p.financialAccountId), policy = legalPolicy ? JSON.parse(legalPolicy.settingsJson) : {};
   const documentType = first.direction === "in" ? "sales_invoice" : "internal_support";
-  if (documentType === "sales_invoice" && policy.salesInvoiceApproved !== true) throw new ConvexError("Set up sales invoices for this company in Settings: legal name, address, tax rate and invoice date policy are required.");
-  if (documentType === "sales_invoice" && (!policy.legalName?.trim() || !policy.legalAddress?.trim() || !policy.taxPolicy?.trim() || !/^\d{1,3}(?:\.\d{1,2})?$/.test(policy.taxRate ?? "") || Number(policy.taxRate) > 100 || !["transaction", "generation"].includes(policy.invoiceDatePolicy))) throw new ConvexError("Complete the approved legal issuer, tax and document-date policy in Settings");
+  if (documentType === "sales_invoice" && policy.salesInvoiceApproved !== true) throw new ConvexError("Set up sales invoices for this company in Settings: verified legal name and address are required.");
+  if (documentType === "sales_invoice" && (!policy.legalName?.trim() || !policy.legalAddress?.trim())) throw new ConvexError("Complete the approved legal issuer in Settings");
+  let generationOptions: ReturnType<typeof validateInvoiceGenerationOptions> | undefined;
+  if (documentType === "sales_invoice") {
+    try { generationOptions = validateInvoiceGenerationOptions(a.generationOptionsJson ? JSON.parse(a.generationOptionsJson) : null); }
+    catch (error) { throw new ConvexError(error instanceof Error ? error.message : "Choose invoice options before generation"); }
+  }
+  if (generationOptions && generationOptions.taxTreatment !== "no_vat" && !policy.vat?.trim()) throw new ConvexError("Add this company’s verified VAT number in Settings before selecting VAT or reverse charge");
   const businessKey = JSON.stringify([documentType, companyId, first.financialAccountId ?? null, rows.map(r => [r!._id, r!.financialRevision ?? r!.revision]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
   const active = await ctx.db.query("statementInvoices").withIndex("by_businessKey", q => q.eq("businessKey", businessKey)).order("desc").take(100);
   const current = active.find(i => !["discarded", "cancelled", "stale", "superseded"].includes(i.state));
+  if (current && !a.regenerate && generationOptions && JSON.stringify(JSON.parse(current.draftJson).generationOptions) !== JSON.stringify(generationOptions)) throw new ConvexError("A document already exists with different tax or date choices. Open it and choose Regenerate to save a new version.");
   if (current && !a.regenerate) return current._id;
   if (current && a.regenerate && current.state !== "ready") return current._id;
   let predecessorId = current?._id ?? active.find(i => i.state === "stale")?._id;
@@ -171,19 +181,23 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   const addresses = await addressesFor(ctx, companyId, first.financialAccountId);
   if (new Set(rows.map(r => invoiceIssuerKey(r!.counterparty ?? "", companyId, "out", addresses))).size > 1) throw new ConvexError("Choose transactions with the same other company for one invoice");
   if (!pair) throw new ConvexError("Enter approved company and counterparty details");
-  if (documentType === "sales_invoice") pair.ours = { name: policy.legalName, address: policy.legalAddress, vat: policy.vat ?? "" };
-  const issuerKey = `our:${companyId}`, sellerName = pair.ours.name;
-  // Supporting records are issued internally. Supplier examples cannot authorize impersonation.
+  if (policy.legalName?.trim() && policy.legalAddress?.trim()) pair.ours = { name: policy.legalName, address: policy.legalAddress, vat: policy.vat ?? "" };
+  const supplierDesign = documentType === "internal_support" ? expenseInvoiceDesign(pair.other.name, addresses) : null;
+  const issuerKey = supplierDesign?.key ?? `our:${companyId}`, sellerName = pair.ours.name;
+  // Supplier-specific expense layouts retain our legal issuer and never copy supplier branding.
   const parties = plainInvoiceParties(pair, "in");
   const example = null;
   let design = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", issuerKey)).unique();
   if (!design) {
-    const template = ["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : defaultInvoiceDesign(issuerKey,sellerName).template!;
-    const designJson=JSON.stringify({...defaultInvoiceDesign(issuerKey,sellerName),template});
+    const template = supplierDesign?.template ?? (["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : defaultInvoiceDesign(issuerKey,sellerName).template!);
+    const designJson=JSON.stringify({...(supplierDesign ?? defaultInvoiceDesign(issuerKey,sellerName)),template});
     const id = await ctx.db.insert("statementInvoiceDesigns", { issuerKey, designJson,version:1,style:template,brandingAuthorized:false,createdAt: Date.now() });
-    await ctx.db.insert("statementTemplateVersions",{companyId,version:1,style:template,designJson,brandingAuthorized:false,actor:member.actor,createdAt:Date.now()});design = (await ctx.db.get(id))!;
+    if (!supplierDesign) await ctx.db.insert("statementTemplateVersions",{companyId,version:1,style:template,designJson,brandingAuthorized:false,actor:member.actor,createdAt:Date.now()});design = (await ctx.db.get(id))!;
   }
-  const layout = parties.layout; layout.design = JSON.parse(design.designJson); if (!design.brandingAuthorized && layout.design) { delete layout.design.logoPath; delete layout.design.logoDataUrl; delete layout.design.source; }
+  const layout = parties.layout;
+  if (policy.registrationNumber) layout.sellerDetails += `\nRegistration: ${invoiceText(policy.registrationNumber, "registration number", 80)}`;
+  if (documentType === "sales_invoice") layout.paymentDetails = invoiceText(policy.bankDetails ?? "", "bank details", 1000);
+  layout.design = JSON.parse(design.designJson); if (!design.brandingAuthorized && layout.design) { delete layout.design.logoPath; delete layout.design.logoDataUrl; delete layout.design.source; }
   if (pair && a.remember) {
     const otherKey = invoiceCompanyKey(pair.other.name), old = await ctx.db.query("statementInvoiceProfiles").withIndex("by_company_account_other", q => q.eq("companyId", companyId).eq("financialAccountId", first.financialAccountId).eq("otherKey", otherKey)).unique();
     if ((old?.revision ?? 0) !== a.profileRevision) throw new ConvexError("Saved company details changed. Close this form and open it again before saving");
@@ -193,10 +207,11 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   }
   const input = JSON.parse(a.draftJson) as InvoiceDraft;
   input.documentType = documentType; input.taxAssessment = documentType === "sales_invoice" ? "configured" : "unassessed"; input.taxMode = "included"; input.dueDate = "";
-  input.date = documentType === "sales_invoice" && policy.invoiceDatePolicy === "generation" ? new Date().toISOString().slice(0,10) : rows.map(r => r!.date).sort().at(-1)!;
+  input.generationOptions = generationOptions;
+  input.date = generationOptions?.datePolicy === "generation" ? new Date().toISOString().slice(0,10) : rows.map(r => r!.date).sort().at(-1)!;
   input.number = await automaticNumber(ctx, companyId, input.date, documentType);
   const sources = rows.map(row => ({ transactionId: row!._id, revision: row!.financialRevision ?? row!.revision, date: row!.date, description: row!.description, amount: statementAmountDecimal(row!.amountMinor, first.currency), counterparty: row!.counterparty ?? "" }));
-  const draft = validateInvoiceDraft({ ...input, ...(parties ? { customer: parties.customer, customerAddress: parties.customerAddress, customerVat: parties.customerVat } : {}), currency: first.currency, lines: sources.map(row => ({ transactionId: row.transactionId, description: row.description, amount: row.amount, taxPercent: documentType === "sales_invoice" ? String(policy.taxRate) : "0" })) });
+  const draft = validateInvoiceDraft({ ...input, ...(parties ? { customer: parties.customer, customerAddress: parties.customerAddress, customerVat: parties.customerVat } : {}), currency: first.currency, lines: sources.map(row => ({ transactionId: row.transactionId, description: row.description, amount: row.amount, taxPercent: generationOptions?.taxRate ?? "0" })) });
   if (await ctx.db.query("statementInvoices").withIndex("by_company_number", q => q.eq("companyId", first.companyId!).eq("number", draft.number)).first()) throw new ConvexError(`Invoice number ${draft.number} is already used for this company. Open it in Created invoices, or enter a different number.`);
   const id = await ctx.db.insert("statementInvoices", { companyId, financialAccountId: first.financialAccountId, businessKey, documentType, predecessorId, templateVersion: design.version ?? 0, plainLayoutJson: JSON.stringify(layout), requestId: a.requestId, pairDetailsJson: JSON.stringify(pair), draftJson: JSON.stringify(draft), sourceJson: JSON.stringify(sources), instructions: invoiceText([pair?.description, a.instructions].filter(Boolean).join("\n"), "instructions", 2501), state: "failed", leaseUntil: 0, revision: 1, createdAt: Date.now(), updatedAt: Date.now(), actor: member.actor, number: draft.number });
   await indexInvoice(ctx, id);
@@ -217,7 +232,7 @@ export const save = mutation({ args: { ...auth, id: v.id("statementInvoices"), r
   const row = await invoice(ctx, a); requirePermission(await access(ctx, a), "generate"); if (row.state !== "draft" || row.revision !== a.revision) throw new ConvexError("Reload this draft before editing");
   const draft = validateInvoiceDraft(JSON.parse(a.draftJson)), old = validateInvoiceDraft(JSON.parse(row.draftJson));
   if (draft.currency !== old.currency || draft.lines.length !== old.lines.length || draft.lines.some(l => !old.lines.some(x => x.transactionId === l.transactionId))) throw new ConvexError("Keep the selected transactions and currency");
-  if (draft.number !== old.number || draft.documentType !== old.documentType || draft.taxAssessment !== old.taxAssessment || draft.lines.some(l => l.amount !== old.lines.find(x => x.transactionId === l.transactionId)!.amount || l.taxPercent !== old.lines.find(x => x.transactionId === l.transactionId)!.taxPercent) || draft.taxMode !== "included") throw new ConvexError("Keep the legal document number, recorded amounts and unassessed tax treatment");
+  if (draft.number !== old.number || draft.documentType !== old.documentType || draft.taxAssessment !== old.taxAssessment || JSON.stringify(draft.generationOptions) !== JSON.stringify(old.generationOptions) || draft.lines.some(l => l.amount !== old.lines.find(x => x.transactionId === l.transactionId)!.amount || l.taxPercent !== old.lines.find(x => x.transactionId === l.transactionId)!.taxPercent) || draft.taxMode !== "included") throw new ConvexError("Keep the legal document number, recorded amounts and unassessed tax treatment");
   const duplicate = await ctx.db.query("statementInvoices").withIndex("by_company_number", q => q.eq("companyId", row.companyId).eq("number", draft.number)).first();
   if (duplicate && duplicate._id !== row._id) throw new ConvexError(`Invoice number ${draft.number} is already used for this company. Open it in Created invoices, or enter a different number.`);
   await ctx.db.patch(row._id, { draftJson: JSON.stringify(draft), number: draft.number, revision: row.revision + 1, updatedAt: Date.now() }); await indexInvoice(ctx, row._id); await audit(ctx, a.actor, row._id, "draft_updated"); return null;

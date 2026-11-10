@@ -32,6 +32,34 @@ test("MZS Bouw shows its Rompslomp connection inside transactions",async({page})
   await expect(page.getByLabel("Rompslomp API token")).toBeVisible();
   await page.screenshot({path:"output/playwright/company-rompslomp.png",fullPage:true});
 });
+test("customer invoice waits for explicit tax and date choices before generation", async ({ page }) => {
+  const requests: Array<Record<string, unknown>> = [];
+  page.on("request", request => {
+    if (request.url().endsWith("/created-invoices/one-click") && request.method() === "POST") requests.push(request.postDataJSON());
+  });
+  await page.goto("/statements?company=amg-holding&search=Synthetic%20hosting%204");
+  await page.getByRole("button", { name: "Create invoice / document", exact: true }).first().click();
+  await expect(page.getByRole("heading", { name: "Choose invoice options" })).toBeVisible();
+  expect(requests).toHaveLength(0);
+  await page.getByRole("button", { name: "Continue to generation" }).click();
+  await expect(page.getByText("Choose the tax treatment before generation", { exact: true })).toBeVisible();
+  expect(requests).toHaveLength(0);
+  await page.getByLabel("Tax treatment", { exact: true }).click();
+  await page.getByRole("option", { name: "Reverse charge", exact: true }).click();
+  await page.getByLabel("Invoice date", { exact: true }).click();
+  await page.getByRole("option", { name: "Transaction date", exact: true }).click();
+  await page.screenshot({ path: "output/playwright/invoice-generation-options.png" });
+  await page.getByRole("button", { name: "Continue to generation" }).click();
+  await expect(page.getByRole("heading", { name: "Document saved" })).toBeVisible({ timeout: 30000 });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].generationOptions).toMatchObject({ taxTreatment: "reverse_charge", taxRate: "0", datePolicy: "transaction" });
+  const href = await page.getByRole("link", { name: "View", exact: true }).getAttribute("href");
+  const response = await page.request.get(href!.replace(/\/file$/, ""));
+  const saved = await response.json();
+  expect(saved.draft.documentType).toBe("sales_invoice");
+  expect(saved.draft.generationOptions.taxTreatment).toBe("reverse_charge");
+  expect(saved.draft.lines[0].taxPercent).toBe("0");
+});
 test("LMD shows saved balances and incomplete history without claiming DN coverage",async({page})=>{
   await page.route("**/api/statements/revolut?companyId=lovemedo",route=>route.fulfill({json:{mode:"direct",accounts:[{id:"fixture-eur",name:"Main",currency:"EUR",owner:"LoveMeDo B.V.",balance:1234.56,syncedAt:"2026-11-01T12:00:00Z"}],error:"LMD Revolut returned HTTP 429; saved data retained.",discoveredAt:1,importedThrough:null,historyPending:true,coverageFrom:null,coverageThrough:null}}));
   await page.goto("/statements?company=revolut-lmd");
@@ -141,6 +169,11 @@ test("missing company facts use one compact correction form", async ({
     .getByRole("button", { name: "Create invoice / document", exact: true })
     .first()
     .click();
+  await page.getByLabel("Tax treatment", { exact: true }).click();
+  await page.getByRole("option", { name: "Reverse charge", exact: true }).click();
+  await page.getByLabel("Invoice date", { exact: true }).click();
+  await page.getByRole("option", { name: "Transaction date", exact: true }).click();
+  await page.getByRole("button", { name: "Continue to generation" }).click();
   await expect(page.getByRole("group", { name: "Legal issuer" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Counterparty" })).toBeVisible();
   await expect(

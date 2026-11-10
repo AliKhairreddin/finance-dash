@@ -63,6 +63,7 @@ await t.mutation(api.statements.initialize, {
   serviceToken: auth.serviceToken,
 });
 for (const company of statementCompanies) {
+  await t.mutation(api.statementWorkspace.savePolicy, { ...auth, companyId: company.id, revision: 0, settingsJson: JSON.stringify({ salesInvoiceApproved: true, legalName: company.name, legalAddress: "SYNTHETIC - Example Lane 1", vat: "TEST-VAT-123" }) });
   await t.mutation(api.statements.saveAddress, {
     ...auth,
     companyId: company.id,

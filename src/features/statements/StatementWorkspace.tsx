@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { InfoPopover } from "@/components/ui/finance-visuals";
 import {
   statementCompanies,
   statementAccounts,
@@ -380,6 +381,7 @@ export function WorkspaceSettings({
           />
           {[
             ["legalName", "Legal company name"],
+            ["registrationNumber", "Company registration number"],
 
             ["legalAddress", "Legal address"],
             ["senderName", "Document sender"],
@@ -388,7 +390,6 @@ export function WorkspaceSettings({
             ["notes", "Company / account notes"],
             ["inboxKeywords", "Inbox keywords"],
             ["merchantAliases", "Merchant aliases (review required)"],
-            ["taxPolicy", "Approved tax policy reference"],
             ["numberingPolicy", "Numbering policy reference"],
             ["automaticRulePolicy", "Approved automatic rule precedence"],
           ].map(([key, label]) => (
@@ -436,7 +437,7 @@ export function WorkspaceSettings({
             ],
             [
               "automaticRequest",
-              "Automatically request eligible supporting documents",
+              "Automatically request eligible expense records",
             ],
           ].map(([key, label]) => (
             <label className="statement-checkbox" key={key}>
@@ -451,7 +452,7 @@ export function WorkspaceSettings({
           ))}
         </fieldset>
         <fieldset className="statement-settings-group">
-          <legend>Sales invoice policy (legal company scope)</legend>
+          <legend>Sales invoice issuer</legend>
           <label className="statement-checkbox">
             <Checkbox
               checked={settings.salesInvoiceApproved === true}
@@ -462,16 +463,6 @@ export function WorkspaceSettings({
             Approve sales invoices for incoming transactions
           </label>
           <label>
-            Configured tax percentage
-            <Input
-              inputMode="decimal"
-              value={String(settings.taxRate ?? "")}
-              onChange={(e) =>
-                setSettings({ ...settings, taxRate: e.target.value })
-              }
-            />
-          </label>
-          <label>
             Verified VAT number (optional)
             <Input
               value={String(settings.vat ?? "")}
@@ -480,16 +471,7 @@ export function WorkspaceSettings({
               }
             />
           </label>
-          <SelectField
-            label="Invoice date policy"
-            value={String(settings.invoiceDatePolicy ?? "")}
-            onChange={(v) => setSettings({ ...settings, invoiceDatePolicy: v })}
-            options={[
-              { value: "", label: "Unverified" },
-              { value: "transaction", label: "Transaction date" },
-              { value: "generation", label: "Generation date" },
-            ]}
-          />
+          <InfoPopover label="Invoice tax and date">Choose the tax treatment and invoice date before each generation. Company settings store the verified issuer details.</InfoPopover>
         </fieldset>
         <div className="statement-dialog-footer">
           <SubmitButton busy={busy}>Save settings</SubmitButton>

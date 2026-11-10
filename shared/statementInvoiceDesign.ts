@@ -30,6 +30,17 @@ export function defaultInvoiceDesign(key: string, name: string): InvoiceDesign {
   const company = key.startsWith("our:") ? owned[key.slice(4) as StatementCompanyId] : undefined;
   return { key, name, template: key.startsWith("our:") ? templates[key.slice(4) as StatementCompanyId] : invoiceDesignStyles[hash % invoiceDesignStyles.length], ...(company ?? { accent: palette[hash % palette.length], style: (["rule", "minimal", "frame"] as const)[(hash >>> 4) % 3], font: (hash & 16) ? "serif" as const : "sans" as const }) };
 }
+export function expenseInvoiceDesign(name: string, addresses: InvoiceAddress[]): InvoiceDesign {
+  const match = matchingInvoiceAddress(addresses, name);
+  const canonical = match && !match.reviewNote ? match.invoiceName || match.name : name;
+  const key = `expense:supplier:${invoiceCompanyKey(canonical)}`;
+  let hash = 2166136261;
+  for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
+  // A stable supplier palette and layout, independent of the paying company.
+  // These are internal record designs, without supplier logos or copied branding.
+  const accent = `#${[0, 8, 16].map(shift => (48 + ((hash >>> shift) & 255) % 105).toString(16).padStart(2, "0")).join("")}`;
+  return { ...defaultInvoiceDesign(key, canonical), accent };
+}
 export function validateInvoiceDesign(value: InvoiceDesign): InvoiceDesign {
   if (!value || !/^#[0-9a-f]{6}$/i.test(value.accent) || !["rule", "minimal", "frame"].includes(value.style) || !["sans", "serif"].includes(value.font) || typeof value.key !== "string" || value.key.length > 300 || typeof value.name !== "string" || value.name.length > 250 || (value.logoPath && !/^\/invoice-brands\/[a-z0-9-]+\.(png|svg|jpg)$/.test(value.logoPath))) throw new Error("Check the company design");
   if (value.logoDataUrl) {

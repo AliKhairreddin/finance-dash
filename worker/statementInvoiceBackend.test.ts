@@ -12,14 +12,14 @@ async function setup() {
   const fixture = await t.run(async ctx => {
     await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: statementCompanies.map(c => c.id), manage: true, permissions: [...statementPermissions], accountIds: [] });
     await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["artec"], manage: false, permissions: [...statementPermissions], accountIds: [] });
-    for (const companyId of ["amg-holding", "artec"] as const) await ctx.db.insert("statementPolicies", {companyId,settingsJson:JSON.stringify({salesInvoiceApproved:true,legalName:companyId==="amg-holding"?"AMG Holding":"Artec",legalAddress:"Test street",taxPolicy:"Test VAT policy",taxRate:"21",invoiceDatePolicy:"transaction"}),revision:1,actor:"Ali",updatedAt:new Date().toISOString()});
+    for (const companyId of ["amg-holding", "artec"] as const) await ctx.db.insert("statementPolicies", {companyId,settingsJson:JSON.stringify({salesInvoiceApproved:true,legalName:companyId==="amg-holding"?"AMG Holding":"Artec",legalAddress:"Test street",taxPolicy:"Test VAT policy",taxRate:"21",invoiceDatePolicy:"transaction",vat:"NL-TEST"}),revision:1,actor:"Ali",updatedAt:new Date().toISOString()});
     const storageId = await ctx.storage.store(new Blob(["%PDF-sample"], { type: "application/pdf" }));
     const templateId = await ctx.db.insert("statementInvoiceTemplates", { companyId: "amg-holding", issuerKey: "our:amg-holding", issuerName: "AMG Holding", storageId, fileName: "test.pdf", layoutJson: JSON.stringify({ headerPercent: 10, footerPercent: 10, sellerDetails: "Test seller", paymentDetails: "" }), approved: true, createdAt: Date.now(), actor: "Ali", model: "saved/model" });
     const base = { date: "2026-10-26", description: "Test service", source: "Test bank", amountMinor: "12100", currency: "EUR", direction: "in" as const, reviewReasons: [], origin: "manual" as const, status: "pending" as const, documentIds: [], revision: 1, createdAt: "2026-10-26", updatedAt: "2026-10-26", createdBy: "Ali", candidateKey: "test", intakeKey: "test" };
     const id = await ctx.db.insert("statementTransactions", { ...base, companyId: "amg-holding" }), other = await ctx.db.insert("statementTransactions", { ...base, companyId: "artec" });
     return { storageId, templateId, id, other };
   });
-  const input = { ...auth, requestId: crypto.randomUUID(), ids: [fixture.id], instructions: "Describe the work simply", plainDetailsJson: JSON.stringify(pair), draftJson: JSON.stringify({ number: "TEST-001", date: "2026-10-26", dueDate: "", customer: "Customer", customerAddress: "Address", notes: "", currency: "USD", taxMode: "included", lines: [{ taxPercent: "21", amount: "999" }] }) };
+  const input = { generationOptionsJson: JSON.stringify({ taxTreatment: "vat", taxRate: "21", taxNote: "", datePolicy: "transaction" }), ...auth, requestId: crypto.randomUUID(), ids: [fixture.id], instructions: "Describe the work simply", plainDetailsJson: JSON.stringify(pair), draftJson: JSON.stringify({ number: "TEST-001", date: "2026-10-26", dueDate: "", customer: "Customer", customerAddress: "Address", notes: "", currency: "USD", taxMode: "included", lines: [{ taxPercent: "21", amount: "999" }] }) };
   return { t, ...fixture, input };
 }
 test("invoice drafts use saved amounts, reject mixed-company selections and enforce access", async () => {
@@ -105,17 +105,20 @@ test("invoice status and PDF projection follow draft/final/discard lifecycle wit
   assert.equal(after?.generatedInvoiceId, id); assert.equal(after?.revision, before!.revision); assert.equal(after?.amountMinor, before!.amountMinor);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id })).storageId, storageId);
 });
-test("internal records use legal issuer designs and never impersonate supplier templates", async () => {
+test("expense records reuse supplier-specific designs across buyers without copying supplier templates", async () => {
   const { t, input, other, templateId, storageId } = await setup();
   await t.run(async ctx => { await ctx.db.patch(input.ids[0], { direction: "out", counterparty: "Vendor payment" }); await ctx.db.patch(other, { direction: "out", counterparty: "Vendor payment" }); });
   await t.mutation(api.statements.saveAddress, { ...auth, companyId: "all", name: "Example Supplier", invoiceName: "Supplier BV", aliases: ["Vendor payment"], addressLine1: "Street 1", notes: "" });
   const create = { ...input, plainDetailsJson: JSON.stringify(pair) };
   const first = await t.mutation(api.statementInvoices.begin, create);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: first }));
-  assert.equal(row.templateId, undefined); assert.equal(row.layout.design.key, "our:amg-holding");
+  assert.equal(row.templateId, undefined); assert.equal(row.layout.design.key, "expense:supplier:supplier bv");
   assert.equal(row.draft.customer, "Example Supplier");
   const second = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), ids: [other], plainDetailsJson: JSON.stringify({ ...pair, ours: { ...pair.ours, name: "Artec" } }) });
-  assert.notDeepEqual(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: second })).layout.design, row.layout.design);
+  assert.deepEqual(JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: second })).layout.design, row.layout.design);
+  assert.match(row.layout.sellerDetails, /AMG Holding/);
+  assert.equal(row.layout.design.logoPath, undefined);
+  assert.equal(row.layout.design.logoDataUrl, undefined);
   const supplierExample = await t.run(async ctx => { const own = await ctx.db.get(templateId); const { _id, _creationTime, ...fields } = own!; return ctx.db.insert("statementInvoiceTemplates", { ...fields, storageId, issuerKey: "supplier:supplier bv", issuerName: "Supplier BV" }); });
   const third = await t.mutation(api.statementInvoices.begin, { ...create, requestId: crypto.randomUUID(), draftJson: JSON.stringify({ ...JSON.parse(input.draftJson), number: "THIRD" }) });
   const withExample = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: third }));
@@ -141,15 +144,15 @@ test("no-example invoices save confirmed company-pair details and preserve the c
   const id = await t.mutation(api.statementInvoices.begin, create);
   const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
   assert.equal(row.templateUrl, null); assert.equal(row.draft.customer, pair.other.name); assert.equal(row.draft.customerVat, pair.other.vat);
-  assert.ok(row.layout.sellerDetails.includes(pair.ours.vat)); assert.ok(row.layout.sellerDetails.includes(pair.ours.address));
+  assert.ok(row.layout.sellerDetails.includes("NL-TEST")); assert.ok(row.layout.sellerDetails.includes("Test street"));
   assert.equal(row.draft.lines[0].amount, "121.00"); assert.ok(row.instructions.includes(pair.description));
   assert.equal(await t.mutation(api.statementInvoices.begin, create), id);
   const profile = JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: "  EXAMPLE   SUPPLIER " }));
-  assert.deepEqual(profile.details, pair); assert.equal(profile.revision, 1);
+  assert.deepEqual(profile.details, { ...pair, ours: { name: "AMG Holding", address: "Test street", vat: "NL-TEST" } }); assert.equal(profile.revision, 1);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "artec", otherName: pair.other.name })), null);
   await assert.rejects(t.query(api.statementInvoices.profile, { ...auth, actor: "Alaa", companyId: "amg-holding", otherName: pair.other.name }));
   const setupData = JSON.parse(await t.query(api.statementInvoices.setup, { ...auth, ids: input.ids }));
-  assert.deepEqual(setupData.profiles[0].details, pair); assert.equal(setupData.hasExample, false);
+  assert.deepEqual(setupData.profiles[0].details, { ...pair, ours: { name: "AMG Holding", address: "Test street", vat: "NL-TEST" } }); assert.equal(setupData.hasExample, false);
 });
 test("remember is optional, stale updates cannot overwrite saved details, and failed creation rolls them back", async () => {
   const { t, input } = await setup();
@@ -223,4 +226,21 @@ test("incoming payments require sales invoice setup instead of silently generati
  await t.run(async ctx=>{for(const p of await ctx.db.query("statementPolicies").collect())await ctx.db.delete(p._id)});
  await assert.rejects(t.mutation(api.statementInvoices.begin,input),/Set up sales invoices/);
  assert.equal((await t.run(ctx=>ctx.db.query("statementInvoices").collect())).length,0);
+});
+
+test("generation choices cannot inherit company tax defaults and VAT requires a saved issuer VAT number", async () => {
+  const { t, input } = await setup();
+  await assert.rejects(t.mutation(api.statementInvoices.begin, { ...input, generationOptionsJson: undefined }), /Choose the tax treatment/);
+  await t.run(async ctx => {
+    const policy = await ctx.db.query("statementPolicies").withIndex("by_company", q => q.eq("companyId", "amg-holding")).first();
+    await ctx.db.patch(policy!._id, { settingsJson: JSON.stringify({ salesInvoiceApproved: true, legalName: "AMG Holding", legalAddress: "Verified street" }) });
+  });
+  await assert.rejects(t.mutation(api.statementInvoices.begin, input), /verified VAT number/);
+  const generationOptions = { taxTreatment: "no_vat", taxRate: "0", taxNote: "Synthetic non-taxable service", datePolicy: "generation" };
+  const id = await t.mutation(api.statementInvoices.begin, { ...input, generationOptionsJson: JSON.stringify(generationOptions) });
+  const saved = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
+  assert.equal(saved.draft.date, new Date().toISOString().slice(0, 10));
+  assert.equal(saved.draft.lines[0].taxPercent, "0");
+  assert.deepEqual(saved.draft.generationOptions, generationOptions);
+  assert.match(saved.layout.sellerDetails, /Verified street/);
 });

@@ -134,15 +134,10 @@ export const savePolicy = mutation({
       throw new ConvexError("Invalid settings");
     if (
       settings.salesInvoiceApproved &&
-      (!settings.legalName?.trim() ||
-        !settings.legalAddress?.trim() ||
-        !settings.taxPolicy?.trim() ||
-        !/^\d{1,3}(?:\.\d{1,2})?$/.test(settings.taxRate ?? "") ||
-        Number(settings.taxRate) > 100 ||
-        !["transaction", "generation"].includes(settings.invoiceDatePolicy))
+      (!settings.legalName?.trim() || !settings.legalAddress?.trim())
     )
       throw new ConvexError(
-        "Approved sales invoices require verified legal details, an explicit tax policy/rate and a date policy",
+        "Approved sales invoices require a verified legal name and address",
       );
     if (
       (settings.automaticComplete || settings.automaticRequest) &&

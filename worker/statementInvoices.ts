@@ -98,7 +98,7 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       const input=await body(), old=JSON.parse(await client.query(api.statementInvoices.get,{...auth,id:regeneration[1] as Id<"statementInvoices">})) as Saved;
       if(!["ready","stale","superseded","cancelled"].includes(old.state)||!old.pairDetailsJson)throw new Error("Select the current transactions and approved company details to generate a replacement");
       const setup=JSON.parse(await client.query(api.statementInvoices.setup,{...auth,ids:old.sources.map(s=>s.transactionId as Id<"statementTransactions">)})),details=applySavedInvoiceDetails(setup,JSON.parse(old.pairDetailsJson));
-      id=await client.mutation(api.statementInvoices.begin,{...auth,requestId:String(input.requestId),ids:old.sources.map(s=>s.transactionId as Id<"statementTransactions">),draftJson:JSON.stringify(old.draft),plainDetailsJson:JSON.stringify(details),instructions:invoiceText(input.description??old.draft.lines[0].description,"description",500),regenerate:true});generate=true;
+      id=await client.mutation(api.statementInvoices.begin,{...auth,requestId:String(input.requestId),ids:old.sources.map(s=>s.transactionId as Id<"statementTransactions">),draftJson:JSON.stringify(old.draft),generationOptionsJson:JSON.stringify(input.generationOptions),plainDetailsJson:JSON.stringify(details),instructions:invoiceText(input.description??old.draft.lines[0].description,"description",500),regenerate:true});generate=true;
     }
     const history=/^\/created-invoices\/([a-zA-Z0-9]+)\/history$/.exec(path);
     if(history && request.method==="GET")return json(JSON.parse(await client.query(api.statementInvoices.history,{...auth,id:history[1] as Id<"statementInvoices">})));
@@ -107,10 +107,11 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
       if (path.endsWith("/one-click")) {
         const setup = JSON.parse(await client.query(api.statementInvoices.setup, { ...auth, ids: input.ids as Id<"statementTransactions">[] }));
         const details = applySavedInvoiceDetails(setup, { ours: { name: statementCompanies.find(c => c.id === setup.companyId)!.name, address: "", vat: "" }, other: { name: setup.sources[0]?.counterparty ?? "", address: "", vat: "" }, description: "" });
+        if (setup.legalIssuer) details.ours = setup.legalIssuer;
         try { input.plainDetails = validateInvoicePair(details); } catch { return json({ correctionRequired: true, setup, details }); }
         input.draft = { number: "", date: "", dueDate: "", customer: "", customerAddress: "", notes: "", currency: "", taxMode: "included", lines: [] };
       }
-      id = await client.mutation(api.statementInvoices.begin, { ...auth, requestId: String(input.requestId), ids: input.ids as Id<"statementTransactions">[], draftJson: JSON.stringify(input.draft), instructions: String(input.instructions ?? ""), regenerate: input.regenerate === true, ...(input.plainDetails ? { plainDetailsJson: JSON.stringify(input.plainDetails), remember: input.remember === true, profileRevision: Number(input.profileRevision) } : {}) }); generate = true;
+      id = await client.mutation(api.statementInvoices.begin, { ...auth, requestId: String(input.requestId), ids: input.ids as Id<"statementTransactions">[], draftJson: JSON.stringify(input.draft), generationOptionsJson: JSON.stringify(input.generationOptions), instructions: String(input.instructions ?? ""), regenerate: input.regenerate === true, ...(input.plainDetails ? { plainDetailsJson: JSON.stringify(input.plainDetails), remember: input.remember === true, profileRevision: Number(input.profileRevision) } : {}) }); generate = true;
     }
     const match = /^\/created-invoices\/([a-zA-Z0-9]+)(?:\/(generate|preview|finalize|file|discard))?$/.exec(path);
     if (match) { id = match[1] as Id<"statementInvoices">; generate = match[2] === "generate" && request.method === "POST"; }
