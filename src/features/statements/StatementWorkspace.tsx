@@ -130,7 +130,7 @@ export function MerchantIntelligence({
                       ? new Date(r.researchedAt).toLocaleString()
                       : "Pending"}
                   </td>
-                  <td>
+                  <td><div className="row-actions">
                     {(r.suggestionJson || r.approvedJson) && (
                       <Button
                         variant="outline"
@@ -152,7 +152,7 @@ export function MerchantIntelligence({
                     >
                       Research
                     </Button>
-                  </td>
+                  </div></td>
                 </tr>
               ))}
           </tbody>

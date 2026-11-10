@@ -31,7 +31,8 @@
 .statement-page-heading h1 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 22px; font-weight: 650; line-height: 1.25; letter-spacing: -.3px; margin: 0; }
 .statement-title-count { display: inline-flex; align-items: center; min-height: 22px; padding: 1px 7px; border-radius: 5px; background: var(--active-bg); color: var(--app-muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 .statement-shell .row-actions { flex-wrap: wrap; min-width: 0; }
-.statement-shell .data-table .row-actions { flex-wrap: nowrap; gap: 6px; }
+.statement-shell .data-table .row-actions, .statement-dialog .data-table .row-actions { flex-wrap: nowrap; gap: 6px; width: max-content; }
+.statement-shell .row-actions > input, .statement-dialog .row-actions > input { flex: 1 1 160px; min-width: 0; width: auto; }
 .statement-shell .primary-button, .statement-dialog .primary-button { width: auto; }
 .statement-panel { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); overflow: hidden; }
 .statement-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; padding: 16px 18px; }
@@ -46,6 +47,7 @@
 .statement-totals > div > span:last-of-type svg { color: var(--app-muted); }
 .statement-filterbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 13px 15px; border-bottom: 1px solid var(--line); }
 .statement-filterbar > [data-slot="select-trigger"], .statement-filterbar > .searchable-select { width: auto; min-width: 120px; }
+.statement-filterbar > input { flex: 1 1 180px; width: auto; min-width: 0; }
 .statement-search { position: relative; flex: 1 1 180px; min-width: 160px; max-width: 350px; }
 .statement-search > svg { position: absolute; top: 50%; left: 10px; transform: translateY(-50%); color: var(--app-muted); pointer-events: none; }
 .statement-search input { padding-left: 33px; }
@@ -55,7 +57,7 @@
 .statement-more-filters label, .statement-dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 500; color: var(--label-text); }
 .statement-active-button { background: var(--active-bg); }
 .statement-shell .data-table { font-size: 12px; margin: 0; width: 100%; }
-.statement-shell .data-table th, .statement-shell .data-table td { padding: 12px 13px; }
+.statement-shell .data-table th, .statement-shell .data-table td { padding: 12px 10px; }
 .statement-shell .data-table th { font-size: 11px; background: var(--table-head-bg); }
 .statement-transactions-table { min-height: 220px; }
 .statement-transactions-table .data-table { min-width: 1450px; }
@@ -123,7 +125,7 @@
 .statement-inline-icon { display: inline; margin-right: 6px; vertical-align: -2px; color: var(--app-muted); }
 .statement-checkbox { display: flex; flex-direction: row !important; align-items: center; gap: 8px !important; margin-top: 15px; font-weight: 400 !important; }
 .statement-document-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 15px; margin: 10px 0 18px; }
-.statement-file-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.statement-file-link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; white-space: nowrap; }
 .statement-provenance { display: flex; flex-wrap: wrap; gap: 10px 25px; margin: 0 0 15px; }
 .statement-provenance > div { min-width: 0; }
 .statement-provenance dt { font-size: 10px; color: var(--app-muted); margin-bottom: 3px; }
@@ -146,7 +148,9 @@
 .statement-sender-form { display: grid; grid-template-columns: 2fr 1fr auto; align-items: end; gap: 12px; padding: 15px 18px; border-top: 1px solid var(--line); }
 .statement-sender-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
 .statement-import-corrections { margin: 15px 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
-.statement-document-metadata { margin-top: 13px; }
+.statement-connection-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0 18px 18px; }
+.statement-connection-form > label { flex: 1 1 220px; }
+.statement-connection-form > a { min-height: 36px; display: inline-flex; align-items: center; white-space: nowrap; }
 @media (max-width: 1150px) { .statement-topbar { padding: 16px 20px; } .statement-content { padding: 24px 20px; } .statement-inbox > span { display: none; } .statement-workspace { grid-template-columns: 204px minmax(0, 1fr); } .statement-sidebar { padding: 24px 10px; } }
 @media (max-width: 800px) { .statement-workspace { display: block; } .statement-sidebar { display: none; } .statement-content { padding: 14px 16px 20px; } .statement-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .statement-topbar-actions { gap: 12px; } .statement-user { padding-left: 12px; } .statement-finance-link { font-size: 0; gap: 0; } .statement-finance-link svg { width: 18px; height: 18px; } .statement-link-form { grid-template-columns: 1fr 1fr; } .statement-link-form > label:first-child { grid-column: 1 / -1; } }
 @media (max-width: 540px) { .statement-topbar { padding: 14px 16px; min-height: 68px; } .statement-brand strong { font-size: 16px; } .statement-brand-icon { height: 33px; width: 33px; } .statement-page-heading { align-items: flex-start; flex-direction: column; gap: 14px; margin-bottom: 16px; } .statement-page-heading > .row-actions { width: 100%; justify-content: flex-end; } .statement-page-heading > .row-actions > button:first-child { margin-right: auto; } .statement-filterbar { padding: 12px; } .statement-search { max-width: none; flex-basis: 100%; } .statement-dialog { padding: 16px !important; } .statement-dialog-footer { flex-wrap: wrap; } .statement-fields { grid-template-columns: minmax(0, 1fr); } .statement-dialog:not(.statement-dialog-wide) .statement-fields { grid-template-columns: minmax(0, 1fr); } .statement-field-span { grid-column: auto; } .statement-linked-file { align-items: flex-start; flex-direction: column; } }
@@ -237,10 +241,9 @@
   .statement-invoice-upload, .statement-sender-form { grid-template-columns: minmax(0, 1fr); padding: 14px; }
   .statement-invoice-upload > button, .statement-sender-form > button { width: 100%; justify-self: stretch; }
   .statement-dialog-footer { align-items: stretch; }
-  .statement-dialog-footer > .row-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .statement-dialog-footer > .row-actions { display: flex; flex-wrap: wrap; width: auto; }
   .statement-dialog-footer > button:not(.note-popover-trigger), .statement-dialog-footer > a { flex: 1 1 auto; }
   .statement-dialog-footer button:not(.note-popover-trigger), .statement-import-corrections > button, .statement-bulk > button { max-width: 100%; height: auto; min-height: 36px; padding-block: 8px; white-space: normal; }
-  .statement-dialog-footer > .row-actions > button:last-of-type:nth-of-type(odd) { grid-column: 1 / -1; }
   .statement-link-form { grid-template-columns: minmax(0, 1fr); }
   .statement-transactions-table td:last-child, .exact-records td:last-child { position: static; box-shadow: none; }
   .statement-transactions-table th:last-child { right: auto; box-shadow: none; }
@@ -261,7 +264,13 @@
 .statement-row-note { color: var(--app-muted); }
 .statement-shell .data-table .statement-missing-address { color: #a33f21; font-weight: 600; }
 .statement-shell .status-pill.statement-ai-status { background: #f1edf8; color: #5b417b; border: 1px solid #d4c5e5; }
-.statement-row-pdf { display: inline-flex; width: fit-content; margin: 2px 0 2px 4px; align-items: center; gap: 5px; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.statement-row-pdf { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.statement-inline-items { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; white-space: nowrap; }
+.statement-inline-items > * { flex-shrink: 0; }
+.statement-shell .data-table .statement-inline-items > :is(.status-pill, small), .statement-dialog .data-table .statement-inline-items > :is(.status-pill, small) { display: inline-flex; margin: 0; white-space: nowrap; }
+.statement-shell .status-pill, .statement-dialog .status-pill, .statement-nowrap { white-space: nowrap; }
+.statement-merchant-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.statement-shell .data-table .statement-merchant-inline .statement-missing-address { display: inline; margin: 0; white-space: nowrap; }
 
 
 /* One Statements design system for the shell, tables, forms and portalled dialogs. */

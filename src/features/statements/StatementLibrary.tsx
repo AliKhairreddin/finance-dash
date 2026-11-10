@@ -4,6 +4,7 @@ import { zipSync, strToU8 } from "fflate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { InfoPopover } from "@/components/ui/finance-visuals";
 import { useUrlState } from "@/lib/url-state";
 import {
   statementContext,
@@ -500,15 +501,15 @@ export function StatementLibrary({
                               }
                             />
                           </td>
-                          <td>
+                          <td><div className="statement-inline-items">
                             {r.number}
                             {r.predecessorId && (
-                              <small>Regenerated version</small>
+                              <InfoPopover label="Regenerated version">This document replaces an earlier version.</InfoPopover>
                             )}
-                          </td>
-                          <td>{r.date || "Unverified"}</td>
-                          <td>{r.transactionDate}</td>
-                          <td>{new Date(r.createdAt).toLocaleString()}</td>
+                          </div></td>
+                          <td className="statement-nowrap">{r.date || "Unverified"}</td>
+                          <td className="statement-nowrap">{r.transactionDate}</td>
+                          <td className="statement-nowrap">{new Date(r.createdAt).toLocaleString()}</td>
                           <td>
                             {companyName(
                               r.financialAccountId || r.companyId,
@@ -525,7 +526,7 @@ export function StatementLibrary({
                             <StatusPill value={r.status} />
                           </td>
                           <td>{r.downloadedAt ? "Yes" : "No"}</td>
-                          <td>
+                          <td><div className="row-actions">
                             {r.file && (
                               <>
                                 <a
@@ -549,7 +550,7 @@ export function StatementLibrary({
                             >
                               Cancel
                             </Button>
-                          </td>
+                          </div></td>
                         </tr>
                       </Fragment>
                     ))}
