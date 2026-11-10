@@ -9,8 +9,17 @@ Finance Dashboard records and the reference application are not migrated or chan
 
 ## Access and data
 
-Ali, Ali M, and Alaa use their existing Telegram sign-in. Sessions are bound to
-each hostname. The statements host does not serve the Finance Dashboard API.
+Ali M and Alaa sign in with individual passwords on the statements hostname;
+Ali retains Telegram sign-in. Enter the username first, then the password.
+Passwords are stored only as salted scrypt hashes in the Cloudflare secret
+`STATEMENT_PASSWORD_USERS_JSON`. Ten attempts per account are allowed every
+15 minutes, with the limit stored durably across requests and deployments.
+`npm run auth:configure:statements -- /absolute/private/path/passwords.json`
+generates fresh passwords, writes a mode-0600 file outside the repository, and
+uploads the hashes. Share each user's password privately. Running it again
+rotates both passwords and revokes their existing statement sessions.
+These users cannot use OTP or passwordless sessions on the statements host.
+Sessions are bound to each hostname. The statements host does not serve the Finance Dashboard API.
 Every statement API call derives its actor from the authenticated session; Convex
 also verifies the service token, membership, and company access. Original files
 are downloaded through authenticated Worker routes, without exposing storage URLs.

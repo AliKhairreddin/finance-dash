@@ -335,12 +335,12 @@ export function WorkspaceSettings({
     }
   };
   return (
-    <section className="statement-panel">
+    <section className="statement-panel statement-workspace-settings">
       <div className="statement-section-heading">
         <h2>Company and account settings</h2>
       </div>
       <ErrorMessage error={error} />
-      <form
+      <form className="statement-settings-form"
         onSubmit={(e) => {
           e.preventDefault();
           void run("/workspace/policy", {
@@ -350,7 +350,7 @@ export function WorkspaceSettings({
           });
         }}
       >
-        <SelectField
+        <div className="statement-fields"><SelectField
           label="Settings context"
           value={scope}
           onChange={setScope}
@@ -359,7 +359,6 @@ export function WorkspaceSettings({
             label: c.name,
           }))}
         />
-        <div className="statement-fields">
           <SelectField
             label="Business category"
             value={String(settings.businessCategory ?? "")}
@@ -395,16 +394,14 @@ export function WorkspaceSettings({
           ].map(([key, label]) => (
             <label key={key}>
               {label}
-              <Textarea
+              {["legalAddress", "bankDetails", "notes", "merchantAliases", "inboxKeywords"].includes(key) ? <Textarea
                 value={String(settings[key] ?? "")}
-                onChange={(e) =>
-                  setSettings({ ...settings, [key]: e.target.value })
-                }
-              />
+                onChange={(e) => setSettings({ ...settings, [key]: e.target.value })}
+              /> : <Input value={String(settings[key] ?? "")} onChange={(e) => setSettings({ ...settings, [key]: e.target.value })} />}
             </label>
           ))}
         </div>
-        <fieldset>
+        <fieldset className="statement-settings-group">
           <legend>Automatic document rules</legend>
           <label>
             Exact merchant (optional)
@@ -453,7 +450,7 @@ export function WorkspaceSettings({
             </label>
           ))}
         </fieldset>
-        <fieldset>
+        <fieldset className="statement-settings-group">
           <legend>Sales invoice policy (legal company scope)</legend>
           <label className="statement-checkbox">
             <Checkbox
@@ -547,7 +544,7 @@ export function WorkspaceSettings({
               </tbody>
             </table>
           </div>
-          <div className="statement-section-heading">
+          <div className="statement-section-heading statement-permissions">
             <h3>Permissions</h3>
             {data.members.map((m) => (
               <Button
@@ -664,12 +661,11 @@ export function DocumentDesigns({
   }, [revision]);
   return (
     <section className="statement-panel">
-      <h2>Document designs</h2>
+      <div className="statement-section-heading"><h2>Document designs</h2></div>
       <ErrorMessage error={error} />
       {rows.map((row) => (
-        <form
-          className="statement-fields"
-          key={`${row.companyId}:${row.design?.version ?? 0}`}
+        <details className="statement-design-section" key={row.companyId}><summary>{companyName(row.companyId)}</summary><form
+          className="statement-fields statement-design-form" key={row.design?.version ?? 0}
           onSubmit={async (e) => {
             e.preventDefault();
             setBusy(true);
@@ -710,7 +706,6 @@ export function DocumentDesigns({
             }
           }}
         >
-          <strong>{companyName(row.companyId)}</strong>
           <label>
             Template
             <select
@@ -747,12 +742,12 @@ export function DocumentDesigns({
             <Input name="logo" type="file" accept="image/png,image/jpeg" />
           </label>
           {row.design && JSON.parse(row.design.designJson).logoDataUrl && (
-            <label>
+            <label className="statement-checkbox">
               <input type="checkbox" name="removeLogo" />
               Remove uploaded logo
             </label>
           )}
-          <label>
+          <label className="statement-checkbox">
             <input
               type="checkbox"
               name="brandingAuthorized"
@@ -760,7 +755,7 @@ export function DocumentDesigns({
             />
             Authorized company branding
           </label>
-          <label>
+          <label className="statement-checkbox">
             <input
               type="checkbox"
               name="locked"
@@ -768,7 +763,7 @@ export function DocumentDesigns({
             />
             Lock design
           </label>
-          <SubmitButton busy={busy}>Save version</SubmitButton>
+          <div className="row-actions statement-field-full"><SubmitButton busy={busy}>Save version</SubmitButton>
           <Button
             type="button"
             variant="outline"
@@ -791,8 +786,8 @@ export function DocumentDesigns({
             }}
           >
             Preview saved design
-          </Button>
-          <details>
+          </Button></div>
+          <details className="statement-field-full">
             <summary>Version history ({row.versions.length})</summary>
             {row.versions.map((v) => (
               <p key={v.version}>
@@ -801,7 +796,7 @@ export function DocumentDesigns({
               </p>
             ))}
           </details>
-        </form>
+        </form></details>
       ))}
       {preview && (
         <StatementModal
@@ -835,7 +830,8 @@ export function StatementNotifications({ revision }: { revision: number }) {
   }, [revision]);
   return (
     <section className="statement-panel">
-      <h2>Reminders</h2>
+      <div className="statement-section-heading"><h2>Reminders</h2></div>
+      {!rows.some(row => !row.readAt) && !error && <p className="statement-panel-empty">No upcoming reminders.</p>}
       <ErrorMessage error={error} />
       {rows
         .filter((r) => !r.readAt)

@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAuthSessionToken } from "./auth";
 import { isStatementSurface, routeStatementSurface } from "./statementRouting";
+import { createStatementPassword, usesStatementPassword } from "./statementPassword";
 
 const secret = "statement-routing-test-secret-with-enough-entropy";
+const password = await createStatementPassword("routing-test-only-password");
 const env = {
+  STATEMENT_PASSWORD_USERS_JSON: JSON.stringify({ "ali m": password, alaa: password }),
   AUTH_SESSION_SECRET: secret, TELEGRAM_BOT_TOKEN: "test-bot", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "1", "Ali M": "2", Alaa: "3", Amin: "4" }),
   TELEGRAM_PASSWORDLESS_USERS_JSON: "[]", TELEGRAM_OTP_STATE: { getByName: () => ({}) }, ASSETS: { fetch: async (request: Request) => new Response(new URL(request.url).pathname) }
 } as unknown as WorkerEnv;
 async function request(hostname: string, path: string, username: string) {
-  return new Request(`https://${hostname}${path}`, { headers: { Cookie: `__Host-finance_session=${await createAuthSessionToken(secret, hostname, username)}` } });
+  const subject = usesStatementPassword(hostname, username) ? `statement-password:${username}:${password.salt}` : username;
+  return new Request(`https://${hostname}${path}`, { headers: { Cookie: `__Host-finance_session=${await createAuthSessionToken(secret, hostname, subject)}` } });
 }
 test("statements host cannot route into finance or public financial hooks", async () => {
   for (const path of ["/api/snapshot", "/api/telegram/webhook", "/api/internal/documents/archive-invoices"]) {

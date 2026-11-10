@@ -323,9 +323,9 @@ test("saved design previews, reference attachments and reminders work with isola
   page,
 }) => {
   await page.goto("/statements?view=settings");
-  const design = page
-    .locator("form")
-    .filter({ has: page.locator("strong", { hasText: "AMG Holding" }) });
+  const designSection = page.locator(".statement-design-section").filter({ has: page.locator("summary", { hasText: /^AMG Holding$/ }) });
+  await designSection.locator("summary").first().click();
+  const design = designSection.locator("form");
   await design.locator('select[name="style"]').selectOption("minimal");
   await design
     .getByRole("button", { name: "Save version", exact: true })

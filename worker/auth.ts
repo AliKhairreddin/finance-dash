@@ -6,6 +6,7 @@ import {
   type TelegramAuthUser
 } from "./telegram";
 import { TELEGRAM_OTP_EXPIRY_MS } from "./telegramOtp";
+import { parseStatementPasswords, usesStatementPassword, verifyStatementPassword } from "./statementPassword";
 import type { DashboardSession } from "../shared/types";
 
 const AUTH_COOKIE_NAME = "__Host-finance_session";
@@ -13,6 +14,7 @@ const LOGIN_COOKIE_NAME = "__Host-finance_login";
 const AUTH_SESSION_SECONDS = 12 * 60 * 60;
 const LOGIN_BODY_LIMIT_BYTES = 4 * 1024;
 const PASSWORDLESS_SESSION_SUBJECT_PREFIX = "passwordless:";
+const STATEMENT_PASSWORD_SESSION_PREFIX = "statement-password:";
 const textEncoder = new TextEncoder();
 const PUBLIC_APP_ASSET_PATHS = new Set([
   "/apple-touch-icon.png",
@@ -31,6 +33,7 @@ type AuthEnv = Pick<
   | "TELEGRAM_OTP_STATE"
   | "TELEGRAM_PASSWORDLESS_USERS_JSON"
 > & {
+  STATEMENT_PASSWORD_USERS_JSON?: string;
   TELEGRAM_TOPUP_USERS_JSON?: string;
   TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string;
   TELEGRAM_MEDIA_SPEND_USERS_JSON?: string;
@@ -39,6 +42,7 @@ type AuthEnv = Pick<
 };
 
 interface TelegramAuthConfig {
+  statementPasswords: ReturnType<typeof parseStatementPasswords>;
   users: TelegramAuthUser[];
   passwordlessUsernames: Set<string>;
   topUpUsernames: Set<string>;
@@ -59,7 +63,7 @@ interface AuthDependencies {
   sendTelegramSignInAlert?: typeof sendTelegramSignInAlert;
 }
 
-type LoginMode = "telegram-username" | "telegram-code";
+type LoginMode = "telegram-username" | "telegram-code" | "statement-password";
 
 interface LoginPageOptions {
   mode: LoginMode;
@@ -114,6 +118,7 @@ function telegramConfig(env: AuthEnv): TelegramAuthConfig | null {
   if ([...transactionReviewerUsernames].some((username) => passwordlessUsernames.has(username))) return null;
   if ([...mediaSpendUsernames].some((username) => passwordlessUsernames.has(username))) return null;
   return {
+    statementPasswords: parseStatementPasswords(env.STATEMENT_PASSWORD_USERS_JSON),
     users,
     topUpUsernames: new Set(topUpUsers.map(user => user.normalizedUsername)),
     passwordlessUsernames,
@@ -391,6 +396,17 @@ function htmlResponse(
 function loginForm(options: LoginPageOptions): string {
   const returnTo = escapeHtml(options.returnTo);
   const username = escapeHtml(options.username ?? "");
+  if (options.mode === "statement-password") {
+    return `<p class="subhead">Sign in as ${username}.</p>
+      <form method="post" action="/login">
+        <input type="hidden" name="step" value="password">
+        <input type="hidden" name="returnTo" value="${returnTo}">
+        <input type="hidden" name="username" value="${username}" autocomplete="username">
+        <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required autofocus></div>
+        <button class="submit" type="submit">Sign in</button>
+      </form>
+      <div class="secondary-actions"><a href="/login?returnTo=${encodeURIComponent(options.returnTo)}">Use another username</a></div>`;
+  }
   if (options.mode === "telegram-code") {
     return `<p class="subhead">Enter the 6-digit code sent to ${username} on Telegram.</p>
       <form method="post" action="/login">
@@ -530,11 +546,17 @@ async function telegramSessionUsername(
     ? await verifiedAuthSessionSubject(token, config.sessionSecret, audience)
     : null;
   if (!subject) return null;
+  if (subject.startsWith(STATEMENT_PASSWORD_SESSION_PREFIX)) {
+    const [username, salt, extra] = subject.slice(STATEMENT_PASSWORD_SESSION_PREFIX.length).split(":");
+    if (extra !== undefined || !usesStatementPassword(audience, username) || !config.users.some(user => user.normalizedUsername === username)) return null;
+    return config.statementPasswords?.get(username)?.salt === salt ? username : null;
+  }
   const passwordless = subject.startsWith(PASSWORDLESS_SESSION_SUBJECT_PREFIX);
   const username = passwordless
     ? subject.slice(PASSWORDLESS_SESSION_SUBJECT_PREFIX.length)
     : subject;
   if (!config.users.some((user) => user.normalizedUsername === username)) return null;
+  if (usesStatementPassword(audience, username)) return null;
   if (passwordless && !config.passwordlessUsernames.has(username)) return null;
   return username;
 }
@@ -594,6 +616,11 @@ async function requestTelegramLogin(
   const now = dependencies.now?.() ?? Date.now();
   const normalizedUsername = normalizeFinanceUsername(usernameInput);
   const user = telegramUser(config, usernameInput);
+
+  if (usesStatementPassword(url.hostname, normalizedUsername)) {
+    if (!user || !config.statementPasswords?.has(normalizedUsername)) return authUnavailable(url.pathname);
+    return loginHtmlResponse({ mode: "statement-password", returnTo, username: user.username }, {}, [expiredCookie(LOGIN_COOKIE_NAME)]);
+  }
 
   if (!user) {
     const generatedChallengeId = crypto.randomUUID();
@@ -703,6 +730,9 @@ async function verifyTelegramOtp(
     ? await verifyLoginToken(loginToken, config.sessionSecret, url.hostname, now)
     : null;
   const user = challenge ? telegramUser(config, challenge.username) : undefined;
+  if (user && usesStatementPassword(url.hostname, user.normalizedUsername)) {
+    return loginHtmlResponse({ mode: "statement-password", returnTo, username: user.username, error: "Sign in with your password." }, { status: 401 }, [expiredCookie(LOGIN_COOKIE_NAME)]);
+  }
   if (!challenge || !user || !/^[0-9]{6}$/u.test(code)) {
     return loginHtmlResponse(
       {
@@ -779,6 +809,24 @@ async function enforceTelegramAuth(
     try {
       const form = await readLoginForm(request);
       const formReturnTo = safeReturnTo(form.get("returnTo"));
+      if (form.get("step") === "password") {
+        const username = normalizeFinanceUsername(form.get("username") ?? "");
+        const user = telegramUser(config, username);
+        if (request.headers.get("Origin") !== url.origin || !usesStatementPassword(url.hostname, username) || !user) {
+          return loginHtmlResponse({ mode: "telegram-username", returnTo: formReturnTo, error: "Invalid sign-in request." }, { status: 403 });
+        }
+        const credential = config.statementPasswords?.get(username);
+        if (!credential) return authUnavailable(url.pathname);
+        const retryAfter = await env.TELEGRAM_OTP_STATE.getByName(`statement-password:${username}`).consumeStatementPasswordAttempt();
+        if (retryAfter) {
+          return loginHtmlResponse({ mode: "statement-password", returnTo: formReturnTo, username: user.username, error: "Too many sign-in attempts. Please try again later." }, { status: 429, headers: { "Retry-After": String(retryAfter) } });
+        }
+        if (!await verifyStatementPassword(form.get("password") ?? "", credential)) {
+          return loginHtmlResponse({ mode: "statement-password", returnTo: formReturnTo, username: user.username, error: "Incorrect password." }, { status: 401 });
+        }
+        const token = await createAuthSessionToken(config.sessionSecret, url.hostname, `${STATEMENT_PASSWORD_SESSION_PREFIX}${username}:${credential.salt}`, dependencies.now?.() ?? Date.now());
+        return redirect(formReturnTo, [sessionCookie(token), expiredCookie(LOGIN_COOKIE_NAME)]);
+      }
       if (form.get("step") === "request") {
         return requestTelegramLogin(
           request,
@@ -840,6 +888,8 @@ export async function enforceSiteAuthentication(
     .replace(/href="\/site\.webmanifest\?[^\"]*"/, 'href="/statement.webmanifest?v=1"')
     .replace('<meta name="theme-color" content="#09090b">', '<meta name="theme-color" content="#4f46e5">')
     .replace('<meta name="apple-mobile-web-app-title" content="Finance">', '<meta name="apple-mobile-web-app-title" content="Statements">')
+    .replace('<span>Finance</span>', '<span>Statements</span>')
+    .replace('Sign in to Finance</h1>', 'Sign in to Statements</h1>')
     .replace('<title>Sign in · Finance Dashboard</title>', '<title>Sign in · Statements Dashboard</title>');
   return new Response(html, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

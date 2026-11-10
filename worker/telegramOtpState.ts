@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { statementPasswordAttempt } from "./statementPassword";
 import {
   configureTelegramBotCommands,
   configureTelegramWebhook,
@@ -96,6 +97,17 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
     const result = this.operationQueue.then(operation, operation);
     this.operationQueue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  async consumeStatementPasswordAttempt(): Promise<number> {
+    return this.serialize(async () => {
+      // Dedicated statement-password:<username> objects keep this separate from OTPs.
+      // At most ten timestamps per account; expired attempts are pruned on access.
+      const times = await this.ctx.storage.get<number[]>("statement-password-attempts") ?? [];
+      const result = statementPasswordAttempt(times, Date.now());
+      await this.ctx.storage.put("statement-password-attempts", result.times);
+      return result.retryAfterSeconds;
+    });
   }
 
   private async persistOtpState(state: TelegramOtpStoredState): Promise<void> {

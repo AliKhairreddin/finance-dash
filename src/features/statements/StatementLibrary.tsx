@@ -288,14 +288,14 @@ export function StatementLibrary({
     }
   };
   return (
-    <section className="statement-panel">
-      <div className="statement-filterbar">
-        <Input
+    <section className="statement-panel statement-library">
+      <div className="statement-filterbar statement-library-filters">
+        <label>Search<Input
           aria-label="Search document library"
           placeholder="Search documents"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-        />
+        /></label>
         <SelectField
           label="Document financial account"
           value={context.financialAccountId || accountFilter}
@@ -348,13 +348,14 @@ export function StatementLibrary({
             { value: "out", label: "Outgoing" },
           ]}
         />
-        <Button
-          disabled={busy}
+      </div><div className="statement-library-actions row-actions">
+        <Button variant="outline"
+          disabled={busy || !filtered.length}
           onClick={() => setSelected(filtered.map((r) => r.id))}
         >
           Select visible
         </Button>
-        <Button
+        <Button variant="outline"
           disabled={busy || !selected.length}
           onClick={() =>
             void download(filtered.filter((r) => selected.includes(r.id)))
@@ -362,13 +363,13 @@ export function StatementLibrary({
         >
           Download selected
         </Button>
-        <Button
-          disabled={busy || Boolean(error)}
+        <Button variant="outline"
+          disabled={busy || Boolean(error) || !filtered.length}
           onClick={() => void download(filtered)}
         >
           Download all matching
         </Button>
-        <Button
+        <Button variant="outline"
           disabled={busy || !selected.length}
           onClick={() =>
             void action(
@@ -379,7 +380,7 @@ export function StatementLibrary({
         >
           Cancel selected
         </Button>
-        <Button
+        <Button variant="outline"
           disabled={busy || !selected.length}
           onClick={() =>
             void action(
@@ -392,7 +393,8 @@ export function StatementLibrary({
         </Button>
       </div>
       <ErrorMessage error={error} />
-      {busy && <p role="status">Loading documents…</p>}
+      {busy && <p className="statement-panel-empty" role="status">Loading documents…</p>}
+      {!busy && !error && !filtered.length && <p className="statement-panel-empty">No documents match these filters.</p>}
       {notice && (
         <details>
           <summary>Operation results</summary>
@@ -406,7 +408,7 @@ export function StatementLibrary({
         return (
           <section key={group}>
             <div className="statement-section-heading">
-              <h2>{group}</h2>
+              <h2>{group}</h2><div className="row-actions">
               <Button
                 variant="outline"
                 onClick={() =>
@@ -431,7 +433,7 @@ export function StatementLibrary({
                 >
                   Download {d === "in" ? "incoming" : "outgoing"}
                 </Button>
-              ))}
+              ))}</div>
             </div>
             <div className="table-wrap">
               <table className="data-table">

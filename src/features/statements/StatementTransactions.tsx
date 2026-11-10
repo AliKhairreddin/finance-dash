@@ -42,7 +42,7 @@ export function TransactionFields({ draft, onChange, disabled = false }: { draft
     <label>Currency<Input required pattern="[A-Z]{3,4}" maxLength={4} value={draft.currency} onChange={event => edit("currency", event.target.value.toUpperCase())} /></label>
     <SelectField label="Direction" value={draft.direction} onChange={value => edit("direction", value)} options={[{ value: "out", label: "Money out" }, { value: "in", label: "Money in" }]} disabled={disabled} />
     <label>Paid to / received from<Input value={draft.counterparty} onChange={event => edit("counterparty", event.target.value)} /></label>
-    <label className="statement-field-span">Description<Input required value={draft.description} onChange={event => edit("description", event.target.value)} /></label>
+    <label>Description<Input required value={draft.description} onChange={event => edit("description", event.target.value)} /></label>
     <label>Reference<Input value={draft.reference} onChange={event => edit("reference", event.target.value)} /></label>
     <label>Bank or payment service<Input required value={draft.source} placeholder="Bank, card, or cash" onChange={event => edit("source", event.target.value)} /></label>
     <label>Account<Input value={draft.account} onChange={event => edit("account", event.target.value)} /></label>
