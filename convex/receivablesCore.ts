@@ -93,7 +93,7 @@ export async function guardTrackerFinancialState(ctx: MutationCtx, previous: Doc
       if (!bank || !trackerBankEligible(bank) || bank.identityVersion !== 2 || bank._creationTime < Date.parse(settings.enabledAt) || bank.syncedAt < settings.enabledAt || bank.currency !== invoice.currency) continue;
       const binding = await ctx.db.query("bankConnectionBindings").withIndex("by_source", q => q.eq("source", bank.source)).unique();
       if (!binding || binding.connectionKey !== bank.connectionKey) continue;
-      await queueTrackerEvent(ctx, `invoice-received:${invoice.id}:${additions.map(a => a.id).sort().join(":")}`, `${invoice.customerName} paid · ${invoice.currency} ${invoice.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}\n${bank.date.slice(0, 10)} · ${bank.source} · ${bank.accountName}\n${invoice.invoiceNumber}`, trackerNow(), { invoiceId: invoice.id });
+      await queueTrackerEvent(ctx, `invoice-received:${invoice.id}:${additions.map(a => a.id).sort().join(":")}`, `${invoice.customerName} paid · ${invoice.currency} ${payments.filter(a => a.invoiceId === invoice.id).reduce((sum, a) => sum + a.amount, 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}\n${bank.date.slice(0, 10)} · ${bank.source} · ${bank.accountName}\n${invoice.invoiceNumber}`, trackerNow(), { invoiceId: invoice.id });
     }
   }
 }

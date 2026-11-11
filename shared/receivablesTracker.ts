@@ -71,9 +71,9 @@ export function resolveTrackerDate(input: { week: string; payer: string; explici
 }
 export function trackerAmounts(item: TrackerItem, receipts: TrackerReceipt[], invoices: Invoice[], payments: PaymentAllocation[]) {
   const invoice = item.invoiceId ? invoices.find(i => i.id === item.invoiceId) : undefined;
-  const received = invoice ? trackerMoney(invoice.status === "paid" ? invoice.amount : invoice.amount - invoiceOutstanding(invoice, payments)) : trackerMoney(receipts.filter(a => a.itemKey === item.key && a.state === "active").reduce((s, a) => s + a.amount, 0));
+  const received = invoice ? trackerMoney(payments.filter(p => p.invoiceId === invoice.id).reduce((sum, p) => sum + p.amount, 0)) : trackerMoney(receipts.filter(a => a.itemKey === item.key && a.state === "active").reduce((s, a) => s + a.amount, 0));
   const amount = invoice?.amount ?? item.amount;
-  const outstanding = Math.max(0, trackerMoney(amount - received));
+  const outstanding = invoice ? (invoice.status === "paid" ? 0 : invoiceOutstanding(invoice, payments)) : Math.max(0, trackerMoney(amount - received));
   return { amount, received, outstanding, currency: invoice?.currency ?? item.currency,
     status: outstanding <= 0 && amount > 0 ? "Received" : received > 0 ? "Partially received" : item.payerSent ? "Paid by payer / awaiting receipt" : "Open" };
 }

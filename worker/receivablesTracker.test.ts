@@ -54,3 +54,9 @@ test("an active weekly album does not consume another album or an unrelated docu
   globalThis.fetch = async (_input, init) => { const body = JSON.parse(String(init?.body)); paths.push(body.path); assert.equal(body.path, "receivables:intake"); return Response.json({ status: "success", value: body.args[0].cancel ? null : { week: "2026-11-09", mediaGroupId: "first-album" } }); };
   try { const result = await trackerTelegramIntake(env, ali, "administrator", { chatId: "111", firstName: "Ali", attachment: { fileId: "a", uniqueId: "b", fileName: "amex.csv", contentType: "text/csv" } }); assert.equal(result, null); assert.equal(paths.length, 2); } finally { globalThis.fetch = original; }
 });
+test("a full Finance administrator can use their existing private chat from the shared login directory", () => {
+  const config = { ...env, TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "444", Restricted: "555" }), DASHBOARD_ADMINISTRATOR_USERS: "Alaa" };
+  assert.deepEqual(trackerEligibleUsers(config).map(u => u.normalizedUsername), ["ali", "ali m", "alaa"]);
+  assert.equal(trackerEligibleUsers({ ...config, DASHBOARD_ADMINISTRATOR_USERS: "" }).some(u => u.normalizedUsername === "alaa"), false);
+  assert.equal(trackerEligibleUsers({ ...config, TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "111" }) }).length, 0);
+});

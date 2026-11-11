@@ -46,3 +46,8 @@ test("CSV retains duplicate invoice source lines and does not treat missing stat
   const rows = parseTrackerCsv('payer,amount,reference,line,paid\nKissterra,10,2026/1439,a,0\nKissterra,20,2026/1439,b,0\n"Client, Inc",30,,,', item.week);
   assert.notEqual(trackerSourceKey(rows[0]), trackerSourceKey(rows[1])); assert.ok(rows[2].issue); assert.equal(rows[2].payer, "Client, Inc");
 });
+test("invoice settlement adjustments clear outstanding amounts without inventing cash received", () => {
+  const invoice = { id: "invoice", amount: 1006, currency: "USD", status: "paid" } as any;
+  const paid = { invoiceId: "invoice", amount: 1000, settlementAdjustment: 6, currency: "USD" } as any;
+  assert.deepEqual(trackerAmounts({ ...item, invoiceId: "invoice" }, [], [invoice], [paid]), { amount: 1006, received: 1000, outstanding: 0, currency: "USD", status: "Received" });
+});

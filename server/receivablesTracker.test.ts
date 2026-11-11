@@ -84,3 +84,7 @@ test("a reversed receipt cancels its pending payment confirmation", async () => 
   await call(tracker.reverse, ctx, { ...actor, key: ctx.tables.receivableReceipts[0].key, reason: "Reversed payment" });
   assert.equal((await call(tracker.deliveryClaim, ctx, auth)).length, 0); assert.ok(ctx.tables.receivableDeliveries.every(d => d.state === "disabled"));
 });
+test("a monthly send task cannot be completed by an unrelated payer invoice", async () => {
+  const ctx = setup(); Object.assign(ctx.tables.receivableItems[0], { kind: "monthly", payer: "SF Ishan", providerId: undefined, amount: 0 }); ctx.tables.dashboardState[0].invoices.push(invoice);
+  await assert.rejects(call(tracker.linkInvoice, ctx, { ...actor, key: item.key, invoiceId: invoice.id }), /payer and billing entity/);
+});

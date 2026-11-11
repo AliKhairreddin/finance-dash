@@ -89,6 +89,7 @@ export const linkInvoice = mutation({ args: { ...actor, key: v.string(), invoice
   trackerAuth(args.serviceToken); const state = await trackerState(ctx), item = await trackerItemByKey(ctx, args.key), invoice = state.invoices.find(i => i.id === args.invoiceId);
   if (!item || !invoice || invoice.documentType !== "sales_invoice" || invoice.meritReplacementId) trackerReject("Choose an available item and sales invoice");
   if (item.invoiceId && item.invoiceId !== invoice.id) trackerReject("This item is already linked to another invoice");
+  if (item.kind === "monthly" && ((item.providerId ? item.providerId !== invoice.providerId : trackerPayer(item.payer) !== trackerPayer(invoice.customerName)) || (item.entity && invoice.entity && item.entity !== invoice.entity))) trackerReject("Choose an invoice for this task’s payer and billing entity");
   if (item.kind !== "monthly" && (item.providerId !== invoice.providerId || item.currency !== invoice.currency || trackerCents(item.amount) !== trackerCents(invoice.amount) || (invoice.entity && item.entity !== invoice.entity))) trackerReject("Invoice client, original currency, entity and amount must match the collectible balance");
   const receipts = (await trackerReceipts(ctx)).filter(r => r.itemKey === item.key);
   if (receipts.length && state.paymentAllocations.some(a => a.invoiceId === invoice.id)) trackerReject("Invoice already has payments; review those before transferring receipts");

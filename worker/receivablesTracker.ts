@@ -7,13 +7,19 @@ import { readBoundedResponseJson } from "../shared/boundedHttp";
 import { documentContentType } from "../shared/financialDocuments";
 import { parseTrackerCsv, trackerAmounts, trackerClock, trackerInView, trackerWeek, type TrackerReportRow, type TrackerView } from "../shared/receivablesTracker";
 import { downloadTelegramAttachment, normalizeFinanceUsername, parseTelegramAuthUsers, type TelegramAuthUser, type TelegramPrivateMessage, type TelegramCommandRole } from "./telegram";
-export type TrackerEnv = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OPENROUTER_API_KEY" | "DOCUMENT_AI_MODEL" | "PUBLIC_APP_URL" | "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_COMMAND_ADMIN_USERS" | "TELEGRAM_COMMAND_READ_ONLY_USERS" | "TELEGRAM_BOT_TOKEN"> & { DASHBOARD_ADMINISTRATOR_USERS?: string };
+export type TrackerEnv = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OPENROUTER_API_KEY" | "DOCUMENT_AI_MODEL" | "PUBLIC_APP_URL" | "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_COMMAND_ADMIN_USERS" | "TELEGRAM_COMMAND_READ_ONLY_USERS" | "TELEGRAM_BOT_TOKEN"> & { DASHBOARD_ADMINISTRATOR_USERS?: string; TELEGRAM_TOPUP_USERS_JSON?: string; TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON?: string; TELEGRAM_MEDIA_SPEND_USERS_JSON?: string };
 const client = (env: TrackerEnv) => new ConvexHttpClient(env.CONVEX_URL, { logger: false });
 const auth = (env: TrackerEnv) => ({ serviceToken: env.CONVEX_SERVICE_TOKEN });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "private, no-store" } });
 export function trackerEligibleUsers(env: TrackerEnv) {
   const allowed = new Set(`${env.TELEGRAM_COMMAND_ADMIN_USERS},${env.TELEGRAM_COMMAND_READ_ONLY_USERS},${env.DASHBOARD_ADMINISTRATOR_USERS ?? ""}`.split(",").map(normalizeFinanceUsername));
-  return (parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []).filter(u => allowed.has(u.normalizedUsername));
+  // Finance login merges these existing private-chat directories. Eligibility still requires a full Finance role.
+  const directories = [env.TELEGRAM_AUTH_USERS_JSON, env.TELEGRAM_TOPUP_USERS_JSON, env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON, env.TELEGRAM_MEDIA_SPEND_USERS_JSON].filter((value): value is string => Boolean(value?.trim()));
+  const parsed = directories.map(value => parseTelegramAuthUsers(value));
+  if (!parsed.length || parsed.some(users => !users)) return [];
+  const users = parsed.flatMap(users => users!);
+  if (new Set(users.map(u => u.normalizedUsername)).size !== users.length || new Set(users.map(u => u.chatId)).size !== users.length) return [];
+  return users.filter(u => allowed.has(u.normalizedUsername));
 }
 export const trackerLink = (env: Pick<TrackerEnv, "PUBLIC_APP_URL">, view: TrackerView = "This week") => { const url = new URL("/", env.PUBLIC_APP_URL); url.searchParams.set("page", "cash-flow-invoices"); url.searchParams.set("receivablesView", "tracker"); url.searchParams.set("trackerView", view); return url.toString(); };
 async function hash(bytes: Uint8Array<ArrayBuffer>) { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join(""); }
