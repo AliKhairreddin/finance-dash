@@ -17,7 +17,7 @@ import {
   type CashReportDeliveryState,
   type CashReportKind
 } from "./telegramCashReport";
-import { getTelegramCashReport, handleTelegramCommand } from "./handler";
+import { flexNotificationRecipient, getTelegramCashReport, handleTelegramCommand } from "./handler";
 
 const now = "2026-09-07T04:00:00.000Z";
 function account(overrides: Partial<CashReportAccount> = {}): CashReportAccount {
@@ -43,6 +43,13 @@ test("cash reports include Flex bank balances and exclude card debt and availabl
   assert.match(report, /Bank total ≈ USD 14,000\.00/);
   assert.match(report, /Flex · Mojo Labs LLC ≈ USD 14,000\.00/);
   assert.doesNotMatch(report, /98,000|2,000/);
+});
+
+test("Flex alert routing allows overlapping recipient groups without sending outside the configured users", () => {
+  const env = { FLEX_CARD_ALERT_RECIPIENTS: "Ali,Ali M", FLEX_BALANCE_ALERT_RECIPIENTS: "Amin,Ali,Ali M",
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", Ben: "444" }) };
+  for (const [name, chatId] of [["Ali", "111"], ["Ali M", "222"], ["Amin", "333"]]) assert.equal(flexNotificationRecipient(env, name).chatId, chatId);
+  assert.throws(() => flexNotificationRecipient(env, "Ben"), /not authorized/);
 });
 
 test("cash report groups banks in the requested order and shows crypto separately from every bank total", () => {

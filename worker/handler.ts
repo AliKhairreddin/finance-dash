@@ -3747,6 +3747,14 @@ async function syncRevolutActivity(
   });
 }
 
+export function flexNotificationRecipient(env: Pick<Env, "FLEX_CARD_ALERT_RECIPIENTS" | "FLEX_BALANCE_ALERT_RECIPIENTS" | "TELEGRAM_AUTH_USERS_JSON">, recipient: string) {
+  const configured = [...parseTelegramCommandUsers(env.FLEX_CARD_ALERT_RECIPIENTS, "FLEX_CARD_ALERT_RECIPIENTS"), ...parseTelegramCommandUsers(env.FLEX_BALANCE_ALERT_RECIPIENTS, "FLEX_BALANCE_ALERT_RECIPIENTS")];
+  const normalized = normalizeFinanceUsername(recipient);
+  const user = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(candidate => candidate.normalizedUsername === normalized);
+  if (!user || !configured.some(name => normalizeFinanceUsername(name) === normalized)) throw new Error("Flex notification recipient is not authorized");
+  return user;
+}
+
 async function syncFlexActivity(env: Env, requestedRange?: SlashTransactionDateRange, laneKey = "live", pageBudget = 5): Promise<boolean> {
   const connectionKey = await requireBankConnectionKey(env, "flex");
   return withBankSyncLease(env, "flex", connectionKey, async lease => {
@@ -3758,10 +3766,9 @@ async function syncFlexActivity(env: Env, requestedRange?: SlashTransactionDateR
     // Delivery also holds the provider lease, so ordinary refreshes cannot send concurrently.
     const deliverNotifications = async () => {
       if (!notificationsEnabled) return;
-      const recipients = [...parseTelegramCommandUsers(env.FLEX_CARD_ALERT_RECIPIENTS, "FLEX_CARD_ALERT_RECIPIENTS"), ...parseTelegramCommandUsers(env.FLEX_BALANCE_ALERT_RECIPIENTS, "FLEX_BALANCE_ALERT_RECIPIENTS")];
       for (const job of await convex.query(api.flexSync.pending, { serviceToken, connectionKey })) {
         try {
-          const user = cashReportRecipient({ ...env, TELEGRAM_CASH_REPORT_RECIPIENTS: recipients.join(",") }, job.recipient, "weekly-cash");
+          const user = flexNotificationRecipient(env, job.recipient);
           await sendTelegramMessage(env, user.chatId, job.message);
           await convex.mutation(api.flexSync.deliveryResult, { ...credential, id: job.id, success: true });
         } catch {
