@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { applyPaymentState, invoiceOutstanding } from "../shared/income";
-import { defaultTrackerRules, sameTrackerReceipt, trackerAmounts, trackerBankEligible, trackerCents, trackerClock, trackerMatchReason, trackerMoney, trackerPayer, trackerShift, trackerTiming, trackerWeek, type TrackerItem, type TrackerReceipt } from "../shared/receivablesTracker";
+import { resolveTrackerDate, sameTrackerReceipt, trackerAmounts, trackerBankEligible, trackerCents, trackerClock, trackerMatchReason, trackerMoney, trackerPayer, trackerShift, trackerTiming, trackerWeek, type TrackerItem, type TrackerReceipt } from "../shared/receivablesTracker";
 import type { Invoice, PaymentAllocation } from "../shared/types";
 export const trackerLimit = 2000;
 export function trackerAuth(token: string) { if (!process.env.CONVEX_SERVICE_TOKEN || token !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized"); }
@@ -100,8 +100,6 @@ export async function guardTrackerFinancialState(ctx: MutationCtx, previous: Doc
 
 export async function reconcileTrackerInvoices(ctx: MutationCtx, state: Doc<"dashboardState">, forecasts: { invoiceId: string; date: string; basis: string }[]) {
   const items = await trackerItems(ctx), now = trackerNow(), week = trackerWeek(trackerClock().date);
-  const settings = await trackerSettings(ctx), rules = settings?.rules ?? defaultTrackerRules;
-  const { resolveTrackerDate } = await import("../shared/receivablesTracker");
   for (const invoice of state.invoices.filter(i => i.documentType === "sales_invoice" && i.status !== "draft" && !i.meritReplacementId)) {
     const existing = items.find(i => i.invoiceId === invoice.id);
     if (!existing && (invoice.status === "paid" || invoiceOutstanding(invoice, state.paymentAllocations) <= 0)) continue;

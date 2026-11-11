@@ -88,3 +88,16 @@ test("a monthly send task cannot be completed by an unrelated payer invoice", as
   const ctx = setup(); Object.assign(ctx.tables.receivableItems[0], { kind: "monthly", payer: "SF Ishan", providerId: undefined, amount: 0 }); ctx.tables.dashboardState[0].invoices.push(invoice);
   await assert.rejects(call(tracker.linkInvoice, ctx, { ...actor, key: item.key, invoiceId: invoice.id }), /payer and billing entity/);
 });
+test("maintenance enrolls open invoices once without inventing dates or changing accounting balances", async () => {
+  const ctx = setup(); ctx.tables.receivableItems = [];
+  ctx.tables.dashboardState[0].invoices = [invoice, { ...invoice, id: "paid", status: "paid" }, { ...invoice, id: "draft", status: "draft" }];
+  const before = JSON.stringify(ctx.tables.dashboardState[0]);
+  await call(tracker.maintain, ctx, { ...auth, forecasts: [] });
+  assert.equal(ctx.tables.receivableItems.filter(i => i.kind === "invoice").length, 1);
+  assert.equal(ctx.tables.receivableItems.find(i => i.invoiceId === invoice.id)?.expectedDate, undefined);
+  assert.equal(ctx.tables.receivableItems.filter(i => i.kind === "monthly").length, 4);
+  await call(tracker.maintain, ctx, { ...auth, forecasts: [{ invoiceId: invoice.id, date, basis: "Matched invoice history" }] });
+  assert.equal(ctx.tables.receivableItems.length, 5);
+  assert.equal(ctx.tables.receivableItems.find(i => i.invoiceId === invoice.id)?.expectedDate, date);
+  assert.equal(JSON.stringify(ctx.tables.dashboardState[0]), before);
+});
