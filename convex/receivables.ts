@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 import { trackerDelivery, trackerItem, trackerReceipt, trackerReport, trackerReportRow, trackerRule } from "./receivablesSchema";
 import { defaultTrackerRules, resolveTrackerDate, sameTrackerReceipt, trackerAmounts, trackerBankEligible, trackerCents, trackerClock, trackerGroupKey, trackerMatchReason, trackerMoney, trackerPayer, trackerProvider, trackerSourceKey, trackerWeek, validTrackerDate, type TrackerItem, type TrackerReportRow } from "../shared/receivablesTracker";
 import { applyPaymentState, invoiceOutstanding } from "../shared/income";
+import { historicalWiseTransferKey } from "../shared/historicalPaymentMatch";
 import { plain, queueTrackerEvent, recordTrackerReceipt, reconcileTrackerInvoices, trackerAudit, trackerAuth, trackerItemByKey, trackerItems, trackerLimit, trackerNow, trackerReceipts, trackerReject, trackerReminderEvents, trackerSettings, trackerState, updateTrackerMirror } from "./receivablesCore";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
@@ -170,28 +171,45 @@ export const saveSettings = mutation({ args: { ...actor, recipients: v.array(v.s
 export const maintain = mutation({ args: { ...auth, forecasts: v.array(v.object({ invoiceId: v.string(), date: v.string(), basis: v.string() })) }, returns: v.null(), handler: async (ctx, args) => { trackerAuth(args.serviceToken); if (args.forecasts.length > 2000) trackerReject("Forecast limit exceeded"); await reconcileTrackerInvoices(ctx, await trackerState(ctx), args.forecasts); await trackerReminderEvents(ctx); return null; } });
 export const match = mutation({ args: auth, returns: v.object({ matched: v.number(), complete: v.boolean(), candidates: v.number() }), handler: async (ctx, args) => {
   trackerAuth(args.serviceToken); const state = await trackerState(ctx), items = await trackerItems(ctx), receipts = await trackerReceipts(ctx);
+  const open = items.filter(i => !i.invoiceId && !i.review && i.kind !== "monthly" && i.expectedDate && trackerAmounts(i, receipts, state.invoices, state.paymentAllocations).outstanding > 0);
+  if (!open.length && !receipts.some(r => r.transactionId)) return { matched: 0, complete: true, candidates: 0 };
   const bindings = await ctx.db.query("bankConnectionBindings").take(6); if (bindings.length > 5) trackerReject("Unexpected bank connection scope");
-  const cutoff = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
-  const rows = await ctx.db.query("bankTransactions").withIndex("by_direction_date_id", q => q.eq("direction", "in").gte("date", cutoff)).take(3001);
-  if (rows.length > 3000) return { matched: 0, complete: false, candidates: 0 };
-  const banks = rows.filter(t => t.identityVersion === 2 && bindings.some(b => b.source === t.source && b.connectionKey === t.connectionKey) && trackerBankEligible(t));
-  let corrected = false;
+  const identity = (id: string) => { const wise = historicalWiseTransferKey(id); return wise ? `historical-wise:${wise}` : id; };
+  const consumed = new Set<string>(), usedAmounts = new Map<string, number>();
+  for (const id of [...state.invoices.map(i => i.transactionId), ...state.paymentAllocations.map(a => a.transactionId), ...receipts.map(r => r.transactionId)]) if (id) consumed.add(identity(id));
+  for (const receipt of receipts) if (receipt.transactionId) { const key = identity(receipt.transactionId); usedAmounts.set(key, (usedAmounts.get(key) ?? 0) + receipt.bankAmount); }
+  const correctedItems = new Set<string>(), checkedBanks = new Map<string, Doc<"bankTransactions"> | null>();
   for (const receipt of receipts.filter(r => r.transactionId)) {
-    const bank = await ctx.db.query("bankTransactions").withIndex("by_transaction_id", q => q.eq("id", receipt.transactionId!)).unique();
+    if (!checkedBanks.has(receipt.transactionId!)) checkedBanks.set(receipt.transactionId!, await ctx.db.query("bankTransactions").withIndex("by_transaction_id", q => q.eq("id", receipt.transactionId!)).unique());
+    const bank = checkedBanks.get(receipt.transactionId!);
     // Absence or failed coverage never erases receipt evidence. Only an explicit source correction does.
     if (!bank || !bindings.some(b => b.source === bank.source && b.connectionKey === bank.connectionKey)) continue;
-    const used = receipts.filter(r => sameTrackerReceipt(r.transactionId, bank.id)).reduce((s, r) => s + r.bankAmount, 0);
+    const used = usedAmounts.get(identity(bank.id)) ?? 0;
     if (bank.status === "voided" || bank.direction !== "in" || bank.currency !== receipt.bankCurrency || trackerCents(bank.amount) < trackerCents(used)) {
       const reason = "Saved bank record was reversed or its amount/currency was corrected; review receipt evidence";
       await ctx.db.patch(receipt._id, { state: "reversed", reversedAt: trackerNow(), reversalReason: reason });
       const item = items.find(i => i.key === receipt.itemKey);
       if (item) await ctx.db.patch(item._id, { review: reason, revision: item.revision + 1, updatedAt: trackerNow() });
-      await trackerAudit(ctx, receipt.itemKey, "scheduled matcher", "Source receipt corrected", JSON.stringify({ transactionId: bank.id, reason })); corrected = true;
+      await trackerAudit(ctx, receipt.itemKey, "scheduled matcher", "Source receipt corrected", JSON.stringify({ transactionId: bank.id, reason })); correctedItems.add(receipt.itemKey);
     }
   }
-  const available = banks.filter(t => !t.matchedInvoiceId && !state.invoices.some(i => sameTrackerReceipt(i.transactionId, t.id)) && !state.paymentAllocations.some(a => sameTrackerReceipt(a.transactionId, t.id)) && !receipts.some(a => sameTrackerReceipt(a.transactionId, t.id)));
-  const open = items.filter(i => !i.invoiceId && !i.review && i.kind !== "monthly" && trackerAmounts(i, receipts, state.invoices, state.paymentAllocations).outstanding > 0);
-  const pairs = open.flatMap(item => available.filter(t => !trackerMatchReason(item, t, state.providers.find(p => p.id === item.providerId), trackerAmounts(item, receipts, state.invoices, state.paymentAllocations).outstanding)).map(bank => ({ item, bank })));
+  if (correctedItems.size) await updateTrackerMirror(ctx, state);
+  const groups = new Map<string, { currency: string; cents: number; items: typeof open }>();
+  for (const item of open.filter(i => !correctedItems.has(i.key))) {
+    const cents = trackerCents(trackerAmounts(item, receipts, state.invoices, state.paymentAllocations).outstanding), key = `${item.currency}:${cents}`;
+    const group = groups.get(key) ?? { currency: item.currency, cents, items: [] }; group.items.push(item); groups.set(key, group);
+  }
+  const cutoff = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+  const pairs: { item: Doc<"receivableItems">; bank: Doc<"bankTransactions"> }[] = [];
+  let readCount = 0;
+  for (const group of groups.values()) {
+    // Scope the durable ledger read to the balances being matched; decode consumed identities only once.
+    const rows = await ctx.db.query("bankTransactions").withIndex("by_direction_currency_amount", q => q.eq("direction", "in").eq("currency", group.currency).gte("amount", (group.cents - 1) / 100).lte("amount", (group.cents + 1) / 100)).take(1001);
+    readCount += rows.length;
+    if (rows.length > 1000 || readCount > 3000) return { matched: 0, complete: false, candidates: 0 };
+    const available = rows.filter(t => trackerCents(t.amount) === group.cents && t.date >= cutoff && t.identityVersion === 2 && !t.matchedInvoiceId && !consumed.has(identity(t.id)) && bindings.some(b => b.source === t.source && b.connectionKey === t.connectionKey) && trackerBankEligible(t));
+    for (const item of group.items) for (const bank of available) if (!trackerMatchReason(item, bank, state.providers.find(p => p.id === item.providerId), group.cents / 100)) pairs.push({ item, bank });
+  }
   let matched = 0;
   for (const { item, bank } of pairs) {
     if (pairs.filter(p => p.item.key === item.key).length !== 1 || pairs.filter(p => p.bank.id === bank.id).length !== 1) continue;
@@ -200,7 +218,7 @@ export const match = mutation({ args: auth, returns: v.object({ matched: v.numbe
     await recordTrackerReceipt(ctx, item, { key: `bank:${bank.id}:${item.key}`, itemKey: item.key, transactionId: bank.id, amount: bank.amount, currency: bank.currency, bankAmount: bank.amount, bankCurrency: bank.currency, paidAt: bank.date.slice(0, 10), bank: bank.source, account: bank.accountName, reference: bank.reference, evidence: "Unique completed credit: payer, entity/account, currency, exact remaining amount and expected date window", actor: "scheduled matcher", state: "active", createdAt: trackerNow() }, state, Boolean(settings?.enabledAt && bank.syncedAt > settings.enabledAt && bank.date.slice(0, 10) >= settings.enabledAt.slice(0, 10)));
     matched++;
   }
-  if (matched || corrected) await updateTrackerMirror(ctx, state); return { matched, complete: true, candidates: pairs.length };
+  if (matched) await updateTrackerMirror(ctx, state); return { matched, complete: true, candidates: pairs.length };
 } });
 export const reserved = query({ args: { ...auth, transactionIds: v.array(v.string()) }, returns: v.array(v.string()), handler: async (ctx, args) => {
   trackerAuth(args.serviceToken); if (args.transactionIds.length > 3000) trackerReject("Candidate limit exceeded");

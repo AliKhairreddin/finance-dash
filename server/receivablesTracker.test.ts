@@ -18,6 +18,32 @@ test("saved healthy receipt settles once even with an unrelated failed/stale ban
   assert.equal((await call(tracker.match, ctx, auth)).matched, 0); assert.equal(ctx.tables.receivableReceipts.length, 1);
   assert.equal(ctx.tables.receivableDeliveries?.length ?? 0, 0);
 });
+test("matching reads only the relevant amount and currency in a large saved ledger", async () => {
+  const ctx = setup(); const indexes: string[] = [];
+  ctx.tables.bankTransactions.push(...Array.from({ length: 4000 }, (_, n) => ({ ...bank, _id: `other-${n}`, id: bankProviderTransactionId("revolut", ["account", `other-${n}`, "leg"]), amount: 2000 + n })));
+  const query = ctx.db.query.bind(ctx.db);
+  ctx.db.query = table => { const result = query(table), indexed = result.withIndex.bind(result); result.withIndex = (name, filter) => { if (table === "bankTransactions") indexes.push(name); return indexed(name, filter); }; return result; };
+  assert.equal((await call(tracker.match, ctx, auth)).matched, 1);
+  assert.ok(indexes.includes("by_direction_currency_amount"));
+  assert.equal(indexes.includes("by_direction_date_id"), false);
+  assert.equal(ctx.tables.receivableReceipts[0].transactionId, bank.id);
+});
+test("an invoice-only tracker does not scan bank history", async () => {
+  const ctx = setup(); ctx.tables.receivableItems[0].invoiceId = invoice.id; ctx.tables.dashboardState[0].invoices.push(invoice);
+  const query = ctx.db.query.bind(ctx.db); ctx.db.query = table => { assert.notEqual(table, "bankTransactions"); return query(table); };
+  assert.deepEqual(await call(tracker.match, ctx, auth), { matched: 0, complete: true, candidates: 0 });
+});
+test("indexed matching preserves historical Wise allocation reservations and refuses truncated candidates", async () => {
+  const ctx = setup();
+  const oldId = bankProviderTransactionId("wise", ["legacy", "wise-csv-USD-transfer123"]);
+  const currentId = `wise-v2-42-${Buffer.from(JSON.stringify(["TRANSFER-123", "account", "USD", "CREDIT", "DEPOSIT"])).toString("hex")}`;
+  Object.assign(ctx.tables.bankTransactions[0], { id: currentId, source: "wise", connectionKey: "broken-feed" });
+  ctx.tables.dashboardState[0].paymentAllocations.push({ invoiceId: "prior", transactionId: oldId, amount: 1000, currency: "USD" });
+  assert.equal((await call(tracker.match, ctx, auth)).matched, 0);
+  const many = setup(); many.tables.bankTransactions.push(...Array.from({ length: 1000 }, (_, n) => ({ ...bank, _id: `duplicate-${n}`, id: bankProviderTransactionId("revolut", ["account", `duplicate-${n}`, "leg"]) })));
+  assert.deepEqual(await call(tracker.match, many, auth), { matched: 0, complete: false, candidates: 0 });
+  assert.equal(many.tables.receivableReceipts.length, 0);
+});
 test("competing invoice or duplicate candidate does not auto settle a tracker item", async () => {
   for (const conflict of ["invoice", "bank", "item"]) {
     const ctx = setup(); if (conflict === "invoice") ctx.tables.dashboardState[0].invoices.push(invoice); else if (conflict === "bank") ctx.tables.bankTransactions.push({ ...bank, _id: "bank2", id: bankProviderTransactionId("revolut", ["account", "receipt2", "leg"]) }); else ctx.tables.receivableItems.push({ ...item, _id: "item2", key: "other" });

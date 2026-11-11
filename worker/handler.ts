@@ -9294,6 +9294,11 @@ export default {
       }
       try {
         await runTrackerMaintenance(env);
+      } catch (error) {
+        console.error(JSON.stringify({ event: "receivables_matching_failed", scheduledTime: controller.scheduledTime }));
+        failures.push(error);
+      }
+      try {
         const result = await runInvoicePaymentMatching(env);
         console.log(JSON.stringify({
           event: "invoice_payment_auto_match_completed",
