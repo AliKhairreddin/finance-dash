@@ -651,6 +651,9 @@ export default defineSchema({
     key: v.string(), leaseId: v.string(), leaseExpiresAt: v.number(), nextAllowedAt: v.number(),
     lastAttemptAt: v.string(), lastSuccessAt: v.optional(v.string()), error: v.optional(v.string())
   }).index("by_key", ["key"]),
+  meritHistoryReports: defineTable({
+    key: v.string(), fromDate: v.string(), toDate: v.string(), recordsJson: v.string(), fetchedAt: v.string()
+  }).index("by_key", ["key"]),
   quinstreetMonthlyReports: defineTable({
     partnerId: v.string(), partnerName: v.string(), periodStart: v.string(), periodEnd: v.string(), timezone: v.string(),
     revenue: v.number(), currency: v.string(), fetchedAt: v.string()

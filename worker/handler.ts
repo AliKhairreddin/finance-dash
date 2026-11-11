@@ -1,3 +1,4 @@
+import { meritHistoryKey, validateMeritHistory } from "../shared/meritHistory";
 import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
 import { syncStatementRevolutLmd } from "./statementRevolutLmd";
 import { discoverStatementRevolut } from "./statementRevolut";
@@ -1667,6 +1668,28 @@ async function fetchMeritJson<T>(env: Env, path: string, payload: unknown): Prom
     await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfterSeconds, 60) * 1000));
   }
   throw new Error("Merit API request retry limit reached");
+}
+
+export async function syncMeritHistory(env: Env, fromDate: string, toDate: string, refresh = false) {
+  const key = meritHistoryKey(fromDate, toDate);
+  const client = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const saved = await client.query(api.meritHistory.get, { serviceToken, fromDate, toDate });
+  if (saved && !refresh) return saved;
+  if (!env.MERIT_API_ID || !env.MERIT_API_KEY) throw new ApiError(503, "Merit is not configured");
+  const leaseId = crypto.randomUUID();
+  const lease = await client.mutation(api.integrationSync.begin, { serviceToken, key, leaseId });
+  if (!lease.acquired) throw new ApiError(429, "This Merit history period is already syncing or cooling down");
+  try {
+    const records = await fetchMeritJson<unknown>(env, "/v2/getinvoices", { PeriodStart: meritDate(fromDate), PeriodEnd: meritDate(toDate), UnPaid: false, DateType: 0 });
+    const recordsJson = validateMeritHistory(records, fromDate, toDate);
+    const result = await client.mutation(api.meritHistory.save, { serviceToken, leaseId, fromDate, toDate, recordsJson });
+    await client.mutation(api.integrationSync.finish, { serviceToken, key, leaseId });
+    return result;
+  } catch (error) {
+    await client.mutation(api.integrationSync.finish, { serviceToken, key, leaseId, error: "Merit history could not be validated or saved" });
+    throw error;
+  }
 }
 
 interface MeritInvoiceRecord {
@@ -8983,6 +9006,15 @@ export default {
     const statementResponse = await routeStatementSurface(request, env);
     if (statementResponse) return statementResponse;
     if (new URL(request.url).pathname === "/api/slash/card-events") return handleSlashCardWebhook(request, env);
+    if (new URL(request.url).pathname === "/api/internal/merit/history") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      if (request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
+      try {
+        const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { fromDate: string; toDate: string; refresh?: boolean };
+        if (typeof body.fromDate !== "string" || typeof body.toDate !== "string" || (body.refresh !== undefined && typeof body.refresh !== "boolean")) return json({ message: "Invalid historical period" }, { status: 400 });
+        return json(await syncMeritHistory(env, body.fromDate, body.toDate, body.refresh === true));
+      } catch (error) { return json({ message: error instanceof Error ? error.message : "Merit history failed" }, { status: error instanceof ApiError ? error.status : 502 }); }
+    }
     if (new URL(request.url).pathname === "/api/internal/mercury/entities") {
       if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });

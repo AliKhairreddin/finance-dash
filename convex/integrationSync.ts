@@ -15,7 +15,7 @@ export const begin = mutation({
   returns: v.object({ acquired: v.boolean(), retryAt: v.number() }),
   handler: async (ctx, args) => {
     authorize(args.serviceToken);
-    if (args.key !== "merit" && !args.key.startsWith("quinstreet-mtd:")) throw new ConvexError("Unknown sync");
+    if (args.key !== "merit" && !args.key.startsWith("quinstreet-mtd:") && !/^merit-history:\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(args.key)) throw new ConvexError("Unknown sync");
     if (args.key === "merit") {
       const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
       if (state?.invoices.some(i => i.meritReplacementId)) throw new ConvexError("An invoice replacement is pending; check its status before syncing Merit");
