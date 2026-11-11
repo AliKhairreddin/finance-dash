@@ -1,3 +1,4 @@
+import { bankSources } from "../shared/banks";
 import { ConvexError, v } from "convex/values";
 import { calculatePaymentHistory, paymentHistoryDays } from "../shared/paymentForecasts";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../shared/operatingDate";
@@ -36,13 +37,13 @@ export const get = query({
     const fromDate = shiftFinanceOperatingDate(toDate, 1 - paymentHistoryDays);
     const [state, bindings, receipts] = await Promise.all([
       ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique(),
-      ctx.db.query("bankConnectionBindings").take(6),
+      ctx.db.query("bankConnectionBindings").take(bankSources.length + 1),
       ctx.db.query("bankTransactions")
         .withIndex("by_direction_date_id", q => q.eq("direction", "in").gte("date", fromDate).lt("date", shiftFinanceOperatingDate(toDate, 1)))
         .paginate({ cursor: null, numItems: 3000, maximumRowsRead: 3000, maximumBytesRead: 6 * 1024 * 1024 })
     ]);
     if (!state) throw new ConvexError({ code: "DASHBOARD_STATE_MISSING" });
-    if (bindings.length > 5) throw new ConvexError({ code: "BANK_CONNECTION_BINDING_LIMIT_EXCEEDED" });
+    if (bindings.length > bankSources.length) throw new ConvexError({ code: "BANK_CONNECTION_BINDING_LIMIT_EXCEEDED" });
     // A bounded query never presents partial history as complete totals or learned dates.
     // Sources are durable bank records; reloads do not contact banking APIs.
     const active = new Map(bindings.map(binding => [binding.source, binding.connectionKey]));

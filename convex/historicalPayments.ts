@@ -1,3 +1,4 @@
+import { bankSources } from "../shared/banks";
 import { trackerReceipts } from "./receivablesCore";
 import { sameTrackerReceipt } from "../shared/receivablesTracker";
 import { ConvexError, v } from "convex/values";
@@ -28,8 +29,8 @@ export const reconcile = mutation({
     if (!state || state.updatedAt !== args.expectedUpdatedAt) reject("Financial records changed; review the matching plan again");
     const trackerClaims = await trackerReceipts(ctx);
     if (args.matches.some(m => trackerClaims.some(r => sameTrackerReceipt(r.transactionId, m.transactionId)))) reject("Receipt is already allocated in Receivables tracker");
-    const bindings = await ctx.db.query("bankConnectionBindings").take(6);
-    if (bindings.length > 5) reject("Unexpected bank connections");
+    const bindings = await ctx.db.query("bankConnectionBindings").take(bankSources.length + 1);
+    if (bindings.length > bankSources.length) reject("Unexpected bank connections");
     const active = new Map(bindings.map(b => [b.source, b.connectionKey]));
     const prepared: { invoice: Doc<"dashboardState">["invoices"][number]; allocation: Doc<"dashboardState">["paymentAllocations"][number]; bank: Doc<"bankTransactions">; old?: Doc<"bankTransactions"> | null }[] = [];
     for (const match of args.matches) {
@@ -96,8 +97,8 @@ export const importSettled = mutation({
     if (!state || state.updatedAt !== args.expectedUpdatedAt) reject("Financial records changed; review the import plan again");
     const trackerClaims = await trackerReceipts(ctx);
     if (args.matches.some(m => trackerClaims.some(r => sameTrackerReceipt(r.transactionId, m.transactionId)))) reject("Receipt is already allocated in Receivables tracker");
-    const bindings = await ctx.db.query("bankConnectionBindings").take(6);
-    if (bindings.length > 5) reject("Unexpected bank connections");
+    const bindings = await ctx.db.query("bankConnectionBindings").take(bankSources.length + 1);
+    if (bindings.length > bankSources.length) reject("Unexpected bank connections");
     const active = new Map(bindings.map(b => [b.source, b.connectionKey]));
     type Source = { SIHId: string; CustomerId: string; CustomerName: string; InvoiceNo: string; DocumentDate: string; DueDate: string; CurrencyCode: string; TotalSum: number; PaidAmount: number; Paid: boolean };
     const reports = new Map<string, Source[]>();

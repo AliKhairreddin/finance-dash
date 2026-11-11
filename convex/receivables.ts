@@ -1,3 +1,4 @@
+import { bankSources } from "../shared/banks";
 import { bumpBankLedgerRevision } from "./dashboard";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
@@ -173,7 +174,7 @@ export const match = mutation({ args: auth, returns: v.object({ matched: v.numbe
   trackerAuth(args.serviceToken); const state = await trackerState(ctx), items = await trackerItems(ctx), receipts = await trackerReceipts(ctx);
   const open = items.filter(i => !i.invoiceId && !i.review && i.kind !== "monthly" && i.expectedDate && trackerAmounts(i, receipts, state.invoices, state.paymentAllocations).outstanding > 0);
   if (!open.length && !receipts.some(r => r.transactionId)) return { matched: 0, complete: true, candidates: 0 };
-  const bindings = await ctx.db.query("bankConnectionBindings").take(6); if (bindings.length > 5) trackerReject("Unexpected bank connection scope");
+  const bindings = await ctx.db.query("bankConnectionBindings").take(bankSources.length + 1); if (bindings.length > bankSources.length) trackerReject("Unexpected bank connection scope");
   const identity = (id: string) => { const wise = historicalWiseTransferKey(id); return wise ? `historical-wise:${wise}` : id; };
   const consumed = new Set<string>(), usedAmounts = new Map<string, number>();
   for (const id of [...state.invoices.map(i => i.transactionId), ...state.paymentAllocations.map(a => a.transactionId), ...receipts.map(r => r.transactionId)]) if (id) consumed.add(identity(id));

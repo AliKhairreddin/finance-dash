@@ -5,9 +5,10 @@ import { get } from "../convex/paymentForecasts";
 import { call } from "./convexTestDb";
 import { financeOperatingDate } from "../shared/operatingDate";
 import { bankProviderTransactionId } from "../shared/providerIdentity";
+import { bankSources } from "../shared/banks";
 
 const auth = { serviceToken: "payment-forecast-test" };
-function setup(isDone = true) {
+function setup(isDone = true, sources = ["slash"]) {
   process.env.CONVEX_SERVICE_TOKEN = auth.serviceToken;
   const transaction = { id: bankProviderTransactionId("slash", ["account", "receipt"]), source: "slash", connectionKey: "active", identityVersion: 2, date: financeOperatingDate(), direction: "in", status: "posted", amount: 100, currency: "USD", category: "Media buying direct", counterparty: "MediaAlpha", merchantName: "QuoteLab" };
   const reads: { table: string; index?: string; bounds?: unknown[]; limit?: number }[] = [];
@@ -17,7 +18,7 @@ function setup(isDone = true) {
     const query = {
       withIndex(index: string, fn: (value: typeof range) => unknown) { read.index = index; fn(range); return query; },
       async unique() { return { providers: [], invoices: [], paymentAllocations: [] }; },
-      async take(limit: number) { read.limit = limit; return [{ source: "slash", connectionKey: "active" }]; },
+      async take(limit: number) { read.limit = limit; return sources.map(source => ({ source, connectionKey: "active" })).slice(0, limit); },
       async paginate(options: { numItems: number; maximumRowsRead: number; maximumBytesRead: number }) {
         assert.equal(options.numItems, 3000); assert.equal(options.maximumRowsRead, 3000); assert.ok(options.maximumBytesRead <= 6 * 1024 * 1024);
         return { isDone, continueCursor: "cursor", page: [transaction, { ...transaction, id: bankProviderTransactionId("slash", ["account", "old-connection"]), connectionKey: "retired" }, { ...transaction, id: bankProviderTransactionId("slash", ["account", "old-identity"]), identityVersion: 1 }] };
@@ -44,6 +45,13 @@ test("bounded incomplete history is exposed without misleading partial totals", 
   const report = await call(get, setup(false), auth);
   assert.equal(report.complete, false);
   assert.deepEqual(report.clients, []);
+});
+
+test("payment forecasts accept all six bank connections and still reject an excess binding", async () => {
+  const sources = bankSources.map(source => source.id);
+  const report = await call(get, setup(true, sources), auth);
+  assert.equal(report.clients[0].received, 100);
+  await assert.rejects(call(get, setup(true, [...sources, "unexpected"]), auth), /BANK_CONNECTION_BINDING_LIMIT_EXCEEDED/);
 });
 
 test("payment history requires the service credential before accessing financial data", async () => {
