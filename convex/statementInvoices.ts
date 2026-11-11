@@ -282,3 +282,41 @@ export const history = query({args:{...auth,id:v.id("statementInvoices")},return
   const rows=[];for(const link of links){const row=await ctx.db.get(link.invoiceId);if(row&&canReadScope(member,row))rows.push({id:row._id,number:row.number,state:row.state,createdAt:row.createdAt,actor:row.actor,templateVersion:row.templateVersion,file:Boolean(row.storageId)});}
   return JSON.stringify(rows);
 }});
+
+// Administrator-only maintenance: update the rendered file without regenerating
+// the financial document, allocating a number, or changing its transaction links.
+export const replaceRenderedPdf = internalMutation({
+  args: {
+    actor: v.string(), id: v.id("statementInvoices"), expectedRevision: v.number(),
+    expectedStorageId: v.id("_storage"), storageId: v.id("_storage"),
+  },
+  returns: v.object({ changed: v.boolean(), documentId: v.id("statementDocuments") }),
+  handler: async (ctx, a) => {
+    const actor = normalizeStatementActor(a.actor);
+    const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", actor)).unique();
+    if (!member?.manage) throw new ConvexError("Statement administrator required");
+    requirePermission(member, "generate");
+    const row = await ctx.db.get(a.id);
+    if (!row || row.documentType !== "internal_support" || row.state !== "ready") throw new ConvexError("Select a saved internal record");
+    requireScope(member, row);
+    const documents = await ctx.db.query("statementDocuments").withIndex("by_generatedInvoiceId", q => q.eq("generatedInvoiceId", row._id)).take(2);
+    if (documents.length !== 1) throw new ConvexError("Review the saved document references first");
+    const document = documents[0];
+    if (document.companyId !== row.companyId || document.financialAccountId !== row.financialAccountId || document.documentType !== "supporting") throw new ConvexError("Document scope or type changed");
+    if (a.storageId === a.expectedStorageId) throw new ConvexError("Provide a newly rendered PDF");
+    if (row.storageId === a.storageId && document.storageId === a.storageId && row.revision === a.expectedRevision + 1) return { changed: false, documentId: document._id };
+    if (row.revision !== a.expectedRevision || row.storageId !== a.expectedStorageId || document.storageId !== a.expectedStorageId || row.leaseUntil > Date.now()) throw new ConvexError("The saved document changed; inspect it again");
+    const original = await ctx.db.system.get(a.expectedStorageId), file = await ctx.db.system.get(a.storageId);
+    if (!original || !file || file.contentType !== "application/pdf" || file.size <= 0 || file.size > 15 * 1024 * 1024) throw new ConvexError("Both the original and replacement PDF must be saved");
+    const now = Date.now(), stamp = new Date(now).toISOString();
+    await ctx.db.insert("statementAudit", {
+      actor, entityType: "invoice", entityId: row._id, action: "pdf_wording_refreshed",
+      details: JSON.stringify({ documentId: document._id, previousStorageId: row.storageId, storageId: a.storageId, previousRevision: row.revision, previousSize: document.size, renderer: "aee7eb8" }),
+      createdAt: stamp,
+    });
+    await ctx.db.patch(row._id, { storageId: a.storageId, revision: row.revision + 1, updatedAt: now });
+    await ctx.db.patch(document._id, { storageId: a.storageId, size: file.size, updatedAt: stamp });
+    // Retain the previous storage object and audit reference for recovery.
+    return { changed: true, documentId: document._id };
+  },
+});

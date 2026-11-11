@@ -17,7 +17,7 @@ There is no default tax treatment or date policy. A bulk run explicitly applies 
 
 Outgoing PDFs omit added document headings, explanatory sentences and provenance labels. The dashboard’s sortable Type column identifies them as `Internal record`; customer invoices are `Sales invoice`. Company/supplier details, transaction values and approved notes remain in the PDFs.
 
-Each canonical supplier receives a saved layout, accent, typography and header treatment derived from its identity. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design; existing PDFs remain immutable, and regeneration creates a new version.
+Each canonical supplier receives a saved layout, accent, typography and header treatment derived from its identity. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design. Normal regeneration creates a new document version. An explicit administrator wording refresh changes only the rendered PDF and retains the original storage object in the audit history.
 
 Generation uses saved transaction evidence and approved details without an AI call. Reading an uploaded invoice example remains a separate AI-assisted operation.
 
@@ -44,3 +44,9 @@ Tax treatment and issue date are deliberately operator choices before generation
 Run `npm run check`, `npm run test:statements:e2e` with a fresh synthetic fixture server, and `npm run test:statements:pdfs`. The service-token-protected POST `/api/internal/statements/verify-invoice?layout=expense` renders a fixed synthetic supplier expense PDF on Cloudflare without AI calls or financial writes.
 
 Production issuer changes use the existing revision-checked `statementWorkspace.savePolicy` mutation, preserving unrelated settings and audit history. Back up the previous policies and original document references before applying verified identity details; verify the seven saved policies and unchanged original document snapshots afterward. Routine releases use `npm run deploy` and production `famous-oyster-878`.
+
+## Refresh saved PDF wording
+
+For an explicitly requested wording-only update, run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --prepare`. This reads production, backs up saved files/snapshots, renders affected internal records locally, and verifies document values without writing production. Inspect the prepared PDFs, then run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --apply <manifest.json>`.
+
+The internal `replaceRenderedPdf` mutation checks administrator scope, document type, revision, both file references and stored PDF metadata. It atomically updates the generated invoice and its existing document attachment, retaining numbers, financial snapshots, transaction links and original files. Audit entries record both storage IDs. Applying the same manifest is resumable and does not duplicate document numbers or allocations. Unsupported layouts, concurrent changes, unresolved references and non-PDF replacements stop the operation.
