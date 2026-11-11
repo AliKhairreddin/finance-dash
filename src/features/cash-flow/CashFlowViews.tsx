@@ -745,7 +745,15 @@ export function CashFlowOpenInvoicesView({
               <td className="amount"><strong>{money(row.amount, row.currency)}</strong></td>
               <td>{row.currency}</td>
               <td>{row.notes || "—"}</td>
-              <td>{row.manual ? <div className="row-actions"><Button className="icon-text-button" type="button" onClick={() => setEditingManual(row.manual!)}><Edit3 size={14} /> Edit</Button><Button className="icon-text-button destructive-icon-button" type="button" onClick={() => setDeleteRows([row])}><Trash2 size={14} /> Remove</Button></div> : row.invoice ? <div className="row-actions"><Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(row.invoice!)}>{editingId === row.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>{row.invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(row.invoice!)}>{downloadingId === row.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}</div> : null}</td>
+              <td><div className="row-actions">
+                {row.manual && <Button className="icon-text-button" type="button" onClick={() => setEditingManual(row.manual!)}><Edit3 size={14} /> Edit</Button>}
+                {row.invoice && <>
+                  <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(row.invoice!)}>{editingId === row.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>
+                  {row.invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(row.invoice!)}>{downloadingId === row.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}
+                </>}
+                <Button className="icon-text-button destructive-icon-button" type="button" disabled={Boolean(row.invoice && openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations))} onClick={() => setDeleteRows([row])}><Trash2 size={14} /> Delete</Button>
+                {row.invoice && openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations) && <InfoPopover label={`Why ${row.source} cannot be deleted`}>{openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations)}</InfoPopover>}
+              </div></td>
             </tr>) : <tr><td colSpan={9}>No open items</td></tr>}</tbody>
           </table>
         </div>
@@ -753,6 +761,9 @@ export function CashFlowOpenInvoicesView({
       {deleteRows.length > 0 && createPortal(<div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-open-items-title">
         <h2 id="delete-open-items-title">Delete {deleteRows.length} open {deleteRows.length === 1 ? "item" : "items"}?</h2>
         <p>{deleteRows.map(row => row.name).slice(0, 5).join(", ")}{deleteRows.length > 5 ? ` and ${deleteRows.length - 5} more` : ""}</p>
+        <p>This permanently removes the selected items from the dashboard. Nothing in Merit will be changed.</p>
+        {deleteRows.some(row => row.invoice && (row.invoice.origin === "revenue" || row.invoice.revenueRunIds.length > 0)) && <p>Earned revenue stays saved. Deleted drafts will not be recreated automatically for the same period.</p>}
+        {deleteRows.some(row => row.invoice?.transactionId) && <p>Linked bank transactions will be kept and unlinked from these drafts.</p>}
         {editError && <div className="inline-error" role="alert">{editError}</div>}
         <div className="modal-actions"><Button type="button" disabled={deleting} onClick={() => setDeleteRows([])}>Cancel</Button><Button type="button" variant="destructive" disabled={deleting} onClick={() => void confirmDelete()}>{deleting ? "Deleting…" : "Delete"}</Button></div>
       </div></div>, document.body)}

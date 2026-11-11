@@ -1470,8 +1470,13 @@ export async function updateManualReceivable(id: string, payload: CreateManualRe
 
 export async function deleteOpenItems(ids: string[]): Promise<void> {
   const selected = validateOpenItemDeletion(ids, invoices, manualReceivables, paymentAllocations);
+  const selectedInvoices = invoices.filter(item => selected.has(item.id));
   manualReceivables = manualReceivables.filter(item => !selected.has(item.id));
   invoices = invoices.filter(item => !selected.has(item.id));
+  ({ revenueRuns, revenueAccruals } = unlinkDeletedInvoiceDrafts(selectedInvoices, revenueRuns, revenueAccruals, new Date().toISOString()));
+  for (const transaction of getKnownTransactions()) {
+    if (transaction.matchedInvoiceId && selected.has(transaction.matchedInvoiceId)) updateStoredTransaction({ ...transaction, matchedInvoiceId: undefined, matchReason: undefined, confidence: undefined });
+  }
   await persist();
 }
 

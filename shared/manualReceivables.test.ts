@@ -8,11 +8,12 @@ test("manual receivable editing keeps identity and validates dates and values",(
   assert.deepEqual(row,{id:"r",name:"Client",balance:12.35,currency:"USD",notes:"note",dueDate:"2026-09-08",source:"manual"});
   for(const patch of [{amount:0},{amount:NaN},{dueDate:"2026-02-30"},{name:""}]) assert.throws(()=>manualReceivableFromPayload({name:"Client",amount:10,currency:"USD",...patch},"r"));
 });
-test("mixed open-item deletion validates the whole batch and protects linked invoices",()=>{
+test("mixed open-item deletion accepts linked drafts and protects paid or Merit invoices",()=>{
  const manual=manualReceivableFromPayload({name:"Commission",amount:10,currency:"USD"},"r");
  assert.deepEqual([...validateOpenItemDeletion(["i","r"],[invoice],[manual],[])],["i","r"]);
  assert.deepEqual([...validateOpenItemDeletion(["i"],[{...invoice,status:"open"}],[],[])],["i"]);
- for(const bad of [{...invoice,externalId:"merit-1"},{...invoice,transactionId:"t"},{...invoice,status:"paid" as const},{...invoice,origin:"revenue" as const}]) assert.throws(()=>validateOpenItemDeletion(["r","i"],[bad],[manual],[]));
+ for(const linked of [{...invoice,transactionId:"t"},{...invoice,origin:"revenue" as const,billingRuleId:"rule",revenueRunIds:["run"]}]) assert.deepEqual([...validateOpenItemDeletion(["r","i"],[linked],[manual],[])],["r","i"]);
+ for(const bad of [{...invoice,externalId:"merit-1"},{...invoice,status:"paid" as const},{...invoice,meritCreationReservedAt:"now"},{...invoice,sendError:"Uncertain create"}]) assert.throws(()=>validateOpenItemDeletion(["r","i"],[bad],[manual],[]));
  assert.throws(()=>validateOpenItemDeletion(["r","missing"],[invoice],[manual],[]));
  assert.throws(()=>validateOpenItemDeletion(["r","r"],[],[manual],[]));
 });

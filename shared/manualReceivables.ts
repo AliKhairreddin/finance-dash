@@ -19,9 +19,6 @@ export function manualReceivableFromPayload(payload: CreateManualReceivablePaylo
 
 /** Validate the complete batch before either list changes. */
 export function openItemDeletionBlockReason(invoice: Invoice, payments: PaymentAllocation[]): string | undefined {
-  if (invoice.transactionId || invoice.origin === "revenue" || invoice.billingRuleId || invoice.revenueRunIds.length) {
-    return "Delete this linked draft from Invoices so its bank and revenue links are updated together";
-  }
   return dashboardInvoiceDeletionBlockReason(invoice.status === "open" ? { ...invoice, status: "draft" } : invoice, payments);
 }
 

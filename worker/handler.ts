@@ -34,7 +34,7 @@ import { buildTelegramSlashCashbackReport } from "./telegramSlashCashbackReport"
 import { slashPreviousDayReportPeriod } from "./telegramSlashDailyPeriod";
 import { buildTelegramSlashRejectedCardsReport } from "./telegramSlashRejectedCardsReport";
 import { handleSlashCardWebhook } from "./slashCardWebhook";
-import { manualReceivableFromPayload, validateOpenItemDeletion } from "../shared/manualReceivables";
+import { manualReceivableFromPayload } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
@@ -5836,11 +5836,7 @@ async function updateManualReceivable(env: Env, id: string, payload: CreateManua
 }
 
 async function deleteOpenItems(env: Env, ids: string[]): Promise<void> {
-  const state = await loadPersisted(env);
-  const selected = validateOpenItemDeletion(ids, state.invoices, state.manualReceivables, state.paymentAllocations);
-  state.manualReceivables = state.manualReceivables.filter(item => !selected.has(item.id));
-  state.invoices = state.invoices.filter(item => !selected.has(item.id));
-  await savePersisted(env, state);
+  await getConvexClient(env).mutation(api.invoiceDrafts.removeOpenItems, { serviceToken: getConvexServiceToken(env), ids });
 }
 
 async function deleteManualReceivable(env: Env, receivableId: string): Promise<void> {

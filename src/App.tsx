@@ -1903,6 +1903,7 @@ function App() {
     });
     if (!response.ok) throw new Error(await apiErrorMessage(response, "Open items could not be deleted"));
     await loadDashboard();
+    await refreshCurrentTransactionPage();
     setNotice(`${ids.length} open items deleted.`);
   }
 
