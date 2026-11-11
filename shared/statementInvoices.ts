@@ -1,7 +1,8 @@
 import { validateInvoiceCopy, validateInvoiceDesign, type InvoiceCopyLayout, type InvoiceDesign } from "./statementInvoiceDesign";
 import { statementAmountDecimal, statementAmountMinor } from "./statements";
 
-export type InvoiceTemplateLayout = { headerPercent: number; footerPercent: number; sellerDetails: string; paymentDetails: string; design?: InvoiceDesign; copy?: InvoiceCopyLayout };
+export type InvoicePresentation = { showBrandName: boolean; numberLabel: "Document number" | "Invoice number"; dateLabel: "Transaction date" | "Issue date" | "Invoice date" };
+export type InvoiceTemplateLayout = { presentation?: InvoicePresentation; headerPercent: number; footerPercent: number; sellerDetails: string; paymentDetails: string; design?: InvoiceDesign; copy?: InvoiceCopyLayout };
 export type InvoiceLine = { transactionId: string; description: string; amount: string; taxPercent: string };
 export type InvoiceGenerationOptions = { taxTreatment: "vat" | "reverse_charge" | "no_vat"; taxRate: string; taxNote: string; datePolicy: "transaction" | "generation" };
 export function validateInvoiceGenerationOptions(value: unknown): InvoiceGenerationOptions {
@@ -73,7 +74,8 @@ export function invoiceText(value: unknown, label: string, maximum = 1000, requi
 export function invoiceLayout(value: unknown): InvoiceTemplateLayout {
   const v = value as InvoiceTemplateLayout;
   if (!v || !Number.isFinite(v.headerPercent) || v.headerPercent < 0 || v.headerPercent > 30 || !Number.isFinite(v.footerPercent) || v.footerPercent < 0 || v.footerPercent > 20) throw new Error("Keep the header between 0–30% and the footer between 0–20%");
-  return { headerPercent: v.headerPercent, footerPercent: v.footerPercent, sellerDetails: invoiceText(v.sellerDetails, "company details", 1000, true), paymentDetails: invoiceText(v.paymentDetails, "payment details", 1000), ...(v.design ? { design: validateInvoiceDesign(v.design) } : {}), ...(v.copy ? { copy: validateInvoiceCopy(v.copy) } : {}) };
+  if (v.presentation !== undefined && (!v.presentation || typeof v.presentation.showBrandName !== "boolean" || !["Document number", "Invoice number"].includes(v.presentation.numberLabel) || !["Transaction date", "Issue date", "Invoice date"].includes(v.presentation.dateLabel))) throw new Error("Check the saved document labels");
+  return { ...(v.presentation ? { presentation: v.presentation } : {}), headerPercent: v.headerPercent, footerPercent: v.footerPercent, sellerDetails: invoiceText(v.sellerDetails, "company details", 1000, true), paymentDetails: invoiceText(v.paymentDetails, "payment details", 1000), ...(v.design ? { design: validateInvoiceDesign(v.design) } : {}), ...(v.copy ? { copy: validateInvoiceCopy(v.copy) } : {}) };
 }
 export function validateInvoiceDraft(value: unknown): InvoiceDraft {
   const v = value as InvoiceDraft;

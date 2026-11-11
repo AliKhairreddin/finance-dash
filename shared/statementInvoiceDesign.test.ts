@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultInvoiceDesign, expenseInvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, invoiceDesignStyles, type InvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
 import { statementCompanies } from "./statements";
 
 test("issuer designs distinguish our companies and resolve supplier aliases across buyers", () => {
@@ -41,4 +41,18 @@ test("expense designs resolve approved aliases, remain stable and distinguish su
   }));
   assert.equal(signatures.size, 200);
   assert.notEqual(expenseInvoiceDesign(contact.aliases[0], [{ ...contact, reviewNote: "Wrong identity" }]).key, design.key);
+});
+
+test("supplier design allocation uses distinct layouts and colors before reusing a layout", () => {
+  const saved: InvoiceDesign[] = [];
+  for (let i = 0; i < invoiceDesignStyles.length; i++) {
+    const base = expenseInvoiceDesign(`Supplier ${i}`, []);
+    const design = allocateExpenseInvoiceDesign({ ...base, template: "corporate", accent: "#35566c" }, saved);
+    saved.push(design);
+  }
+  assert.equal(new Set(saved.map(d => d.template)).size, invoiceDesignStyles.length);
+  assert.equal(new Set(saved.map(d => d.accent)).size, invoiceDesignStyles.length);
+  for (const design of saved) assert.deepEqual(allocateExpenseInvoiceDesign(expenseInvoiceDesign(design.name, []), saved), design);
+  const next = allocateExpenseInvoiceDesign(expenseInvoiceDesign("Another supplier", []), saved);
+  assert(!saved.some(d => d.key === next.key || d.accent === next.accent));
 });

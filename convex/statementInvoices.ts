@@ -7,7 +7,7 @@ import { statementCompany } from "./statementSchema";
 import { normalizeStatementActor, statementAmountDecimal } from "../shared/statements";
 import { invoiceLayout, invoiceSelectionLimit, invoiceText, validateInvoiceDraft, validateInvoiceAi, type InvoiceDraft, invoiceCompanyKey, validateInvoicePair, plainInvoiceParties, invoiceTotals, validateInvoiceGenerationOptions } from "../shared/statementInvoices";
 import { paginationOptsValidator } from "convex/server";
-import { defaultInvoiceDesign, expenseInvoiceDesign, invoiceIssuerKey } from "../shared/statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, validateInvoiceDesign, invoiceIssuerKey } from "../shared/statementInvoiceDesign";
 import { statementCompanies } from "../shared/statements";
 const auth = { serviceToken: v.string(), actor: v.string() };
 async function access(ctx: QueryCtx | MutationCtx, a: { serviceToken: string; actor: string }, companyId?: string) {
@@ -189,6 +189,11 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   const example = null;
   let design = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", issuerKey)).unique();
   if (!design) {
+    if (supplierDesign) {
+      const saved = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.gte("issuerKey", "expense:supplier:").lt("issuerKey", "expense:supplier;" )).take(501);
+      if (saved.length > 500) throw new ConvexError("Review the supplier design catalogue before adding more designs");
+      Object.assign(supplierDesign, allocateExpenseInvoiceDesign(supplierDesign, saved.map(row => JSON.parse(row.designJson))));
+    }
     const template = supplierDesign?.template ?? (["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : defaultInvoiceDesign(issuerKey,sellerName).template!);
     const designJson=JSON.stringify({...(supplierDesign ?? defaultInvoiceDesign(issuerKey,sellerName)),template});
     const id = await ctx.db.insert("statementInvoiceDesigns", { issuerKey, designJson,version:1,style:template,brandingAuthorized:false,createdAt: Date.now() });
@@ -283,40 +288,72 @@ export const history = query({args:{...auth,id:v.id("statementInvoices")},return
   return JSON.stringify(rows);
 }});
 
-// Administrator-only maintenance: update the rendered file without regenerating
-// the financial document, allocating a number, or changing its transaction links.
+// Administrator-only rendering maintenance. Financial snapshots and links stay fixed.
 export const replaceRenderedPdf = internalMutation({
   args: {
     actor: v.string(), id: v.id("statementInvoices"), expectedRevision: v.number(),
     expectedStorageId: v.id("_storage"), storageId: v.id("_storage"),
+    replacementDesignJson: v.optional(v.string()), presentationJson: v.optional(v.string()), expectedDesignVersion: v.optional(v.number()),
   },
-  returns: v.object({ changed: v.boolean(), documentId: v.id("statementDocuments") }),
+  returns: v.object({ changed: v.boolean(), documentId: v.union(v.id("statementDocuments"), v.null()) }),
   handler: async (ctx, a) => {
     const actor = normalizeStatementActor(a.actor);
     const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", actor)).unique();
     if (!member?.manage) throw new ConvexError("Statement administrator required");
     requirePermission(member, "generate");
     const row = await ctx.db.get(a.id);
-    if (!row || row.documentType !== "internal_support" || row.state !== "ready") throw new ConvexError("Select a saved internal record");
+    if (!row || row.state !== "ready" || row.documentType === "sales_invoice" || (!a.replacementDesignJson && row.documentType !== "internal_support")) throw new ConvexError("Select a saved outgoing internal record");
     requireScope(member, row);
+    const design = a.replacementDesignJson ? validateInvoiceDesign(JSON.parse(a.replacementDesignJson)) : undefined;
+    if (design) {
+      if (!design.template || design.logoPath || design.logoDataUrl || design.source || a.expectedDesignVersion === undefined) throw new ConvexError("Provide the reviewed supplier layout and its saved version");
+      const sources = JSON.parse(row.sourceJson) as Array<{ transactionId: Id<"statementTransactions"> }>;
+      if (!sources.length || sources.length > invoiceSelectionLimit) throw new ConvexError("Review the document sources first");
+      const addresses = await addressesFor(ctx, row.companyId, row.financialAccountId);
+      for (const source of sources) {
+        const transaction = await ctx.db.get(source.transactionId);
+        if (!transaction || transaction.direction !== "out" || transaction.companyId !== row.companyId || transaction.financialAccountId !== row.financialAccountId) throw new ConvexError("Supplier designs require matching outgoing transactions");
+        if (!transaction.counterparty?.trim()) throw new ConvexError("Review the supplier identity before refreshing its design");
+        const expected = expenseInvoiceDesign(transaction.counterparty, addresses);
+        if (design.key !== expected.key || design.name !== expected.name) throw new ConvexError("The design belongs to a different supplier");
+      }
+    }
     const documents = await ctx.db.query("statementDocuments").withIndex("by_generatedInvoiceId", q => q.eq("generatedInvoiceId", row._id)).take(2);
-    if (documents.length !== 1) throw new ConvexError("Review the saved document references first");
+    if (documents.length > 1 || (!design && documents.length !== 1)) throw new ConvexError("Review the saved document references first");
     const document = documents[0];
-    if (document.companyId !== row.companyId || document.financialAccountId !== row.financialAccountId || document.documentType !== "supporting") throw new ConvexError("Document scope or type changed");
+    if (document && (document.companyId !== row.companyId || document.financialAccountId !== row.financialAccountId)) throw new ConvexError("Document scope changed");
     if (a.storageId === a.expectedStorageId) throw new ConvexError("Provide a newly rendered PDF");
-    if (row.storageId === a.storageId && document.storageId === a.storageId && row.revision === a.expectedRevision + 1) return { changed: false, documentId: document._id };
-    if (row.revision !== a.expectedRevision || row.storageId !== a.expectedStorageId || document.storageId !== a.expectedStorageId || row.leaseUntil > Date.now()) throw new ConvexError("The saved document changed; inspect it again");
+    const currentLayout = row.plainLayoutJson ? invoiceLayout(JSON.parse(row.plainLayoutJson)) : null;
+    if (design && (!currentLayout || currentLayout.copy || row.templateId)) throw new ConvexError("Review image-based document layouts separately");
+    if (a.presentationJson && !design) throw new ConvexError("Document presentation requires a reviewed design refresh");
+    const nextLayout = design ? invoiceLayout({ ...currentLayout!, design, ...(a.presentationJson ? { presentation: JSON.parse(a.presentationJson) } : {}) }) : currentLayout;
+    if (row.storageId === a.storageId && (!document || document.storageId === a.storageId) && row.revision === a.expectedRevision + 1) {
+      if (design && JSON.stringify(currentLayout) !== JSON.stringify(nextLayout)) throw new ConvexError("The saved layout changed");
+      return { changed: false, documentId: document?._id ?? null };
+    }
+    if (row.revision !== a.expectedRevision || row.storageId !== a.expectedStorageId || (document && document.storageId !== a.expectedStorageId) || row.leaseUntil > Date.now()) throw new ConvexError("The saved document changed; inspect it again");
     const original = await ctx.db.system.get(a.expectedStorageId), file = await ctx.db.system.get(a.storageId);
     if (!original || !file || file.contentType !== "application/pdf" || file.size <= 0 || file.size > 15 * 1024 * 1024) throw new ConvexError("Both the original and replacement PDF must be saved");
     const now = Date.now(), stamp = new Date(now).toISOString();
+    let templateVersion = row.templateVersion;
+    if (design) {
+      const saved = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", design.key)).unique();
+      const version = saved?.version ?? 0, designJson = JSON.stringify(design), same = saved?.designJson === designJson;
+      if (version !== a.expectedDesignVersion && !(same && version === a.expectedDesignVersion! + 1)) throw new ConvexError("The supplier design changed; prepare the files again");
+      if (!same) {
+        if (saved?.locked) throw new ConvexError("Unlock the supplier design before replacing it");
+        templateVersion = version + 1;
+        const fields = { issuerKey: design.key, designJson, version: templateVersion, style: design.template!, brandingAuthorized: false, createdAt: saved?.createdAt ?? now };
+        if (saved) await ctx.db.patch(saved._id, fields); else await ctx.db.insert("statementInvoiceDesigns", fields);
+        await ctx.db.insert("statementAudit", { actor, entityType: "template", entityId: design.key, action: "supplier_design_saved", details: JSON.stringify({ previousDesignJson: saved?.designJson, previousVersion: version, version: templateVersion, designJson }), createdAt: stamp });
+      } else templateVersion = version;
+    }
     await ctx.db.insert("statementAudit", {
-      actor, entityType: "invoice", entityId: row._id, action: "pdf_wording_refreshed",
-      details: JSON.stringify({ documentId: document._id, previousStorageId: row.storageId, storageId: a.storageId, previousRevision: row.revision, previousSize: document.size, renderer: "aee7eb8" }),
-      createdAt: stamp,
+      actor, entityType: "invoice", entityId: row._id, action: design ? "pdf_supplier_design_refreshed" : "pdf_wording_refreshed",
+      details: JSON.stringify({ documentId: document?._id, previousStorageId: row.storageId, storageId: a.storageId, previousRevision: row.revision, previousSize: document?.size, ...(design ? { previousLayoutJson: row.plainLayoutJson, previousTemplateVersion: row.templateVersion, designJson: JSON.stringify(design) } : {}) }), createdAt: stamp,
     });
-    await ctx.db.patch(row._id, { storageId: a.storageId, revision: row.revision + 1, updatedAt: now });
-    await ctx.db.patch(document._id, { storageId: a.storageId, size: file.size, updatedAt: stamp });
-    // Retain the previous storage object and audit reference for recovery.
-    return { changed: true, documentId: document._id };
+    await ctx.db.patch(row._id, { storageId: a.storageId, revision: row.revision + 1, updatedAt: now, ...(design ? { plainLayoutJson: JSON.stringify(nextLayout), templateVersion } : {}) });
+    if (document) await ctx.db.patch(document._id, { storageId: a.storageId, size: file.size, updatedAt: stamp });
+    return { changed: true, documentId: document?._id ?? null };
   },
 });

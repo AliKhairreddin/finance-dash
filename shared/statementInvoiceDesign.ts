@@ -1,7 +1,7 @@
 import { statementCompanies, type StatementCompanyId } from "./statements";
 import { invoiceCompanyKey, matchingInvoiceAddress, type InvoiceAddress } from "./statementInvoices";
 
-export const invoiceDesignStyles = ["corporate", "minimal", "technology", "insurance", "professional_services", "retail", "subscription"] as const;
+export const invoiceDesignStyles = ["corporate", "minimal", "technology", "insurance", "professional_services", "retail", "subscription", "editorial", "compact"] as const;
 export type InvoiceDesign = { template?: typeof invoiceDesignStyles[number]; key: string; name: string; accent: string; style: "rule" | "minimal" | "frame"; font: "sans" | "serif"; logoPath?: string; logoDataUrl?: string; logoMode?: "mark" | "padded"; source?: string };
 export type InvoiceBox = { x: number; y: number; width: number; height: number };
 export const invoiceCopyKeys = ["seller", "number", "date", "dueDate", "customer", "customerAddress", "customerVat", "payment", "notes", "currency", "lines", "net", "tax", "total"] as const;
@@ -40,6 +40,18 @@ export function expenseInvoiceDesign(name: string, addresses: InvoiceAddress[]):
   // These are internal record designs, without supplier logos or copied branding.
   const accent = `#${[0, 8, 16].map(shift => (48 + ((hash >>> shift) & 255) % 105).toString(16).padStart(2, "0")).join("")}`;
   return { ...defaultInvoiceDesign(key, canonical), accent };
+}
+export function allocateExpenseInvoiceDesign(base: InvoiceDesign, saved: InvoiceDesign[]): InvoiceDesign {
+  const existing = saved.find(design => design.key === base.key);
+  if (existing) return existing;
+  const suppliers = saved.filter(design => design.key.startsWith("expense:supplier:"));
+  const start = Math.max(0, invoiceDesignStyles.indexOf(base.template!));
+  const ordered = [...invoiceDesignStyles.slice(start), ...invoiceDesignStyles.slice(0, start)];
+  const usage = (template: InvoiceDesign["template"]) => suppliers.filter(design => design.template === template).length;
+  const template = ordered.reduce((best, candidate) => usage(candidate) < usage(best) ? candidate : best);
+  let accent = base.accent;
+  for (let attempt = 1; suppliers.some(design => design.accent === accent); attempt++) accent = expenseInvoiceDesign(`${base.key}:${attempt}`, []).accent;
+  return { ...base, template, accent, style: ["minimal", "editorial"].includes(template) ? "minimal" : ["insurance", "professional_services"].includes(template) ? "frame" : "rule" };
 }
 export function validateInvoiceDesign(value: InvoiceDesign): InvoiceDesign {
   if (!value || !/^#[0-9a-f]{6}$/i.test(value.accent) || !["rule", "minimal", "frame"].includes(value.style) || !["sans", "serif"].includes(value.font) || typeof value.key !== "string" || value.key.length > 300 || typeof value.name !== "string" || value.name.length > 250 || (value.logoPath && !/^\/invoice-brands\/[a-z0-9-]+\.(png|svg|jpg)$/.test(value.logoPath))) throw new Error("Check the company design");

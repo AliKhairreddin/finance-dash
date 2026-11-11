@@ -17,7 +17,7 @@ There is no default tax treatment or date policy. A bulk run explicitly applies 
 
 Outgoing PDFs omit added document headings, explanatory sentences and provenance labels. The dashboard’s sortable Type column identifies them as `Internal record`; customer invoices are `Sales invoice`. Company/supplier details, transaction values and approved notes remain in the PDFs.
 
-Each canonical supplier receives a saved layout, accent, typography and header treatment derived from its identity. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design. Normal regeneration creates a new document version. An explicit administrator wording refresh changes only the rendered PDF and retains the original storage object in the audit history.
+Each canonical supplier receives a saved layout, accent, typography and header treatment. New supplier allocation uses the least-used layout and an unused accent; the first nine suppliers receive nine distinct layouts. Existing suppliers reuse their saved design across payments and buying companies. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design. Normal regeneration creates a new document version. An explicit administrator wording refresh changes only the rendered PDF and retains the original storage object in the audit history.
 
 Generation uses saved transaction evidence and approved details without an AI call. Reading an uploaded invoice example remains a separate AI-assisted operation.
 
@@ -50,3 +50,9 @@ Production issuer changes use the existing revision-checked `statementWorkspace.
 For an explicitly requested wording-only update, run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --prepare`. This reads production, backs up saved files/snapshots, renders affected internal records locally, and verifies document values without writing production. Inspect the prepared PDFs, then run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --apply <manifest.json>`.
 
 The internal `replaceRenderedPdf` mutation checks administrator scope, document type, revision, both file references and stored PDF metadata. It atomically updates the generated invoice and its existing document attachment, retaining numbers, financial snapshots, transaction links and original files. Audit entries record both storage IDs. Applying the same manifest is resumable and does not duplicate document numbers or allocations. Unsupported layouts, concurrent changes, unresolved references and non-PDF replacements stop the operation.
+
+## Apply supplier designs to saved PDFs
+
+Run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --prepare-designs` to prepare all saved outgoing PDFs with distinct supplier layouts. The manifest retains each original PDF and financial snapshot, records the design catalogue versions, and checks that the redesigned files preserve the original text and all document values. It preserves original metadata labels on older PDFs. Review the rendered pages, then apply that manifest with `--apply <manifest.json>`.
+
+The administrator mutation validates the supplier against each outgoing source transaction and saves the reusable supplier design together with the updated file and layout snapshot. It rejects concurrent changes, mismatched suppliers, copied-image layouts and unapproved logos. Older generated PDFs without document attachments keep that structure. Neither allocation links nor numbers, dates, amounts, tax or document states change. Prior layouts and storage IDs remain in the audit history.
