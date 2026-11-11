@@ -7766,6 +7766,7 @@ async function handleApi(
     }
 
     if (url.pathname === "/api/invoices" && request.method === "DELETE") {
+      if (request.headers.get("Origin") !== url.origin) throw new ApiError(403, "Delete invoices from this dashboard.");
       const payload = (await request.json()) as Partial<DeleteInvoicesPayload> | null;
       return json(await deleteInvoiceDrafts(env, Array.isArray(payload?.invoiceIds) ? payload.invoiceIds : []));
     }
@@ -7802,6 +7803,7 @@ async function handleApi(
     }
 
     if (url.pathname === "/api/receivables" && request.method === "DELETE") {
+      if (request.headers.get("Origin") !== url.origin) throw new ApiError(403, "Delete open items from this dashboard.");
       const payload = await request.json() as { ids: string[] };
       await deleteOpenItems(env, payload.ids);
       return json({ success: true });
@@ -7860,6 +7862,10 @@ async function handleApi(
 
     return json({ message: "Not found" }, { status: 404 });
   } catch (error) {
+    if (request.method === "DELETE" && ["/api/invoices", "/api/receivables"].includes(url.pathname)
+      && error instanceof ConvexError && typeof error.data === "string") {
+      return json({ message: error.data }, { status: 409 });
+    }
     const message = error instanceof Error ? error.message : "Unknown server error";
     console.error(JSON.stringify({ event: "api_request_failed", method: request.method, path: url.pathname, message }));
     return json({ message }, { status: error instanceof ApiError ? error.status : 500 });
