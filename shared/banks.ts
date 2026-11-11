@@ -19,3 +19,16 @@ export function isBankSource(source: DataSource): source is BankSource {
 export function bankSourceLabel(source: DataSource): string {
   return bankSources.find((item) => item.id === source)?.label ?? source.charAt(0).toUpperCase() + source.slice(1);
 }
+
+export function isBankSourceFilter(value: string): boolean {
+  return value === "all" || value.split(",").every(source => bankSourceIds.has(source as BankSource));
+}
+
+export function selectedBankSources(value: string): BankSource[] {
+  if (!isBankSourceFilter(value)) throw new Error("Transaction source is invalid");
+  return value === "all" ? [] : bankSources.filter(source => value.split(",").includes(source.id)).map(source => source.id);
+}
+
+export function bankSourceMatches(filter: string, source: DataSource): boolean {
+  return filter === "all" || filter.split(",").includes(source);
+}

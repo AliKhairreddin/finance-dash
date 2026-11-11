@@ -1,3 +1,4 @@
+import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { mercuryEntities } from "../shared/mercuryEntities";
 import { slashEntities } from "../shared/slashEntities";
 import type { SlashEntity } from "../shared/types";
@@ -95,6 +96,7 @@ import {
   getSnapshot,
   getBankActivitySummary,
   getTransactionPage,
+  getTransactionExport,
   getInvoicePaymentCandidates,
   getInvoicePaymentSuggestions,
   getOpenRouterZdrModels,
@@ -591,14 +593,11 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate) || fromDate > toDate || toDate > financeOperatingDate()) {
       throw new ClientRequestError("Transaction date range is invalid");
     }
-    const rawSource = typeof request.query.source === "string" ? request.query.source : undefined;
-    if (rawSource && rawSource !== "wise" && rawSource !== "revolut" && rawSource !== "slash" && rawSource !== "amex" && rawSource !== "mercury") {
-      throw new ClientRequestError("Transaction source is invalid");
-    }
-    const source: BankTransactionSource | undefined =
-      rawSource === "wise" || rawSource === "revolut" || rawSource === "slash" || rawSource === "amex" || rawSource === "mercury"
-        ? rawSource
-        : undefined;
+    const rawSource = typeof request.query.source === "string" ? request.query.source : "all";
+    if (!isBankSourceFilter(rawSource)) throw new ClientRequestError("Transaction source is invalid");
+    const selectedSources = selectedBankSources(rawSource);
+    const source = selectedSources.length === 1 ? selectedSources[0] : undefined;
+    const sources = selectedSources.length > 1 ? selectedSources : undefined;
     const rawDirection = typeof request.query.direction === "string" ? request.query.direction : undefined;
     if (rawDirection && rawDirection !== "in" && rawDirection !== "out") {
       throw new ClientRequestError("Transaction direction is invalid");
@@ -644,6 +643,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       fromDate,
       toDate,
       ...(source ? { source } : {}),
+      ...(sources ? { sources } : {}),
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
@@ -665,6 +665,14 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
 app.get("/api/transactions", (request, response, next) => {
   try {
     response.json(getTransactionPage(localTransactionPageOptions(request)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/transactions/export", (request, response, next) => {
+  try {
+    response.json(getTransactionExport(localTransactionPageOptions(request)));
   } catch (error) {
     next(error);
   }

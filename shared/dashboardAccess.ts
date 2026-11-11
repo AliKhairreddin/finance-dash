@@ -34,7 +34,7 @@ export function financeOperatorCanAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
   if (request.method === "GET") {
     return ["/api/session", "/api/dashboard", "/api/manual-bank-transactions", "/api/analytics", "/api/analytics/category-companies",
-      "/api/transactions", "/api/transactions/lookup", "/api/transactions/summary", "/api/transactions/sync",
+      "/api/transactions", "/api/transactions/export", "/api/transactions/lookup", "/api/transactions/summary", "/api/transactions/sync",
       "/api/management-report", "/api/documents", "/api/documents/config", "/api/documents/folders",
       "/api/amex/statements", "/api/amex/statements/accounts", "/api/invoice-payment-candidates"].includes(path)
       || /^\/api\/documents\/[^/]+(?:\/(?:file|candidates))?$/u.test(path)

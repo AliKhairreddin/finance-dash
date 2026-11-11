@@ -1,3 +1,4 @@
+import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { meritHistoryKey, validateMeritHistory } from "../shared/meritHistory";
 import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
 import { syncStatementRevolutLmd } from "./statementRevolutLmd";
@@ -2255,6 +2256,7 @@ function defaultBankDateRange(now = Date.now()): SlashTransactionDateRange {
 }
 
 interface TransactionPageOptions {
+  sources?: BankTransactionSource[];
   slashVirtualAccountId?: string;
   fromDate: string;
   toDate: string;
@@ -2360,7 +2362,8 @@ function normalizedActivityText(value: string | undefined): string {
 
 function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean {
   return Boolean(
-    options.search
+    options.sources?.length
+    || options.search
     || options.wiseEntity
     || options.mercuryEntity
     || options.slashEntity
@@ -2432,6 +2435,9 @@ function filterAndSortActivity(
   const documentedTransactionIds = new Set(directory.documentedTransactionIds);
   const search = normalizedActivityText(options.search);
   const rows = transactions.filter((transaction) => {
+    if (transaction.date < options.fromDate || transaction.date > options.toDate) return false;
+    if (options.source && transaction.source !== options.source) return false;
+    if (options.sources && !options.sources.includes(transaction.source as BankTransactionSource)) return false;
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
     if (options.mercuryEntity && transaction.mercuryEntity !== options.mercuryEntity) return false;
     if (options.slashEntity && transaction.slashEntity !== options.slashEntity) return false;
@@ -2486,34 +2492,43 @@ function filterAndSortActivity(
   });
 }
 
-async function collectActivityTransactions(env: Env, options: TransactionPageOptions): Promise<{
+async function collectActivityTransactions(env: Env, options: TransactionPageOptions, maximumTransactions = Infinity): Promise<{
   directory: ActivityDirectory;
   transactions: Transaction[];
 }> {
   const convex = getConvexClient(env);
   const serviceToken = getConvexServiceToken(env);
-  const directoryPromise = convex.query(api.dashboard.getAnalyticsDirectory, { serviceToken });
+  const directory = await convex.query(api.dashboard.getAnalyticsDirectory, { serviceToken }) as ActivityDirectory;
   const transactions: Transaction[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null = null;
-  do {
-    const page = await readRawTransactionPage(env, {
-      fromDate: options.fromDate,
-      toDate: options.toDate,
-      source: options.source,
-      direction: options.direction,
-      order: "asc",
-      cursor,
-      limit: bankMutationBatchSize
-    });
-    transactions.push(...page.transactions);
-    cursor = page.continueCursor;
-    if (cursor) {
-      if (seenCursors.has(cursor)) throw new ApiError(503, "Transaction pagination did not advance");
-      seenCursors.add(cursor);
-    }
-  } while (cursor);
-  const directory = await directoryPromise as ActivityDirectory;
+  const seenIds = new Set<string>();
+  // Each selected bank uses its existing source/date index in saved storage.
+  for (const source of options.sources ?? [options.source]) {
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const page = await readRawTransactionPage(env, {
+        fromDate: options.fromDate,
+        toDate: options.toDate,
+        source,
+        direction: options.direction,
+        order: "asc",
+        cursor,
+        limit: bankMutationBatchSize
+      });
+      for (const transaction of page.transactions) {
+        if (seenIds.has(transaction.id)) throw new ApiError(503, "Bank transactions changed during the export. Please retry.");
+        seenIds.add(transaction.id);
+        transactions.push(transaction);
+      }
+      if (transactions.length > maximumTransactions) throw new ApiError(422, "Too many transactions to export. Select a shorter date range.");
+      cursor = page.continueCursor;
+      if (!page.isDone && !cursor) throw new ApiError(503, "Transaction pagination is incomplete. Please retry.");
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new ApiError(503, "Transaction pagination did not advance");
+        seenCursors.add(cursor);
+      }
+    } while (cursor);
+  }
   return {
     directory,
     transactions: filterAndSortActivity(transactions, options, directory)
@@ -2546,7 +2561,7 @@ async function readScopedTransactionPage(env: Env, options: TransactionPageOptio
     continueCursor: isDone ? null : `activity-offset:${nextOffset}`,
     isDone,
     totalCount: collected.transactions.length,
-    coverage
+    coverage: options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage
   };
 }
 
@@ -7080,10 +7095,11 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   ) {
     throw new ApiError(400, "Transaction date range is invalid");
   }
-  const source = url.searchParams.get("source");
-  if (source !== null && source !== "wise" && source !== "revolut" && source !== "slash" && source !== "amex" && source !== "mercury") {
-    throw new ApiError(400, "Transaction source is invalid");
-  }
+  const rawSource = url.searchParams.get("source") ?? "all";
+  if (!isBankSourceFilter(rawSource)) throw new ApiError(400, "Transaction source is invalid");
+  const selectedSources = selectedBankSources(rawSource);
+  const source = selectedSources.length === 1 ? selectedSources[0] : undefined;
+  const sources = selectedSources.length > 1 ? selectedSources : undefined;
   const direction = url.searchParams.get("direction");
   if (direction !== null && direction !== "in" && direction !== "out") {
     throw new ApiError(400, "Transaction direction is invalid");
@@ -7143,6 +7159,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     fromDate,
     toDate,
     ...(source ? { source } : {}),
+    ...(sources ? { sources } : {}),
     ...(direction ? { direction } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
     ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
@@ -7402,10 +7419,28 @@ async function handleApi(
       return json(response);
     }
 
+    if (url.pathname === "/api/transactions/export" && request.method === "GET") {
+      const options = transactionPageOptions(url);
+      const coverage = await getConvexClient(env).query(api.banking.getActivityCoverage, {
+        serviceToken: getConvexServiceToken(env),
+        connections: await bankConnectionDirectory(env),
+        source: options.source,
+        fromDate: options.fromDate,
+        toDate: options.toDate
+      });
+      const selectedCoverage = options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage;
+      if (selectedCoverage.some(item => item.missingRanges.length > 0)) {
+        throw new ApiError(409, "Bank history for the selected dates is incomplete. Wait for history sync to finish before downloading.");
+      }
+      const collected = await collectActivityTransactions(env, { ...options, cursor: null }, 50_000);
+      return json({ fromDate: options.fromDate, toDate: options.toDate, transactions: collected.transactions,
+        totalCount: collected.transactions.length, isDone: true, continueCursor: null });
+    }
+
     if (url.pathname === "/api/transactions/summary" && request.method === "GET") {
       const options = transactionPageOptions(url);
-      if (options.source && options.source !== "amex" && !bankSourceConfigured(env, options.source)) {
-        throw new ApiError(409, `${options.source} is not configured for transaction sync`);
+      for (const source of options.sources ?? (options.source ? [options.source] : [])) {
+        if (source !== "amex" && !bankSourceConfigured(env, source)) throw new ApiError(409, `${source} is not configured for transaction sync`);
       }
       return json(await readBankActivitySummary(env, options));
     }
@@ -7413,8 +7448,8 @@ async function handleApi(
     if (url.pathname === "/api/transactions" && request.method === "GET") {
       const startedAt = Date.now();
       const options = transactionPageOptions(url);
-      if (options.source && options.source !== "amex" && !bankSourceConfigured(env, options.source)) {
-        throw new ApiError(409, `${options.source} is not configured for transaction sync`);
+      for (const source of options.sources ?? (options.source ? [options.source] : [])) {
+        if (source !== "amex" && !bankSourceConfigured(env, source)) throw new ApiError(409, `${source} is not configured for transaction sync`);
       }
       const page = await readScopedTransactionPage(env, options);
       const durationMs = Date.now() - startedAt;

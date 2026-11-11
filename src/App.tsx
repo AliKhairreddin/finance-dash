@@ -157,7 +157,7 @@ import type {
   BankCardGroupSummary,
   BankMerchantGroupSummary
 } from "../shared/bankMerchantGroups";
-import { type BankSource, bankSourceLabel, bankSources, isBankSource } from "../shared/banks";
+import { type BankSource, bankSourceLabel, bankSources, isBankSource, isBankSourceFilter, selectedBankSources, bankSourceMatches } from "../shared/banks";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../shared/operatingDate";
 import {
   isRequiredTransactionCategory,
@@ -251,6 +251,7 @@ type TransactionPageRequest = {
   key: string;
   dateRange: BankTransactionDateRange;
   source?: BankSource;
+  sources?: BankSource[];
   direction?: "in" | "out";
   wiseEntity?: WiseEntity;
   mercuryEntity?: import("../shared/types").MercuryEntity;
@@ -704,8 +705,8 @@ function App() {
   });
   const [bankGroupKey, setBankGroupKey] = useUrlState("bankGroupKey", "");
   const [bankGroupLabel, setBankGroupLabel] = useUrlState("bankGroupLabel", "");
-  const [allBankSource, setAllBankSource] = useUrlState<"all" | BankSource>("allBankSource", "all", {
-    allowedValues: ["all", ...bankSources.map((source) => source.id)]
+  const [allBankSource, setAllBankSource] = useUrlState<string>("allBankSource", "all", {
+    isValid: isBankSourceFilter
   });
   const [mercuryEntityView] = useUrlState<MercuryEntityView>("mercuryEntity", "all", { allowedValues: mercuryEntityViews });
   const [slashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
@@ -791,6 +792,8 @@ function App() {
     allowedValues: ["asc", "desc"]
   });
   const isTransactionReviewer = session?.role === "transaction-reviewer";
+  const [isExportingTransactions, setIsExportingTransactions] = useState(false);
+  const transactionExportAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!notice) return;
@@ -812,9 +815,9 @@ function App() {
     const effectiveBankTab: "all" | BankSource = isTransactionReviewer || bankTab === "holdings" || isManualBankSource(bankTab)
       ? "all"
       : bankTab;
-    const source = effectiveBankTab === "all"
-      ? allBankSource === "all" ? undefined : allBankSource
-      : effectiveBankTab;
+    const selectedSources = effectiveBankTab === "all" ? selectedBankSources(allBankSource) : [effectiveBankTab];
+    const source = selectedSources.length === 1 ? selectedSources[0] : undefined;
+    const sources = selectedSources.length > 1 ? selectedSources : undefined;
     const direction = bankDirection !== "all" ? bankDirection : undefined;
     const dateRange = effectiveBankTab === "all"
       ? allBankDateRange
@@ -840,6 +843,7 @@ function App() {
     const request = {
       dateRange,
       ...(source ? { source } : {}),
+      ...(sources ? { sources } : {}),
       ...(direction ? { direction } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(mercuryEntity ? { mercuryEntity } : {}),
@@ -1084,6 +1088,7 @@ function App() {
       limit: String(transactionTablePageSize)
     });
     if (request.source) query.set("source", request.source);
+    if (request.sources) query.set("source", request.sources.join(","));
     if (request.direction) query.set("direction", request.direction);
     if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
     if (request.mercuryEntity) query.set("mercuryEntity", request.mercuryEntity);
@@ -1099,6 +1104,40 @@ function App() {
     }
     return query;
   }
+
+  async function downloadBankTransactions(): Promise<void> {
+    const request = transactionPageRequestRef.current;
+    if (!request || !dashboard || transactionExportAbortRef.current) return;
+    const controller = new AbortController();
+    transactionExportAbortRef.current = controller;
+    setIsExportingTransactions(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/transactions/export?${transactionRequestQuery(request)}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(await apiErrorMessage(response, "Transactions could not be exported"));
+      const page = await response.json() as TransactionPage;
+      if (controller.signal.aborted || transactionPageRequestRef.current?.key !== request.key) return;
+      if (!page.isDone || page.continueCursor || page.totalCount !== page.transactions.length) {
+        throw new Error("The transaction export is incomplete. Please retry.");
+      }
+      if (page.transactions.some(row => row.date < request.dateRange.fromDate || row.date > request.dateRange.toDate)) {
+        throw new Error("The transaction export does not match the selected dates. Please retry.");
+      }
+      exportBankTransactionsCsv({
+        providersById: new Map(dashboard.providers.map(provider => [provider.id, provider])),
+        teamsById: new Map(dashboard.teams.map(team => [team.id, team])),
+        rows: page.transactions,
+        scope: `${request.source ?? request.sources?.join("-") ?? "all"}-${request.dateRange.fromDate}-to-${request.dateRange.toDate}`
+      });
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Transactions could not be exported");
+    } finally {
+      if (transactionExportAbortRef.current === controller) transactionExportAbortRef.current = null;
+      setIsExportingTransactions(false);
+    }
+  }
+
+  useEffect(() => () => { transactionExportAbortRef.current?.abort(); }, [transactionPageRequest?.key]);
 
   async function waitForHistoricalTransactionSync(jobKey: string): Promise<void> {
     const result = await waitForBankHistorySync(apiBase, jobKey, new AbortController().signal);
@@ -2397,6 +2436,12 @@ function App() {
         <BanksView
           dashboard={dashboard}
           backgroundSync={bankBackgroundSync}
+          exportControl={<Button aria-label="Export filtered CSV" className="icon-button" type="button"
+            disabled={isExportingTransactions || isLoadingTransactionPage || Boolean(transactionPageError) || !transactionPageRequest || searchTerm !== debouncedSearchTerm}
+            title="Download all transactions matching the selected dates and filters"
+            onClick={() => void downloadBankTransactions()}>
+            {isExportingTransactions ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+          </Button>}
           activeBank={bankTab}
           activityView={bankActivityView}
           setActivityView={changeBankActivityView}
@@ -2741,11 +2786,11 @@ function TransactionReviewerWorkspace({
   setSearchTerm: (value: string) => void;
   setSortDirection: (value: SortDirection) => void;
   setSortKey: (value: TransactionSortKey) => void;
-  setSource: (value: "all" | BankSource) => void;
+  setSource: (value: string) => void;
   setTeam: (value: string) => void;
   sortDirection: SortDirection;
   sortKey: TransactionSortKey;
-  source: "all" | BankSource;
+  source: string;
   team: string;
   themeMode: ThemeMode;
   toggleThemeMode: () => void;
@@ -2758,7 +2803,7 @@ function TransactionReviewerWorkspace({
   );
   const accountOptions = useMemo(
     () => access.accounts
-      .filter((item) => source === "all" || item.source === source)
+      .filter((item) => bankSourceMatches(source, item.source))
       .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
     [access.accounts, source]
   );
@@ -2823,7 +2868,7 @@ function TransactionReviewerWorkspace({
         </nav>
         <section className="panel wide-panel transaction-reviewer-panel">
           <div className="panel-header compact transaction-reviewer-panel-header">
-            <div><p className="eyebrow">Transaction review</p><h2>{source === "all" ? "All banks" : sourceLabel(source)}</h2></div>
+            <div><p className="eyebrow">Transaction review</p><h2>{source === "all" ? "All banks" : selectedBankSources(source).map(bankSourceLabel).join(", ")}</h2></div>
             <div className="list-toolbar transaction-reviewer-toolbar">
               <div className="list-toolbar-main">
                 <ToolbarSearchField
@@ -3619,6 +3664,7 @@ function BankDetailsAccountTable({
 }
 
 function BanksView({
+  exportControl,
   dashboard,
   backgroundSync,
   activeBank,
@@ -3694,6 +3740,7 @@ function BanksView({
 }: {
   dashboard: DashboardSnapshot;
   backgroundSync: BankBackgroundSyncState | null;
+  exportControl: ReactNode;
   activeBank: BankTab;
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
@@ -3723,8 +3770,8 @@ function BanksView({
   setTransactionSortDirection: (value: SortDirection) => void;
   allBankTransactions: Transaction[];
   allBankDateRange: BankTransactionDateRange;
-  allBankSource: "all" | BankSource;
-  setAllBankSource: (source: "all" | BankSource) => void;
+  allBankSource: string;
+  setAllBankSource: (source: string) => void;
   wiseTransactions: Transaction[];
   wiseDateRange: BankTransactionDateRange;
   revolutTransactions: Transaction[];
@@ -3835,9 +3882,7 @@ function BanksView({
       : "0";
   const allTabPeriodActivity = periodMetricsReady
     ? (
-      allBankSource === "all"
-        ? bankPeriodMetrics.sources
-        : bankPeriodMetrics.sources.filter((item) => item.source === allBankSource)
+      bankPeriodMetrics.sources.filter((item) => bankSourceMatches(allBankSource, item.source))
     ).reduce<BankPeriodActivityMetrics>((total, activity) => ({
       moneyIn: combineBankPeriodDirectionMetrics(total.moneyIn, activity.moneyIn),
       moneyOut: combineBankPeriodDirectionMetrics(total.moneyOut, activity.moneyOut)
@@ -4169,6 +4214,7 @@ function BanksView({
       {isManualBankSource(activeBank) && <ManualBankTransactions key={activeBank} source={activeBank} />}
       {activeBank === "all" && (
         <AllBankTransactionsView
+            exportControl={exportControl}
             activityView={activityView}
             bankGroupType={bankGroupType}
             bankGroupLabel={bankGroupLabel}
@@ -4225,6 +4271,7 @@ function BanksView({
       )}
       {activeBank === "wise" && (
         <BankReconciliationView
+          exportControl={exportControl}
           activityView={activityView}
           bankGroupType={bankGroupType}
           bankGroupLabel={bankGroupLabel}
@@ -4287,6 +4334,7 @@ function BanksView({
       )}
       {(activeBank === "revolut" || activeBank === "mercury") && (
         <ConnectedBankView
+          exportControl={exportControl}
           source={activeBank}
           activityView={activityView}
           bankGroupType={bankGroupType}
@@ -4343,6 +4391,7 @@ function BanksView({
       )}
       {activeBank === "slash" && (
         <SlashView
+          exportControl={exportControl}
           activityView={activityView}
           bankGroupType={bankGroupType}
           bankGroupLabel={bankGroupLabel}
@@ -4398,6 +4447,7 @@ function BanksView({
       )}
       {activeBank === "amex" && (
         <AmexView
+          exportControl={exportControl}
           activityView={activityView}
           bankGroupType={bankGroupType}
           bankGroupLabel={bankGroupLabel}
@@ -4532,6 +4582,7 @@ function BankSyncStatus({
 }
 
 type BankReconciliationViewProps = {
+  exportControl: ReactNode;
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
   bankGroupType: "" | BankActivityGroupType;
@@ -4588,6 +4639,7 @@ type BankReconciliationViewProps = {
 };
 
 function BankReconciliationView({
+  exportControl,
   activityView,
   setActivityView,
   bankGroupType,
@@ -4784,21 +4836,7 @@ function BankReconciliationView({
           </div>
           <div className="list-toolbar-actions">
             {rangeControls}
-              <Button
-                aria-label={`Export ${sourceLabel} CSV`}
-                className="icon-button"
-                type="button"
-                disabled={rows.length === 0}
-                title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
-                onClick={() => exportBankTransactionsCsv({
-                  providersById,
-                  rows,
-                  scope: sourceLabel,
-                  teamsById
-                })}
-              >
-                <Upload size={15} aria-hidden="true" />
-              </Button>
+            {exportControl}
           </div>
         </div>
       </div>

@@ -2876,6 +2876,7 @@ export async function syncExternalActivity(
 }
 
 type LocalTransactionPageOptions = {
+  sources?: BankTransactionSource[];
   slashVirtualAccountId?: string;
   fromDate: string;
   toDate: string;
@@ -2982,6 +2983,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
         || transaction.source === "slash"
         || transaction.source === "amex" || transaction.source === "mercury")
       && (!options.source || transaction.source === options.source)
+      && (!options.sources || options.sources.includes(transaction.source as BankTransactionSource))
       && (!options.direction || transaction.direction === options.direction)
       && (!options.wiseEntity || transaction.wiseEntity === options.wiseEntity)
       && (!options.mercuryEntity || transaction.mercuryEntity === options.mercuryEntity)
@@ -3001,6 +3003,12 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
 
 export function getTransactionPage(options: LocalTransactionPageOptions): TransactionPage {
   return localTransactionPage(localScopedTransactions(options), options);
+}
+
+export function getTransactionExport(options: LocalTransactionPageOptions): TransactionPage {
+  const rows = localScopedTransactions(options);
+  if (rows.length > 50_000) throw new Error("Too many transactions to export. Select a shorter date range.");
+  return localTransactionPage(rows, { ...options, cursor: null, limit: rows.length });
 }
 
 export function getBankActivitySummary(options: LocalTransactionPageOptions): BankActivitySummary {

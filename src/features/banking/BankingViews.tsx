@@ -1,5 +1,5 @@
 import { useAmexStatementAccounts } from "./useAmexStatementAccounts";
-import { ArrowDownRight, ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleAlert, Coins, Download, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Check, ChevronLeft, ChevronRight, CircleAlert, Coins, Edit3, Link2, Loader2, Plus, RefreshCw, Trash2, Wallet, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import type {
   BankCardGroupSummary,
   BankMerchantGroupSummary
 } from "../../../shared/bankMerchantGroups";
-import { bankSources, type BankSource } from "../../../shared/banks";
+import { bankSources, bankSourceMatches, selectedBankSources } from "../../../shared/banks";
 import { transactionBusinessCategory, transactionCategoryOptionsForDirection } from "../../../shared/categories";
 import {
   isInternalTransferTransaction,
@@ -42,7 +42,7 @@ import {
   wiseEntityLabel,
   wiseEntityShortLabel
 } from "../../../shared/wiseEntities";
-import { exportBankTransactionsCsv } from "./exportTransactions";
+import { BankSourceFilter } from "./BankSourceFilter";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./SlashVirtualAccountFilter";
 import {
   BankActivityViewToggle,
@@ -85,6 +85,7 @@ export function AllBankTransactionsView({
   dashboard,
   providersById,
   rangeControls,
+  exportControl,
   activityView,
   setActivityView,
   bankGroupType,
@@ -131,13 +132,14 @@ export function AllBankTransactionsView({
   dashboard: DashboardSnapshot;
   providersById: Map<string, Provider>;
   rangeControls: ReactNode;
+  exportControl: ReactNode;
   activityView: BankActivityViewMode;
   setActivityView: (view: BankActivityViewMode) => void;
   bankGroupType: "" | BankActivityGroupType;
   bankGroupLabel: string;
   period: { fromDate: string; toDate: string };
-  source: "all" | BankSource;
-  setSource: (source: "all" | BankSource) => void;
+  source: string;
+  setSource: (source: string) => void;
   transactions: Transaction[];
   searchTerm: string;
   setSearchTerm: (value: string) => void;
@@ -196,7 +198,7 @@ export function AllBankTransactionsView({
     () => new Map(dashboard.expenses.flatMap((expense) => expense.transactionId ? [[expense.transactionId, expense] as const] : [])),
     [dashboard.expenses]
   );
-  const statementAccounts = useAmexStatementAccounts(source === "amex" || source === "all");
+  const statementAccounts = useAmexStatementAccounts(bankSourceMatches(source, "amex"));
   const accountOptions = useMemo(
     () => [...dashboard.accounts, ...statementAccounts]
       .filter((item) => bankSources.some((bankSource) => bankSource.id === item.source))
@@ -224,8 +226,8 @@ export function AllBankTransactionsView({
   useEffect(() => {
     if (account === "all") return;
     const selectedAccount = accountOptions.find((item) => item.id === account);
-    if (!selectedAccount && account.startsWith("amex-statement-") && (source === "all" || source === "amex")) return;
-    if (!selectedAccount || (source !== "all" && selectedAccount.source !== source)) setAccount("all");
+    if (!selectedAccount && account.startsWith("amex-statement-") && bankSourceMatches(source, "amex")) return;
+    if (!selectedAccount || !bankSourceMatches(source, selectedAccount.source)) setAccount("all");
   }, [account, accountOptions, setAccount, source]);
 
   const rows = transactions;
@@ -265,11 +267,11 @@ export function AllBankTransactionsView({
       label: `${bankGroupType === "merchant" ? "Group" : bankGroupType === "card" ? "Card" : source === "slash" ? "Virtual account" : "Account"}: ${bankGroupLabel}`,
       onRemove: onClearBankGroup
     }] : []),
-    ...(source === "all" ? [] : [{
-      key: "source",
-      label: `Source: ${sourceLabel(source)}`,
-      onRemove: () => setSource("all")
-    }]),
+    ...selectedBankSources(source).map(bank => ({
+      key: `source-${bank}`,
+      label: `Source: ${sourceLabel(bank)}`,
+      onRemove: () => setSource(selectedBankSources(source).filter(item => item !== bank).join(",") || "all")
+    })),
     ...(account === "all" ? [] : [{
       key: "account",
       label: `Account: ${accountOptions.find((item) => item.id === account)?.name ?? account}`,
@@ -358,29 +360,17 @@ export function AllBankTransactionsView({
               <FilterFieldGroup title="Transaction">
                 <label>
                   Source
-                  <NativeSelect
-                    aria-label="Filter bank transactions by source"
-                    value={source}
-                    onValueChange={(value) => {
-                      const nextSource = value as "all" | BankSource;
-                      setSource(nextSource);
-                      const selectedAccount = accountOptions.find((item) => item.id === account);
-                      if (nextSource !== "all" && selectedAccount?.source !== nextSource) setAccount("all");
-                    }}
-                  >
-                    <NativeSelectOption value="all">All sources</NativeSelectOption>
-                    {bankSources.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.label}</NativeSelectOption>)}
-                  </NativeSelect>
+                  <BankSourceFilter value={source} onChange={setSource} />
                 </label>
                 <label>
                   Account
                   <NativeSelect aria-label="Filter bank transactions by account" value={account} onValueChange={setAccount}>
                     <NativeSelectOption value="all">All accounts</NativeSelectOption>
                     {accountOptions
-                      .filter((item) => source === "all" || item.source === source)
+                      .filter((item) => bankSourceMatches(source, item.source))
                       .map((item) => (
                         <NativeSelectOption key={item.id} value={item.id}>
-                          {source === "all" ? `${sourceLabel(item.source)} · ${item.name}` : item.name}
+                          {selectedBankSources(source).length !== 1 ? `${sourceLabel(item.source)} · ${item.name}` : item.name}
                         </NativeSelectOption>
                       ))}
                   </NativeSelect>
@@ -425,21 +415,7 @@ export function AllBankTransactionsView({
           </div>
           <div className="list-toolbar-actions">
             {rangeControls}
-            <Button
-              aria-label="Export loaded CSV"
-              className="icon-button"
-              type="button"
-              disabled={rows.length === 0}
-              title={`Export ${rows.length} loaded row${rows.length === 1 ? "" : "s"} from this filtered view`}
-              onClick={() => exportBankTransactionsCsv({
-                providersById,
-                rows,
-                scope: "all",
-                teamsById
-              })}
-            >
-              <Download size={15} />
-            </Button>
+            {exportControl}
           </div>
         </div>
       </div>

@@ -50,7 +50,7 @@ test("finance operators can navigate exactly the requested pages", () => {
 test("finance operator APIs allow complete banking, document and workbook workflows", () => {
   for (const [method, path] of [
     ["GET", "/api/session"], ["GET", "/api/dashboard"], ["GET", "/api/transactions?limit=100"],
-    ["GET", "/api/transactions/summary"], ["GET", "/api/transactions/lookup?id=tx"],
+    ["GET", "/api/transactions/export"], ["GET", "/api/transactions/summary"], ["GET", "/api/transactions/lookup?id=tx"],
     ["GET", "/api/analytics/category-companies"], ["GET", "/api/management-report"],
     ["POST", "/api/management-report/upload"], ["POST", "/api/sync"], ["POST", "/api/wise/import-statement"],
     ["POST", "/api/transactions/sync"], ["GET", "/api/transactions/sync"],
