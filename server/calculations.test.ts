@@ -6,7 +6,7 @@ import { calculateMetrics } from "./calculations";
 const account = (id: string, balance: number, currency: string): AccountBalance => ({
   id,
   name: id,
-  source: "wise",
+  source: "revolut",
   balance,
   currency,
   updatedAt: "2026-07-09T00:00:00.000Z",
@@ -68,4 +68,16 @@ test("calculateMetrics excludes available Slash card credit from cash", () => {
   const cardCredit = { ...account("slash-credit", 66_849.84, "USD"), source: "slash" as const, slashAccountSubtype: "credit" as const };
 
   assert.deepEqual(calculateMetrics([cash, cardCredit], [], [], [], []).totalCash, { USD: 50_000 });
+});
+
+
+test("retired Wise balances cannot inflate current cash or derived asset totals", () => {
+  const accounts = [account("active", 500, "USD"),
+    { ...account("wise-dn", 10000, "USD"), source: "wise" as const, wiseEntity: "dn" as const },
+    { ...account("wise-lmd", -200, "EUR"), source: "wise" as const, wiseEntity: "lmd" as const }];
+  const metrics = calculateMetrics(accounts, [], [], [], []);
+  for (const total of [metrics.totalCash, metrics.totalFloat, metrics.netOperatingAssets, metrics.totalAssets]) {
+    assert.deepEqual(total, { USD: 500 });
+  }
+  assert.equal(accounts.length, 3, "Saved account metadata remains available to Banks");
 });

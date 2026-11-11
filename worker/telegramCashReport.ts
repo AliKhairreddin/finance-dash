@@ -1,4 +1,5 @@
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
+import { isActiveBalanceSource } from "../shared/banks";
 import { slashEntityLabel } from "../shared/slashEntities";
 import { slashReportDateIfDue } from "./telegramSlashReport";
 import type { AccountBalance, FxRate } from "../shared/types";
@@ -14,7 +15,8 @@ const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 export type CashReportAccount = AccountBalance & { syncedAt: string };
 
 export function isCashReportAccount(account: CashReportAccount): boolean {
-  return (account.source === "wise" || account.source === "revolut" || account.source === "mercury" || account.source === "flex" && account.flex?.type === "banking")
+  return isActiveBalanceSource(account.source)
+    && (account.source === "revolut" || account.source === "mercury" || account.source === "flex" && account.flex?.type === "banking")
     && account.status === "live" && cashCurrencies.has(account.currency.toUpperCase());
 }
 
@@ -66,7 +68,7 @@ export function buildTelegramCashReport(input: {
   ).map((rate) => [rate.asset.toUpperCase(), rate]));
   const totals = new Map<string, number>();
   const cryptoBalances = new Map<string, number>();
-  const groups = new Map(["Wise LMD", "Wise DN", "Revolut", "Slash", "Mercury"].map((name) => [name, new Map<string, number>()]));
+  const groups = new Map(["Revolut", "Slash", "Mercury"].map((name) => [name, new Map<string, number>()]));
   const add = (group: string, currency: string, balance: number) => {
     if (!Number.isFinite(balance)) throw new Error("Invalid bank balance");
     const asset = currency.toUpperCase();
@@ -76,11 +78,8 @@ export function buildTelegramCashReport(input: {
     totals.set(asset, (totals.get(asset) ?? 0) + balance);
   };
   for (const account of bankAccounts) {
-    if (account.source === "wise" && account.wiseEntity !== "dn" && account.wiseEntity !== "lmd") {
-      throw new Error("Wise balance company is unavailable; cash report could not be grouped");
-    }
     if (account.source === "mercury" && !account.mercuryEntity) throw new Error("Mercury balance company is unavailable; cash report could not be grouped");
-    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : account.source === "flex" ? "Flex · Mojo Labs LLC" : "Revolut";
+    const group = account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : account.source === "flex" ? "Flex · Mojo Labs LLC" : "Revolut";
     add(group, account.currency, account.balance);
   }
   for (const account of slashAccounts) add(account.slashEntity ? `Slash · ${slashEntityLabel(account.slashEntity)}` : "Slash", account.currency, account.balance);
@@ -145,9 +144,9 @@ export function buildTelegramCashReport(input: {
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
   const totals = new Map<string, number | null>();
   for (const line of message.split("\n")) {
-    const match = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · [^\n]+)? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
+    const match = /^(Revolut|Slash|Mercury)(?: · [^\n]+)? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
     if (match && totals.get(match[1]) !== null) totals.set(match[1], (totals.get(match[1]) ?? 0) + Number(match[2].replaceAll(",", "")));
-    const unavailable = /^(Wise LMD|Wise DN|Revolut|Slash|Mercury)(?: · [^\n]+)? — USD total unavailable$/u.exec(line);
+    const unavailable = /^(Revolut|Slash|Mercury)(?: · [^\n]+)? — USD total unavailable$/u.exec(line);
     if (unavailable) totals.set(unavailable[1], null);
   }
   const text = [...totals].map(([name, total]) => total === null ? `${name} — USD total unavailable` : `${name} ≈ ${amountLabel(total, "USD")}`).join("\n");

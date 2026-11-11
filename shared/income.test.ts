@@ -605,8 +605,8 @@ test("a newer monthly accrual removes only its superseded cumulative pull", () =
 test("approximate USD totals retain missing-quote disclosure", () => {
   const totals = calculateApproximateUsdTotals(
     [
-      { id: "usd", name: "USD", source: "wise", balance: 100, currency: "USD", updatedAt: "2026-07-20", status: "live" },
-      { id: "cad", name: "CAD", source: "wise", balance: 100, currency: "CAD", updatedAt: "2026-07-20", status: "live" },
+      { id: "usd", name: "USD", source: "revolut", balance: 100, currency: "USD", updatedAt: "2026-07-20", status: "live" },
+      { id: "cad", name: "CAD", source: "revolut", balance: 100, currency: "CAD", updatedAt: "2026-07-20", status: "live" },
       { id: "amex", name: "Amex", source: "amex", balance: -500, currency: "EUR", updatedAt: "2026-07-20", status: "live" }
     ],
     [
@@ -629,7 +629,7 @@ test("non-zero account balance visibility keeps positive and negative amounts on
   const account = (balance: number) => ({
     id: `account-${balance}`,
     name: "Account",
-    source: "wise" as const,
+    source: "revolut" as const,
     balance,
     currency: "USD",
     updatedAt: "2026-07-20",
@@ -645,7 +645,7 @@ test("non-zero account balance visibility keeps positive and negative amounts on
 test("approximate USD total converts EUR, GBP, USD, and crypto into one number", () => {
   const totals = calculateApproximateUsdTotals(
     [
-      { id: "eur", name: "EUR", source: "wise", balance: 100, currency: "EUR", updatedAt: "2026-07-20", status: "live" },
+      { id: "eur", name: "EUR", source: "revolut", balance: 100, currency: "EUR", updatedAt: "2026-07-20", status: "live" },
       { id: "gbp", name: "GBP", source: "revolut", balance: 100, currency: "GBP", updatedAt: "2026-07-20", status: "live" },
       { id: "usd", name: "USD", source: "slash", balance: 50, currency: "USD", updatedAt: "2026-07-20", status: "live" }
     ],
@@ -661,6 +661,18 @@ test("approximate USD total converts EUR, GBP, USD, and crypto into one number",
   assert.equal(totals.holdingsUsd, 1000);
   assert.equal(totals.totalUsd, 1285);
   assert.equal(totals.asOf, "2026-07-20T01:00:00.000Z");
+});
+
+test("retired Wise balances do not affect liquidity, quote age, or missing-rate warnings", () => {
+  const totals = calculateApproximateUsdTotals(
+    [
+      { id: "active", name: "Revolut", source: "revolut", balance: 200, currency: "USD", updatedAt: "2026-11-11", status: "live" },
+      { id: "wise-eur", name: "Wise LMD", source: "wise", wiseEntity: "lmd", balance: 9000, currency: "EUR", updatedAt: "2026-01-01", status: "live" },
+      { id: "wise-gbp", name: "Wise DN", source: "wise", wiseEntity: "dn", balance: -500, currency: "GBP", updatedAt: "2026-01-01", status: "live" }
+    ], [],
+    [{ asset: "EUR", rateUsd: 1.1, provider: "coinbase", asOf: "2026-01-01", stale: true }]
+  );
+  assert.deepEqual(totals, { accountsUsd: 200, holdingsUsd: 0, totalUsd: 200, excludedAssets: [], staleAssets: [], asOf: undefined });
 });
 
 test("rate refresh keeps an unavailable last-known rate and marks it stale", () => {

@@ -32,11 +32,10 @@ test("upload content is checked against its declared format", () => {
   assert.throws(() => validateDocumentFile("text/html", pdf), /Choose/);
   assert.throws(() => validateDocumentFile("application/pdf", new Uint8Array(11 * 1024 * 1024)), /10 MB/);
 });
-test("account totals keep company and credit balances distinct and report missing conversions", () => {
+test("account totals omit retired Wise balances, separate credit, and report missing conversions", () => {
   const account = (source: AccountBalance["source"], balance: number, currency: string, extra: Partial<AccountBalance> = {}): AccountBalance => ({ id: `${source}-${currency}`, name: source, source, balance, currency, updatedAt: "2026-09-06", status: "live", ...extra });
   const groups = accountBalanceGroups([account("wise", 100, "USD", { wiseEntity: "lmd" }), account("wise", 100, "EUR", { wiseEntity: "lmd" }), account("wise", 50, "USD", { wiseEntity: "dn" }), account("revolut", 10, "CAD"), account("slash", 100, "USD", { slashAccountSubtype: "cash" }), account("slash", 200, "USD", { slashAccountSubtype: "credit" })], [{ asset: "EUR", rateUsd: 1.2, asOf: "2026-09-06", provider: "coinbase", stale: false }]);
-  assert.equal(groups.find(g => g.id === "wise-lmd")?.totalUsd, 220);
-  assert.equal(groups.find(g => g.id === "wise-dn")?.totalUsd, 50);
+  assert.equal(groups.some(g => g.id.startsWith("wise")), false);
   assert.deepEqual(groups.find(g => g.id === "revolut")?.excludedCurrencies, ["CAD"]);
   assert.equal(groups.find(g => g.id === "slash")?.totalUsd, 100);
   assert.equal(groups.find(g => g.id === "slash-credit")?.totalUsd, 200);

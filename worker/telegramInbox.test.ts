@@ -61,8 +61,9 @@ test("the webhook inbox persists the bank totals button and retries the saved re
     await new TelegramInbox(context, env).alarm();
     assert.equal(queries, 1);
     assert.equal(messages.length, 1);
+    assert.doesNotMatch(String(messages[0].text), /Wise/);
     assert.equal(messages[0].protect_content, undefined);
-    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Wise LMD ≈ USD 100.00\nWise DN ≈ USD 200.00\nRevolut ≈ USD 300.00\nSlash ≈ USD 400.00" } }]] });
+    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Revolut ≈ USD 300.00\nSlash ≈ USD 400.00" } }]] });
     assert.equal(values.has("reply:1"), false);
   } finally { globalThis.fetch = originalFetch; }
 });

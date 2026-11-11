@@ -156,7 +156,7 @@ import type {
   BankCardGroupSummary,
   BankMerchantGroupSummary
 } from "../shared/bankMerchantGroups";
-import { type BankSource, bankSourceLabel, bankSources, isBankSource, isBankSourceFilter, selectedBankSources, bankSourceMatches } from "../shared/banks";
+import { type BankSource, bankSourceLabel, bankSources, isBankSource, isBankSourceFilter, selectedBankSources, bankSourceMatches, isActiveBalanceSource } from "../shared/banks";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../shared/operatingDate";
 import {
   isRequiredTransactionCategory,
@@ -2277,10 +2277,11 @@ function App() {
   const hasPayables = dashboard.payables.length > 0;
   const hasNetOperatingAssets = hasCurrencyTotals(dashboard.metrics.netOperatingAssets);
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
-  const liquidAccounts = dashboard.accounts.filter((account) =>
+  const activeAccounts = dashboard.accounts.filter(account => isActiveBalanceSource(account.source));
+  const liquidAccounts = activeAccounts.filter((account) =>
     isLiquidAccountBalance(account) && hasNonZeroAccountBalance(account)
   );
-  const cardAccounts = dashboard.accounts.filter((account) => !isLiquidAccountBalance(account));
+  const cardAccounts = activeAccounts.filter((account) => !isLiquidAccountBalance(account));
   const cardLiabilities = sumCurrencyTotals(cardAccounts, (account) => Math.abs(account.balance));
   const overviewConversions = [
     cardLiabilities,
@@ -2300,7 +2301,7 @@ function App() {
     ...overviewConversions.flatMap((conversion) => conversion.staleCurrencies)
   ])].sort();
   const incompleteLiquiditySources = dashboard.integrationStatus
-    .filter((status) => (status.id === "wise" || status.id === "revolut" || status.id === "slash" || status.id === "mercury") && status.mode === "partial")
+    .filter((status) => (status.id === "revolut" || status.id === "slash" || status.id === "mercury") && status.mode === "partial")
     .map((status) => status.label);
   return (
     <main className="app-shell">
@@ -3331,7 +3332,8 @@ function Overview({
   const hasPayables = dashboard.payables.length > 0;
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
   const assetsTone = currencyTotalsTone(dashboard.metrics.totalAssets);
-  const balanceGroups = accountBalanceGroups(dashboard.accounts.filter(hasNonZeroAccountBalance), dashboard.fxRates);
+  const activeAccounts = dashboard.accounts.filter(account => isActiveBalanceSource(account.source) && hasNonZeroAccountBalance(account));
+  const balanceGroups = accountBalanceGroups(activeAccounts, dashboard.fxRates);
 
   return (
     <div className="overview-grid">
@@ -3360,8 +3362,9 @@ function Overview({
             </div>
           )}
           <SimpleMoneyTable
+            sortPrefix="overviewAccounts"
             nameLabel="Account"
-            rows={dashboard.accounts.filter(hasNonZeroAccountBalance).map((item) => ({
+            rows={activeAccounts.map((item) => ({
               id: item.id,
               name: item.name,
               title: item.name,
@@ -3385,6 +3388,7 @@ function Overview({
               </div>
             </div>
             <SimpleMoneyTable
+              sortPrefix="overviewReceivables"
               nameLabel="Receivable"
               rows={dashboard.receivables.map((item) => ({
                 id: item.id,
@@ -3404,6 +3408,7 @@ function Overview({
               <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalOpenBalance)}>{formatUsdCurrencyTotal(dashboard.metrics.totalOpenBalance, dashboard.fxRates, money(0))}</span>
             </div>
             <SimpleMoneyTable
+              sortPrefix="overviewOpenBalances"
               nameLabel="Balance item"
               rows={dashboard.openBalances.map((item) => ({
                 id: item.id,
@@ -6099,40 +6104,52 @@ function CategoryPieSvg({
 
 function SimpleMoneyTable({
   rows,
+  sortPrefix,
   dense,
   emptyLabel = "No live rows",
   nameLabel = "Account",
   secondaryLabel = "Source"
 }: {
   rows: Array<{ id: string; name: string; title: string; amount: number; currency: string; source: string }>;
+  sortPrefix: string;
   dense?: boolean;
   emptyLabel?: string;
   nameLabel?: string;
   secondaryLabel?: string;
 }) {
+  const [sortKey, setSortKey] = useUrlState<BankDetailAccountSortKey>(`${sortPrefix}Sort`, "name", {
+    allowedValues: ["name", "source", "balance"]
+  });
+  const [direction, setDirection] = useUrlState<SortDirection>(`${sortPrefix}Order`, "asc", {
+    allowedValues: ["asc", "desc"]
+  });
+  const sortedRows = [...rows].sort((left, right) => {
+    const value = (row: typeof left) => sortKey === "balance" ? row.amount : row[sortKey];
+    return compareTableValues(value(left), value(right), direction) || left.id.localeCompare(right.id);
+  });
+  function requestSort(next: BankDetailAccountSortKey) {
+    setDirection(next === sortKey && direction === "asc" ? "desc" : "asc");
+    setSortKey(next);
+  }
   return (
-    <div className={`money-list ${dense ? "dense" : ""}`}>
-      <div className="money-row money-head">
-        <span>{nameLabel}</span>
-        <span>{secondaryLabel}</span>
-        <span>Balance</span>
-      </div>
-      {rows.length > 0 ? (
-        rows.map((row) => (
-          <div className="money-row" key={row.id}>
-            <span className="money-name" title={row.title}>
-              {row.name}
-            </span>
-            <span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span>
-            <span className={`money-amount ${row.amount < 0 ? "danger-text" : ""}`}>
-              {money(row.amount, row.currency)}
-            </span>
-          </div>
-        ))
-      ) : (
-        <div className="money-empty">{emptyLabel}</div>
-      )}
-    </div>
+    <table className={`money-list ${dense ? "dense" : ""}`}>
+      <thead>
+        <tr className="money-row money-head">
+          <SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="name">{nameLabel}</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} direction={direction} onSort={requestSort} sortKey="source">{secondaryLabel}</SortableTableHead>
+          <SortableTableHead activeSortKey={sortKey} className="amount" direction={direction} onSort={requestSort} sortKey="balance">Balance</SortableTableHead>
+        </tr>
+      </thead>
+      <tbody>
+        {sortedRows.length > 0 ? sortedRows.map((row) => (
+          <tr className="money-row" key={row.id}>
+            <td className="money-name" title={row.title}>{row.name}</td>
+            <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
+            <td className={`money-amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
+          </tr>
+        )) : <tr><td className="money-empty" colSpan={3}>{emptyLabel}</td></tr>}
+      </tbody>
+    </table>
   );
 }
 

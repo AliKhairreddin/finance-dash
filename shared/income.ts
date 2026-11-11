@@ -1,4 +1,5 @@
 import { wiseEntityFromAccountName } from "./wiseEntities";
+import { isActiveBalanceSource } from "./banks";
 import type {
   AccountBalance,
   AiInvoicePaymentMatch,
@@ -628,7 +629,7 @@ export function calculateApproximateUsdTotals(
   let accountsUsd = 0;
   let holdingsUsd = 0;
 
-  for (const account of accounts.filter(isLiquidAccountBalance)) {
+  for (const account of accounts.filter(account => isActiveBalanceSource(account.source) && isLiquidAccountBalance(account))) {
     const asset = account.currency.toUpperCase();
     const quote = rateByAsset.get(asset);
     const rate = asset === "USD" ? 1 : quote?.rateUsd;

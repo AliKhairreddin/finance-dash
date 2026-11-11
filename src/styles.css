@@ -2302,6 +2302,23 @@ th.amount .sortable-table-heading {
 .money-list {
   display: grid;
   width: 100%;
+  border-collapse: collapse;
+}
+
+.money-list th,
+.money-list td {
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.money-list td.money-amount {
+  text-align: right;
+}
+
+.money-list td.money-empty {
+  display: block;
+  padding: 14px 12px;
 }
 
 .money-row {

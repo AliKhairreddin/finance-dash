@@ -1,7 +1,7 @@
 import { fetchFlexActivityBatch, flexRefreshMs, FlexRateLimitError } from "../shared/flexApi";
 import { flexCardObservations, flexBalanceObservations } from "../shared/flexAlerts";
 import { handleTrackerApi, runTrackerMaintenance, deliverTrackerNotifications, trackerTelegramCommand } from "./receivablesTracker";
-import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
+import { isActiveBalanceSource, isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { meritHistoryKey, validateMeritHistory } from "../shared/meritHistory";
 import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
 import { syncStatementRevolutLmd } from "./statementRevolutLmd";
@@ -4212,7 +4212,7 @@ export async function getTelegramSlashRejectedCardsReport(env: Env, asOf = Date.
 
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
-    .filter(connection => ["wise", "revolut", "mercury", "slash", "flex"].includes(connection.source));
+    .filter(connection => isActiveBalanceSource(connection.source) && ["revolut", "mercury", "slash", "flex"].includes(connection.source));
   const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, {
     serviceToken: getConvexServiceToken(env), connections
   });
@@ -8618,7 +8618,7 @@ async function telegramReadCommand(
   }
   if (command === "balances") {
     const filter = (args || "all").toLowerCase();
-    if (!["all", "slash", "wise", "revolut", "amex", "mercury", "flex", "holdings"].includes(filter)) {
+    if (!["all", "slash", "revolut", "amex", "mercury", "flex", "holdings"].includes(filter)) {
       throw new ApiError(400, telegramHelp.balances);
     }
     if (filter === "slash") {
@@ -8632,7 +8632,7 @@ async function telegramReadCommand(
     }
     const lines = filter === "holdings"
       ? snapshot.holdings.map((holding) => `${holding.name}: ${holding.balance.toLocaleString("en-US")} ${holding.asset}`)
-      : snapshot.accounts.filter((account) => filter === "all" || account.source === filter).map((account) =>
+      : snapshot.accounts.filter((account) => isActiveBalanceSource(account.source) && (filter === "all" || account.source === filter)).map((account) =>
           `${account.name}: ${telegramMoney(account.balance, account.currency)} · ${account.source}`
         );
     return telegramList("💰 Balances", lines, "No balances match this filter.");
