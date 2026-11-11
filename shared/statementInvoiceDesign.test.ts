@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, invoiceDesignStyles, type InvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, invoiceAccentColors, invoiceDesignStyles, type InvoiceDesign, invoiceIssuerKey, validateInvoiceCopy, validateInvoiceDesign } from "./statementInvoiceDesign";
 import { statementCompanies } from "./statements";
 
 test("issuer designs distinguish our companies and resolve supplier aliases across buyers", () => {
@@ -55,4 +55,12 @@ test("supplier design allocation uses distinct layouts and colors before reusing
   for (const design of saved) assert.deepEqual(allocateExpenseInvoiceDesign(expenseInvoiceDesign(design.name, []), saved), design);
   const next = allocateExpenseInvoiceDesign(expenseInvoiceDesign("Another supplier", []), saved);
   assert(!saved.some(d => d.key === next.key || d.accent === next.accent));
+});
+test("supplier color panels keep readable text on both dark and light accent colors", () => {
+  const luminance = (hex: string) => [1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16) / 255).map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+  const contrast = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
+  for (const accent of ["#ffffff", "#000000", "#ffff00", "#195cc7", "#8a4a22", "#12804a", ...Array.from({ length: 200 }, (_, i) => expenseInvoiceDesign(`Supplier ${i}`, []).accent)]) {
+    const colors = invoiceAccentColors(accent);
+    assert(contrast(accent, colors.text) >= 4.5, `Text must remain legible on ${accent}`);
+  }
 });

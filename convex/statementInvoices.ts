@@ -7,7 +7,7 @@ import { statementCompany } from "./statementSchema";
 import { normalizeStatementActor, statementAmountDecimal } from "../shared/statements";
 import { invoiceLayout, invoiceSelectionLimit, invoiceText, validateInvoiceDraft, validateInvoiceAi, type InvoiceDraft, invoiceCompanyKey, validateInvoicePair, plainInvoiceParties, invoiceTotals, validateInvoiceGenerationOptions } from "../shared/statementInvoices";
 import { paginationOptsValidator } from "convex/server";
-import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, validateInvoiceDesign, invoiceIssuerKey } from "../shared/statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, allocateExpenseInvoiceDesign, validateInvoiceDesign, invoiceIssuerKey, type InvoiceDesign } from "../shared/statementInvoiceDesign";
 import { statementCompanies } from "../shared/statements";
 const auth = { serviceToken: v.string(), actor: v.string() };
 async function access(ctx: QueryCtx | MutationCtx, a: { serviceToken: string; actor: string }, companyId?: string) {
@@ -26,6 +26,13 @@ async function addressesFor(ctx: QueryCtx | MutationCtx, companyId: Doc<"stateme
 async function issuer(ctx: QueryCtx | MutationCtx, companyId: Doc<"statementInvoiceTemplates">["companyId"], name: string) {
   const ours = statementCompanies.find(c => c.id === companyId)!;
   return invoiceIssuerKey(name, companyId, invoiceCompanyKey(name) === invoiceCompanyKey(ours.name) ? "in" : "out", await addressesFor(ctx, companyId));
+}
+async function sharedSupplierDesign(ctx: QueryCtx | MutationCtx, base: InvoiceDesign): Promise<InvoiceDesign> {
+  const alias = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", base.key)).unique();
+  if (!alias?.aliasOf) return base;
+  const target = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", alias.aliasOf!)).unique();
+  if (!target || target.aliasOf) throw new ConvexError("Review the shared supplier design");
+  return validateInvoiceDesign(JSON.parse(target.designJson));
 }
 async function exampleFor(ctx: QueryCtx | MutationCtx, member: Doc<"statementMembers">, issuerKey: string) {
   const rows = await ctx.db.query("statementInvoiceTemplates").withIndex("by_issuer_approved", q => q.eq("issuerKey", issuerKey).eq("approved", true)).order("desc").take(100);
@@ -182,7 +189,7 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   if (new Set(rows.map(r => invoiceIssuerKey(r!.counterparty ?? "", companyId, "out", addresses))).size > 1) throw new ConvexError("Choose transactions with the same other company for one invoice");
   if (!pair) throw new ConvexError("Enter approved company and counterparty details");
   if (policy.legalName?.trim() && policy.legalAddress?.trim()) pair.ours = { name: policy.legalName, address: policy.legalAddress, vat: policy.vat ?? "" };
-  const supplierDesign = documentType === "internal_support" ? expenseInvoiceDesign(pair.other.name, addresses) : null;
+  const supplierDesign = documentType === "internal_support" ? await sharedSupplierDesign(ctx, expenseInvoiceDesign(pair.other.name, addresses)) : null;
   const issuerKey = supplierDesign?.key ?? `our:${companyId}`, sellerName = pair.ours.name;
   // Supplier-specific expense layouts retain our legal issuer and never copy supplier branding.
   const parties = plainInvoiceParties(pair, "in");
@@ -192,7 +199,7 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
     if (supplierDesign) {
       const saved = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.gte("issuerKey", "expense:supplier:").lt("issuerKey", "expense:supplier;" )).take(501);
       if (saved.length > 500) throw new ConvexError("Review the supplier design catalogue before adding more designs");
-      Object.assign(supplierDesign, allocateExpenseInvoiceDesign(supplierDesign, saved.map(row => JSON.parse(row.designJson))));
+      Object.assign(supplierDesign, allocateExpenseInvoiceDesign(supplierDesign, saved.filter(row => !row.aliasOf).map(row => JSON.parse(row.designJson))));
     }
     const template = supplierDesign?.template ?? (["corporate","minimal","technology","insurance","professional_services","retail","subscription"].includes(policy.businessCategory) ? policy.businessCategory : defaultInvoiceDesign(issuerKey,sellerName).template!);
     const designJson=JSON.stringify({...(supplierDesign ?? defaultInvoiceDesign(issuerKey,sellerName)),template});
@@ -289,6 +296,27 @@ export const history = query({args:{...auth,id:v.id("statementInvoices")},return
 }});
 
 // Administrator-only rendering maintenance. Financial snapshots and links stay fixed.
+export const shareSupplierDesign = internalMutation({
+  args: { actor: v.string(), aliasKey: v.string(), targetKey: v.string(), expectedAliasVersion: v.number(), expectedTargetVersion: v.number() },
+  returns: v.boolean(),
+  handler: async (ctx, a) => {
+    const actor = normalizeStatementActor(a.actor);
+    const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", actor)).unique();
+    if (!member?.manage) throw new ConvexError("Statement administrator required");
+    requirePermission(member, "settings");
+    if (a.aliasKey === a.targetKey || ![a.aliasKey, a.targetKey].every(key => key.startsWith("expense:supplier:") && key.length <= 300)) throw new ConvexError("Choose two different saved supplier designs");
+    const alias = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", a.aliasKey)).unique();
+    const target = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", a.targetKey)).unique();
+    if (!alias || !target || target.aliasOf) throw new ConvexError("Choose an existing primary supplier design");
+    if (alias.aliasOf === a.targetKey && alias.version === a.expectedAliasVersion + 1) return false;
+    if (alias.aliasOf || alias.locked || target.locked || alias.version !== a.expectedAliasVersion || target.version !== a.expectedTargetVersion) throw new ConvexError("The supplier designs changed; review them again");
+    if (await ctx.db.query("statementInvoiceDesigns").withIndex("by_aliasOf", q => q.eq("aliasOf", alias.issuerKey)).first()) throw new ConvexError("A shared design cannot become another alias");
+    await ctx.db.patch(alias._id, { aliasOf: target.issuerKey, version: a.expectedAliasVersion + 1 });
+    await ctx.db.insert("statementAudit", { actor, entityType: "template", entityId: alias.issuerKey, action: "supplier_design_shared", details: JSON.stringify({ targetKey: target.issuerKey, previousDesignJson: alias.designJson, previousVersion: alias.version, targetVersion: target.version }), createdAt: new Date().toISOString() });
+    return true;
+  },
+});
+
 export const replaceRenderedPdf = internalMutation({
   args: {
     actor: v.string(), id: v.id("statementInvoices"), expectedRevision: v.number(),
@@ -314,7 +342,7 @@ export const replaceRenderedPdf = internalMutation({
         const transaction = await ctx.db.get(source.transactionId);
         if (!transaction || transaction.direction !== "out" || transaction.companyId !== row.companyId || transaction.financialAccountId !== row.financialAccountId) throw new ConvexError("Supplier designs require matching outgoing transactions");
         if (!transaction.counterparty?.trim()) throw new ConvexError("Review the supplier identity before refreshing its design");
-        const expected = expenseInvoiceDesign(transaction.counterparty, addresses);
+        const expected = await sharedSupplierDesign(ctx, expenseInvoiceDesign(transaction.counterparty, addresses));
         if (design.key !== expected.key || design.name !== expected.name) throw new ConvexError("The design belongs to a different supplier");
       }
     }
@@ -338,6 +366,7 @@ export const replaceRenderedPdf = internalMutation({
     let templateVersion = row.templateVersion;
     if (design) {
       const saved = await ctx.db.query("statementInvoiceDesigns").withIndex("by_issuer", q => q.eq("issuerKey", design.key)).unique();
+      if (saved?.aliasOf) throw new ConvexError("Use the shared supplier design");
       const version = saved?.version ?? 0, designJson = JSON.stringify(design), same = saved?.designJson === designJson;
       if (version !== a.expectedDesignVersion && !(same && version === a.expectedDesignVersion! + 1)) throw new ConvexError("The supplier design changed; prepare the files again");
       if (!same) {

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { invoiceHtml } from "../worker/statementInvoicePdf";
 import {
   invoiceDesignStyles,
-  defaultInvoiceDesign,
+  expenseInvoiceDesign,
 } from "../shared/statementInvoiceDesign";
 import { invoiceTotals, type InvoiceDraft } from "../shared/statementInvoices";
 import { PDFDocument } from "pdf-lib";
@@ -35,7 +35,7 @@ try {
       ),
     };
     const design = {
-      ...defaultInvoiceDesign("our:lovemedo", "LoveMeDo B.V. — SYNTHETIC"),
+      ...expenseInvoiceDesign("Synthetic Hosting Company", []),
       template,
     };
     const page = await browser.newPage();

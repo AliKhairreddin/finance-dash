@@ -38,8 +38,18 @@ export function expenseInvoiceDesign(name: string, addresses: InvoiceAddress[]):
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
   // A stable supplier palette and layout, independent of the paying company.
   // These are internal record designs, without supplier logos or copied branding.
-  const accent = `#${[0, 8, 16].map(shift => (48 + ((hash >>> shift) & 255) % 105).toString(16).padStart(2, "0")).join("")}`;
+  const hue = (hash % 360) / 60, saturation = (65 + ((hash >>> 8) % 20)) / 100, lightness = (30 + ((hash >>> 16) % 10)) / 100;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation, x = chroma * (1 - Math.abs(hue % 2 - 1)), m = lightness - chroma / 2;
+  const rgb = [[chroma,x,0],[x,chroma,0],[0,chroma,x],[0,x,chroma],[x,0,chroma],[chroma,0,x]][Math.floor(hue)];
+  const accent = `#${rgb.map(channel => Math.round((channel + m) * 255).toString(16).padStart(2, "0")).join("")}`;
   return { ...defaultInvoiceDesign(key, canonical), accent };
+}
+export function invoiceAccentColors(accent: string) {
+  const rgb = [1, 3, 5].map(start => parseInt(accent.slice(start, start + 2), 16));
+  const mix = (target: number, amount: number) => `#${rgb.map(c => Math.round(c + (target - c) * amount).toString(16).padStart(2, "0")).join("")}`;
+  const linear = rgb.map(c => c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4);
+  const luminance = linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+  return { soft: mix(255, 0.92), ink: mix(0, 0.3), text: luminance > 0.179 ? "#000000" : "#ffffff" };
 }
 export function allocateExpenseInvoiceDesign(base: InvoiceDesign, saved: InvoiceDesign[]): InvoiceDesign {
   const existing = saved.find(design => design.key === base.key);

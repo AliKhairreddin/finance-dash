@@ -8,7 +8,7 @@ const modules = { "../convex/statementInvoices.ts": () => import("../convex/stat
 async function fixture() {
   const t = convexTest(schema, modules);
   const saved = await t.run(async ctx => {
-    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: ["inch-engineering"], manage: true, permissions: ["generate"] });
+    await ctx.db.insert("statementMembers", { actor: "Ali", companyIds: ["inch-engineering"], manage: true, permissions: ["generate", "settings"] });
     await ctx.db.insert("statementMembers", { actor: "Alaa", companyIds: ["inch-engineering"], manage: false, permissions: ["generate"] });
     const expectedStorageId = await ctx.storage.store(new Blob(["%PDF-old"], { type: "application/pdf" }));
     const storageId = await ctx.storage.store(new Blob(["%PDF-new-render"], { type: "application/pdf" }));
@@ -98,4 +98,26 @@ test("older saved outgoing files can adopt a supplier design without inventing a
   assert.equal(result.documentId, null);
   const after = await snapshot(); assert.equal(after.invoice!.draftJson, before.invoice!.draftJson); assert.equal(after.invoice!.sourceJson, before.invoice!.sourceJson);
   assert.deepEqual(after.transaction, before.transaction); assert.deepEqual(after.link, before.link);
+});
+test("sharing supplier designs preserves names and financial records and refreshes aliases through the primary design", async () => {
+  const { t, args, transactionId, snapshot } = await fixture();
+  const alias = expenseInvoiceDesign("Nespresso Amstelveen NLD Apple Pay", []), target = expenseInvoiceDesign("NESPRESSO NEDERLAND B.V.", []);
+  await t.run(async ctx => {
+    await ctx.db.patch(transactionId, { counterparty: alias.name });
+    for (const design of [alias, target]) await ctx.db.insert("statementInvoiceDesigns", { issuerKey: design.key, designJson: JSON.stringify(design), version: 1, createdAt: 1 });
+  });
+  const before = await snapshot(), command = { actor: "Ali", aliasKey: alias.key, targetKey: target.key, expectedAliasVersion: 1, expectedTargetVersion: 1 };
+  await assert.rejects(t.mutation(internal.statementInvoices.shareSupplierDesign, { ...command, actor: "Alaa" }), /administrator/);
+  await assert.rejects(t.mutation(internal.statementInvoices.shareSupplierDesign, { ...command, expectedAliasVersion: 0 }), /changed/);
+  assert.equal(await t.mutation(internal.statementInvoices.shareSupplierDesign, command), true);
+  assert.deepEqual(await snapshot(), before);
+  assert.equal(await t.mutation(internal.statementInvoices.shareSupplierDesign, command), false);
+  await assert.rejects(t.mutation(internal.statementInvoices.shareSupplierDesign, { ...command, aliasKey: target.key, targetKey: alias.key }), /primary/);
+  const colorful = { ...target, accent: "#8a4a22" };
+  await t.mutation(internal.statementInvoices.replaceRenderedPdf, { ...args, replacementDesignJson: JSON.stringify(colorful), expectedDesignVersion: 1 });
+  const after = await snapshot();
+  assert.deepEqual(after.transaction, before.transaction); assert.deepEqual(after.link, before.link);
+  assert.equal(after.invoice!.draftJson, before.invoice!.draftJson);
+  assert.deepEqual(JSON.parse(after.invoice!.plainLayoutJson!).design, colorful);
+  assert.equal(await t.mutation(internal.statementInvoices.shareSupplierDesign, command), false);
 });

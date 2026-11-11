@@ -19,6 +19,8 @@ Outgoing PDFs omit added document headings, explanatory sentences and provenance
 
 Each canonical supplier receives a saved layout, accent, typography and header treatment. New supplier allocation uses the least-used layout and an unused accent; the first nine suppliers receive nine distinct layouts. Existing suppliers reuse their saved design across payments and buying companies. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design. Normal regeneration creates a new document version. An explicit administrator wording refresh changes only the rendered PDF and retains the original storage object in the audit history.
 
+Supplier designs use saturated accents with coordinated pale panels, colored headers/tables/totals, and contrast-checked text. Saved colors and layouts remain stable. A design-only alias can point another saved supplier name to one primary design without changing addresses, printed names, source transactions or accounting identity. Both Nespresso names share the Netherlands design. Alias chains and cycles are rejected; the alias keeps its previous design in storage and the audit history.
+
 Generation uses saved transaction evidence and approved details without an AI call. Reading an uploaded invoice example remains a separate AI-assisted operation.
 
 ## Identity evidence and remaining gaps
@@ -54,5 +56,7 @@ The internal `replaceRenderedPdf` mutation checks administrator scope, document 
 ## Apply supplier designs to saved PDFs
 
 Run `npx tsx scripts/refresh-statement-invoice-pdfs.ts --prepare-designs` to prepare all saved outgoing PDFs with distinct supplier layouts. The manifest retains each original PDF and financial snapshot, records the design catalogue versions, and checks that the redesigned files preserve the original text and all document values. It preserves original metadata labels on older PDFs. Review the rendered pages, then apply that manifest with `--apply <manifest.json>`.
+
+Preparation preserves existing supplier layouts and colors. For an approved palette or shared-design change, pass a JSON plan after `--prepare-designs`, with `accents` mapping saved supplier design keys to hex colors and `aliases` containing `{aliasKey, targetKey}` pairs. Preparation is read-only; applying the reviewed manifest saves version-checked design links and PDFs. Shared names always resolve the current primary design for future generation, while past document snapshots remain unchanged unless explicitly refreshed.
 
 The administrator mutation validates the supplier against each outgoing source transaction and saves the reusable supplier design together with the updated file and layout snapshot. It rejects concurrent changes, mismatched suppliers, copied-image layouts and unapproved logos. Older generated PDFs without document attachments keep that structure. Neither allocation links nor numbers, dates, amounts, tax or document states change. Prior layouts and storage IDs remain in the audit history.

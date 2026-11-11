@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
 import { statementCompanies, statementPermissions } from "../shared/statements";
+import { expenseInvoiceDesign } from "../shared/statementInvoiceDesign";
 process.env.CONVEX_SERVICE_TOKEN = "invoice-test";
 const auth = { serviceToken: "invoice-test", actor: "Ali" };
 const modules = { "../convex/statements.ts": () => import("../convex/statements"), "../convex/_generated/server.ts": () => import("../convex/_generated/server"), "../convex/statementInvoices.ts": () => import("../convex/statementInvoices") };
@@ -136,6 +137,29 @@ test("missing supplier addresses honor saved aliases, review flags and private c
   assert.equal((await t.query(api.statements.listTransactions, { ...auth, companyId: "artec" })).transactions[0].counterpartyAddressMissing, true);
   await t.mutation(api.statements.saveAddress, { ...args, id: contact, reviewNote: "Wrong company" });
   assert.equal((await t.query(api.statements.listTransactions, { ...auth, companyId: "amg-holding" })).transactions[0].counterpartyAddressMissing, true);
+});
+test("Nespresso names reuse one saved design across buyers and future palette updates without renaming document parties", async () => {
+  const { t, input, other } = await setup();
+  const alias = expenseInvoiceDesign("Nespresso Amstelveen NLD Apple Pay", []), target = { ...expenseInvoiceDesign("NESPRESSO NEDERLAND B.V.", []), accent: "#8a4a22", template: "subscription" as const };
+  const targetId = await t.run(async ctx => {
+    await ctx.db.patch(input.ids[0], { direction: "out", counterparty: alias.name });
+    await ctx.db.patch(other, { direction: "out", counterparty: target.name });
+    await ctx.db.insert("statementInvoiceDesigns", { issuerKey: alias.key, aliasOf: target.key, designJson: JSON.stringify(alias), version: 2, createdAt: 1 });
+    return ctx.db.insert("statementInvoiceDesigns", { issuerKey: target.key, designJson: JSON.stringify(target), version: 2, createdAt: 1 });
+  });
+  const create = (name: string) => ({ ...input, requestId: crypto.randomUUID(), plainDetailsJson: JSON.stringify({ ...pair, other: { ...pair.other, name } }) });
+  const first = await t.mutation(api.statementInvoices.begin, create(alias.name));
+  const second = await t.mutation(api.statementInvoices.begin, { ...create(target.name), ids: [other] });
+  for (const [id, name] of [[first, alias.name], [second, target.name]] as const) {
+    const row = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id }));
+    assert.deepEqual(row.layout.design, target); assert.equal(row.draft.customer, name); assert.equal(row.draft.customerAddress, pair.other.address);
+  }
+  await t.mutation(api.statementInvoices.discard, { ...auth, id: first });
+  const revised = { ...target, accent: "#7e421d" };
+  await t.run(ctx => ctx.db.patch(targetId, { designJson: JSON.stringify(revised), version: 3 }));
+  const third = await t.mutation(api.statementInvoices.begin, create(alias.name));
+  const current = JSON.parse(await t.query(api.statementInvoices.get, { ...auth, id: third }));
+  assert.deepEqual(current.layout.design, revised); assert.equal(current.templateVersion, 3);
 });
 test("no-example invoices save confirmed company-pair details and preserve the correct payment direction", async () => {
   const { t, input, templateId } = await setup();

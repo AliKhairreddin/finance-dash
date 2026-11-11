@@ -9,14 +9,17 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { InvoiceDraft, InvoiceTemplateLayout, InvoicePresentation } from "../shared/statementInvoices";
-import { allocateExpenseInvoiceDesign, expenseInvoiceDesign, type InvoiceDesign } from "../shared/statementInvoiceDesign";
+import { allocateExpenseInvoiceDesign, expenseInvoiceDesign, validateInvoiceDesign, type InvoiceDesign } from "../shared/statementInvoiceDesign";
 import { invoiceLayout, invoiceTotals } from "../shared/statementInvoices";
 import { invoiceHtml } from "../worker/statementInvoicePdf";
 import { productionEnvironment, productionServiceEnvironment, productionUrl } from "./deploy-production";
 
 type Saved = { _id: Id<"statementInvoices">; number: string; documentType?: string; state: string; revision: number; storageId?: Id<"_storage">; pdfUrl?: string; templateUrl?: string; draft: InvoiceDraft; layout: InvoiceTemplateLayout; draftJson: string; sourceJson: string; plainLayoutJson?: string };
 type Item = { saved: Saved; beforePath: string; afterPath: string; sha256: string; design?: InvoiceDesign; presentation?: InvoicePresentation; expectedDesignVersion?: number; storageId?: Id<"_storage">; applied?: boolean };
-type Manifest = { designRefresh: boolean; productionUrl: string; items: Item[]; skipped: number; createdAt: string };
+type DesignAlias = { aliasKey: string; targetKey: string; expectedAliasVersion: number; expectedTargetVersion: number };
+type DesignPlan = { aliases?: Array<{ aliasKey: string; targetKey: string }>; accents?: Record<string, string> };
+type Registry = { issuerKey: string; aliasOf?: string; version?: number; designJson: string };
+type Manifest = { designRefresh: boolean; productionUrl: string; items: Item[]; skipped: number; createdAt: string; aliases?: DesignAlias[] };
 const [mode, input] = process.argv.slice(2);
 if (!["--prepare", "--prepare-designs", "--apply"].includes(mode) || mode === "--apply" && !input) throw Error("Use --prepare, --prepare-designs or --apply <reviewed-manifest.json>");
 const env = productionServiceEnvironment(productionEnvironment(process.env));
@@ -40,6 +43,25 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
   const dir = resolve(`.local/statement-pdf-refresh-${Date.now()}`); mkdirSync(dir, { recursive: true, mode: 0o700 });
   const listing = JSON.parse(await client.query(api.statementInvoices.list, auth)); assert.equal(listing.truncated, false, "Use paginated maintenance for more than 100 documents");
   const manifest: Manifest = { designRefresh, productionUrl, items: [], skipped: 0, createdAt: new Date().toISOString() };
+  const registry: Registry[] = designRefresh ? run(["--inline-query", 'return await ctx.db.query("statementInvoiceDesigns").take(501);']) : [];
+  assert(registry.length <= 500, "Review the larger design catalogue separately"); save(`${dir}/designs-before.json`, registry);
+  const plan: DesignPlan = designRefresh && input ? JSON.parse(readFileSync(resolve(input), "utf8")) : {};
+  const aliasTargets = new Map(registry.filter(row => row.aliasOf).map(row => [row.issuerKey, row.aliasOf!]));
+  manifest.aliases = (plan.aliases ?? []).map(({ aliasKey, targetKey }) => {
+    const alias = registry.find(row => row.issuerKey === aliasKey), target = registry.find(row => row.issuerKey === targetKey);
+    assert(alias && target && aliasKey !== targetKey && !alias.aliasOf && !target.aliasOf, "Choose two existing primary designs");
+    assert([aliasKey, targetKey].every(key => key.startsWith("expense:supplier:")), "Only supplier designs can share layouts");
+    assert(![...aliasTargets.values()].includes(aliasKey), "A shared design cannot become another alias");
+    aliasTargets.set(aliasKey, targetKey);
+    return { aliasKey, targetKey, expectedAliasVersion: alias.version ?? 0, expectedTargetVersion: target.version ?? 0 };
+  });
+  assert([...aliasTargets.values()].every(key => !aliasTargets.has(key)), "Shared designs cannot form chains");
+  const resolveDesign = (base: InvoiceDesign) => {
+    const key = aliasTargets.get(base.key);
+    if (!key) return base;
+    const target = registry.find(row => row.issuerKey === key); assert(target, "Shared design missing");
+    return validateInvoiceDesign(JSON.parse(target.designJson));
+  };
   const entries: Array<{ saved: Saved; base?: InvoiceDesign }> = [];
   for (const row of listing.invoices) {
     const saved = await read(row.id);
@@ -47,17 +69,22 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
     if (designRefresh) {
       const setup = JSON.parse(await client.query(api.statementInvoices.setup, { ...auth, ids: JSON.parse(saved.sourceJson).map((source: { transactionId: Id<"statementTransactions"> }) => source.transactionId) }));
       if (setup.direction !== "out") { manifest.skipped++; continue; }
-      const base = expenseInvoiceDesign(setup.sources[0].counterparty, setup.addresses);
-      assert(setup.sources.every((source: { counterparty: string }) => expenseInvoiceDesign(source.counterparty, setup.addresses).key === base.key), "Review mixed supplier identities");
+      const base = resolveDesign(expenseInvoiceDesign(setup.sources[0].counterparty, setup.addresses));
+      assert(setup.sources.every((source: { counterparty: string }) => resolveDesign(expenseInvoiceDesign(source.counterparty, setup.addresses)).key === base.key), "Review mixed supplier identities");
       entries.push({ saved, base });
     } else entries.push({ saved });
   }
-  const registry: Array<{ issuerKey: string; version?: number; designJson: string }> = designRefresh ? run(["--inline-query", 'return await ctx.db.query("statementInvoiceDesigns").take(501);']) : [];
-  assert(registry.length <= 500, "Review the larger design catalogue separately"); save(`${dir}/designs-before.json`, registry);
   const selected = new Map(entries.filter(entry => entry.base).map(entry => [entry.base!.key, entry.base!]));
-  const assigned: InvoiceDesign[] = registry.filter(row => !selected.has(row.issuerKey)).map(row => JSON.parse(row.designJson));
+  assert(Object.keys(plan.accents ?? {}).every(key => selected.has(key)), "Every selected color must have a saved PDF to refresh");
+  const assigned: InvoiceDesign[] = registry.filter(row => !selected.has(row.issuerKey) && !aliasTargets.has(row.issuerKey)).map(row => JSON.parse(row.designJson));
   const designs = new Map<string, InvoiceDesign>();
-  for (const [key, base] of [...selected.entries()].sort(([a], [b]) => a.localeCompare(b))) { const design = allocateExpenseInvoiceDesign(base, assigned); assigned.push(design); designs.set(key, design); }
+  for (const [key, base] of [...selected.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const saved = registry.find(row => row.issuerKey === key);
+    const design = saved ? validateInvoiceDesign(JSON.parse(saved.designJson)) : allocateExpenseInvoiceDesign(base, assigned);
+    if (plan.accents?.[key]) design.accent = plan.accents[key];
+    validateInvoiceDesign(design); assigned.push(design); designs.set(key, design);
+  }
+  assert.equal(new Set([...designs.values()].map(design => JSON.stringify([design.template, design.accent, design.style, design.font]))).size, designs.size, "Each supplier needs its own design");
   const browser = await chromium.launch();
   try {
     for (const { saved, base } of entries) {
@@ -106,6 +133,7 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
     assert.deepEqual(JSON.parse(current.plainLayoutJson!), item.applied && item.design ? invoiceLayout({ ...item.saved.layout, design: item.design, presentation: item.presentation }) : JSON.parse(item.saved.plainLayoutJson!));
   }
   const before = references(manifest.items); save(manifestPath.replace("manifest.json", `references-apply-${Date.now()}.json`), before);
+  for (const alias of manifest.aliases ?? []) run(["statementInvoices:shareSupplierDesign", JSON.stringify({ actor: auth.actor, ...alias })]);
   for (const item of manifest.items) {
     if (!item.storageId) {
       const url = await client.mutation(api.statements.generateUploadUrl, { serviceToken: auth.serviceToken });
