@@ -8171,7 +8171,7 @@ th.amount .sortable-table-heading {
 
 .bank-source-select {
   display: block;
-  width: 150px;
+  width: 180px;
 }
 
 .wise-entity-select {
@@ -8179,11 +8179,28 @@ th.amount .sortable-table-heading {
 }
 
 .bank-navigation-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
 }
 
 .bank-navigation-menu {
+  min-width: 200px;
   padding: 4px;
+}
+
+.bank-navigation-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bank-navigation-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
 }
 
 .bank-navigation-menu a {

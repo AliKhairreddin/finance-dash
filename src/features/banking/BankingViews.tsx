@@ -42,7 +42,6 @@ import {
   wiseEntityLabel,
   wiseEntityShortLabel
 } from "../../../shared/wiseEntities";
-import { BankSourceFilter } from "./BankSourceFilter";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./SlashVirtualAccountFilter";
 import {
   BankActivityViewToggle,
@@ -356,12 +355,8 @@ export function AllBankTransactionsView({
               value={query}
               onChange={setQuery}
             />
-            <FilterPopover activeCount={bankActiveFilters.length} title="Bank transaction filters">
+            <FilterPopover activeCount={bankActiveFilters.filter(filter => !filter.key.startsWith("source-")).length} title="Bank transaction filters">
               <FilterFieldGroup title="Transaction">
-                <label>
-                  Source
-                  <BankSourceFilter value={source} onChange={setSource} />
-                </label>
                 <label>
                   Account
                   <NativeSelect aria-label="Filter bank transactions by account" value={account} onValueChange={setAccount}>

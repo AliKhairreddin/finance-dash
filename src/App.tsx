@@ -59,7 +59,6 @@ import {
   X
 } from "lucide-react";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
-import { Menu } from "@base-ui/react/menu";
 import {
   Fragment,
   type FormEvent,
@@ -225,6 +224,7 @@ import {
   type BankActivityViewMode
 } from "@/features/banking/BankActivityViews";
 import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions";
+import { BankSourceDropdown } from "@/features/banking/BankSourceDropdown";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
@@ -2130,6 +2130,22 @@ function App() {
     setBankGroupLabel("");
   }
 
+  function changeBankSourceSelection(value: string): void {
+    const sources = selectedBankSources(value);
+    const nextBank = sources.length === 1 ? sources[0] : "all";
+    const period = transactionPageRequestRef.current?.dateRange;
+    if (period) {
+      if (nextBank === "wise") setWiseDateRange(period);
+      else if (nextBank === "revolut") setRevolutDateRange(period);
+      else if (nextBank === "slash") setSlashDateRange(period);
+      else setAllBankDateRange(period);
+    }
+    setAllBankSource(value);
+    setBankAccountFilter("all");
+    clearBankGroupDrilldown();
+    setBankTab(nextBank);
+  }
+
   function changeBankActivityView(view: BankActivityViewMode): void {
     if (view !== "transactions") clearBankGroupDrilldown();
     setBankActivityView(view);
@@ -2473,7 +2489,7 @@ function App() {
           allBankTransactions={allBankTransactions}
           allBankDateRange={allBankDateRange}
           allBankSource={allBankSource}
-          setAllBankSource={setAllBankSource}
+          setAllBankSource={changeBankSourceSelection}
           wiseTransactions={wiseTransactions}
           wiseDateRange={wiseDateRange}
           revolutTransactions={revolutTransactions}
@@ -3817,7 +3833,6 @@ function BanksView({
   const [slashEntityView, setSlashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
   const [, setSlashVirtualAccount] = useSlashVirtualAccountFilter();
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false);
-  const [bankNavigationOpen, setBankNavigationOpen] = useState(false);
 
   const accountsBySource = new Map<BankSource, DashboardSnapshot["accounts"]>();
   const statusBySource = new Map<BankSource, DashboardSnapshot["integrationStatus"][number]>();
@@ -3855,7 +3870,7 @@ function BanksView({
   const relevantIntegrationStatuses = activeSourceStatus
     ? [activeSourceStatus]
     : activeBank === "all"
-      ? bankSources.flatMap((source) => {
+      ? bankSources.filter(source => bankSourceMatches(allBankSource, source.id)).flatMap((source) => {
           const status = statusBySource.get(source.id);
           return status ? [status] : [];
         })
@@ -3951,11 +3966,11 @@ function BanksView({
       : activeSource.label
     : activeBank === "holdings"
       ? "Cash & wallet holdings"
-      : isManualBankSource(activeBank) ? manualBankSources.find(source => source.id === activeBank)!.label : "All bank activity";
+      : isManualBankSource(activeBank) ? manualBankSources.find(source => source.id === activeBank)!.label : allBankSource === "all" ? "All bank activity" : selectedBankSources(allBankSource).map(bankSourceLabel).join(" + ");
 
   useEffect(() => {
     setBankDetailsOpen(false);
-  }, [activeBank, wiseEntityView, slashEntityView, mercuryEntityView]);
+  }, [activeBank, allBankSource, wiseEntityView, slashEntityView, mercuryEntityView]);
 
   const headerMetrics = activeBank === "all" ? (
     <>
@@ -4033,7 +4048,7 @@ function BanksView({
       <section className="bank-details-section">
         <h3>Connected sources</h3>
         <div className="bank-details-summary-grid">
-          {bankSources.map((source) => {
+          {bankSources.filter(source => bankSourceMatches(allBankSource, source.id)).map((source) => {
             const accounts = accountsBySource.get(source.id) ?? [];
             const status = statusBySource.get(source.id);
             const sourceSlashAccounts = source.id === "slash" ? slashAccounts : [];
@@ -4179,35 +4194,7 @@ function BanksView({
                 ))}
               </NativeSelect>
             )}
-            <div className="bank-source-select">
-              <Menu.Root open={bankNavigationOpen} onOpenChange={setBankNavigationOpen}>
-                <Menu.Trigger
-                  aria-label="Bank source"
-                  className="searchable-select-control simple-select-control bank-navigation-trigger"
-                >
-                  <span className="searchable-select-input simple-select-value">
-                    {activeBank === "all" ? "All" : activeSource?.label ?? (isManualBankSource(activeBank) ? activeBankLabel : "Cash & wallets")}
-                  </span>
-                </Menu.Trigger>
-                <Menu.Portal>
-                  <Menu.Positioner align="start" sideOffset={5} className="searchable-select-positioner">
-                    <Menu.Popup aria-label="Banks" className="searchable-select-popup bank-navigation-menu">
-                      {[{ id: "all", label: "All" }, ...bankSources, ...manualBankSources, { id: "holdings", label: "Cash & wallets" }].map((source) => (
-                        <Menu.LinkItem
-                          key={source.id}
-                          className="searchable-select-option"
-                          aria-current={activeBank === source.id ? "page" : undefined}
-                          data-selected={activeBank === source.id ? "" : undefined}
-                          render={<UrlStateLink stateKey="bankView" value={source.id} defaultValue="all" onNavigate={() => setBankNavigationOpen(false)} />}
-                        >
-                          <span className="searchable-select-option-label">{source.label}</span>
-                        </Menu.LinkItem>
-                      ))}
-                    </Menu.Popup>
-                  </Menu.Positioner>
-                </Menu.Portal>
-              </Menu.Root>
-            </div>
+            <BankSourceDropdown activeBank={activeBank} sourceFilter={allBankSource} onChange={setAllBankSource} />
           </div>
         </div>
       </section>
