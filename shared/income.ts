@@ -8,7 +8,6 @@ import type {
   FxRate,
   Holding,
   Invoice,
-  InvoicePaymentPrediction,
   LedgerItem,
   PaymentAllocation,
   PaymentSource,
@@ -302,46 +301,6 @@ export function applyPaymentState(invoices: Invoice[], allocations: PaymentAlloc
     );
     return { ...invoice, status: "paid", paidAt: paidAt || invoice.updatedAt };
   });
-}
-
-export function calculateInvoicePredictions(
-  invoices: Invoice[],
-  allocations: PaymentAllocation[]
-): InvoicePaymentPrediction[] {
-  const paymentHistory = invoices
-    .filter((invoice) => invoice.status === "paid" && invoice.providerId && invoice.paidAt)
-    .flatMap((invoice) => {
-      const invoiceAllocations = allocations.filter((allocation) => allocation.invoiceId === invoice.id);
-      if (invoiceAllocations.length === 0 || invoiceAllocations.some((allocation) => !allocation.transactionId)) return [];
-      return [
-        {
-          providerId: invoice.providerId as string,
-          currency: invoice.currency,
-          paidAt: invoice.paidAt as string,
-          delayDays: calendarDayDifference(invoice.issueDate, invoice.paidAt as string)
-        }
-      ];
-    });
-
-  return invoices
-    .filter((invoice) => invoice.status === "open")
-    .map((invoice) => {
-      const history = paymentHistory
-        .filter((payment) => payment.providerId === invoice.providerId && payment.currency === invoice.currency)
-        .sort((left, right) => right.paidAt.localeCompare(left.paidAt))
-        .slice(0, 5);
-      if (history.length < 5) return { invoiceId: invoice.id, sampleSize: history.length };
-      const delays = history.map((payment) => payment.delayDays).sort((left, right) => left - right);
-      const medianDays = delays[2];
-      return {
-        invoiceId: invoice.id,
-        sampleSize: 5,
-        predictedDate: addDays(invoice.issueDate, medianDays),
-        medianDays,
-        earliestDays: delays[0],
-        latestDays: delays[4]
-      };
-    });
 }
 
 export interface InvoicePaymentMatchCandidateGroup {
@@ -738,12 +697,6 @@ export function hasNonZeroAccountBalance(account: AccountBalance): boolean {
 
 function isPaymentSource(source: Transaction["source"]): source is Extract<PaymentSource, Transaction["source"]> {
   return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
-}
-
-function calendarDayDifference(start: string, end: string): number {
-  const startTime = Date.parse(`${start.slice(0, 10)}T00:00:00Z`);
-  const endTime = Date.parse(`${end.slice(0, 10)}T00:00:00Z`);
-  return Math.max(0, Math.round((endTime - startTime) / dayMs));
 }
 
 function lastDayOfMonth(date: string): string {

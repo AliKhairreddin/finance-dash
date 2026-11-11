@@ -1,3 +1,4 @@
+import { calculatePaymentHistory } from "../shared/paymentForecasts";
 import { validateMeritInvoiceCopy, verifyMeritCopyTaxes } from "../shared/meritInvoiceCopy";
 import { draftKissterraWeek, existingKissterraInvoices, isKissterraPartner, kissterraBillingPartners, validateRevenueInvoiceEdit } from "../shared/kissterraBilling";
 import { replaceLocalMeritInvoice, localInvoiceBackup, localReplacementRunning } from "./meritReplacement";
@@ -143,7 +144,6 @@ import {
   applyPaymentState,
   buildRevenueDraft,
   calculateApproximateUsdTotals,
-  calculateInvoicePredictions,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   incomeAutomationTimezone,
@@ -780,6 +780,7 @@ export async function autoMatchInvoicePayments(): Promise<AutoMatchInvoicePaymen
 export function getSnapshot(): DashboardSnapshot {
   const matchedTransactions = getMatchedTransactions();
   const paymentAwareInvoices = applyPaymentState(invoices, paymentAllocations);
+  const paymentHistory = calculatePaymentHistory({ invoices: paymentAwareInvoices, allocations: paymentAllocations, providers, transactions: getKnownTransactions(), asOfDate: financeOperatingDate() });
   const receivables = [...openInvoiceReceivables(paymentAwareInvoices, paymentAllocations), ...manualReceivables];
   const payables = expensePayables(expenses);
   const metrics = calculateMetrics(accounts, receivables, [], payables, []);
@@ -802,7 +803,8 @@ export function getSnapshot(): DashboardSnapshot {
     invoices: paymentAwareInvoices,
     expenses,
     paymentAllocations,
-    invoicePredictions: calculateInvoicePredictions(paymentAwareInvoices, paymentAllocations),
+    invoicePredictions: paymentHistory.predictions,
+    paymentHistory,
     holdings,
     fxRates,
     approximateUsdTotals,

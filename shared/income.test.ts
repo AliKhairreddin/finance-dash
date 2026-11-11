@@ -6,7 +6,6 @@ import {
   buildRevenueDraft,
   calculateApproximateUsdTotals,
   calculateInvoiceSummaryTotals,
-  calculateInvoicePredictions,
   canCatchUpLebanonIncomeAutomation,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
@@ -556,33 +555,6 @@ test("open invoice receivables group outstanding balances by currency", () => {
       source: "merit"
     }
   ]);
-});
-
-test("payment prediction waits for five confirmed transaction matches and uses their median", () => {
-  const historyInvoices = [5, 7, 9, 20, 6].map((delay, index) =>
-    openInvoice({
-      id: `paid-${index}`,
-      status: "paid",
-      issueDate: `2026-0${index + 1}-01`,
-      sentAt: `2026-0${index + 1}-04T00:00:00.000Z`,
-      paidAt: `2026-0${index + 1}-${String(1 + delay).padStart(2, "0")}T00:00:00.000Z`
-    })
-  );
-  const allocations = historyInvoices.map((invoice, index): PaymentAllocation => ({
-    id: `allocation-${index}`,
-    invoiceId: invoice.id,
-    transactionId: `transaction-${index}`,
-    amount: invoice.amount,
-    currency: invoice.currency,
-    source: "wise",
-    mode: "automatic",
-    paidAt: invoice.paidAt as string,
-    createdAt: invoice.paidAt as string
-  }));
-  const prediction = calculateInvoicePredictions([...historyInvoices, openInvoice()], allocations).at(-1);
-  assert.equal(prediction?.sampleSize, 5);
-  assert.equal(prediction?.medianDays, 7);
-  assert.equal(prediction?.predictedDate, "2026-07-08");
 });
 
 test("a newer monthly accrual removes only its superseded cumulative pull", () => {

@@ -474,10 +474,34 @@ export interface AiInvoicePaymentMatch {
 export interface InvoicePaymentPrediction {
   invoiceId: string;
   sampleSize: number;
+  state: "estimated" | "learning" | "excluded" | "review" | "incomplete";
   predictedDate?: string;
   medianDays?: number;
   earliestDays?: number;
   latestDays?: number;
+}
+
+export interface ClientPaymentHistory {
+  id: string;
+  name: string;
+  currency: string;
+  received: number;
+  receiptCount: number;
+  lastReceipt?: string;
+  receiptIntervalDays?: number;
+  sampleSize: number;
+  medianDays?: number;
+  earliestDays?: number;
+  latestDays?: number;
+}
+
+export interface PaymentHistoryReport {
+  fromDate: string;
+  toDate: string;
+  complete: boolean;
+  unverifiedReceipts: number;
+  clients: ClientPaymentHistory[];
+  predictions: InvoicePaymentPrediction[];
 }
 
 export interface ExpenseDocument {
@@ -771,6 +795,7 @@ export interface DashboardSnapshot {
   expenses: ExpenseRecord[];
   paymentAllocations: PaymentAllocation[];
   invoicePredictions: InvoicePaymentPrediction[];
+  paymentHistory: PaymentHistoryReport;
   holdings: Holding[];
   fxRates: FxRate[];
   approximateUsdTotals: ApproximateUsdTotals;

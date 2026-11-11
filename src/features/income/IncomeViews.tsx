@@ -1,3 +1,5 @@
+import { PaymentForecast } from "./PaymentForecast";
+import { ClientPaymentHistory } from "./ClientPaymentHistory";
 import { InvoiceCopyLines } from "./InvoiceCopyLines";
 import { RevenueInvoiceLines } from "./RevenueInvoiceLines";
 import { MeritSyncButton, QuinStreetMonthlyReport } from "./IncomeSyncControls";
@@ -9,7 +11,6 @@ import {
   Check,
   ChevronRight,
   CircleAlert,
-  Clock3,
   Copy,
   Download,
   Edit3,
@@ -962,6 +963,7 @@ export function InvoicesView({
       "Period end",
       "Issue date",
       "Due date",
+      "Expected payment",
       "Currency",
       "Amount",
       "Invoice status",
@@ -980,6 +982,7 @@ export function InvoicesView({
         row.invoice.periodEnd,
         row.invoice.issueDate,
         row.invoice.dueDate,
+        dashboard.invoicePredictions.find(item => item.invoiceId === row.invoice.id)?.predictedDate,
         row.invoice.currency,
         row.invoice.amount,
         row.invoice.status,
@@ -1284,7 +1287,7 @@ export function InvoicesView({
               <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="cadence">Cadence</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status / match</SortableTableHead>
-              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="forecast">Payment forecast</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="forecast">Expected payment</SortableTableHead>
               <th scope="col">Actions</th>
             </tr></thead>
             <tbody>
@@ -1447,6 +1450,7 @@ export function InvoicesView({
           setSelectedIds([]);
         }}
       />}
+      <ClientPaymentHistory report={dashboard.paymentHistory} />
       {deleteInvoices && <DeleteInvoiceDialog
         invoices={deleteInvoices}
         onClose={() => setDeleteInvoices(null)}
@@ -1459,15 +1463,6 @@ export function InvoicesView({
       />}
     </div>
   );
-}
-
-function PaymentForecast({ invoice, prediction }: { invoice: Invoice; prediction?: DashboardSnapshot["invoicePredictions"][number] }) {
-  if (invoice.status === "draft") return <span className="forecast-copy muted"><Clock3 size={14} /> Forecast starts from issue date</span>;
-  if (invoice.status === "paid") return <span className="forecast-copy good"><Check size={14} /> Paid {invoice.paidAt ? dateLabel(invoice.paidAt) : ""}</span>;
-  const sampleSize = prediction?.sampleSize ?? 0;
-  if (sampleSize < 5) return <span className="forecast-copy learning" title="Forecasting starts after five confirmed matched payments"><Sparkles size={14} /> {5 - sampleSize} more match{5 - sampleSize === 1 ? "" : "es"} needed</span>;
-  if (!prediction?.predictedDate) return <span className="forecast-copy muted"><Clock3 size={14} /> Forecast unavailable</span>;
-  return <span className="forecast-copy"><CalendarClock size={14} /><strong>{dateLabel(prediction.predictedDate)}</strong><small>Median {prediction.medianDays} days · last 5 matched</small></span>;
 }
 
 export function InvoiceEditorDialog({

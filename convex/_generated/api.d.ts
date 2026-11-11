@@ -40,6 +40,7 @@ import type * as mediaSpend from "../mediaSpend.js";
 import type * as meritInvoiceCopySchema from "../meritInvoiceCopySchema.js";
 import type * as meritReplacementSchema from "../meritReplacementSchema.js";
 import type * as meritReplacements from "../meritReplacements.js";
+import type * as paymentForecasts from "../paymentForecasts.js";
 import type * as redtrack from "../redtrack.js";
 import type * as redtrackCache from "../redtrackCache.js";
 import type * as redtrackSchema from "../redtrackSchema.js";
@@ -108,6 +109,7 @@ declare const fullApi: ApiFromModules<{
   meritInvoiceCopySchema: typeof meritInvoiceCopySchema;
   meritReplacementSchema: typeof meritReplacementSchema;
   meritReplacements: typeof meritReplacements;
+  paymentForecasts: typeof paymentForecasts;
   redtrack: typeof redtrack;
   redtrackCache: typeof redtrackCache;
   redtrackSchema: typeof redtrackSchema;

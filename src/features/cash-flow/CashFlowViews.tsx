@@ -1,3 +1,5 @@
+import { PaymentForecast } from "@/features/income/PaymentForecast";
+import { ClientPaymentHistory } from "@/features/income/ClientPaymentHistory";
 import { providerCashFlowLines } from "../../../shared/providerCashFlow";
 import type { MediaFundingApiResponse } from "../../../shared/mediaFunding";
 import { openItemDeletionBlockReason } from "../../../shared/manualReceivables";
@@ -49,7 +51,7 @@ import type {
 } from "../../../shared/types";
 
 type CashFlowLineSortKey = "amount" | "currency" | "included" | "name" | "notes" | "dueDate";
-type OpenReceivableSortKey = "amount" | "dueDate" | "name" | "source" | "status" | "currency" | "notes";
+type OpenReceivableSortKey = "expectedDate" | "amount" | "dueDate" | "name" | "source" | "status" | "currency" | "notes";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
 
@@ -562,6 +564,7 @@ type OpenReceivableRow = {
   amount: number;
   currency: string;
   dueDate?: string;
+  expectedDate?: string;
   notes?: string;
   invoice?: Invoice;
   manual?: LedgerItem;
@@ -587,7 +590,7 @@ export function CashFlowOpenInvoicesView({
   const [query, setQuery] = useUrlState("cashFlowOpenQuery", "");
   const [matchFilter, setMatchFilter] = useUrlState("cashFlowOpenMatch", "all", { allowedValues: ["all", "matched", "unmatched"] });
   const [sortKey, setSortKey] = useUrlState<OpenReceivableSortKey>("cashFlowOpenSort", "dueDate", {
-    allowedValues: ["amount", "dueDate", "name", "source", "status", "currency", "notes"]
+    allowedValues: ["amount", "dueDate", "expectedDate", "name", "source", "status", "currency", "notes"]
   });
   const [sortDirection, setSortDirection] = useUrlState<TableSortDirection>("cashFlowOpenOrder", "asc", {
     allowedValues: ["asc", "desc"]
@@ -613,6 +616,7 @@ export function CashFlowOpenInvoicesView({
         amount: lineItem.amount,
         currency: lineItem.currency,
         dueDate: invoice.dueDate,
+        expectedDate: dashboard.invoicePredictions.find(item => item.invoiceId === invoice.id)?.predictedDate,
         notes: invoice.description,
         invoice
       }];
@@ -624,11 +628,11 @@ export function CashFlowOpenInvoicesView({
       status: "Open",
       amount: item.balance,
       currency: item.currency,
-      dueDate: item.dueDate,
+      expectedDate: item.dueDate,
       notes: item.notes,
       manual: item
     }))
-  ], [dashboard.invoices, dashboard.paymentAllocations, dashboard.providers, dashboard.receivables]);
+  ], [dashboard.invoices, dashboard.paymentAllocations, dashboard.providers, dashboard.receivables, dashboard.invoicePredictions]);
   const visibleRows = rows
     .filter(row => matchFilter === "all" || (matchFilter === "matched" ? Boolean(row.invoice?.transactionId) : !row.invoice?.transactionId))
     .filter((row) => `${row.name} ${row.source} ${row.status} ${row.currency} ${row.notes ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -641,7 +645,7 @@ export function CashFlowOpenInvoicesView({
   function exportRows() {
     const exported = selectedRows.length ? selectedRows : visibleRows;
     const cell = (value: string | number | undefined) => typeof value === "number" ? String(value) : `"${(value ?? "").replace(/^[=+\-@\t\r]/, "'$&").replaceAll('"', '""')}"`;
-    const csv = [["Company / item", "Source", "Status", "Due date", "Amount", "Currency", "Notes"], ...exported.map(row => [row.name, row.source, row.status, row.dueDate, row.amount, row.currency, row.notes])].map(row => row.map(cell).join(",")).join("\r\n");
+    const csv = [["Company / item", "Source", "Status", "Due date", "Expected payment", "Amount", "Currency", "Notes"], ...exported.map(row => [row.name, row.source, row.status, row.dueDate, row.expectedDate, row.amount, row.currency, row.notes])].map(row => row.map(cell).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url; link.download = `open-invoices-${financeOperatingDate()}.csv`;
@@ -730,7 +734,8 @@ export function CashFlowOpenInvoicesView({
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="name">Company / item</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="source">Source</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="status">Status / match</SortableTableHead>
-              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="dueDate">Expected / due</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="dueDate">Due date</SortableTableHead>
+              <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="expectedDate">Expected payment</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} className="amount" direction={sortDirection} onSort={requestSort} sortKey="amount">Amount</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="currency">Currency</SortableTableHead>
               <SortableTableHead activeSortKey={sortKey} direction={sortDirection} onSort={requestSort} sortKey="notes">Notes</SortableTableHead>
@@ -741,10 +746,11 @@ export function CashFlowOpenInvoicesView({
               <td><strong>{row.name}</strong></td>
               <td>{row.source}</td>
               <td><span className={`status-pill invoice-status-${row.invoice?.status ?? "open"}`}>{row.status}</span>{row.invoice?.transactionId && <a href={documentTransactionLink(row.invoice.transactionId)}>View transaction</a>}</td>
-              <td>{dateLabel(row.dueDate)}</td>
+              <td>{row.invoice ? dateLabel(row.dueDate) : "—"}</td>
+              <td>{row.invoice ? <PaymentForecast invoice={row.invoice} prediction={dashboard.invoicePredictions.find(item => item.invoiceId === row.id)} /> : dateLabel(row.expectedDate)}</td>
               <td className="amount"><strong>{money(row.amount, row.currency)}</strong></td>
               <td>{row.currency}</td>
-              <td>{row.notes || "—"}</td>
+              <td><div className="open-invoice-notes"><span>{row.notes || "—"}</span>{row.notes && row.notes.length > 60 && <InfoPopover label={`notes for ${row.source}`}>{row.notes}</InfoPopover>}</div></td>
               <td><div className="row-actions">
                 {row.manual && <Button className="icon-text-button" type="button" onClick={() => setEditingManual(row.manual!)}><Edit3 size={14} /> Edit</Button>}
                 {row.invoice && <>
@@ -754,10 +760,11 @@ export function CashFlowOpenInvoicesView({
                 <Button className="icon-text-button destructive-icon-button" type="button" disabled={Boolean(row.invoice && openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations))} onClick={() => setDeleteRows([row])}><Trash2 size={14} /> Delete</Button>
                 {row.invoice && openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations) && <InfoPopover label={`Why ${row.source} cannot be deleted`}>{openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations)}</InfoPopover>}
               </div></td>
-            </tr>) : <tr><td colSpan={9}>No open items</td></tr>}</tbody>
+            </tr>) : <tr><td colSpan={10}>No open items</td></tr>}</tbody>
           </table>
         </div>
       </section>
+      <ClientPaymentHistory report={dashboard.paymentHistory} />
       {deleteRows.length > 0 && createPortal(<div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-open-items-title">
         <h2 id="delete-open-items-title">Delete {deleteRows.length} open {deleteRows.length === 1 ? "item" : "items"}?</h2>
         <p>{deleteRows.map(row => row.name).slice(0, 5).join(", ")}{deleteRows.length > 5 ? ` and ${deleteRows.length - 5} more` : ""}</p>

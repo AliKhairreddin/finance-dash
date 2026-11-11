@@ -209,7 +209,6 @@ import {
   buildRevenueDraft,
   canCatchUpLebanonIncomeAutomation,
   calculateApproximateUsdTotals,
-  calculateInvoicePredictions,
   currentMonthAccrualPeriod,
   currentWeekAccrualPeriod,
   incomeAutomationTimezone,
@@ -4470,6 +4469,7 @@ async function getSnapshot(
     ...emptyWiseActivity(),
     accounts: state.bankAccounts.filter((account) => account.source === "wise")
   };
+  const paymentHistory = await getConvexClient(env).query(api.paymentForecasts.get, { serviceToken: getConvexServiceToken(env) });
   const reviewBacklog = await getConvexClient(env).query(api.banking.getClassificationBacklog, {
     serviceToken: getConvexServiceToken(env),
     limit: 5
@@ -4532,7 +4532,8 @@ async function getSnapshot(
     invoices,
     expenses: state.expenses,
     paymentAllocations: state.paymentAllocations,
-    invoicePredictions: calculateInvoicePredictions(invoices, state.paymentAllocations),
+    invoicePredictions: paymentHistory.predictions,
+    paymentHistory,
     holdings: state.holdings,
     fxRates: state.fxRates,
     approximateUsdTotals,

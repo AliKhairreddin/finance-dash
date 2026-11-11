@@ -13116,3 +13116,21 @@ body {
   outline-offset: 2px;
   box-shadow: none;
 }
+
+.expected-payment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+.expected-payment small { display: block; font-size: 0.68rem; }
+.client-payment-history > summary {
+  cursor: pointer;
+  padding: 14px 18px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.client-payment-history > summary > span { margin-left: 8px; font-weight: 400; }
+.client-payment-history .list-toolbar { padding: 0 18px 12px; flex-wrap: wrap; }
+.open-invoice-notes { display: flex; align-items: center; gap: 6px; min-width: 140px; max-width: 230px; }
+.open-invoice-notes > span:first-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
