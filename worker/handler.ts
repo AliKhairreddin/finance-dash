@@ -7216,7 +7216,7 @@ async function handleApi(
     }
     if (url.pathname.startsWith("/api/partner-updates")) {
       const session = await getDashboardSession(request, env);
-      if (!session || session.role !== "administrator" || !canSharePartnerUpdates(session.username)) throw new ApiError(403, "Partner sharing is available to Ali and Ali M only.");
+      if (!session || session.role !== "administrator" || !canSharePartnerUpdates(session.username)) throw new ApiError(403, "Partner sharing requires administrator access for Ali, Ali M or Alaa.");
       partnerSender(env, session.username);
       if (url.pathname === "/api/partner-updates" && request.method === "GET") return json({ recipients: partnerRecipients(env).map(user => user.username) });
       const match = url.pathname.match(/^\/api\/partner-updates\/([a-f0-9-]{36})(\/retry)?$/);

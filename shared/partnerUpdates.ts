@@ -32,7 +32,7 @@ export interface PartnerReportData {
 }
 
 export function canSharePartnerUpdates(username: string | undefined): boolean {
-  return ["ali", "ali m"].includes(username?.trim().toLowerCase().replace(/\s+/g, " ") ?? "");
+  return ["ali", "ali m", "alaa"].includes(username?.trim().toLowerCase().replace(/\s+/g, " ") ?? "");
 }
 
 export type PartnerUpdateSource = Pick<DashboardSnapshot, "invoices" | "paymentAllocations" | "providers" | "receivables" | "asOf" | "cashFlowSnapshots" | "fxRates">;

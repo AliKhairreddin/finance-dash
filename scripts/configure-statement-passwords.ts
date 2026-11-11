@@ -12,9 +12,9 @@ const users = ["Ali M", "Alaa"].map(username => ({ username, password: randomByt
 const credentials = Object.fromEntries(await Promise.all(users.map(async user => [user.username.toLowerCase(), await createStatementPassword(user.password)])));
 mkdirSync(dirname(filename), { recursive: true, mode: 0o700 });
 // Refuse to overwrite a prior delivery. No passwords or hashes go to stdout.
-writeFileSync(filename, JSON.stringify({ loginUrl: "https://statements.thatcanadian.dev/login", users }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+writeFileSync(filename, JSON.stringify({ loginUrls: ["https://statements.thatcanadian.dev/login", "https://finance.thatcanadian.dev/login"], users }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 const result = spawnSync("npx", ["wrangler", "secret", "put", "STATEMENT_PASSWORD_USERS_JSON"], {
   input: JSON.stringify(credentials), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"]
 });
 if (result.error || result.status !== 0) throw new Error(`Password hash upload failed. The private password file is preserved at ${filename}.`);
-console.log(`Configured statement password hashes for Ali M and Alaa. Private password file: ${filename}`);
+console.log(`Configured Finance and Statements password hashes for Ali M and Alaa. Private password file: ${filename}`);

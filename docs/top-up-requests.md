@@ -8,7 +8,7 @@ Requests, original invoices and processing state are saved in production Convex.
 
 Group ID: `-5336756761`. Add the existing finance bot to this group with permission to send messages; add Amin, Ali M and Ali as group members yourself (Telegram bots cannot add arbitrary users). `npm run top-ups:configure` configures callback updates and verifies the bot's group access without posting test messages.
 
-Pending messages mention Amin, with Approve and Adjust amount buttons. Past and expected spend have separate icons and a blank line between them. Adjustment uses a group reply prompt valid for ten minutes. The numeric Telegram IDs mapped to Amin, Ali M and Ali can approve or adjust. Each amount prompt belongs to the user who opened it, and the audit trail records that user for the adjustment. Approval posts a new message mentioning the ID mapped to Ali M, with a Paid button restricted to that ID. Previous message buttons are cleared and every action checks the current request version. Dashboard administrators can also act, with an audit trail. Alaa's role can read requests but cannot approve, adjust, mark paid or create drafts.
+Pending messages mention Amin, with Approve and Adjust amount buttons. Past and expected spend have separate icons and a blank line between them. Adjustment uses a group reply prompt valid for ten minutes. The numeric Telegram IDs mapped to Amin, Ali M and Ali can approve or adjust. Each amount prompt belongs to the user who opened it, and the audit trail records that user for the adjustment. Approval posts a new message mentioning the ID mapped to Ali M, with a Paid button restricted to that ID. Previous message buttons are cleared and every action checks the current request version. Dashboard administrators can also act, with an audit trail. Restricted top-up reviewers can read requests but cannot approve, adjust, mark paid or create drafts. Alaa now has full dashboard administrator access.
 
 Invoice links in group messages are signed bearer links expiring after 30 days. Group members can view the invoice without dashboard sign-in; avoid sharing those links outside the group. Permanent dashboard file access requires authentication.
 
@@ -16,7 +16,7 @@ Notification delivery is durable, retried up to four times with backoff, with vi
 
 ## Alaa
 
-Once Alaa's numeric Telegram chat ID is available, have him start the finance bot, then run `npm run auth:configure:top-ups`. The helper writes a dedicated restricted-user secret; it does not alter administrator accounts. Sign-in username: `Alaa`. The server permits only Top-up requests and Documents endpoints for this role. His account is not activated until the ID is supplied.
+Alaa signs in with his existing password on Finance and Statements. His identity remains in `TELEGRAM_TOPUP_USERS_JSON`, while `DASHBOARD_ADMINISTRATOR_USERS=Alaa` grants full Finance administrator access, including top-up actions. The identity-registration helper `npm run auth:configure:top-ups` only updates his Telegram identity; it does not provision or rotate his dashboard password. Telegram command and recipient permissions remain separately configured.
 
 ## Revolut drafts
 

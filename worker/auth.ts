@@ -39,6 +39,7 @@ type AuthEnv = Pick<
   TELEGRAM_MEDIA_SPEND_USERS_JSON?: string;
   DASHBOARD_MEDIA_SPEND_USERS?: string;
   DASHBOARD_FINANCE_OPERATOR_USERS?: string;
+  DASHBOARD_ADMINISTRATOR_USERS?: string;
 };
 
 interface TelegramAuthConfig {
@@ -907,7 +908,9 @@ export async function getDashboardSession(
   if (!user) return null;
   return {
     username: user.username,
-    role: config.topUpUsernames.has(normalizedUsername) ? "top-up-reviewer" : config.mediaSpendUsernames.has(normalizedUsername)
+    role: env.DASHBOARD_ADMINISTRATOR_USERS?.split(",").some(username => normalizeFinanceUsername(username) === normalizedUsername)
+      ? "administrator"
+      : config.topUpUsernames.has(normalizedUsername) ? "top-up-reviewer" : config.mediaSpendUsernames.has(normalizedUsername)
       ? "media-spend-reviewer"
       : env.DASHBOARD_FINANCE_OPERATOR_USERS?.split(",").some((username) => normalizeFinanceUsername(username) === normalizedUsername)
       ? "finance-operator"

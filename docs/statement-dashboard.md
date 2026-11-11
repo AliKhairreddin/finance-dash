@@ -11,16 +11,19 @@ Finance Dashboard records and the reference application are not migrated or chan
 
 ## Access and data
 
-Ali M and Alaa sign in with individual passwords on the statements hostname;
+Ali M and Alaa use their existing individual passwords on both
+`statements.thatcanadian.dev` and `finance.thatcanadian.dev`;
 Ali retains Telegram sign-in. Enter the username first, then the password.
 Passwords are stored only as salted scrypt hashes in the Cloudflare secret
 `STATEMENT_PASSWORD_USERS_JSON`. Ten attempts per account are allowed every
-15 minutes, with the limit stored durably across requests and deployments.
+15 minutes across both dashboards, with the limit stored durably across requests and deployments.
 `npm run auth:configure:statements -- /absolute/private/path/passwords.json`
 generates fresh passwords, writes a mode-0600 file outside the repository, and
 uploads the hashes. Share each user's password privately. Running it again
-rotates both passwords and revokes their existing statement sessions.
-These users cannot use OTP or passwordless sessions on the statements host.
+rotates both passwords and revokes their existing sessions on both dashboards.
+These users cannot use OTP or passwordless sessions on either dashboard host.
+Alaa has full Finance administrator access via `DASHBOARD_ADMINISTRATOR_USERS`;
+Ali M retains his existing access. Statement company permissions remain separately enforced.
 Sessions are bound to each hostname. The statements host does not serve the Finance Dashboard API.
 Every statement API call derives its actor from the authenticated session; Convex
 also verifies the service token, membership, and company access. Original files

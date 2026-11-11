@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAuthSessionToken, enforceSiteAuthentication, getDashboardSession } from "./auth";
-import { createStatementPassword, parseStatementPasswords, statementPasswordAttempt, statementPasswordHostname, verifyStatementPassword } from "./statementPassword";
+import { createStatementPassword, parseStatementPasswords, statementPasswordAttempt, statementPasswordHostname, financePasswordHostname, verifyStatementPassword } from "./statementPassword";
 
 const password = "Test-only-strong-password-264";
 const secret = "test-only-statement-session-secret";
@@ -10,7 +10,9 @@ function env() {
   let attempts: number[] = [];
   return {
     AUTH_SESSION_SECRET: secret, TELEGRAM_BOT_TOKEN: "test-only",
-    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "1", "Ali M": "2", Alaa: "3" }),
+    TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "1", "Ali M": "2" }),
+    TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "3" }),
+    DASHBOARD_ADMINISTRATOR_USERS: "Alaa",
     TELEGRAM_PASSWORDLESS_USERS_JSON: '["Ali M"]',
     STATEMENT_PASSWORD_USERS_JSON: JSON.stringify(credentials),
     TELEGRAM_OTP_STATE: { getByName: () => ({
@@ -34,20 +36,21 @@ test("statement passwords are salted, validated and compared without normalizing
   assert.equal(parseStatementPasswords(JSON.stringify(credentials))?.size, 2);
 });
 
-test("both statement users get password login without OTP or sign-in alerts", async () => {
+for (const hostname of [statementPasswordHostname, financePasswordHostname]) test(`both users get password login with administrator access on ${hostname} without OTP or alerts`, async () => {
   for (const [username, value] of [[" Ali M ", password], ["ALAA", password + "A"]]) {
     const config = env();
-    const form = await enforceSiteAuthentication(request({ step: "request", username }), config, { sendTelegramSignInAlert: async () => { throw new Error("No alert required"); } });
+    const form = await enforceSiteAuthentication(request({ step: "request", username }, hostname), config, { sendTelegramSignInAlert: async () => { throw new Error("No alert required"); } });
     assert.equal(form?.status, 200);
     assert.match(await form!.text(), /autocomplete="current-password"/);
-    const response = await enforceSiteAuthentication(request({ step: "password", username, password: value, returnTo: "/?view=documents" }), config);
+    const response = await enforceSiteAuthentication(request({ step: "password", username, password: value, returnTo: "/?view=documents" }, hostname), config);
     assert.equal(response?.status, 303);
     assert.equal(response?.headers.get("Location"), "/?view=documents");
-    const authenticated = new Request(`https://${statementPasswordHostname}/api/statements/bootstrap`, { headers: { Cookie: cookie(response!) } });
+    const authenticated = new Request(`https://${hostname}/api/session`, { headers: { Cookie: cookie(response!) } });
     assert.equal(await enforceSiteAuthentication(authenticated, config), null);
-    assert.equal((await getDashboardSession(authenticated, config))?.username, username.trim().toLowerCase() === "alaa" ? "Alaa" : "Ali M");
+    assert.deepEqual(await getDashboardSession(authenticated, config), { username: username.trim().toLowerCase() === "alaa" ? "Alaa" : "Ali M", role: "administrator" });
     assert.match(response!.headers.get("Set-Cookie")!, /HttpOnly; Secure; SameSite=Strict/);
-    const finance = new Request("https://finance.thatcanadian.dev/api/session", { headers: { Cookie: cookie(response!) } });
+    const otherHost = hostname === financePasswordHostname ? statementPasswordHostname : financePasswordHostname;
+    const finance = new Request(`https://${otherHost}/api/session`, { headers: { Cookie: cookie(response!) } });
     assert.equal(await getDashboardSession(finance, config), null);
   }
 });
@@ -55,13 +58,13 @@ test("both statement users get password login without OTP or sign-in alerts", as
 test("password authentication fails closed, rejects cross-origin posts and rate limits guesses", async () => {
   const config = env();
   assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, statementPasswordHostname, "https://evil.example"), config))?.status, 403);
-  assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, "finance.thatcanadian.dev"), config))?.status, 403);
+  assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, "receipts.thatcanadian.dev"), config))?.status, 403);
   for (let i = 0; i < 10; i++) {
-    const response = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password: "wrong" }), config);
+    const response = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password: "wrong" }, i % 2 ? financePasswordHostname : statementPasswordHostname), config);
     assert.equal(response?.status, 401);
     assert.equal(response?.headers.get("Set-Cookie"), null);
   }
-  const limited = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }), config);
+  const limited = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, financePasswordHostname), config);
   assert.equal(limited?.status, 429);
   assert.ok(Number(limited?.headers.get("Retry-After")) > 0);
   const missing = { ...env(), STATEMENT_PASSWORD_USERS_JSON: undefined };
@@ -70,15 +73,15 @@ test("password authentication fails closed, rejects cross-origin posts and rate 
   assert.equal(statementPasswordAttempt(Array(10).fill(1000), 901001).retryAfterSeconds, 0);
 });
 
-test("old OTP sessions and passwordless exceptions cannot bypass statement passwords; rotation revokes sessions", async () => {
+for (const hostname of [statementPasswordHostname, financePasswordHostname]) test(`OTP/passwordless sessions cannot bypass passwords on ${hostname}; rotation revokes sessions`, async () => {
   const config = env();
   for (const subject of ["ali m", "alaa", "passwordless:ali m"]) {
-    const token = await createAuthSessionToken(secret, statementPasswordHostname, subject);
-    assert.equal(await getDashboardSession(new Request(`https://${statementPasswordHostname}/`, { headers: { Cookie: `__Host-finance_session=${token}` } }), config), null);
+    const token = await createAuthSessionToken(secret, hostname, subject);
+    assert.equal(await getDashboardSession(new Request(`https://${hostname}/`, { headers: { Cookie: `__Host-finance_session=${token}` } }), config), null);
   }
-  const login = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }), config);
+  const login = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, hostname), config);
   const rotated = { ...config, STATEMENT_PASSWORD_USERS_JSON: JSON.stringify({ ...credentials, "ali m": await createStatementPassword(password) }) };
-  assert.equal(await getDashboardSession(new Request(`https://${statementPasswordHostname}/`, { headers: { Cookie: cookie(login!) } }), rotated), null);
-  const ali = await createAuthSessionToken(secret, statementPasswordHostname, "ali");
-  assert.equal((await getDashboardSession(new Request(`https://${statementPasswordHostname}/`, { headers: { Cookie: `__Host-finance_session=${ali}` } }), config))?.username, "Ali");
+  assert.equal(await getDashboardSession(new Request(`https://${hostname}/`, { headers: { Cookie: cookie(login!) } }), rotated), null);
+  const ali = await createAuthSessionToken(secret, hostname, "ali");
+  assert.equal((await getDashboardSession(new Request(`https://${hostname}/`, { headers: { Cookie: `__Host-finance_session=${ali}` } }), config))?.username, "Ali");
 });

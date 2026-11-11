@@ -15,7 +15,14 @@ test("recipient aliases resolve exactly once; missing or ambiguous users block t
   assert.throws(() => partnerRecipients({ TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "4" }) }), /Amin/);
   assert.throws(() => partnerRecipients({ TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Amin: "1", Sanjin: "2", Sani: "6", Ben: "3", Ali: "4", "Ali M": "5" }) }), /exactly one.*Sani/);
   assert.equal(partnerSender(env, "Ali M").chatId, "5");
-  assert.throws(() => partnerSender(env, "Amin"), /Ali and Ali M only/);
+  assert.throws(() => partnerSender(env, "Amin"), /administrator access/);
+});
+
+test("Alaa needs an explicit administrator grant and a unique configured identity to share", () => {
+  const configured = { ...env, TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "6" }) };
+  assert.throws(() => partnerSender(configured, "Alaa"), /administrator access/);
+  assert.equal(partnerSender({ ...configured, DASHBOARD_ADMINISTRATOR_USERS: "Alaa" }, "ALAA").chatId, "6");
+  assert.throws(() => partnerSender({ ...env, DASHBOARD_ADMINISTRATOR_USERS: "Alaa" }, "Alaa"), /administrator access/);
 });
 
 test("all five recipients receive the identical pair and successful recipients are never replayed", async () => {

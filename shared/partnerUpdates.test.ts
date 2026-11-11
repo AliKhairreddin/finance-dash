@@ -25,8 +25,9 @@ test("open-invoice images retain drafts, manual receivables and remaining paymen
   assert.deepEqual(rows.map(row => [row.status, row.amount, row.currency]), [["Open", 70, "USD"], ["Draft", 100, "USD"], ["Receivable", 25, "EUR"]]);
 });
 
-test("only Ali and Ali M can trigger partner sharing", () => {
+test("Ali, Ali M and Alaa can trigger partner sharing", () => {
   assert.equal(canSharePartnerUpdates(" Ali  M "), true);
   assert.equal(canSharePartnerUpdates("ALI"), true);
+  assert.equal(canSharePartnerUpdates(" ALAA "), true);
   for (const name of [undefined, "Amin", "Sani", "Ben", "Meet"]) assert.equal(canSharePartnerUpdates(name), false);
 });

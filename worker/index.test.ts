@@ -1278,3 +1278,19 @@ test("Alaa's restricted role cannot reach dashboard, bank, settings or top-up ac
   for (const path of ["/api/dashboard", "/api/transactions", "/api/settings", "/api/top-ups/abc/draft-options"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "alaa"), env)).status, 403, path);
   for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/reconcile-draft", "/api/top-ups/abc/delete", "/api/top-ups/abc/restore", "/api/sync"]) assert.equal((await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, { method: "POST" }, "alaa"), env)).status, 403, path);
 });
+
+test("Alaa's explicit administrator grant reaches Finance APIs without weakening the reviewer role", async () => {
+  const env = authenticatedEnv({
+    TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "8710954543", Reviewer: "8710954544" }),
+    DASHBOARD_ADMINISTRATOR_USERS: "Alaa"
+  });
+  const session = await worker.fetch(await authenticatedRequest("https://finance.example/api/session", {}, "alaa"), env);
+  assert.deepEqual(await session.json(), { username: "Alaa", role: "administrator" });
+  for (const path of ["/api/dashboard", "/api/transactions", "/api/settings", "/api/top-ups/abc/draft-options"]) {
+    const granted = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "alaa"), env);
+    assert.notEqual(granted.status, 401, path);
+    assert.notEqual(granted.status, 403, path);
+    const restricted = await worker.fetch(await authenticatedRequest(`https://finance.example${path}`, {}, "reviewer"), env);
+    assert.equal(restricted.status, 403, path);
+  }
+});

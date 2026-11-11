@@ -13,7 +13,7 @@ test("Cloudflare runtime verifies scrypt passwords and serializes concurrent dur
       export { TelegramOtpState } from './worker/telegramOtpState';
       export default { async fetch(request, bindings) {
         const env = { ...bindings, AUTH_SESSION_SECRET: 'runtime-only-secret', TELEGRAM_BOT_TOKEN: 'no-network',
-          TELEGRAM_AUTH_USERS_JSON: '{"Ali":"1","Ali M":"2","Alaa":"3"}', TELEGRAM_PASSWORDLESS_USERS_JSON: '[]',
+          TELEGRAM_AUTH_USERS_JSON: '{"Ali":"1","Ali M":"2"}', TELEGRAM_TOPUP_USERS_JSON: '{"Alaa":"3"}', DASHBOARD_ADMINISTRATOR_USERS: 'Alaa', TELEGRAM_PASSWORDLESS_USERS_JSON: '[]',
           STATEMENT_PASSWORD_USERS_JSON: ${JSON.stringify(JSON.stringify({ "ali m": credential, alaa: credential }))} };
         return await enforceSiteAuthentication(request, env) ?? Response.json(await getDashboardSession(request, env));
       } };
@@ -29,19 +29,21 @@ test("Cloudflare runtime verifies scrypt passwords and serializes concurrent dur
     },
     dev: { outboundService: { type: "fetcher", handler: () => { throw new Error("Password login must not contact external services"); } } }
   }] });
-  const login = (username: string, value: string) => runtime.dispatchFetch("https://statements.thatcanadian.dev/login", {
-    method: "POST", redirect: "manual", headers: { Origin: "https://statements.thatcanadian.dev", "Content-Type": "application/x-www-form-urlencoded" },
+  const login = (username: string, value: string, host = "finance.thatcanadian.dev") => runtime.dispatchFetch(`https://${host}/login`, {
+    method: "POST", redirect: "manual", headers: { Origin: `https://${host}`, "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ step: "password", username, password: value }).toString()
   });
   try {
-    const result = await login("Ali M", password);
-    assert.equal(result.status, 303, await result.text());
-    const cookie = result.headers.get("Set-Cookie")!.match(/__Host-finance_session=[^;]+/)![0];
-    const session = await runtime.dispatchFetch("https://statements.thatcanadian.dev/api/session", { headers: { Cookie: cookie } });
-    assert.equal((await session.json() as { username: string }).username, "Ali M");
-    const guesses = await Promise.all(Array.from({ length: 12 }, () => login("Alaa", "wrong")));
-    assert.equal(guesses.filter(response => response.status === 401).length, 10);
-    assert.equal(guesses.filter(response => response.status === 429).length, 2);
+    for (const username of ["Ali M", "Alaa"]) {
+      const result = await login(username, password);
+      assert.equal(result.status, 303, await result.text());
+      const cookie = result.headers.get("Set-Cookie")!.match(/__Host-finance_session=[^;]+/)![0];
+      const session = await runtime.dispatchFetch("https://finance.thatcanadian.dev/api/session", { headers: { Cookie: cookie } });
+      assert.deepEqual(await session.json(), { username, role: "administrator" });
+    }
+    const guesses = await Promise.all(Array.from({ length: 12 }, (_, i) => login("Alaa", "wrong", i % 2 ? "finance.thatcanadian.dev" : "statements.thatcanadian.dev")));
+    assert.equal(guesses.filter(response => response.status === 401).length, 9);
+    assert.equal(guesses.filter(response => response.status === 429).length, 3);
     assert.equal((await login("Alaa", password)).status, 429);
   } finally { await runtime.dispose(); }
 });

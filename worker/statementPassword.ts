@@ -2,6 +2,7 @@ import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { normalizeFinanceUsername } from "./telegram";
 
 export const statementPasswordHostname = "statements.thatcanadian.dev";
+export const financePasswordHostname = "finance.thatcanadian.dev";
 export const statementPasswordUsers = ["ali m", "alaa"] as const;
 export const statementPasswordWindowMs = 15 * 60 * 1000;
 export const statementPasswordMaxAttempts = 10;
@@ -9,7 +10,8 @@ export const statementPasswordMaxAttempts = 10;
 export interface StatementPasswordCredential { salt: string; hash: string }
 
 export function usesStatementPassword(hostname: string, username: string): boolean {
-  return hostname === statementPasswordHostname && statementPasswordUsers.some(user => user === normalizeFinanceUsername(username));
+  // Both dashboards use the same credentials and per-account attempt budget.
+  return [statementPasswordHostname, financePasswordHostname].includes(hostname) && statementPasswordUsers.some(user => user === normalizeFinanceUsername(username));
 }
 
 export function parseStatementPasswords(value: string | undefined): Map<string, StatementPasswordCredential> | null {

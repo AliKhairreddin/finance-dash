@@ -66,6 +66,15 @@ async function request(path: string, username: string, method = "GET", origin?: 
   return new Request(`https://finance.example${path}`, { method, headers: { Cookie: `__Host-finance_session=${token}`, ...(origin ? { Origin: origin } : {}) } });
 }
 
+test("Alaa can access dashboard partner reports only with his administrator grant", async () => {
+  const env = { ...baseEnv, TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "6" }), DASHBOARD_ADMINISTRATOR_USERS: "Alaa" } as unknown as WorkerEnv;
+  const response = await worker.fetch(await request("/api/partner-updates", "alaa"), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { recipients: ["Amin", "Sani", "Ben", "Ali", "Ali M"] });
+  const restricted = { ...env, DASHBOARD_ADMINISTRATOR_USERS: "" };
+  assert.equal((await worker.fetch(await request("/api/partner-updates", "alaa"), restricted)).status, 403);
+});
+
 test("website sharing denies partner sessions and cross-origin requests, and repeated request IDs return the existing job", async () => {
   const existing = { id, status: "complete" } as PartnerUpdateStatus;
   const env = { ...baseEnv, PARTNER_UPDATES: { getByName: () => ({ status: async () => existing, start: async () => { throw new Error("Must not create again"); } }) } } as unknown as WorkerEnv;

@@ -559,9 +559,18 @@ test("public top-up pages and assets require no sign-in while dashboard routes r
   for (const path of ["/top-up", "/payments", "/top-up-assets/example.js"]) assert.equal(await enforceSiteAuthentication(new Request(`https://finance.thatcanadian.dev${path}`), env), null);
   for (const path of ["/", "/?page=top-ups"]) assert.equal((await enforceSiteAuthentication(new Request(`https://finance.thatcanadian.dev${path}`), env))?.status, 303);
 });
-test("Alaa receives a restricted session from the separate Telegram user registry", async () => {
-  const env = { ...(telegramEnv() as WorkerEnv), TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "444444" }) };
-  const token = await createAuthSessionToken(testSessionSecret, "finance.thatcanadian.dev", "alaa");
+test("top-up users without an administrator grant retain their restricted session", async () => {
+  const env = { ...(telegramEnv() as WorkerEnv), TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Reviewer: "444444" }) };
+  const token = await createAuthSessionToken(testSessionSecret, "finance.thatcanadian.dev", "reviewer");
   const session = await getDashboardSession(new Request("https://finance.thatcanadian.dev", { headers: { Cookie: `__Host-finance_session=${token}` } }), env);
-  assert.deepEqual(session, { username: "Alaa", role: "top-up-reviewer" });
+  assert.deepEqual(session, { username: "Reviewer", role: "top-up-reviewer" });
+});
+
+test("the configured administrator grant promotes only a registered Alaa identity", async () => {
+  const env = { ...(telegramEnv() as WorkerEnv), TELEGRAM_TOPUP_USERS_JSON: JSON.stringify({ Alaa: "444444", Reviewer: "555555" }), DASHBOARD_ADMINISTRATOR_USERS: " ALAA , Unknown" };
+  for (const [username, role] of [["alaa", "administrator"], ["reviewer", "top-up-reviewer"], ["ali", "administrator"], ["unknown", undefined]]) {
+    const token = await createAuthSessionToken(testSessionSecret, "finance.example", username!);
+    const request = new Request("https://finance.example/api/session", { headers: { Cookie: `__Host-finance_session=${token}` } });
+    assert.equal((await getDashboardSession(request, env))?.role, role);
+  }
 });

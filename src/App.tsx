@@ -1,3 +1,4 @@
+import { canSharePartnerUpdates } from "../shared/partnerUpdates";
 import { mercuryEntities, mercuryEntityLabel, mercuryEntityViews, type MercuryEntityView } from "../shared/mercuryEntities";
 import { slashEntities, slashEntityLabel, slashEntityViews, type SlashEntityView } from "../shared/slashEntities";
 import type { SlashEntity } from "../shared/types";
@@ -2375,13 +2376,13 @@ function App() {
       )}
 
       {activeTab === "cash-flow" && (
-        <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} canShareUpdates={["ali", "ali m"].includes(session?.username.trim().toLowerCase() ?? "")} />
+        <CashFlowPositionView dashboard={dashboard} onSave={saveCashFlowSnapshot} canShareUpdates={session?.role === "administrator" && canSharePartnerUpdates(session.username)} />
       )}
 
       {activeTab === "cash-flow-invoices" && (
         <CashFlowOpenInvoicesView
           dashboard={dashboard}
-          canShareUpdates={["ali", "ali m"].includes(session?.username.trim().toLowerCase() ?? "")}
+          canShareUpdates={session?.role === "administrator" && canSharePartnerUpdates(session.username)}
           onCreateManualReceivable={createManualReceivable}
           onUpdateManualReceivable={updateManualReceivable}
           onDeleteOpenItems={deleteOpenItems}

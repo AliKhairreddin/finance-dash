@@ -13,13 +13,16 @@ export function partnerRecipients(env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON
   });
 }
 
-export function partnerSender(env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_COMMAND_ADMIN_USERS">, username: string): TelegramAuthUser {
+export function partnerSender(env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON" | "TELEGRAM_COMMAND_ADMIN_USERS" | "TELEGRAM_TOPUP_USERS_JSON"> & { DASHBOARD_ADMINISTRATOR_USERS?: string }, username: string): TelegramAuthUser {
   const normalized = normalizeFinanceUsername(username);
-  const user = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(user => user.normalizedUsername === normalized);
-  if (!canSharePartnerUpdates(username) || !user || !env.TELEGRAM_COMMAND_ADMIN_USERS.split(",").map(normalizeFinanceUsername).includes(normalized)) {
-    throw new Error("Partner sharing is available to Ali and Ali M only.");
+  const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
+  const topUpUsers = env.TELEGRAM_TOPUP_USERS_JSON?.trim() ? parseTelegramAuthUsers(env.TELEGRAM_TOPUP_USERS_JSON) : [];
+  const matches = [...(users ?? []), ...(topUpUsers ?? [])].filter(user => user.normalizedUsername === normalized);
+  const administrators = [env.TELEGRAM_COMMAND_ADMIN_USERS, env.DASHBOARD_ADMINISTRATOR_USERS ?? ""].flatMap(value => value.split(",").map(normalizeFinanceUsername));
+  if (!canSharePartnerUpdates(username) || !users || !topUpUsers || matches.length !== 1 || !administrators.includes(normalized)) {
+    throw new Error("Partner sharing requires administrator access for Ali, Ali M or Alaa.");
   }
-  return user;
+  return matches[0];
 }
 
 export async function deliverPartnerImages(
