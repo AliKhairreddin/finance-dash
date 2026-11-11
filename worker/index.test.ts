@@ -1,3 +1,4 @@
+import { withTrackerSchedulerFixture } from "./receivablesTestFixture";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConvexHttpClient } from "convex/browser";
@@ -1034,13 +1035,14 @@ test("scheduled handler ignores the non-09:00 Lebanon cron occurrence", async ()
 
 test("one-minute scheduled handler polls Telegram onboarding updates", async () => {
   let calls = 0;
-  await worker.scheduled(
+  await withTrackerSchedulerFixture({} as never, async trackerEnv => worker.scheduled(
     {
       cron: "* * * * *",
       scheduledTime: new Date("2026-08-21T03:59:00.000Z").getTime(),
       noRetry() {}
     },
     {
+      ...trackerEnv as object,
       TELEGRAM_OTP_STATE: {
         getByName(name: string) {
           assert.equal(name, "telegram-onboarding");
@@ -1063,13 +1065,14 @@ test("one-minute scheduled handler polls Telegram onboarding updates", async () 
       SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary Account,Wagner,Reservation Account",
       SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Ali,Ali M"
     } as never
-  );
+  ));
   assert.equal(calls, 1);
 });
 
 test("minute scheduler checks each cash recipient using the Monday Beirut date after 07:00", async () => {
   const checked: string[] = [];
-  await worker.scheduled({ cron: "* * * * *", scheduledTime: Date.parse("2026-09-07T04:00:00Z"), noRetry() {} }, {
+  await withTrackerSchedulerFixture({} as never, async trackerEnv => worker.scheduled({ cron: "* * * * *", scheduledTime: Date.parse("2026-09-07T04:00:00Z"), noRetry() {} }, {
+    ...trackerEnv as object,
     TELEGRAM_CASH_REPORT_RECIPIENTS: "Ali,Ali M",
     TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222" }),
     SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary Account",
@@ -1082,7 +1085,7 @@ test("minute scheduler checks each cash recipient using the Monday Beirut date a
         async getTelegramAlertSettings() { return { rules: [], digestTimeUtc: null, updatedAt: "2026-09-07T04:00:00Z" }; }
       };
     } }
-  } as never);
+  } as never));
   assert.deepEqual(checked.sort(), ["telegram-cash-report:ali m:2026-09-07", "telegram-cash-report:ali:2026-09-07"]);
 });
 

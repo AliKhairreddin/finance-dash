@@ -47,6 +47,7 @@ test("automatic matching persists exact payments before AI and rechecks manual d
     const args = body.args[0];
     let value: unknown;
     switch (body.path) {
+      case "receivables:reserved": value = []; break;
       case "dashboard:getState": value = {
         invoices, updatedAt, paymentAllocations, providers: [{ id: "client", name: "Client Ltd", type: "client", aliases: [], tags: [], source: "manual", createdAt: "2026-09-01" }],
         expenses: [], transactionCategories: initialTransactionCategories, transactionCategoryRules: [], wiseStatementImports: []
@@ -104,6 +105,7 @@ test("automatic matching records nothing when candidate history cannot be comple
     const body = JSON.parse(String(init?.body)) as { path: string };
     let value: unknown;
     switch (body.path) {
+      case "receivables:reserved": value = []; break;
       case "dashboard:getState": value = {
         invoices: [invoice], updatedAt: "revision-1", paymentAllocations: [], providers: [], expenses: [],
         transactionCategories: initialTransactionCategories, transactionCategoryRules: [], wiseStatementImports: []

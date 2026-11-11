@@ -1,3 +1,4 @@
+import { handleTrackerApi, runTrackerMaintenance, deliverTrackerNotifications, trackerTelegramCommand } from "./receivablesTracker";
 import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { meritHistoryKey, validateMeritHistory } from "../shared/meritHistory";
 import { assertSavedMercuryBalances, mercuryConnections, mercuryEntities, mercuryTokenNames } from "../shared/mercuryEntities";
@@ -5087,7 +5088,9 @@ async function autoMatchInvoicePayments(env: Env): Promise<AutoMatchInvoicePayme
 
 export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise<Omit<AutoMatchInvoicePaymentsResult, "dashboard">> {
   const state = await loadPersisted(env);
-  const candidates = await loadInvoicePaymentMatchTransactions(env, state.invoices);
+  const allCandidates = await loadInvoicePaymentMatchTransactions(env, state.invoices);
+  const reserved = new Set(await getConvexClient(env).query(api.receivables.reserved, { serviceToken: getConvexServiceToken(env), transactionIds: allCandidates.map(t => t.id) }));
+  const candidates = allCandidates.filter(t => !reserved.has(t.id));
   const originalTransactions = new Map(candidates.map((transaction) => [transaction.id, transaction]));
   for (const transaction of candidates) {
     upsertPersistedTransaction(state, transaction);
@@ -5137,7 +5140,9 @@ export async function runInvoicePaymentMatching(env: Env, useAi = true): Promise
   }
   // Revalidate against current records after the external AI call, including intervening manual decisions.
   const currentState = await loadPersisted(env);
-  const currentTransactions = await loadInvoicePaymentMatchTransactions(env, currentState.invoices);
+  const currentCandidates = await loadInvoicePaymentMatchTransactions(env, currentState.invoices);
+  const currentReserved = new Set(await getConvexClient(env).query(api.receivables.reserved, { serviceToken: getConvexServiceToken(env), transactionIds: currentCandidates.map(t => t.id) }));
+  const currentTransactions = currentCandidates.filter(t => !currentReserved.has(t.id));
   const currentOriginals = new Map(currentTransactions.map(transaction => [transaction.id, transaction]));
   for (const transaction of currentTransactions) {
     upsertPersistedTransaction(currentState, transaction);
@@ -7258,6 +7263,8 @@ async function handleApi(
     if (statementResponse) return statementResponse;
     const contractResponse = await handleCompanyDocumentApi(request, env);
     if (contractResponse) return contractResponse;
+    const trackerResponse = await handleTrackerApi(request, env);
+    if (trackerResponse) return trackerResponse;
     const documentResponse = await handleDocumentApi(request, env);
     if (documentResponse) return documentResponse;
 
@@ -8147,6 +8154,10 @@ function telegramMenu(role: TelegramCommandRole): string {
     "📊 Finance Dash commands",
     `Access: ${role === "administrator" ? "Full administrator" : "CEO read-only"}`,
     "",
+    "Receivables tracker",
+    "/this_week · /expected_overdue · /pending_invoices · /to_invoice · /tariq · /acp_hcp · /received",
+    ...(role === "administrator" ? ["/weekly_update"] : []),
+    "",
     "▶ TAP TO RUN",
     tap.join(" · "),
     "",
@@ -8980,6 +8991,8 @@ export async function handleTelegramCommand(
       ].join("\n");
     }
     if (command === "menu") return telegramMenu(role);
+    const trackerReply = await trackerTelegramCommand(env, user, role, command);
+    if (trackerReply !== null) return trackerReply;
     const definition = financeTelegramCommands.find((item) => item.command === command);
     if (!definition) throw new ApiError(400, "Unknown command. Use /menu.");
     if (definition.access === "action") {
@@ -9251,6 +9264,10 @@ export default {
         failures.push(error);
       }
     }
+    if (controller.cron === "* * * * *") {
+      try { await getConvexClient(env).mutation(api.receivables.reminders, { serviceToken: getConvexServiceToken(env) }); await deliverTrackerNotifications(env); }
+      catch (error) { console.error(JSON.stringify({ event: "receivables_notifications_failed" })); failures.push(error); }
+    }
     if (controller.cron === "*/5 * * * *") {
       try {
         await enqueueSlashMetadataRepair(env);
@@ -9276,6 +9293,7 @@ export default {
         failures.push(error);
       }
       try {
+        await runTrackerMaintenance(env);
         const result = await runInvoicePaymentMatching(env);
         console.log(JSON.stringify({
           event: "invoice_payment_auto_match_completed",

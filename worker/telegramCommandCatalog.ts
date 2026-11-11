@@ -11,6 +11,13 @@ export interface FinanceTelegramCommand {
 }
 
 export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
+  { command: "this_week", description: "Expected receipts this week", access: "read", input: "tap" },
+  { command: "expected_overdue", description: "Expected receipts past grace day", access: "read", input: "tap" },
+  { command: "to_invoice", description: "Invoices to send", access: "read", input: "tap" },
+  { command: "tariq", description: "Tariq payment follow-ups", access: "read", input: "tap" },
+  { command: "acp_hcp", description: "ACP and HCP outstanding receipts", access: "read", input: "tap" },
+  { command: "received", description: "Confirmed tracker receipts", access: "read", input: "tap" },
+  { command: "weekly_update", description: "Upload a weekly receivables report", access: "action", input: "tap" },
   { command: "menu", description: "Browse Finance Dash commands", access: "read", input: "tap" },
   { command: "help", description: "Show help or command syntax", access: "read", input: "optional", arguments: "[command]", example: "/help search" },
   { command: "whoami", description: "Show your identity and role", access: "read", input: "tap" },

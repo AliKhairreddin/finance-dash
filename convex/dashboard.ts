@@ -1,3 +1,4 @@
+import { guardTrackerFinancialState } from "./receivablesCore";
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
 import { revenueInvoiceLine } from "./revenueInvoiceSchema";
 import { canonical } from "../shared/meritReplacement";
@@ -1351,6 +1352,7 @@ export const saveState = mutation({
       });
     }
 
+    await guardTrackerFinancialState(ctx, existing, args.invoices, args.paymentAllocations, args.manualReceivables);
     const updatedAt = nextUpdatedAt(existing?.updatedAt);
     const dashboardState = {
       providers: args.providers,

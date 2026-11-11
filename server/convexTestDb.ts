@@ -9,6 +9,8 @@ export function database(seed: Record<string, RecordRow[]>) {
       let rows = tables[table] ?? [];
       const index = {
         eq(key: string, value: unknown) { rows = rows.filter((r) => r[key] === value); return index; },
+        gte(key: string, value: any) { rows = rows.filter(r => r[key] >= value); return index; },
+        lt(key: string, value: any) { rows = rows.filter(r => r[key] < value); return index; },
         gt(key: string, value: any) { rows = rows.filter(r => r[key] > value); return index; },
         lte(key: string, value: any) { rows = rows.filter((r) => r[key] <= value); return index; }
       };

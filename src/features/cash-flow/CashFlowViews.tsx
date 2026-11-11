@@ -1,3 +1,4 @@
+import { ReceivablesTracker } from "@/features/receivables/ReceivablesTracker";
 import { PaymentForecast } from "@/features/income/PaymentForecast";
 import { ClientPaymentHistory } from "@/features/income/ClientPaymentHistory";
 import { providerCashFlowLines } from "../../../shared/providerCashFlow";
@@ -570,7 +571,12 @@ type OpenReceivableRow = {
   manual?: LedgerItem;
 };
 
-export function CashFlowOpenInvoicesView({
+export function CashFlowOpenInvoicesView(props: Parameters<typeof LegacyOpenInvoicesView>[0] & { onTrackerChanged: () => Promise<void> }) {
+  const [view, setView] = useUrlState("receivablesView", "invoices", { allowedValues: ["invoices", "tracker"] });
+  return <div className="cash-flow-page-stack"><div className="tracker-tabs" role="group" aria-label="Open invoices view"><Button aria-pressed={view === "invoices"} onClick={() => setView("invoices")}>Open invoices</Button><Button aria-pressed={view === "tracker"} onClick={() => setView("tracker")}>Receivables tracker</Button></div>{view === "tracker" ? <ReceivablesTracker dashboard={props.dashboard} onChanged={props.onTrackerChanged} /> : <LegacyOpenInvoicesView {...props} />}</div>;
+}
+
+function LegacyOpenInvoicesView({
   dashboard,
   canShareUpdates,
   onCreateManualReceivable,
@@ -588,6 +594,8 @@ export function CashFlowOpenInvoicesView({
   onUpdateInvoice: (invoiceId: string, payload: UpdateInvoicePayload) => Promise<Invoice>;
 }) {
   const [query, setQuery] = useUrlState("cashFlowOpenQuery", "");
+  const [, setReceivablesView] = useUrlState("receivablesView", "invoices");
+  const [, setTrackerCreate] = useUrlState("trackerCreate", "closed");
   const [matchFilter, setMatchFilter] = useUrlState("cashFlowOpenMatch", "all", { allowedValues: ["all", "matched", "unmatched"] });
   const [sortKey, setSortKey] = useUrlState<OpenReceivableSortKey>("cashFlowOpenSort", "dueDate", {
     allowedValues: ["amount", "dueDate", "expectedDate", "name", "source", "status", "currency", "notes"]
@@ -624,7 +632,7 @@ export function CashFlowOpenInvoicesView({
     ...dashboard.receivables.filter((item) => item.source === "manual").map((item) => ({
       id: item.id,
       name: item.name,
-      source: item.notes?.toLowerCase().includes("commission") ? "Commission" : "Manual receivable",
+      source: item.id.startsWith("tracker:") ? "Tracked receivable" : item.notes?.toLowerCase().includes("commission") ? "Commission" : "Manual receivable",
       status: "Open",
       amount: item.balance,
       currency: item.currency,
@@ -640,7 +648,7 @@ export function CashFlowOpenInvoicesView({
   const total = usdTotal(visibleRows.map((row) => line(row.id, row.name, row.amount, row.currency)), dashboard.fxRates);
 
   const selectedRows = visibleRows.filter(row => selectedIds.has(row.id));
-  const deletionReason = selectedRows.map(row => row.invoice ? openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations) : undefined).find(Boolean);
+  const deletionReason = selectedRows.map(row => row.id.startsWith("tracker:") ? "Manage tracked balances in Receivables tracker" : row.invoice ? openItemDeletionBlockReason(row.invoice, dashboard.paymentAllocations) : undefined).find(Boolean);
 
   function exportRows() {
     const exported = selectedRows.length ? selectedRows : visibleRows;
@@ -720,7 +728,7 @@ export function CashFlowOpenInvoicesView({
           <Button className="icon-text-button destructive-icon-button" type="button" disabled={!selectedRows.length || Boolean(deletionReason) || selectedRows.length > 200} onClick={() => setDeleteRows(selectedRows)}><Trash2 size={15} /> Delete selected{selectedRows.length ? ` (${selectedRows.length})` : ""}</Button>
           {deletionReason && <InfoPopover label="Why these items cannot be deleted">{deletionReason}</InfoPopover>}
 
-          <Button className="icon-text-button" type="button" onClick={() => setDialogKind("receivable")}><Plus size={15} /> Add receivable</Button>
+          <Button className="icon-text-button" type="button" onClick={() => { setTrackerCreate("open"); setReceivablesView("tracker"); }}><Plus size={15} /> Add receivable</Button>
           <Button className="primary-button" type="button" onClick={() => setDialogKind("commission")}><Plus size={15} /> Add Sanjin commission</Button>
         </div>
       </section>
@@ -756,7 +764,7 @@ export function CashFlowOpenInvoicesView({
               <td>{row.currency}</td>
               <td><div className="open-invoice-notes"><span>{row.notes || "—"}</span>{row.notes && row.notes.length > 60 && <InfoPopover label={`notes for ${row.source}`}>{row.notes}</InfoPopover>}</div></td>
               <td><div className="row-actions">
-                {row.manual && <Button className="icon-text-button" type="button" onClick={() => setEditingManual(row.manual!)}><Edit3 size={14} /> Edit</Button>}
+                {row.manual && <Button className="icon-text-button" type="button" onClick={() => row.id.startsWith("tracker:") ? window.location.assign("/?page=cash-flow-invoices&receivablesView=tracker") : setEditingManual(row.manual!)}><Edit3 size={14} /> Edit</Button>}
                 {row.invoice && <>
                   <Button className="icon-text-button" type="button" disabled={editingId !== null} onClick={() => void editInvoice(row.invoice!)}>{editingId === row.id ? <Loader2 className="spin" size={14} /> : <Edit3 size={14} />} Edit</Button>
                   {row.invoice.externalId && <Button className="icon-text-button" type="button" disabled={downloadingId !== null} onClick={() => void downloadInvoice(row.invoice!)}>{downloadingId === row.id ? <Loader2 className="spin" size={14} /> : <Download size={14} />} PDF</Button>}

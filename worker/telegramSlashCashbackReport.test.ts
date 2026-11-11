@@ -1,3 +1,4 @@
+import { withTrackerSchedulerFixture } from "./receivablesTestFixture";
 import { slashEntities } from "../shared/slashEntities";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -256,7 +257,7 @@ test("minute cron dispatches the cashback report and repeats neither recipient o
   }, SLASH_VIRTUAL_ACCOUNT_ALERT_NAMES: "Primary", SLASH_VIRTUAL_ACCOUNT_ALERT_THRESHOLD_USD: "10000", SLASH_VIRTUAL_ACCOUNT_ALERT_RECIPIENTS: "Ali,Ali M" };
   globalThis.fetch = sourceFetcher(requests);
   try {
-    for (const time of [asOf, asOf + 60_000]) await worker.scheduled({ scheduledTime: time, cron: "* * * * *", noRetry() {} }, deliveryEnv as never);
+    await withTrackerSchedulerFixture(deliveryEnv, async trackerEnv => { for (const time of [asOf, asOf + 60_000]) await worker.scheduled({ scheduledTime: time, cron: "* * * * *", noRetry() {} }, trackerEnv as never); });
     assert.deepEqual(harness.deliveries.map((row) => row.username), ["Ali", "Ali M"]);
     assert.ok(harness.deliveries.every((row) => row.kind === "daily-slash-cashback" && row.message.includes("2026-09-14")));
     assert.equal(requests.filter((path) => path === "/transaction").length, 4);

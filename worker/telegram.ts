@@ -36,6 +36,7 @@ interface TelegramApiEnvelope {
 }
 
 export interface TelegramPrivateMessage {
+  mediaGroupId?: string;
   chatId: string;
   sentAt?: number;
   firstName: string;
@@ -494,6 +495,7 @@ function telegramPrivateMessage(value: unknown): TelegramPrivateMessage | null {
     : undefined;
   return {
     chatId: String(chatIdValue),
+    ...(typeof message.media_group_id === "string" ? { mediaGroupId: message.media_group_id.slice(0, 120) } : {}),
     ...(typeof message.date === "number" && Number.isSafeInteger(message.date) && message.date > 0 ? { sentAt: message.date } : {}),
     firstName: message.from.first_name.slice(0, 128),
     ...(attachment ? { attachment } : {}),
@@ -662,12 +664,14 @@ export function configuredTelegramUser(env: WorkerEnv, message: TelegramPrivateM
 export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdate, dependencies: {
   handleCommand: TelegramCommandHandler;
   handleAttachment: (env: WorkerEnv, user: TelegramAuthUser, message: TelegramPrivateMessage) => Promise<TelegramCommandReply>;
+  handleReceivables?: (env: WorkerEnv, user: TelegramAuthUser, role: TelegramCommandRole, message: TelegramPrivateMessage) => Promise<string | null>;
 }): Promise<{ chatId: string; reply: TelegramCommandReply } | null> {
   const message = update.message; if (!message) return null;
   const account = configuredTelegramUser(env, message);
   const text = message.text?.trim() ?? "";
   let reply: TelegramCommandReply;
   if (!account) reply = onboardingReply(message, parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []);
+  else if (dependencies.handleReceivables && (reply = await dependencies.handleReceivables(env, account.user, account.role, message) ?? "")) { /* Explicitly scoped weekly intake. */ }
   else if (message.attachment) {
     reply = account.role === "administrator" && ["ali", "ali m"].includes(account.user.normalizedUsername)
       ? await dependencies.handleAttachment(env, account.user, message)

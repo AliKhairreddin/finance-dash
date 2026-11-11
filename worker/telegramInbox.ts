@@ -1,3 +1,4 @@
+import { trackerTelegramIntake } from "./receivablesTracker";
 import { DurableObject } from "cloudflare:workers";
 import { prepareTelegramReply, sendTelegramMessage, sendTelegramDocument, telegramUpdate, downloadTelegramAttachment, type TelegramUpdate, type TelegramPrivateMessage, type TelegramAuthUser, type TelegramCopyButton } from "./telegram";
 import { handleTelegramCommand } from "./handler";
@@ -87,7 +88,7 @@ export class TelegramInbox extends DurableObject<WorkerEnv> {
         });
         const result = item.started && action && !idempotentAction ? { chatId: item.update.message!.chatId, reply: "The previous action was interrupted. Please check its result in the dashboard before requesting it again." }
           : item.attempts >= 3 ? { chatId: item.update.message!.chatId, reply: "I couldn’t complete that request. Please try again." }
-          : await prepareTelegramReply(this.env, item.update, { handleCommand: handleTelegramCommand, handleAttachment: ingestTelegramDocument });
+          : await prepareTelegramReply(this.env, item.update, { handleCommand: handleTelegramCommand, handleAttachment: ingestTelegramDocument, handleReceivables: trackerTelegramIntake });
         if (result) prepared = await this.saveReply(key, result);
       }
       if (prepared) {

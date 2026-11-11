@@ -2420,6 +2420,7 @@ function App() {
 
       {activeTab === "cash-flow-invoices" && (
         <CashFlowOpenInvoicesView
+          onTrackerChanged={loadDashboard}
           dashboard={dashboard}
           canShareUpdates={session?.role === "administrator" && canSharePartnerUpdates(session.username)}
           onCreateManualReceivable={createManualReceivable}

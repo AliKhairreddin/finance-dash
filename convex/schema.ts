@@ -1,3 +1,4 @@
+import { receivablesTables } from "./receivablesSchema";
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
 import { mediaFundingSourceReference } from "./mediaFundingSourceSchema";
 import { revenueInvoiceLine } from "./revenueInvoiceSchema";
@@ -624,6 +625,7 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  ...receivablesTables,
   statementCaptureDevices: defineTable({ actor: v.string(), tokenHash: v.string(), active: v.boolean(), createdAt: v.number(), minuteStart: v.number(), minuteCount: v.number(), dayStart: v.number(), dayCount: v.number() }).index("by_actor", ["actor"]).index("by_tokenHash", ["tokenHash"]),
   ...statementTables, ...intelligenceTables,
   ...statementMailboxTables,

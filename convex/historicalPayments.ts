@@ -1,3 +1,5 @@
+import { trackerReceipts } from "./receivablesCore";
+import { sameTrackerReceipt } from "../shared/receivablesTracker";
 import { ConvexError, v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
@@ -24,6 +26,8 @@ export const reconcile = mutation({
       || new Set(args.matches.map(m => m.transactionId)).size !== args.matches.length) reject("Choose 1–100 distinct invoices and receipts");
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     if (!state || state.updatedAt !== args.expectedUpdatedAt) reject("Financial records changed; review the matching plan again");
+    const trackerClaims = await trackerReceipts(ctx);
+    if (args.matches.some(m => trackerClaims.some(r => sameTrackerReceipt(r.transactionId, m.transactionId)))) reject("Receipt is already allocated in Receivables tracker");
     const bindings = await ctx.db.query("bankConnectionBindings").take(6);
     if (bindings.length > 5) reject("Unexpected bank connections");
     const active = new Map(bindings.map(b => [b.source, b.connectionKey]));
@@ -90,6 +94,8 @@ export const importSettled = mutation({
       || new Set(args.matches.map(m => m.transactionId)).size !== args.matches.length) reject("Choose 1–100 distinct historical invoices and receipts");
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     if (!state || state.updatedAt !== args.expectedUpdatedAt) reject("Financial records changed; review the import plan again");
+    const trackerClaims = await trackerReceipts(ctx);
+    if (args.matches.some(m => trackerClaims.some(r => sameTrackerReceipt(r.transactionId, m.transactionId)))) reject("Receipt is already allocated in Receivables tracker");
     const bindings = await ctx.db.query("bankConnectionBindings").take(6);
     if (bindings.length > 5) reject("Unexpected bank connections");
     const active = new Map(bindings.map(b => [b.source, b.connectionKey]));
