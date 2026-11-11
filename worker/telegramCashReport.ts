@@ -14,7 +14,7 @@ const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 export type CashReportAccount = AccountBalance & { syncedAt: string };
 
 export function isCashReportAccount(account: CashReportAccount): boolean {
-  return (account.source === "wise" || account.source === "revolut" || account.source === "mercury")
+  return (account.source === "wise" || account.source === "revolut" || account.source === "mercury" || account.source === "flex" && account.flex?.type === "banking")
     && account.status === "live" && cashCurrencies.has(account.currency.toUpperCase());
 }
 
@@ -80,7 +80,7 @@ export function buildTelegramCashReport(input: {
       throw new Error("Wise balance company is unavailable; cash report could not be grouped");
     }
     if (account.source === "mercury" && !account.mercuryEntity) throw new Error("Mercury balance company is unavailable; cash report could not be grouped");
-    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : "Revolut";
+    const group = account.source === "wise" ? account.wiseEntity === "dn" ? "Wise DN" : "Wise LMD" : account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : account.source === "flex" ? "Flex · Mojo Labs LLC" : "Revolut";
     add(group, account.currency, account.balance);
   }
   for (const account of slashAccounts) add(account.slashEntity ? `Slash · ${slashEntityLabel(account.slashEntity)}` : "Slash", account.currency, account.balance);

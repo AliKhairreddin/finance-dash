@@ -163,7 +163,7 @@ type MutableBankPeriodSlashCashback = {
   credited: Map<string, number>;
 };
 
-const bankSources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex", "mercury"]);
+const bankSources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex", "mercury", "flex"]);
 const wiseEntities = new Set<WiseEntity>(["dn", "lmd"]);
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 

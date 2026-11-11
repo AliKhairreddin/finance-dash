@@ -1,6 +1,7 @@
 import type { BankTransactionSource } from "./types";
 
 export interface BankConnectionIdentityEnvironment {
+  FLEX_ORGANIZATION_ID?: string;
   MERCURY_CONNECTION_ID?: string;
   WISE_ENVIRONMENT?: string;
   WISE_CONNECTION_ID?: string;
@@ -16,6 +17,7 @@ function bankConnectionIdentityMaterial(
   environment: BankConnectionIdentityEnvironment,
   source: BankTransactionSource
 ): unknown | null {
+  if (source === "flex") return environment.FLEX_ORGANIZATION_ID?.trim() ? ["https://api.flex.one", environment.FLEX_ORGANIZATION_ID.trim()] : null;
   if (source === "mercury") {
     const connectionId = environment.MERCURY_CONNECTION_ID?.trim();
     return connectionId ? ["https://api.mercury.com/api/v1", connectionId] : null;

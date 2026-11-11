@@ -390,7 +390,7 @@ export function transactionsShareMerchant(
 export function transactionAiGroupKey(
   transaction: Pick<Transaction, "direction" | "counterparty" | "description" | "rawName">
 ): string {
-  const genericTokens = new Set(["wise", "revolut", "slash", "amex", "mercury", "ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
+  const genericTokens = new Set(["wise", "revolut", "slash", "amex", "mercury", "flex", "ach", "bank", "card", "credit", "debit", "merchant", "payment", "pos", "purchase", "sepa", "transaction", "transfer", "unknown", "wire"]);
   const counterpartyTokens = canonicalTransactionText(transaction.counterparty)
     .split(" ")
     .filter((token) => {

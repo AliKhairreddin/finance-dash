@@ -65,7 +65,7 @@ export function BankSourceDropdown({ activeBank, sourceFilter, onChange }: {
                 </Menu.CheckboxItem>
               ))}
               <Menu.Separator className="bank-navigation-separator" />
-              {[...manualBankSources, { id: "holdings", label: "Cash & wallets" }].map(bank => (
+              {[...manualBankSources.filter(bank => bank.id !== "flex"), { id: "holdings", label: "Cash & wallets" }].map(bank => (
                 <Menu.LinkItem
                   key={bank.id}
                   className="searchable-select-option bank-navigation-option"

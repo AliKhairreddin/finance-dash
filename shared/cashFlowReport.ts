@@ -19,7 +19,7 @@ export function cashFlowCashAccountGroups(lines: CashFlowLine[], includeEmpty = 
     if (words.length > 1 && words.at(-1)?.toUpperCase() === line.currency.trim().toUpperCase()) {
       name = words.slice(0, -1).join(" ").replace(/[\s·–—-]+$/, "");
     }
-    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex|mercury)-/)?.[1];
+    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex|mercury|flex)-/)?.[1];
     if (/^slash[\s·–—-]+cashback$/i.test(name)) {
       name = "Slash Cashback";
     } else if (source === "wise" || /\bwise\b/i.test(name)) {
@@ -27,7 +27,7 @@ export function cashFlowCashAccountGroups(lines: CashFlowLine[], includeEmpty = 
       const shortEntity = name.match(/^wise[\s·–—-]+(dn|lmd)$/i)?.[1].toUpperCase();
       if (entity || shortEntity) name = `Wise ${entity ? wiseEntityShortLabel(entity) : shortEntity}`;
     } else if (source) {
-      name = { revolut: "Revolut", slash: "Slash", amex: "Amex", mercury: "Mercury" }[source]!;
+      name = { revolut: "Revolut", slash: "Slash", amex: "Amex", mercury: "Mercury", flex: "Flex" }[source]!;
     }
     name = cashFlowCashAccountOrder.find(account => account.toLowerCase() === name.toLowerCase()) ?? name;
     const key = name ? name.toLowerCase() : line.id;

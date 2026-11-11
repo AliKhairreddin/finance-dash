@@ -73,7 +73,7 @@ export interface MediaFundingBankFunding {
   id: string;
   providerId: string;
   companyProviderId: string;
-  source: "wise" | "revolut" | "slash" | "amex" | "mercury";
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex";
   accountName: string;
   date: string;
   counterparty: string;

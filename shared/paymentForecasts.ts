@@ -109,7 +109,7 @@ export function calculatePaymentHistory(input: {
   const bankById = new Map<string, Transaction>();
   const bankClients = new Map<string, Client>();
   const receiptDates = new Map<string, Set<string>>();
-  const isBankSource = (source: Transaction["source"]): source is "wise" | "revolut" | "slash" | "amex" | "mercury" => source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
+  const isBankSource = (source: Transaction["source"]): source is "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex" => source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury" || source === "flex";
   let unverifiedReceipts = 0;
   for (const transaction of input.transactions) {
     const date = day(transaction.date);

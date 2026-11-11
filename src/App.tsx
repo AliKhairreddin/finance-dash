@@ -4,7 +4,7 @@ import { slashEntities, slashEntityLabel, slashEntityViews, type SlashEntityView
 import type { SlashEntity } from "../shared/types";
 import { TopUpsView, useTopUpSummary } from "@/features/top-ups/TopUpsView";
 import { ManualBankTransactions } from "@/features/banking/ManualBankTransactions";
-import { isManualBankSource, manualBankSources, type ManualBankSource } from "../shared/manualBankTransactions";
+import { isManualOnlyBankSource, manualBankSources, type ManualBankSource } from "../shared/manualBankTransactions";
 import { ContractsView } from "@/features/contracts/ContractsView";
 import { useAmexStatementAccounts } from "./features/banking/useAmexStatementAccounts";
 import { AmexStatementImport } from "./features/banking/AmexStatementImport";
@@ -310,7 +310,7 @@ type DirectoryDeleteTarget =
   | { kind: "revenue-partner"; partner: RevenuePartner };
 const themeStorageKey = "finance-dash-theme";
 const incomeAutomationReadStorageKey = "finance-dash-income-automation-read-at";
-const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "mercury", "kraken", "trust", "flex", "holdings"];
+const bankTabs: readonly BankTab[] = ["all", "wise", "revolut", "slash", "amex", "mercury", "flex", "kraken", "trust", "holdings"];
 const transactionSortKeys: readonly TransactionSortKey[] = [
   "account",
   "amount",
@@ -811,8 +811,8 @@ function App() {
   const transactionPageRequest = useMemo<TransactionPageRequest | null>(() => {
     if (!session || session.role === "media-spend-reviewer") return null;
     if ((!isTransactionReviewer && activeTab !== "banks") || (!isTransactionReviewer && bankTab === "holdings")) return null;
-    if (isManualBankSource(bankTab) && !isTransactionReviewer) return null;
-    const effectiveBankTab: "all" | BankSource = isTransactionReviewer || bankTab === "holdings" || isManualBankSource(bankTab)
+    if (isManualOnlyBankSource(bankTab) && !isTransactionReviewer) return null;
+    const effectiveBankTab: "all" | BankSource = isTransactionReviewer || bankTab === "holdings" || isManualOnlyBankSource(bankTab)
       ? "all"
       : bankTab;
     const selectedSources = effectiveBankTab === "all" ? selectedBankSources(allBankSource) : [effectiveBankTab];
@@ -1456,8 +1456,8 @@ function App() {
     [bankTab, loadedBankTransactions]
   );
 
-  const mercuryTransactions = useMemo(
-    () => bankTab === "mercury" ? loadedBankTransactions : [],
+  const secondaryBankTransactions = useMemo(
+    () => bankTab === "mercury" || bankTab === "flex" ? loadedBankTransactions : [],
     [bankTab, loadedBankTransactions]
   );
 
@@ -2493,7 +2493,7 @@ function App() {
           wiseTransactions={wiseTransactions}
           wiseDateRange={wiseDateRange}
           revolutTransactions={revolutTransactions}
-          mercuryTransactions={mercuryTransactions}
+          secondaryBankTransactions={secondaryBankTransactions}
           revolutDateRange={revolutDateRange}
           slashTransactions={slashTransactions}
           slashDateRange={slashDateRange}
@@ -3631,6 +3631,7 @@ function BankDetailsAccountTable({
     amount: number;
     currency: string;
     source: string;
+    observedAt?: string;
   }>;
   secondaryLabel: string;
 }) {
@@ -3670,7 +3671,7 @@ function BankDetailsAccountTable({
             <tr key={row.id} className="bank-details-account-row">
               <td><div className="bank-details-account-name"><strong title={row.title}>{row.name}</strong></div></td>
               <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
-              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}</td>
+              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}{row.observedAt && <InfoPopover label={`balance timestamp for ${row.name}`}>Last confirmed by Flex: {new Date(row.observedAt).toLocaleString()}</InfoPopover>}</td>
             </tr>
           ))}
           {sortedRows.length === 0 && <tr><td colSpan={3}>{emptyLabel}</td></tr>}
@@ -3718,7 +3719,7 @@ function BanksView({
   wiseTransactions,
   wiseDateRange,
   revolutTransactions,
-  mercuryTransactions,
+  secondaryBankTransactions,
   revolutDateRange,
   slashTransactions,
   slashDateRange,
@@ -3792,7 +3793,7 @@ function BanksView({
   wiseTransactions: Transaction[];
   wiseDateRange: BankTransactionDateRange;
   revolutTransactions: Transaction[];
-  mercuryTransactions: Transaction[];
+  secondaryBankTransactions: Transaction[];
   revolutDateRange: RevolutTransactionDateRange;
   slashTransactions: Transaction[];
   slashDateRange: SlashTransactionDateRange;
@@ -3849,7 +3850,7 @@ function BanksView({
         account.source === source.id
         && (source.id !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView)
         && (source.id !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)
-        && hasNonZeroAccountBalance(account)
+        && (source.id === "flex" || hasNonZeroAccountBalance(account))
         && (
           source.id !== "wise"
           || wiseEntityView === "all"
@@ -3862,7 +3863,7 @@ function BanksView({
   const activeSourceAccounts = activeSource ? (accountsBySource.get(activeSource.id) ?? []) : [];
   const activeSourceDisplayAccounts = activeSource?.id === "slash"
     ? activeSourceAccounts.filter((account) => account.slashAccountSubtype === "credit")
-    : activeSourceAccounts;
+    : activeSource?.id === "flex" ? activeSourceAccounts.filter(isLiquidAccountBalance) : activeSourceAccounts;
   const activeSourceBalance = sumCurrencyTotals(activeSource?.id === "mercury"
     ? dashboard.accounts.filter(account => account.source === "mercury" && (mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView))
     : activeSourceDisplayAccounts, (account) => account.balance);
@@ -3966,7 +3967,7 @@ function BanksView({
       : activeSource.label
     : activeBank === "holdings"
       ? "Cash & wallet holdings"
-      : isManualBankSource(activeBank) ? manualBankSources.find(source => source.id === activeBank)!.label : allBankSource === "all" ? "All bank activity" : selectedBankSources(allBankSource).map(bankSourceLabel).join(" + ");
+      : isManualOnlyBankSource(activeBank) ? manualBankSources.find(source => source.id === activeBank)!.label : allBankSource === "all" ? "All bank activity" : selectedBankSources(allBankSource).map(bankSourceLabel).join(" + ");
 
   useEffect(() => {
     setBankDetailsOpen(false);
@@ -3996,8 +3997,8 @@ function BanksView({
   ) : activeSource ? (
     <>
       <BankHeadlineMetric
-        label={activeSource.id === "slash" ? "Available card credit" : "Live balance"}
-        value={activeSource.id === "mercury" && !mercuryBalanceAvailable ? "Pending" : activeSource.id === "slash"
+        label={activeSource.id === "slash" ? "Available card credit" : activeSource.id === "flex" ? "Available cash" : "Live balance"}
+        value={activeSource.id === "flex" && !activeSourceDisplayAccounts.length ? "Pending" : activeSource.id === "mercury" && !mercuryBalanceAvailable ? "Pending" : activeSource.id === "slash"
           ? formatUsdCurrencyTotal(slashCardCredit, dashboard.fxRates)
           : formatUsdCurrencyTotal(activeSourceBalance, dashboard.fxRates)}
         title={activeSource.id === "slash"
@@ -4006,6 +4007,7 @@ function BanksView({
             ? nativeCurrencyBreakdown(activeSourceBalance)
             : "No live balance available"}
       />
+      {activeSource.id === "flex" && activeSourceAccounts.some(account => account.flex?.type === "rewardCard") && <BankHeadlineMetric label="Available credit" value={formatUsdCurrencyTotal(sumCurrencyTotals(activeSourceAccounts.filter(account => account.flex?.type === "rewardCard"), account => account.flex!.available), dashboard.fxRates)} />}
       {activeSource.id === "slash" ? (
         <>
           <BankHeadlineMetric
@@ -4057,7 +4059,7 @@ function BanksView({
               ? slashCreditAccounts.length > 0
                 ? slashCreditAccounts
                 : sourceSlashAccounts.filter((account) => account.slashAccountSubtype === "cash")
-              : accounts;
+              : source.id === "flex" ? accounts.filter(isLiquidAccountBalance) : accounts;
             const accountTotals = sumCurrencyTotals(summaryAccounts, (account) => account.balance);
             const sourcePeriodActivity = periodSourceById.get(source.id);
             const periodTransactionCount = sourcePeriodActivity
@@ -4095,16 +4097,17 @@ function BanksView({
           <span className={`status-pill ${activeSourceStatus?.mode === "live" ? "good" : "warning"}`}>{activeSourceStatus?.mode ?? "partial"}</span>
         </div>
         <BankDetailsAccountTable
-          secondaryLabel={activeSource.id === "slash" ? "Type" : "Source"}
+          secondaryLabel={activeSource.id === "slash" || activeSource.id === "flex" ? "Type" : "Source"}
           rows={detailAccounts.map((account) => ({
             id: account.id,
             name: account.name,
             title: account.name,
             amount: account.balance,
             currency: account.currency,
+            observedAt: account.source === "flex" ? account.updatedAt : undefined,
             source: activeSource.id === "slash"
               ? account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
-              : activeSource.label
+              : activeSource.id === "flex" ? account.flex?.type === "rewardCard" ? "Card debt" : "Cash" : activeSource.label
           }))}
           emptyLabel={`No ${activeSource.label} accounts available`}
         />
@@ -4145,7 +4148,7 @@ function BanksView({
     <div className="banks-layout">
       {bankPeriodMetricsError && <div className="income-callout warning" role="alert"><span>{bankPeriodMetricsError}{periodSnapshot ? " Showing the previous calculation." : ""}</span><Button className="secondary-button" disabled={isLoadingBankPeriodMetrics} onClick={onRetryPeriodMetrics}>Retry totals</Button></div>}
       <section className="panel wide-panel bank-overview-bar">
-        <div className={`panel-header bank-overview-header${isManualBankSource(activeBank) ? " bank-manual-header" : ""}`}>
+        <div className={`panel-header bank-overview-header${isManualOnlyBankSource(activeBank) ? " bank-manual-header" : ""}`}>
           <div className="bank-overview-title">
             <p className="eyebrow">Banks</p>
             <h2>{activeBankLabel}</h2>
@@ -4155,7 +4158,7 @@ function BanksView({
               {headerMetrics}
             </div>
           )}
-          {isManualBankSource(activeBank) ? <span className="status-pill">Manual ledger</span> : activeBank === "amex" && !activeSourceStatus?.configured
+          {isManualOnlyBankSource(activeBank) ? <span className="status-pill">Manual ledger</span> : activeBank === "amex" && !activeSourceStatus?.configured
             ? <span className="status-pill">Statement imports</span>
             : <BankSyncStatus backgroundSync={backgroundSync} integrationStatuses={relevantIntegrationStatuses} />}
           <div className="bank-header-controls">
@@ -4199,7 +4202,8 @@ function BanksView({
         </div>
       </section>
 
-      {isManualBankSource(activeBank) && <ManualBankTransactions key={activeBank} source={activeBank} />}
+      {isManualOnlyBankSource(activeBank) && <ManualBankTransactions key={activeBank} source={activeBank} />}
+      {activeBank === "flex" && <details className="panel"><summary>Manual Flex entries</summary><ManualBankTransactions source="flex" /></details>}
       {activeBank === "all" && (
         <AllBankTransactionsView
             exportControl={exportControl}
@@ -4320,7 +4324,7 @@ function BanksView({
           )}
         />
       )}
-      {(activeBank === "revolut" || activeBank === "mercury") && (
+      {(activeBank === "revolut" || activeBank === "mercury" || activeBank === "flex") && (
         <ConnectedBankView
           exportControl={exportControl}
           source={activeBank}
@@ -4328,11 +4332,11 @@ function BanksView({
           bankGroupType={bankGroupType}
           bankGroupLabel={bankGroupLabel}
           dashboard={dashboard}
-          period={activeBank === "mercury" ? allBankDateRange : revolutDateRange}
-          rows={activeBank === "mercury" ? mercuryTransactions : revolutTransactions}
-          dateRange={activeBank === "mercury" ? allBankDateRange : revolutDateRange}
+          period={activeBank !== "revolut" ? allBankDateRange : revolutDateRange}
+          rows={activeBank !== "revolut" ? secondaryBankTransactions : revolutTransactions}
+          dateRange={activeBank !== "revolut" ? allBankDateRange : revolutDateRange}
           isLoadingDateRange={isLoadingTransactions}
-          onLoadDateRange={activeBank === "mercury" ? onLoadAllBankTransactions : onLoadRevolutTransactions}
+          onLoadDateRange={activeBank !== "revolut" ? onLoadAllBankTransactions : onLoadRevolutTransactions}
           providersById={providersById}
           bankDirection={bankDirection}
           setBankDirection={setBankDirection}
@@ -7450,7 +7454,7 @@ function BankDateRangeControls({
         windowDays={windowDays}
       />
       <InfoPopover label="automatic bank updates">
-        Revolut, Slash, and Mercury refresh automatically. Slash account and card metadata is verified on import, and any unchecked history is repaired in the background.
+        Revolut, Slash, Mercury, and Flex refresh automatically. Slash account and card metadata is verified on import, and any unchecked history is repaired in the background.
       </InfoPopover>
     </div>
   );
@@ -7465,7 +7469,7 @@ function ConnectedBankView({
   onLoadDateRange,
   ...reconciliationProps
 }: ConnectedBankViewProps & {
-  source: "revolut" | "mercury";
+  source: "revolut" | "mercury" | "flex";
   dateRange: RevolutTransactionDateRange;
   isLoadingDateRange: boolean;
   onLoadDateRange: (dateRange: RevolutTransactionDateRange) => Promise<void>;

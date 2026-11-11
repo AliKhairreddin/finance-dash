@@ -1,13 +1,14 @@
 import type { DataSource } from "./types";
 
-export type BankSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury">;
+export type BankSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex">;
 
 export const bankSources: Array<{ id: BankSource; label: string }> = [
   { id: "wise", label: "Wise" },
   { id: "revolut", label: "Revolut" },
   { id: "slash", label: "Slash" },
   { id: "amex", label: "Amex" },
-  { id: "mercury", label: "Mercury" }
+  { id: "mercury", label: "Mercury" },
+  { id: "flex", label: "Flex" }
 ];
 
 const bankSourceIds = new Set<BankSource>(bankSources.map((source) => source.id));

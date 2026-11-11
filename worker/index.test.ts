@@ -22,7 +22,7 @@ import worker, {
 } from "./handler";
 
 test("automatic bank transaction sync includes every configured bank", () => {
-  assert.deepEqual(automaticTransactionBankSources, ["wise", "revolut", "slash", "amex", "mercury"]);
+  assert.deepEqual(automaticTransactionBankSources, ["wise", "revolut", "slash", "amex", "mercury", "flex"]);
 });
 
 test("saved Wise balance accounts do not depend on a transaction sync record", () => {

@@ -57,6 +57,7 @@ const transactionSources: Array<{ value: DataSource; label: string }> = [
   { value: "slash", label: "Slash" },
   { value: "amex", label: "Amex" },
   { value: "mercury", label: "Mercury" },
+  { value: "flex", label: "Flex" },
   { value: "merit", label: "Merit" },
   { value: "manual", label: "Manual" },
   { value: "tune", label: "TUNE" },

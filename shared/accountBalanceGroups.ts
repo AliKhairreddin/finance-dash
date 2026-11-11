@@ -5,9 +5,10 @@ import { wiseEntityLabel } from "./wiseEntities";
 export function accountBalanceGroups(accounts: AccountBalance[], rates: FxRate[]) {
   const groups = new Map<string, { id: string; name: string; accounts: AccountBalance[] }>();
   for (const account of accounts) {
-    const id = account.source === "wise" ? `wise-${account.wiseEntity ?? "unassigned"}` : `${account.source}${account.slashAccountSubtype === "credit" ? "-credit" : ""}`;
+    const id = account.source === "wise" ? `wise-${account.wiseEntity ?? "unassigned"}` : `${account.source}${account.slashAccountSubtype === "credit" || account.flex?.type === "rewardCard" ? "-credit" : ""}`;
     const name = account.source === "wise" ? `Wise · ${account.wiseEntity ? wiseEntityLabel(account.wiseEntity) : "Unassigned"}`
       : account.source === "slash" ? `Slash ${account.slashAccountSubtype === "credit" ? "credit" : "cash"}`
+      : account.source === "flex" ? `Flex ${account.flex?.type === "rewardCard" ? "card debt" : "cash"}`
       : `${account.source[0].toUpperCase()}${account.source.slice(1)}`;
     const group = groups.get(id) ?? { id, name, accounts: [] };
     group.accounts.push(account); groups.set(id, group);

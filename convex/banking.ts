@@ -1,3 +1,4 @@
+import { flexAccount, flexTransaction } from "./flexSchema";
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { slashEntityLabel } from "../shared/slashEntities";
 import type { Doc } from "./_generated/dataModel";
@@ -29,13 +30,14 @@ import {
   ensureBankConnectionBinding
 } from "./bankLease";
 
-type BankSource = "wise" | "revolut" | "slash" | "amex" | "mercury";
+type BankSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex";
 
-const allBankSources: BankSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
+const allBankSources: BankSource[] = ["wise", "revolut", "slash", "amex", "mercury", "flex"];
 const bankSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("flex"),
   v.literal("mercury"),
   v.literal("amex")
 );
@@ -102,6 +104,7 @@ const transaction = v.object({
   cardId: v.optional(v.string()),
   cardLastFour: v.optional(v.string()),
   cardMetadataVersion: v.optional(v.number()),
+  flex: v.optional(flexTransaction),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({
@@ -192,6 +195,7 @@ const account = v.object({
   slashEntity: v.optional(slashEntity),
   slashAccountSubtype: v.optional(slashAccountSubtype),
   slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
+  flex: v.optional(flexAccount),
   balance: v.number(),
   currency: v.string(),
   updatedAt: v.string(),
@@ -1626,6 +1630,7 @@ export async function applyActivityBatch(
     }
 
     if (existing) {
+      if (args.source === "flex" && existing.flex && fresh.flex && existing.flex.modifiedAt > fresh.flex.modifiedAt) continue;
       if (existing.source !== fresh.source) {
         throw new ConvexError({
           code: "TRANSACTION_ID_SOURCE_CONFLICT",

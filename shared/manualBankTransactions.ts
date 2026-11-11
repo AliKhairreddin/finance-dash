@@ -53,3 +53,7 @@ export function parseManualBankCommand(args: string, sentAt: number): ManualBank
   if (!Number.isSafeInteger(sentAt) || sentAt <= 0 || !Number.isFinite(new Date(sentAt * 1000).getTime())) throw new Error("The Telegram message date is missing or invalid. Send a new command.");
   return validateManualBankFields({ companyName: match[1], amount: Number(match[2].replaceAll(",", "")), currency: "USDC", direction: "out", date: financeOperatingDate(sentAt * 1000) });
 }
+
+export function isManualOnlyBankSource(value: string): value is Exclude<ManualBankSource, "flex"> {
+  return value !== "flex" && isManualBankSource(value);
+}

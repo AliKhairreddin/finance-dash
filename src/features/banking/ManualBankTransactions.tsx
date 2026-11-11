@@ -62,7 +62,7 @@ export function ManualBankTransactions({ source }: { source: ManualBankSource })
         <Button onClick={() => setEditing("new")}><Plus size={14} /> Add transaction</Button>
       </div>
     </div>
-    {source === "flex" && <div className="status-pill">Manual entries · Live balances and alerts unavailable</div>}
+    {source === "flex" && <div className="status-pill">Manual entries · Excluded from API totals</div>}
     {error && <div role="alert" className="income-callout warning">{error}<Button variant="outline" onClick={reload}>Retry</Button></div>}
     <div ref={tableWrap} className="table-wrap" aria-busy={loading}>
       <table className="data-table">

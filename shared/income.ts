@@ -688,7 +688,7 @@ export function mergeFxRates(
 }
 
 export function isLiquidAccountBalance(account: AccountBalance): boolean {
-  return account.source !== "amex" && account.slashAccountSubtype !== "credit";
+  return account.source !== "amex" && account.slashAccountSubtype !== "credit" && account.flex?.type !== "rewardCard";
 }
 
 export function hasNonZeroAccountBalance(account: AccountBalance): boolean {
@@ -696,7 +696,7 @@ export function hasNonZeroAccountBalance(account: AccountBalance): boolean {
 }
 
 function isPaymentSource(source: Transaction["source"]): source is Extract<PaymentSource, Transaction["source"]> {
-  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
+  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury" || source === "flex";
 }
 
 function lastDayOfMonth(date: string): string {

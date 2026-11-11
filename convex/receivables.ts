@@ -97,7 +97,7 @@ export const linkInvoice = mutation({ args: { ...actor, key: v.string(), invoice
   const payments = [...state.paymentAllocations];
   for (const r of receipts) {
     if (r.bankCurrency !== r.currency || trackerCents(r.bankAmount) !== trackerCents(r.amount)) trackerReject("Review FX allocations in the invoice payment workflow before linking");
-    payments.push({ id: `tracker:${r.key}`, invoiceId: invoice.id, transactionId: r.transactionId, amount: r.amount, currency: r.currency, paidAt: r.paidAt, source: ["wise", "revolut", "slash", "mercury", "amex"].includes(r.bank) ? r.bank as "wise" | "revolut" | "slash" | "mercury" | "amex" : "other", mode: "manual", accountName: r.account, reference: r.reference, note: r.evidence, createdAt: r.createdAt });
+    payments.push({ id: `tracker:${r.key}`, invoiceId: invoice.id, transactionId: r.transactionId, amount: r.amount, currency: r.currency, paidAt: r.paidAt, source: ["wise", "revolut", "slash", "mercury", "flex", "amex"].includes(r.bank) ? r.bank as "wise" | "revolut" | "slash" | "mercury" | "flex" | "amex" : "other", mode: "manual", accountName: r.account, reference: r.reference, note: r.evidence, createdAt: r.createdAt });
     await ctx.db.patch(r._id, { state: "transferred" });
   }
   const other = await ctx.db.query("receivableItems").withIndex("by_invoice", q => q.eq("invoiceId", invoice.id)).take(3);

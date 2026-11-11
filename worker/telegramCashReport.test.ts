@@ -35,6 +35,16 @@ const rates: FxRate[] = [
   { asset: "BTC", rateUsd: 80_000, asOf: now, provider: "coinbase", stale: false }
 ];
 
+test("cash reports include Flex bank balances and exclude card debt and available credit", () => {
+  const report = buildTelegramCashReport({ asOf: now, rates, slashAccounts: [], accounts: [
+    account({ id: "flex-cash", source: "flex", balance: 14000, flex: { type: "banking", available: 14000, availableAsOf: now, status: "active" } }),
+    account({ id: "flex-card", source: "flex", balance: -2000, flex: { type: "rewardCard", available: 98000, availableAsOf: now, status: "active" } })
+  ] });
+  assert.match(report, /Bank total ≈ USD 14,000\.00/);
+  assert.match(report, /Flex · Mojo Labs LLC ≈ USD 14,000\.00/);
+  assert.doesNotMatch(report, /98,000|2,000/);
+});
+
 test("cash report groups banks in the requested order and shows crypto separately from every bank total", () => {
   const report = buildTelegramCashReport({
     asOf: now, rates,

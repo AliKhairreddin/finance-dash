@@ -19,7 +19,7 @@ export async function assertBankLedgerReady(ctx: MutationCtx | QueryCtx): Promis
 
 export async function assertBankConnectionBinding(
   ctx: MutationCtx | QueryCtx,
-  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
   connectionKey: string
 ): Promise<void> {
   const binding = await ctx.db
@@ -37,7 +37,7 @@ export async function assertBankConnectionBinding(
 
 export async function ensureBankConnectionBinding(
   ctx: MutationCtx,
-  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
   connectionKey: string
 ): Promise<void> {
   const binding = await ctx.db
@@ -76,7 +76,7 @@ export async function ensureBankConnectionBinding(
 
 export async function assertActiveBankSyncLease(
   ctx: MutationCtx,
-  source: "wise" | "revolut" | "slash" | "amex" | "mercury",
+  source: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
   credential: BankSyncLeaseCredential
 ): Promise<void> {
   if (

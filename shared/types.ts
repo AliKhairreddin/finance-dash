@@ -2,9 +2,9 @@ export type MercuryEntity = "mojo" | "coveragebird" | "coveragepro";
 export type SlashEntity = "mojo" | "coveragebird" | "coveragepro";
 import type { MeritInvoiceCopy } from "./meritInvoiceCopy";
 import type { Id } from "../convex/_generated/dataModel";
-export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "merit" | "manual" | "tune" | "quinstreet";
+export type DataSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex" | "merit" | "manual" | "tune" | "quinstreet";
 
-export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury">;
+export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex">;
 
 export type Direction = "in" | "out";
 
@@ -28,7 +28,7 @@ export type MeritSendMode = "save" | "deliver";
 
 export type MeritDeliveryStatus = "not-sent" | "saved" | "delivered" | "delivery-failed";
 
-export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "cash" | "kraken" | "trust" | "other";
+export type PaymentSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex" | "cash" | "kraken" | "trust" | "other";
 
 export type InvoiceMatchSource = "exact" | "tolerance" | "ai" | "manual";
 
@@ -73,6 +73,7 @@ export interface AccountBalance {
   slashEntity?: SlashEntity;
   slashAccountSubtype?: SlashAccountSubtype;
   slashVirtualAccounts?: SlashVirtualAccount[];
+  flex?: { type: "banking" | "rewardCard"; available: number; availableAsOf: string; status: string };
   balance: number;
   currency: string;
   updatedAt: string;
@@ -641,6 +642,7 @@ export interface Transaction {
   cardLastFour?: string;
   /** Provider-specific enrichment version proving card metadata was checked, even for non-card activity. */
   cardMetadataVersion?: number;
+  flex?: { id: string; type: string; status: string; occurredAt: string; createdAt: string; modifiedAt: string; declineReason?: string };
   amount: number;
   currency: string;
   cashback?: {
@@ -847,7 +849,7 @@ export interface ImportWiseStatementSummary {
   duplicateTransactions: number;
 }
 
-export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash" | "mercury">;
+export type ConnectedBankSource = Extract<DataSource, "revolut" | "slash" | "mercury" | "flex">;
 
 export interface TransactionPage {
   fromDate: string;

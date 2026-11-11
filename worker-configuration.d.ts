@@ -186,4 +186,11 @@ declare namespace Cloudflare {
 	}
 	interface Env extends __BaseEnv_WorkerEnv {}
 }
-interface WorkerEnv extends __BaseEnv_WorkerEnv {}
+interface WorkerEnv extends __BaseEnv_WorkerEnv {
+  FLEX_API_KEY?: string;
+  FLEX_ORGANIZATION_ID?: string;
+  FLEX_NOTIFICATIONS_ENABLED?: string;
+  FLEX_BALANCE_ALERT_THRESHOLD_USD?: string;
+  FLEX_CARD_ALERT_RECIPIENTS?: string;
+  FLEX_BALANCE_ALERT_RECIPIENTS?: string;
+}

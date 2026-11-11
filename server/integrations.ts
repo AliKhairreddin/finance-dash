@@ -141,7 +141,7 @@ export function getIntegrationStatus(
   wiseBalanceIssue?: string,
   revenuePartners: RevenuePartner[] = [],
   meritIssue?: string,
-  bankIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury", string>> = {},
+  bankIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury" | "flex", string>> = {},
   fxRates: FxRate[] = [],
   missingFxAssets: string[] = [],
   staleFxAssets: string[] = []
@@ -195,6 +195,7 @@ export function getIntegrationStatus(
       needs: wiseNeeds,
       issue: activeWiseIssue
     },
+    { id: "flex", label: "Flex", configured: false, mode: "partial", message: "Flex synchronization runs through the production Worker and saved Convex ledger.", needs: [] },
     {
       id: "mercury", label: "Mercury", configured: mercuryNeeds.length === 0,
       mode: mercuryNeeds.length === 0 && !bankIssues.mercury ? "live" : "partial",

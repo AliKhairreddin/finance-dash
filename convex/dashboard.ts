@@ -1,3 +1,4 @@
+import { flexTransaction } from "./flexSchema";
 import { guardTrackerFinancialState } from "./receivablesCore";
 import { meritInvoiceCopy } from "./meritInvoiceCopySchema";
 import { revenueInvoiceLine } from "./revenueInvoiceSchema";
@@ -35,6 +36,7 @@ const dataSource = v.union(
   v.literal("wise"),
   v.literal("revolut"),
   v.literal("slash"),
+  v.literal("flex"),
   v.literal("mercury"),
   v.literal("amex"),
   v.literal("merit"),
@@ -262,6 +264,7 @@ const transaction = v.object({
   cardId: v.optional(v.string()),
   cardLastFour: v.optional(v.string()),
   cardMetadataVersion: v.optional(v.number()),
+  flex: v.optional(flexTransaction),
   amount: v.number(),
   currency: v.string(),
   cashback: v.optional(v.object({
@@ -453,6 +456,7 @@ const paymentAllocation = v.object({
     v.literal("wise"),
     v.literal("revolut"),
     v.literal("slash"),
+    v.literal("flex"),
     v.literal("mercury"),
     v.literal("amex"),
     v.literal("cash"),
@@ -648,8 +652,8 @@ const maximumLegacyLedgerMigrationBatchSize = 100;
 
 function isBankTransactionSource(
   source: string
-): source is "wise" | "revolut" | "slash" | "amex" | "mercury" {
-  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury";
+): source is "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex" {
+  return source === "wise" || source === "revolut" || source === "slash" || source === "amex" || source === "mercury" || source === "flex";
 }
 
 export const disposeOrphanedLegacyTeamAssignments = mutation({

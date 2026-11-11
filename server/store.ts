@@ -250,7 +250,7 @@ let accounts: DashboardSnapshot["accounts"] = [];
 let lastSync = new Date().toISOString();
 let wiseBalanceSyncIssue: string | undefined;
 let meritSyncIssue: string | undefined;
-let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury", string>> = {};
+let bankSyncIssues: Partial<Record<"revolut" | "slash" | "amex" | "mercury" | "flex", string>> = {};
 
 function runtimeAiSettings(): StoredAiSettings {
   return {
@@ -1883,7 +1883,7 @@ export async function downloadInvoicePdf(invoiceId: string): Promise<{
 }
 
 function validPaymentSource(source: string): source is PaymentAllocation["source"] {
-  return ["wise", "revolut", "slash", "amex", "mercury", "cash", "kraken", "trust", "other"].includes(source);
+  return ["wise", "revolut", "slash", "amex", "mercury", "flex", "cash", "kraken", "trust", "other"].includes(source);
 }
 
 function bulkPaymentAllocationId(operationId: string, invoiceId: string): string {
@@ -2981,7 +2981,7 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       (transaction.source === "wise"
         || transaction.source === "revolut"
         || transaction.source === "slash"
-        || transaction.source === "amex" || transaction.source === "mercury")
+        || transaction.source === "amex" || transaction.source === "mercury" || transaction.source === "flex")
       && (!options.source || transaction.source === options.source)
       && (!options.sources || options.sources.includes(transaction.source as BankTransactionSource))
       && (!options.direction || transaction.direction === options.direction)
@@ -3028,7 +3028,7 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): Analytic
         (transaction.source === "wise"
           || transaction.source === "revolut"
           || transaction.source === "slash"
-          || transaction.source === "amex" || transaction.source === "mercury")
+          || transaction.source === "amex" || transaction.source === "mercury" || transaction.source === "flex")
         && transaction.date >= fromDate
         && transaction.date <= toDate
       )
@@ -3036,7 +3036,7 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): Analytic
   );
   // The local in-memory store has no verified history intervals.
   // Its existing records are useful, but must not be presented as complete history.
-  const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
+  const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury", "flex"];
   return { ...accumulator.finish(), coverage: sources.map((source) => ({ source, missingRanges: [{ fromDate, toDate }] })) };
 }
 

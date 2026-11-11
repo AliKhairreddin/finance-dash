@@ -25,7 +25,7 @@ export const financeTelegramCommands: readonly FinanceTelegramCommand[] = [
   { command: "ask", description: "Ask a finance question", access: "read", input: "required", arguments: "<question>", example: "/ask How much did we spend on Meta last month?" },
   { command: "overview", description: "Show the finance overview", access: "read", input: "tap" },
   { command: "cash", description: "Show Wise, Revolut, Slash and Mercury cash", access: "read", input: "tap" },
-  { command: "balances", description: "Show bank and asset balances", access: "read", input: "optional", arguments: "[all|slash|wise|revolut|amex|mercury|holdings]", example: "/balances slash" },
+  { command: "balances", description: "Show bank and asset balances", access: "read", input: "optional", arguments: "[all|slash|wise|revolut|amex|mercury|flex|holdings]", example: "/balances slash" },
   { command: "cashflow", description: "Show cash-flow totals", access: "read", input: "tap" },
   { command: "share_updates", description: "Send cash-flow + invoice PNGs to partners and both Alis", access: "action", input: "tap" },
   { command: "receivables", description: "Show current receivables", access: "read", input: "tap" },

@@ -1,3 +1,5 @@
+import { fetchFlexActivityBatch, flexRefreshMs, FlexRateLimitError } from "../shared/flexApi";
+import { flexCardObservations, flexBalanceObservations } from "../shared/flexAlerts";
 import { handleTrackerApi, runTrackerMaintenance, deliverTrackerNotifications, trackerTelegramCommand } from "./receivablesTracker";
 import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { meritHistoryKey, validateMeritHistory } from "../shared/meritHistory";
@@ -417,13 +419,14 @@ interface BankBackfillJob {
   updatedAt: string;
 }
 
-const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury"];
+const bankSources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury", "flex"];
 export const automaticTransactionBankSources: readonly BankTransactionSource[] = [
   "wise",
   "revolut",
   "slash",
   "amex",
-  "mercury"
+  "mercury",
+  "flex"
 ];
 
 export function hasSavedWiseBalanceAccounts(accounts: readonly AccountBalance[]): boolean {
@@ -455,6 +458,7 @@ async function bankStorageConnectionDirectory(env: Env): Promise<Array<{
 }
 
 function bankSourceConfigured(env: Env, source: BankTransactionSource): boolean {
+  if (source === "flex") return Boolean(env.FLEX_API_KEY?.trim() && env.FLEX_ORGANIZATION_ID?.trim());
   if (source === "mercury") return Boolean(mercuryTokenNames.every(name => env[name]?.trim()) && env.MERCURY_CONNECTION_ID?.trim());
   if (source === "wise") {
     return Boolean(env.WISE_API_TOKEN?.trim() && env.WISE_PROFILE_IDS?.trim() && env.ZOHO_CLIENT_ID?.trim() && env.ZOHO_CLIENT_SECRET?.trim() && env.ZOHO_REFRESH_TOKEN?.trim());
@@ -3188,6 +3192,7 @@ function integrationStatus(
   const wiseNeeds = ["WISE_API_TOKEN", "WISE_PROFILE_IDS", "ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN"].filter((name) => !env[name as keyof Env]);
   const wiseBalanceIssue = wiseNeeds.length === 0 ? bankIssues.wise ?? wiseActivity?.balanceIssue : undefined;
 
+  const flexNeeds = ["FLEX_API_KEY", "FLEX_ORGANIZATION_ID"].filter(name => !env[name as keyof Env]);
   const mercuryNeeds = [...mercuryTokenNames, "MERCURY_CONNECTION_ID"].filter((name) => !env[name as keyof Env]);
   const revolutNeeds = [
     "REVOLUT_CLIENT_ID",
@@ -3236,6 +3241,12 @@ function integrationStatus(
           : "Configure Wise balance access and Zoho API credentials to sync these accounts."),
       needs: wiseNeeds,
       issue: wiseBalanceIssue
+    },
+    {
+      id: "flex", label: "Flex", configured: flexNeeds.length === 0,
+      mode: flexNeeds.length === 0 && !bankIssues.flex ? "live" : "partial",
+      message: bankIssues.flex ?? (flexNeeds.length === 0 ? "Saved balances and transactions refresh every five minutes; source corrections are reconciled incrementally." : "Connect Flex read-only API access to synchronize accounts and transactions."),
+      needs: flexNeeds, issue: bankIssues.flex
     },
     {
       id: "mercury" as DataSource, label: "Mercury", configured: mercuryNeeds.length === 0,
@@ -3736,6 +3747,61 @@ async function syncRevolutActivity(
   });
 }
 
+async function syncFlexActivity(env: Env, requestedRange?: SlashTransactionDateRange, laneKey = "live", pageBudget = 5): Promise<boolean> {
+  const connectionKey = await requireBankConnectionKey(env, "flex");
+  return withBankSyncLease(env, "flex", connectionKey, async lease => {
+    const convex = getConvexClient(env);
+    const serviceToken = getConvexServiceToken(env);
+    const credential = { serviceToken, connectionKey, leaseToken: lease.token, leaseFence: lease.fence };
+    const control = await convex.mutation(api.flexSync.update, credential);
+    const notificationsEnabled = env.FLEX_NOTIFICATIONS_ENABLED === "true";
+    // Delivery also holds the provider lease, so ordinary refreshes cannot send concurrently.
+    const deliverNotifications = async () => {
+      if (!notificationsEnabled) return;
+      const recipients = [...parseTelegramCommandUsers(env.FLEX_CARD_ALERT_RECIPIENTS, "FLEX_CARD_ALERT_RECIPIENTS"), ...parseTelegramCommandUsers(env.FLEX_BALANCE_ALERT_RECIPIENTS, "FLEX_BALANCE_ALERT_RECIPIENTS")];
+      for (const job of await convex.query(api.flexSync.pending, { serviceToken, connectionKey })) {
+        try {
+          const user = cashReportRecipient({ ...env, TELEGRAM_CASH_REPORT_RECIPIENTS: recipients.join(",") }, job.recipient, "weekly-cash");
+          await sendTelegramMessage(env, user.chatId, job.message);
+          await convex.mutation(api.flexSync.deliveryResult, { ...credential, id: job.id, success: true });
+        } catch {
+          console.error(JSON.stringify({ event: "flex_notification_delivery_failed" }));
+          await convex.mutation(api.flexSync.deliveryResult, { ...credential, id: job.id, success: false });
+        }
+      }
+    };
+    await deliverNotifications();
+    if (control.retryAt > Date.now()) throw new FlexRateLimitError(control.retryAt);
+    const storedCheckpoint = await bankSyncCheckpoint(env, "flex", connectionKey, laneKey);
+    const state = await bankSyncState(env, "flex", connectionKey);
+    if (!requestedRange && !storedCheckpoint && state && Date.now() - Date.parse(state.lastSyncedAt) < flexRefreshMs) return true;
+    if (requestedRange && storedCheckpoint && (requestedRange.fromDate !== storedCheckpoint.fromDate || requestedRange.toDate !== storedCheckpoint.toDate)) return false;
+    const range = storedCheckpoint ?? requestedRange ?? (state ? incrementalBankDateRange(state) : undefined);
+    try {
+      const result = await fetchFlexActivityBatch({
+        apiKey: env.FLEX_API_KEY!, organizationId: env.FLEX_ORGANIZATION_ID!, pageBudget,
+        ...(storedCheckpoint ? { checkpoint: storedCheckpoint.checkpoint } : { dateRange: range,
+          ...(!requestedRange && control.modifiedThrough ? { modifiedAfter: new Date(Date.parse(control.modifiedThrough) - 5 * 60_000).toISOString() } : {}) }),
+        onAccountsDiscovered: accounts => registerDiscoveredBankAccountSet(env, "flex", laneKey, storedCheckpoint, accounts, lease),
+        onTransactionPage: async transactions => {
+          await upsertSyncedLedgerTransactions(env, "flex", transactions, lease);
+          if (notificationsEnabled) await convex.mutation(api.flexSync.observe, { ...credential,
+            observations: flexCardObservations(transactions, control.activatedAt, parseTelegramCommandUsers(env.FLEX_CARD_ALERT_RECIPIENTS, "FLEX_CARD_ALERT_RECIPIENTS")) });
+        }
+      });
+      await persistCheckpointedBankSync(env, "flex", result.dateRange, laneKey, storedCheckpoint?.checkpoint ?? null, storedCheckpoint?.accountIds ?? null, lease, result);
+      if (result.complete && !requestedRange) await convex.mutation(api.flexSync.update, { ...credential, modifiedThrough: result.modifiedThrough, retryAt: 0 });
+      if (notificationsEnabled) await convex.mutation(api.flexSync.observe, { ...credential, observations: flexBalanceObservations(result.accounts,
+        Number(env.FLEX_BALANCE_ALERT_THRESHOLD_USD), parseTelegramCommandUsers(env.FLEX_BALANCE_ALERT_RECIPIENTS, "FLEX_BALANCE_ALERT_RECIPIENTS")) });
+      await deliverNotifications();
+      return result.complete;
+    } catch (error) {
+      if (error instanceof FlexRateLimitError) await convex.mutation(api.flexSync.update, { ...credential, retryAt: error.retryAt });
+      throw error;
+    }
+  });
+}
+
 async function syncMercuryActivity(
   env: Env,
   requestedRange?: SlashTransactionDateRange,
@@ -3973,6 +4039,7 @@ async function syncLatestBankActivity(
   const laneKey = options.dateRange
     ? `range:${options.dateRange.fromDate}:${options.dateRange.toDate}`
     : "live";
+  if (includes("flex") && bankSourceConfigured(env, "flex")) jobs.push({ source: "flex", run: syncFlexActivity(env, options.dateRange, laneKey) });
   if (includes("mercury") && bankSourceConfigured(env, "mercury")) {
     jobs.push({ source: "mercury", run: syncMercuryActivity(env, options.dateRange, laneKey) });
   }
@@ -4138,7 +4205,7 @@ export async function getTelegramSlashRejectedCardsReport(env: Env, asOf = Date.
 
 export async function getTelegramCashReport(env: Env): Promise<string> {
   const connections = (await bankStorageConnectionDirectory(env))
-    .filter(connection => ["wise", "revolut", "mercury", "slash"].includes(connection.source));
+    .filter(connection => ["wise", "revolut", "mercury", "slash", "flex"].includes(connection.source));
   const accounts = await getConvexClient(env).query(api.banking.getCashReportAccounts, {
     serviceToken: getConvexServiceToken(env), connections
   });
@@ -4217,6 +4284,7 @@ async function syncBankSourceRange(
   laneKey: string
 ): Promise<boolean> {
   if (source === "wise") return syncWiseActivity(env, range);
+  if (source === "flex") return syncFlexActivity(env, range, laneKey, 1);
   if (source === "mercury") return syncMercuryActivity(env, range, laneKey, 1);
   if (source === "revolut") return syncRevolutActivity(env, range, laneKey, 1);
   if (source === "slash") return syncSlashActivity(env, range, laneKey, 1);
@@ -4449,6 +4517,10 @@ async function getSnapshot(
   const bankIssues: Partial<Record<BankTransactionSource, string>> = {};
   const state = await loadPersisted(env);
   const now = Date.now();
+  if (bankSourceConfigured(env, "flex") && !state.bankSyncStates.flex) bankIssues.flex = "Initial Flex synchronization is pending; totals are incomplete until coverage is saved.";
+  if (state.bankAccounts.some(account => account.source === "flex" && now - Date.parse(account.updatedAt) > 30 * 60_000)) {
+    bankIssues.flex ??= "Some Flex balance timestamps are older than 30 minutes. Showing the last values reported by Flex.";
+  }
   for (const source of bankSources) {
     const health = state.bankSyncHealth[source];
     if (!health) continue;
@@ -6388,7 +6460,7 @@ async function sendInvoices(env: Env, payload: SendInvoicesPayload): Promise<Sen
   return { dashboard: await getSnapshot(env), outcomes };
 }
 
-const paymentSources = new Set<PaymentAllocation["source"]>(["wise", "revolut", "slash", "amex", "mercury", "cash", "kraken", "trust", "other"]);
+const paymentSources = new Set<PaymentAllocation["source"]>(["wise", "revolut", "slash", "amex", "mercury", "flex", "cash", "kraken", "trust", "other"]);
 
 function isInvoicePaymentSource(value: DataSource): value is Extract<DataSource, PaymentAllocation["source"]> {
   return paymentSources.has(value as PaymentAllocation["source"]);
@@ -8090,7 +8162,7 @@ function telegramTransactionOptions(
   const periodTokens = new Set(["today", "yesterday", "last-7-days", "this-month", "last-month"]);
   const hasCustomPeriod = /^\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/u.test(tokens[0] ?? "");
   const period = periodTokens.has(tokens[0] ?? "") || hasCustomPeriod ? tokens.shift() : undefined;
-  const sources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex", "mercury"]);
+  const sources = new Set<BankTransactionSource>(["wise", "revolut", "slash", "amex", "mercury", "flex"]);
   const sourceToken = tokens[0]?.toLowerCase() as BankTransactionSource | undefined;
   const source = sourceToken && sources.has(sourceToken) ? (tokens.shift() as BankTransactionSource) : undefined;
   const range = telegramDateRange(period);
@@ -8539,7 +8611,7 @@ async function telegramReadCommand(
   }
   if (command === "balances") {
     const filter = (args || "all").toLowerCase();
-    if (!["all", "slash", "wise", "revolut", "amex", "mercury", "holdings"].includes(filter)) {
+    if (!["all", "slash", "wise", "revolut", "amex", "mercury", "flex", "holdings"].includes(filter)) {
       throw new ApiError(400, telegramHelp.balances);
     }
     if (filter === "slash") {
@@ -9063,6 +9135,23 @@ export default {
         return json(await syncMeritHistory(env, body.fromDate, body.toDate, body.refresh === true));
       } catch (error) { return json({ message: error instanceof Error ? error.message : "Merit history failed" }, { status: error instanceof ApiError ? error.status : 502 }); }
     }
+    if (new URL(request.url).pathname === "/api/internal/flex/sync") {
+      if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
+      if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
+      try {
+        const url = new URL(request.url);
+        const connectionKey = await requireBankConnectionKey(env, "flex");
+        const range = url.searchParams.has("fromDate") || url.searchParams.has("toDate") ? parseSlashTransactionDateRange(url.searchParams.get("fromDate"), url.searchParams.get("toDate")) : undefined;
+        const complete = request.method === "POST" ? await syncFlexActivity(env, range, range ? `reconcile:${range.fromDate}:${range.toDate}` : "live") : undefined;
+        const convex = getConvexClient(env);
+        const serviceToken = getConvexServiceToken(env);
+        const [accounts, state, control] = await Promise.all([
+          convex.query(api.banking.getCashReportAccounts, { serviceToken, connections: [{ source: "flex", connectionKey }] }),
+          bankSyncState(env, "flex", connectionKey), convex.query(api.flexSync.get, { serviceToken, connectionKey })
+        ]);
+        return json({ complete, accounts, state, control });
+      } catch (error) { return json({ message: error instanceof Error ? error.message : "Flex synchronization failed" }, { status: 502 }); }
+    }
     if (new URL(request.url).pathname === "/api/internal/mercury/entities") {
       if (!env.CONVEX_SERVICE_TOKEN || !await secureHeaderMatches(request.headers.get("Authorization"), `Bearer ${env.CONVEX_SERVICE_TOKEN}`)) return json({ message: "Unauthorized" }, { status: 401 });
       if (request.method !== "GET" && request.method !== "POST") return json({ message: "Method not allowed" }, { status: 405 });
@@ -9269,6 +9358,9 @@ export default {
       catch (error) { console.error(JSON.stringify({ event: "receivables_notifications_failed" })); failures.push(error); }
     }
     if (controller.cron === "*/5 * * * *") {
+      if (bankSourceConfigured(env, "flex")) {
+        try { await syncFlexActivity(env); } catch (error) { console.error(JSON.stringify({ event: "flex_sync_failed", error: error instanceof Error ? error.message : "Flex synchronization failed" })); failures.push(error); }
+      }
       try {
         await enqueueSlashMetadataRepair(env);
         await processPendingBankBackfills(env);

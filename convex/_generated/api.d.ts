@@ -28,6 +28,8 @@ import type * as documents from "../documents.js";
 import type * as exact from "../exact.js";
 import type * as exactSchema from "../exactSchema.js";
 import type * as exactSync from "../exactSync.js";
+import type * as flexSchema from "../flexSchema.js";
+import type * as flexSync from "../flexSync.js";
 import type * as historicalPayments from "../historicalPayments.js";
 import type * as integrationSync from "../integrationSync.js";
 import type * as invoiceDrafts from "../invoiceDrafts.js";
@@ -102,6 +104,8 @@ declare const fullApi: ApiFromModules<{
   exact: typeof exact;
   exactSchema: typeof exactSchema;
   exactSync: typeof exactSync;
+  flexSchema: typeof flexSchema;
+  flexSync: typeof flexSync;
   historicalPayments: typeof historicalPayments;
   integrationSync: typeof integrationSync;
   invoiceDrafts: typeof invoiceDrafts;

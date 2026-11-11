@@ -98,7 +98,7 @@ export function trackerInView(item: TrackerItem, amounts: ReturnType<typeof trac
 }
 export function sameTrackerReceipt(a?: string, b?: string) { return Boolean(a && b && (a === b || (historicalWiseTransferKey(a) && historicalWiseTransferKey(a) === historicalWiseTransferKey(b)))); }
 export function trackerBankEligible(t: Transaction) {
-  return (t.source === "wise" || t.source === "revolut" || t.source === "slash" || t.source === "mercury" || t.source === "amex") && t.direction === "in" && ["posted", "settled"].includes(t.status) && t.amount > 0.01
+  return (t.source === "wise" || t.source === "revolut" || t.source === "slash" || t.source === "mercury" || t.source === "flex" || t.source === "amex") && t.direction === "in" && ["posted", "settled"].includes(t.status) && t.amount > 0.01
     && isCurrentBankTransactionId(t.source, t.id) && !isLegacySurrogateBankTransactionId(t.source, t.id)
     && ["Media buying direct", "Affiliate team revenue", "Partner network revenue"].includes(transactionBusinessCategory(t.category))
     && !/\b(refund|reversal|chargeback|test payment|internal transfer|capital contribution|card settlement)\b/i.test(`${t.category} ${t.reference ?? ""} ${t.description}`);
