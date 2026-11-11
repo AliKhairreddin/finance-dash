@@ -144,6 +144,7 @@ export const invoice = v.object({
   meritCreationReservedAt: v.optional(v.string()),
   meritReplacementId: v.optional(v.string()),
   meritBackupId: v.optional(v.string()),
+  historicalImportedAt: v.optional(v.string()),
   meritPdfStorageId: v.optional(v.id("_storage")),
   invoiceNumber: v.string(),
   issueDate: v.string(),

@@ -198,3 +198,10 @@ test("Merit invoice periods cover the oldest stored remote invoice in contiguous
     { periodStart: "2026-06-30", periodEnd: "2026-07-22" }
   ]);
 });
+
+test("reviewed historical imports stay saved without expanding ordinary Merit source pulls", () => {
+  const history = invoice({ id: "historical", externalId: "old", issueDate: "2025-01-01", status: "paid", historicalImportedAt: "2026-07-22T00:00:00Z" });
+  const recent = invoice({ issueDate: "2026-05-01" });
+  assert.deepEqual(meritInvoicePeriods([history, recent], "2026-07-22"), meritInvoicePeriods([recent], "2026-07-22"));
+  assert.deepEqual(reconcileMeritInvoices([recent], [history, recent], true), [recent, history]);
+});

@@ -425,6 +425,7 @@ export interface Invoice {
   meritCreationReservedAt?: string;
   meritReplacementId?: string;
   meritBackupId?: string;
+  historicalImportedAt?: string;
   meritPdfStorageId?: Id<"_storage">;
   invoiceNumber: string;
   issueDate: string;

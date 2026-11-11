@@ -310,7 +310,7 @@ export function reconcileMeritInvoices(
     const live = map.get(key);
     if (live) {
       map.set(key, { ...live, ...invoice, meritStatus: live.meritStatus });
-    } else if (invoice.meritReplacementId || !authoritative || invoice.source !== "merit" || !invoice.externalId) {
+    } else if (invoice.historicalImportedAt || invoice.meritReplacementId || !authoritative || invoice.source !== "merit" || !invoice.externalId) {
       map.set(key, invoice);
     }
   }
@@ -337,7 +337,7 @@ export function meritInvoicePeriods(
   if (!safeToday) throw new Error("Merit invoice sync date must use YYYY-MM-DD");
   const defaultStart = addUtcDays(safeToday, -89);
   const earliestPersisted = persistedInvoices
-    .filter((invoice) => invoice.source === "merit" && invoice.externalId)
+    .filter((invoice) => invoice.source === "merit" && invoice.externalId && !invoice.historicalImportedAt)
     .map((invoice) => dateOnly(invoice.issueDate))
     .filter((value): value is string => Boolean(value && value <= safeToday))
     .sort()[0];

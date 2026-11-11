@@ -80,3 +80,37 @@ test("Merit history storage requires its lease and preserves a populated period 
   const result = await call(save, ctx, args);
   assert.equal(result.recordsJson, args.recordsJson); assert.ok(result.fetchedAt);
 });
+
+test("source-backed historical imports create a settled invoice with original dates and no extra bank cash", async () => {
+  const { importSettled } = await import("../convex/historicalPayments");
+  const make = () => {
+    const ctx = setup();
+    ctx.tables.dashboardState[0].providers = [{ id: "client", type: "client", meritCustomerId: "customer" }];
+    ctx.tables.bankTransactions[0].category = "Media buying direct";
+    ctx.tables.meritHistoryReports = [{ _id: "history", key: "merit-history:2026-08-01:2026-08-31", recordsJson: JSON.stringify([
+      { SIHId: "source", CustomerId: "customer", CustomerName: "Client", InvoiceNo: "2026/100", DocumentDate: "2026-08-01T00:00:00", DueDate: "2026-08-31T00:00:00", TotalSum: 100, PaidAmount: 100, Paid: true, CurrencyCode: "USD" }
+    ]) }];
+    return ctx;
+  };
+  const args = { ...auth, matches: [{ fromDate: "2026-08-01", toDate: "2026-08-31", sourceId: "source", transactionId: id }] };
+  const ctx = make(), before = structuredClone(ctx.tables);
+  assert.equal((await call(importSettled, ctx, args)).imported, 1);
+  const state = ctx.tables.dashboardState[0], invoice = state.invoices[1], payment = state.paymentAllocations[1];
+  assert.deepEqual(state.invoices[0], before.dashboardState[0].invoices[0]);
+  assert.deepEqual(state.paymentAllocations[0], before.dashboardState[0].paymentAllocations[0]);
+  assert.equal(invoice.issueDate, "2026-08-01"); assert.equal(invoice.dueDate, "2026-08-31");
+  assert.equal(invoice.status, "paid"); assert.ok(invoice.historicalImportedAt);
+  assert.equal(invoice.amount - payment.amount, 0); assert.equal(payment.paidAt, "2026-08-05");
+  assert.equal(ctx.tables.bankTransactions[0].amount, 100);
+  await assert.rejects(call(importSettled, ctx, { ...args, expectedUpdatedAt: state.updatedAt }), /already exists/);
+  for (const edit of [
+    (c: ReturnType<typeof make>) => { c.tables.bankTransactions[0].amount = 99; },
+    (c: ReturnType<typeof make>) => { c.tables.bankTransactions[0].matchedInvoiceId = "elsewhere"; },
+    (c: ReturnType<typeof make>) => { c.tables.dashboardState[0].paymentAllocations[0].transactionId = id; },
+    (c: ReturnType<typeof make>) => { c.tables.dashboardState[0].providers[0].meritCustomerId = "wrong"; },
+    (c: ReturnType<typeof make>) => { c.tables.meritHistoryReports[0].recordsJson = c.tables.meritHistoryReports[0].recordsJson.replace('"Paid":true', '"Paid":false'); }
+  ]) {
+    const c = make(); edit(c); const original = structuredClone(c.tables);
+    await assert.rejects(call(importSettled, c, args)); assert.deepEqual(c.tables, original);
+  }
+});
