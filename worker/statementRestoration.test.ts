@@ -222,10 +222,10 @@ test("fresh request IDs and different users converge on one document; LMD number
   assert.equal(a.draft.lines[0].taxPercent, "0");
   assert.match(a.layout.sellerDetails, /LoveMeDo/);
   assert.equal(a.draft.customer, "Synthetic Merchant");
-  assert.match(
-    invoiceHtml(a.draft, a.layout, false),
-    /Prepared internally; not issued by the supplier/,
-  );
+  const html = invoiceHtml(a.draft, a.layout, false);
+  assert.doesNotMatch(html, /<h1>|<h2>|Expense record|Prepared internally|Prepared by|Supplier:/);
+  assert.match(html, /Synthetic Merchant/);
+  assert.match(html, /LoveMeDo/);
 });
 test("completion, Done, forgotten and visibility remain independent and reversible", async () => {
   const { t, ids } = await fixture();

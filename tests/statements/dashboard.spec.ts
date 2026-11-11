@@ -160,6 +160,18 @@ test("one click creates a saved internal document and repeated requests reuse it
       .getByRole("link", { name: "View", exact: true })
       .getAttribute("href"),
   ).toBe(first);
+  await page.getByRole("button", { name: "Close Document saved" }).click();
+  await page.getByRole("navigation", { name: "Statement pages" }).getByRole("button", { name: "Created invoices", exact: true }).click();
+  await expect(page.getByRole("cell", { name: "Internal record", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Type", exact: true }).click();
+  await expect(page).toHaveURL(/createdInvoicesSort=documentType/);
+  await expect(page).toHaveURL(/createdInvoicesOrder=asc/);
+  await page.getByRole("button", { name: "Type", exact: true }).click();
+  await expect(page.getByRole("columnheader", { name: "Type" })).toHaveAttribute("aria-sort", "descending");
+  await page.reload();
+  await expect(page).toHaveURL(/createdInvoicesSort=documentType/);
+  await expect(page.getByRole("columnheader", { name: "Type" })).toHaveAttribute("aria-sort", "descending");
+  await page.screenshot({ path: "output/playwright/generated-document-types.png", fullPage: true });
 });
 test("missing company facts use one compact correction form", async ({
   page,

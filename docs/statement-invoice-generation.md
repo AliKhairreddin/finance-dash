@@ -1,6 +1,6 @@
 # Statement invoice generation
 
-Updated 10 November 2026. This supersedes the older invoice-generation descriptions in `statement-dashboard.md` and the October restoration notes.
+Updated 11 November 2026. This supersedes the older invoice-generation descriptions in `statement-dashboard.md` and the October restoration notes.
 
 ## Customer invoices
 
@@ -15,7 +15,7 @@ There is no default tax treatment or date policy. A bulk run explicitly applies 
 
 ## Supplier expense records
 
-Outgoing transactions generate an **Expense record** with a concise `Prepared internally; not issued by the supplier.` note and a named preparer. They remain distinct from supplier-issued invoices.
+Outgoing PDFs omit added document headings, explanatory sentences and provenance labels. The dashboard’s sortable Type column identifies them as `Internal record`; customer invoices are `Sales invoice`. Company/supplier details, transaction values and approved notes remain in the PDFs.
 
 Each canonical supplier receives a saved layout, accent, typography and header treatment derived from its identity. Approved address-book aliases resolve to the same supplier design across buying companies. New supplier designs do not copy supplier logos or examples. Each generated document snapshots its design; existing PDFs remain immutable, and regeneration creates a new version.
 
