@@ -964,6 +964,9 @@ export function InvoicesView({
       "Issue date",
       "Due date",
       "Expected payment",
+      "Estimate basis",
+      "Bank pattern confidence",
+      "Bank pattern stale",
       "Currency",
       "Amount",
       "Invoice status",
@@ -973,6 +976,7 @@ export function InvoicesView({
     ];
     const rows = visibleRows.map((row) => {
       const provider = row.invoice.providerId ? providersById.get(row.invoice.providerId) : undefined;
+      const prediction = dashboard.invoicePredictions.find(item => item.invoiceId === row.invoice.id);
       return [
         row.invoice.invoiceNumber,
         provider?.name ?? row.invoice.customerName,
@@ -982,7 +986,10 @@ export function InvoicesView({
         row.invoice.periodEnd,
         row.invoice.issueDate,
         row.invoice.dueDate,
-        dashboard.invoicePredictions.find(item => item.invoiceId === row.invoice.id)?.predictedDate,
+        prediction?.predictedDate,
+        prediction?.basis,
+        prediction?.bankPattern?.confidence,
+        prediction?.bankPattern ? String(prediction.bankPattern.stale) : undefined,
         row.invoice.currency,
         row.invoice.amount,
         row.invoice.status,

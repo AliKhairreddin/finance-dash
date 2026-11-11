@@ -1,6 +1,7 @@
 import { transactionBusinessCategory } from "./categories";
 import { shiftFinanceOperatingDate } from "./operatingDate";
 import { isCurrentBankTransactionId, isLegacySurrogateBankTransactionId } from "./providerIdentity";
+import { bankPatternForInvoice, estimateBankPaymentPattern } from "./bankPaymentPatterns";
 import type { ClientPaymentHistory, Invoice, PaymentAllocation, PaymentHistoryReport, Provider, Transaction } from "./types";
 
 export const minimumPaymentSamples = 3;
@@ -189,6 +190,7 @@ export function calculatePaymentHistory(input: {
   for (const row of rows.values()) {
     const dates = [...(receiptDates.get(row.id) ?? [])].sort();
     if (dates.length >= 3) row.receiptIntervalDays = median(dates.slice(1).map((date, index) => days(dates[index], date)));
+    if (complete) row.bankPattern = estimateBankPaymentPattern(dates, toDate);
     // One payment event cannot artificially satisfy the minimum sample count via several invoices.
     const used = new Set<string>();
     const history = (observations.get(row.id) ?? []).sort((a, b) => b.date.localeCompare(a.date) || b.delay - a.delay).filter(item => {
@@ -214,8 +216,12 @@ export function calculatePaymentHistory(input: {
       if (!complete) return { ...base, state: "incomplete" };
       if (!client) return { ...base, state: "excluded" };
       if (reviewInvoices.has(invoice.id) || invoice.meritReplacementId) return { ...base, state: "review" };
-      if (row?.medianDays === undefined) return { ...base, state: "learning" };
-      return { ...base, state: "estimated", medianDays: row.medianDays, earliestDays: row.earliestDays, latestDays: row.latestDays,
+      if (row?.medianDays === undefined) {
+        if (!row?.bankPattern) return { ...base, state: "learning" };
+        const bankPattern = bankPatternForInvoice(row.bankPattern, invoice.issueDate.slice(0, 10));
+        return { ...base, state: "estimated", basis: "bank_pattern", bankPattern, predictedDate: bankPattern.expectedDate };
+      }
+      return { ...base, state: "estimated", basis: "invoice_history", medianDays: row.medianDays, earliestDays: row.earliestDays, latestDays: row.latestDays,
         predictedDate: shiftFinanceOperatingDate(invoice.issueDate.slice(0, 10), row.medianDays) };
     })
   };

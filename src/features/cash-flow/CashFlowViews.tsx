@@ -645,7 +645,11 @@ export function CashFlowOpenInvoicesView({
   function exportRows() {
     const exported = selectedRows.length ? selectedRows : visibleRows;
     const cell = (value: string | number | undefined) => typeof value === "number" ? String(value) : `"${(value ?? "").replace(/^[=+\-@\t\r]/, "'$&").replaceAll('"', '""')}"`;
-    const csv = [["Company / item", "Source", "Status", "Due date", "Expected payment", "Amount", "Currency", "Notes"], ...exported.map(row => [row.name, row.source, row.status, row.dueDate, row.expectedDate, row.amount, row.currency, row.notes])].map(row => row.map(cell).join(",")).join("\r\n");
+    const csv = [["Company / item", "Source", "Status", "Due date", "Expected payment", "Estimate basis", "Bank pattern confidence", "Bank pattern stale", "Amount", "Currency", "Notes"], ...exported.map(row => {
+      const prediction = dashboard.invoicePredictions.find(item => item.invoiceId === row.id);
+      return [row.name, row.source, row.status, row.dueDate, row.expectedDate, prediction?.basis ?? (row.manual ? "manual" : undefined), prediction?.bankPattern?.confidence,
+        prediction?.bankPattern ? String(prediction.bankPattern.stale) : undefined, row.amount, row.currency, row.notes];
+    })].map(row => row.map(cell).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url; link.download = `open-invoices-${financeOperatingDate()}.csv`;

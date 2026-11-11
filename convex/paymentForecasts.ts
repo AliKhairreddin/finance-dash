@@ -9,16 +9,22 @@ const timing = {
   earliestDays: v.optional(v.number()),
   latestDays: v.optional(v.number())
 };
+const bankPattern = v.object({
+  intervalDays: v.number(), anchorDate: v.string(), expectedDate: v.string(), earliestDate: v.string(), latestDate: v.string(),
+  sampleSize: v.number(), matchingIntervals: v.number(), projectedCycles: v.number(),
+  confidence: v.union(v.literal("low"), v.literal("medium")), stale: v.boolean(), disrupted: v.boolean()
+});
 export const get = query({
   args: { serviceToken: v.string() },
   returns: v.object({
     fromDate: v.string(), toDate: v.string(), complete: v.boolean(), unverifiedReceipts: v.number(),
     clients: v.array(v.object({
       id: v.string(), name: v.string(), currency: v.string(), received: v.number(), receiptCount: v.number(),
-      lastReceipt: v.optional(v.string()), receiptIntervalDays: v.optional(v.number()), ...timing
+      lastReceipt: v.optional(v.string()), receiptIntervalDays: v.optional(v.number()), bankPattern: v.optional(bankPattern), ...timing
     })),
     predictions: v.array(v.object({
       invoiceId: v.string(), predictedDate: v.optional(v.string()), ...timing,
+      basis: v.optional(v.union(v.literal("invoice_history"), v.literal("bank_pattern"))), bankPattern: v.optional(bankPattern),
       state: v.union(v.literal("estimated"), v.literal("learning"), v.literal("excluded"), v.literal("review"), v.literal("incomplete"))
     }))
   }),

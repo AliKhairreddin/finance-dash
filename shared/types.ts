@@ -472,6 +472,20 @@ export interface AiInvoicePaymentMatch {
   reason: string;
 }
 
+export interface BankPaymentPattern {
+  intervalDays: number;
+  anchorDate: string;
+  expectedDate: string;
+  earliestDate: string;
+  latestDate: string;
+  sampleSize: number;
+  matchingIntervals: number;
+  projectedCycles: number;
+  confidence: "low" | "medium";
+  stale: boolean;
+  disrupted: boolean;
+}
+
 export interface InvoicePaymentPrediction {
   invoiceId: string;
   sampleSize: number;
@@ -480,6 +494,8 @@ export interface InvoicePaymentPrediction {
   medianDays?: number;
   earliestDays?: number;
   latestDays?: number;
+  basis?: "invoice_history" | "bank_pattern";
+  bankPattern?: BankPaymentPattern;
 }
 
 export interface ClientPaymentHistory {
@@ -490,6 +506,7 @@ export interface ClientPaymentHistory {
   receiptCount: number;
   lastReceipt?: string;
   receiptIntervalDays?: number;
+  bankPattern?: BankPaymentPattern;
   sampleSize: number;
   medianDays?: number;
   earliestDays?: number;

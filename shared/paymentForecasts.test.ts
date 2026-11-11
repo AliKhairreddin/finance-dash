@@ -24,13 +24,13 @@ const prediction = (data: ReturnType<typeof fixture>) => calculatePaymentHistory
 test("uses actual bank dates, not recorded dates or the spacing between receipts", () => {
   const data = fixture();
   const result = calculatePaymentHistory(data);
-  assert.deepEqual(result.predictions[0], { invoiceId: "open", state: "estimated", sampleSize: 3, medianDays: 3, earliestDays: 3, latestDays: 7, predictedDate: "2026-11-04" });
+  assert.deepEqual(result.predictions[0], { invoiceId: "open", state: "estimated", basis: "invoice_history", sampleSize: 3, medianDays: 3, earliestDays: 3, latestDays: 7, predictedDate: "2026-11-04" });
   assert.equal(result.clients[0].receiptCount, 3);
   assert.equal(result.clients[0].received, 300);
   assert.equal(result.clients[0].receiptIntervalDays, 32);
 });
 
-test("requires three independent matches; receipt frequency never becomes invoice terms", () => {
+test("irregular bank receipts and fewer than three invoice matches cannot supply an estimate", () => {
   const data = fixture([3, 7]);
   data.transactions.push(bank("unmatched", { date: "2026-08-01" }));
   assert.equal(prediction(data).state, "learning");
@@ -57,7 +57,9 @@ test("does not learn manual, partial, currency-mismatched, pending, unverified, 
   for (const mutate of variations) {
     const data = fixture(); mutate(data);
     assert.equal(prediction(data).sampleSize, 2);
-    assert.equal(prediction(data).state, "learning");
+    assert.notEqual(prediction(data).basis, "invoice_history");
+    assert.equal(prediction(data).medianDays, undefined);
+    if (prediction(data).state === "estimated") assert.equal(prediction(data).basis, "bank_pattern");
   }
 });
 
@@ -117,7 +119,11 @@ test("resolves MediaAlpha's QuoteLab payer alias without mistaking monthly recei
   assert.equal(report.clients.length, 1);
   assert.equal(report.clients[0].name, "MediaAlpha");
   assert.equal(report.clients[0].receiptCount, 3);
-  assert.equal(report.predictions[0].state, "learning");
+  assert.equal(report.predictions[0].state, "estimated");
+  assert.equal(report.predictions[0].basis, "bank_pattern");
+  assert.equal(report.predictions[0].medianDays, undefined);
+  assert.equal(report.predictions[0].sampleSize, 0);
+  assert.ok(report.predictions[0].bankPattern);
 });
 
 test("deduplicates exact bank IDs and rejects invoice evidence colliding with a linked migration surrogate", () => {
@@ -169,4 +175,20 @@ test("unmapped vendors and ambiguous aliases cannot become clients just from a r
   const ambiguous = fixture(); ambiguous.providers.push({ ...client, id: "another-client" });
   ambiguous.transactions.forEach(item => { delete item.matchedProviderId; });
   assert.equal(calculatePaymentHistory(ambiguous).clients[0].receiptCount, 0);
+});
+
+test("unmatched invoices use the next bank cycle and preserve contractual due dates and accounting records", () => {
+  const data = fixture(); data.allocations = [];
+  data.transactions.forEach((t, i) => { t.date = ['2026-09-01', '2026-10-01', '2026-10-31'][i]; });
+  data.invoices = [invoice('open', { status: 'open', issueDate: '2026-11-10', dueDate: '2026-12-25' })];
+  const original = structuredClone(data);
+  const report = calculatePaymentHistory(data);
+  assert.equal(report.predictions[0].basis, 'bank_pattern');
+  assert.equal(report.predictions[0].predictedDate, '2026-11-30');
+  assert.equal(report.predictions[0].sampleSize, 0);
+  assert.equal(report.clients[0].bankPattern?.expectedDate, '2026-11-30');
+  assert.deepEqual(data, original);
+  const incomplete = calculatePaymentHistory({ ...data, complete: false });
+  assert.equal(incomplete.predictions[0].bankPattern, undefined);
+  assert.deepEqual(incomplete.clients, []);
 });
