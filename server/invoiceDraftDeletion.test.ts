@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ConvexError } from "convex/values";
 import { call, database } from "./convexTestDb";
 import { remove, removeOpenItems } from "../convex/invoiceDrafts";
 
@@ -65,12 +66,12 @@ test("open-item rejection leaves the entire mixed batch and all bank links uncha
     Object.assign(ctx.tables.dashboardState[0].invoices[0], invoicePatch);
     if (allocation) ctx.tables.dashboardState[0].paymentAllocations.push({ invoiceId: "invoice", amount: 100 });
     const before = structuredClone(ctx.tables);
-    await assert.rejects(call(removeOpenItems, ctx, { ...auth, ids: ["manual", "invoice"] }));
+    await assert.rejects(call(removeOpenItems, ctx, { ...auth, ids: ["manual", "invoice"] }), error => error instanceof ConvexError && typeof error.data === "string" && error.data.startsWith(draft.invoiceNumber));
     assert.deepEqual(ctx.tables, before);
   }
   const ctx = setup(), before = structuredClone(ctx.tables);
   for (const ids of [[], ["manual", "missing"], ["invoice", "invoice"], Array.from({ length: 201 }, (_, i) => String(i))]) {
-    await assert.rejects(call(removeOpenItems, ctx, { ...auth, ids }));
+    await assert.rejects(call(removeOpenItems, ctx, { ...auth, ids }), error => error instanceof ConvexError && typeof error.data === "string");
     assert.deepEqual(ctx.tables, before);
   }
   await assert.rejects(call(removeOpenItems, ctx, { serviceToken: "wrong", ids: ["manual", "invoice"] }), /Unauthorized/);

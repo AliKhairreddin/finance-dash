@@ -57,7 +57,13 @@ export const removeOpenItems = mutation({
     if (!process.env.CONVEX_SERVICE_TOKEN || args.serviceToken !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized");
     const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
     if (!state) throw new ConvexError("Dashboard is unavailable");
-    const ids = validateOpenItemDeletion(args.ids, state.invoices, state.manualReceivables, state.paymentAllocations);
+    let ids: Set<string>;
+    try {
+      ids = validateOpenItemDeletion(args.ids, state.invoices, state.manualReceivables, state.paymentAllocations);
+    } catch (error) {
+      if (error instanceof Error) throw new ConvexError(error.message);
+      throw error;
+    }
     await removeSelectedItems(ctx, state, ids);
     return null;
   }
