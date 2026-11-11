@@ -5,7 +5,7 @@ import { invoiceHtml, invoiceTemplateHtml } from "./statementInvoicePdf";
 import { handleStatementInvoices } from "./statementInvoices";
 import type { InvoiceDraft } from "../shared/statementInvoices";
 import { invoiceCopyHtml, invoiceCopySchema } from "./statementInvoiceCopy";
-import { defaultInvoiceDesign } from "../shared/statementInvoiceDesign";
+import { defaultInvoiceDesign, expenseInvoiceDesign, invoiceDesignStyles, invoicePageDimensions } from "../shared/statementInvoiceDesign";
 const draft: InvoiceDraft = { number: "TEST-1", date: "2026-10-26", dueDate: "", customer: '<img src="https://bad.test">', customerAddress: "Amsterdam", notes: "", currency: "EUR", taxMode: "included", lines: [{ transactionId: "one", description: "<script>bad()</script>", amount: "121.00", taxPercent: "21" }] };
 test("invoice HTML escapes document/user text and does not include source transaction metadata", () => {
   const html = invoiceHtml(draft, { headerPercent: 10, footerPercent: 10, sellerDetails: "Seller", paymentDetails: "" }, true);
@@ -72,6 +72,21 @@ test("company PDFs use white paper with local verified logos and stable restrain
   assert.ok(html.includes("background:white")); assert.ok(html.includes("/invoice-brands/artec.png"));
   assert.ok(html.includes("solid #eba11c")); assert.ok(!html.includes("background:#eba11c"));
   assert.ok(html.includes("&lt;script&gt;"));
+});
+test("every supplier structure preserves the same escaped content without new wording", () => {
+  const inventories: string[][] = [];
+  for (const template of invoiceDesignStyles) {
+    const design = { ...expenseInvoiceDesign("Supplier", []), template };
+    const html = invoiceHtml({ ...draft, documentType: "internal_support", taxAssessment: "unassessed", customerVat: "NL-123" }, { headerPercent: 0, footerPercent: 0, sellerDetails: "Saved seller\nSaved address", paymentDetails: "", design }, false);
+    assert(!html.includes('<script>bad()')); assert(html.includes('&lt;script&gt;'));
+    assert(!/Supporting document|Expense record|Prepared internally|Prepared by|Supplier:|DRAFT —/.test(html));
+    const body = html.slice(html.indexOf('</head>'));
+    inventories.push(body.replace(/<[^>]*>/g, " ").trim().split(/\s+/).sort());
+    for (const section of ["brand", "meta", "seller", "customer", "lines", "breakdown", "total"]) assert.equal(body.split(`data-section="${section}"`).length - 1, 1);
+    const size = invoicePageDimensions(design); assert.equal(size.width > size.height, template === "minimal");
+  }
+  for (const content of inventories) assert.deepEqual(content, inventories[0]);
+  assert(invoicePageDimensions(defaultInvoiceDesign("our:amg-holding", "AMG")).height > 800);
 });
 test("example copies replace mapped values, escape new text and keep the original image design", () => {
   const keys = ["seller", "number", "date", "customer", "customerAddress", "lines", "net", "tax", "total"] as const;

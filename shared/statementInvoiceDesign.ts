@@ -3,6 +3,11 @@ import { invoiceCompanyKey, matchingInvoiceAddress, type InvoiceAddress } from "
 
 export const invoiceDesignStyles = ["corporate", "minimal", "technology", "insurance", "professional_services", "retail", "subscription", "editorial", "compact"] as const;
 export type InvoiceDesign = { template?: typeof invoiceDesignStyles[number]; key: string; name: string; accent: string; style: "rule" | "minimal" | "frame"; font: "sans" | "serif"; logoPath?: string; logoDataUrl?: string; logoMode?: "mark" | "padded"; source?: string };
+export function invoicePageDimensions(design?: InvoiceDesign) {
+  return design?.key.startsWith("expense:supplier:") && design.template === "minimal"
+    ? { width: 841.89, height: 595.28 }
+    : { width: 595.28, height: 841.89 };
+}
 export type InvoiceBox = { x: number; y: number; width: number; height: number };
 export const invoiceCopyKeys = ["seller", "number", "date", "dueDate", "customer", "customerAddress", "customerVat", "payment", "notes", "currency", "lines", "net", "tax", "total"] as const;
 export type InvoiceCopyField = InvoiceBox & { key: typeof invoiceCopyKeys[number]; fontSize: number; color: string; background: string; align: "left" | "right"; font: "sans" | "serif" };

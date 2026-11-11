@@ -9,7 +9,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { InvoiceDraft, InvoiceTemplateLayout, InvoicePresentation } from "../shared/statementInvoices";
-import { allocateExpenseInvoiceDesign, expenseInvoiceDesign, validateInvoiceDesign, type InvoiceDesign } from "../shared/statementInvoiceDesign";
+import { allocateExpenseInvoiceDesign, expenseInvoiceDesign, validateInvoiceDesign, invoicePageDimensions, type InvoiceDesign } from "../shared/statementInvoiceDesign";
 import { invoiceLayout, invoiceTotals } from "../shared/statementInvoices";
 import { invoiceHtml } from "../worker/statementInvoicePdf";
 import { productionEnvironment, productionServiceEnvironment, productionUrl } from "./deploy-production";
@@ -104,7 +104,8 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
       const layout = design ? invoiceLayout({ ...saved.layout, design, presentation }) : saved.layout;
       const page = await browser.newPage(); await page.route("**/*", route => route.abort());
       await page.setContent(invoiceHtml(saved.draft, layout, false), { waitUntil: "load" });
-      const bytes = await page.pdf({ width: `${595.28 / 72}in`, height: `${841.89 / 72}in`, printBackground: true, displayHeaderFooter: true,
+      const size = invoicePageDimensions(layout.design);
+      const bytes = await page.pdf({ width: `${size.width / 72}in`, height: `${size.height / 72}in`, printBackground: true, displayHeaderFooter: true,
         margin: { top: `${28 / 72}in`, bottom: `${32 / 72}in`, left: "0.5in", right: "0.5in" },
         headerTemplate: '<div style="width:100%;margin-top:-15px"></div>',
         footerTemplate: '<div style="width:100%;font-size:8px;text-align:center"><div style="margin-bottom:6px">Page <span class="pageNumber"></span> / <span class="totalPages"></span></div></div>' });

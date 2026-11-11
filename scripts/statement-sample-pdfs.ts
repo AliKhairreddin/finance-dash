@@ -4,14 +4,18 @@ import { invoiceHtml } from "../worker/statementInvoicePdf";
 import {
   invoiceDesignStyles,
   expenseInvoiceDesign,
+  invoicePageDimensions,
 } from "../shared/statementInvoiceDesign";
 import { invoiceTotals, type InvoiceDraft } from "../shared/statementInvoices";
 import { PDFDocument } from "pdf-lib";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 await mkdir("output/pdf", { recursive: true });
 const browser = await chromium.launch();
 const results = [];
+const structures = new Set<string>();
 try {
-  for (const template of invoiceDesignStyles) {
+  for (const template of invoiceDesignStyles) for (const lineCount of [4, 65]) {
     const draft: InvoiceDraft = {
       documentType: "internal_support",
       taxAssessment: "unassessed",
@@ -25,7 +29,7 @@ try {
       currency: "EUR",
       taxMode: "included",
       lines: Array.from(
-        { length: template === "technology" ? 65 : 4 },
+        { length: lineCount },
         (_, i) => ({
           transactionId: `synthetic-${i}`,
           description: `Web hosting services — synthetic entry ${i + 1}. Recorded transaction evidence; no service period inferred.`,
@@ -39,6 +43,9 @@ try {
       template,
     };
     const page = await browser.newPage();
+    const size = invoicePageDimensions(design);
+    await page.setViewportSize({ width: Math.round((size.width - 72) * 96 / 72), height: 1200 });
+    await page.emulateMedia({ media: "print" });
     await page.route("**/*", (route) => route.abort());
     await page.setContent(
       invoiceHtml(
@@ -54,8 +61,14 @@ try {
         false,
       ),
     );
+    const regions = await page.locator("[data-section]").evaluateAll(nodes => nodes.map(node => {
+      const b = node.getBoundingClientRect(); return { key: node.getAttribute("data-section"), x: b.x, y: b.y, width: b.width, height: b.height };
+    }));
+    for (const [i, a] of regions.entries()) for (const b of regions.slice(i + 1)) assert(Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) < 1 || Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) < 1, `${template}: ${a.key} overlaps ${b.key}`);
+    const signature = JSON.stringify(regions.map(({ key, x, y, width }) => [key, Math.round(x / 20), Math.round(y / 20), Math.round(width / 20)]));
+    if (lineCount === 4) { assert(!structures.has(signature), `Supplier ${template} repeats another page structure`); structures.add(signature); }
     const bytes = await page.pdf({
-      format: "A4",
+      width: `${size.width / 72}in`, height: `${size.height / 72}in`,
       printBackground: true,
       displayHeaderFooter: true,
       headerTemplate: "<div></div>",
@@ -65,11 +78,17 @@ try {
     });
     const pdf = await PDFDocument.load(bytes),
       pages = pdf.getPageCount();
-    if (template === "technology" && pages < 2)
+    if (lineCount === 65 && pages < 2)
       throw new Error("Multi-page template did not paginate");
-    await writeFile(`output/pdf/synthetic-${template}.pdf`, bytes);
+    const path = `output/pdf/synthetic-${template}${lineCount === 65 ? "-multipage" : ""}.pdf`;
+    await writeFile(path, bytes);
+    const text = execFileSync("pdftotext", [path, "-"], { encoding: "utf8" }).replace(/\s+/g, " ");
+    for (let i = 1; i <= draft.lines.length; i++) assert(text.includes(`synthetic entry ${i}.`), `${template}: missing transaction ${i}`);
+    assert(text.includes(invoiceTotals(draft).total), `${template}: missing total`);
+    const pageSize = pdf.getPage(0).getSize(); assert.equal(pageSize.width > pageSize.height, template === "minimal");
     results.push({
       template,
+      lines: lineCount,
       pages,
       total: invoiceTotals(draft).total,
       bytes: bytes.length,

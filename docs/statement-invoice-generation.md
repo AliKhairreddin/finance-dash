@@ -21,6 +21,8 @@ Each canonical supplier receives a saved layout, accent, typography and header t
 
 Supplier designs use saturated accents with coordinated pale panels, colored headers/tables/totals, and contrast-checked text. Saved colors and layouts remain stable. A design-only alias can point another saved supplier name to one primary design without changing addresses, printed names, source transactions or accounting identity. Both Nespresso names share the Netherlands design. Alias chains and cycles are rejected; the alias keeps its previous design in storage and the audit history.
 
+Supplier PDFs have independent page structures, rather than variations on one header/table/total arrangement: a left identity rail (`technology`), a centered receipt (`subscription`), a total-first composition (`retail`), an asymmetric register (`professional_services`), a landscape account sheet (`minimal`), a payment slip with a central total band (`compact`), a postal letterhead (`corporate`), a two-column editorial layout (`editorial`), and a framed form (`insurance`). Existing labels and values are composed once in different positions. Customer invoice templates keep their own renderer. Production generation and saved-file refresh use the same page dimensions, including landscape supplier documents.
+
 Generation uses saved transaction evidence and approved details without an AI call. Reading an uploaded invoice example remains a separate AI-assisted operation.
 
 ## Identity evidence and remaining gaps
