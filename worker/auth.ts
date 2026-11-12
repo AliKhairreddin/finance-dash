@@ -375,7 +375,9 @@ function securityHeaders(scriptNonce?: string): Headers {
     "Content-Security-Policy":
       `default-src 'none'; img-src 'self'; manifest-src 'self'; style-src 'unsafe-inline'; script-src ${scriptSource}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-    "Referrer-Policy": "no-referrer",
+    // Native form POSTs send Origin: null with no-referrer. Keep the origin for
+    // our same-origin password check while withholding referrers from other sites.
+    "Referrer-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY"
   });

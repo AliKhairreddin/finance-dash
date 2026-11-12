@@ -39,8 +39,11 @@ test("statement passwords are salted, validated and compared without normalizing
 for (const hostname of [statementPasswordHostname, financePasswordHostname]) test(`both users get password login with administrator access on ${hostname} without OTP or alerts`, async () => {
   for (const [username, value] of [[" Ali M ", password], ["ALAA", password + "A"]]) {
     const config = env();
+    const login = await enforceSiteAuthentication(new Request(`https://${hostname}/login`), config);
+    assert.equal(login?.headers.get("Referrer-Policy"), "same-origin");
     const form = await enforceSiteAuthentication(request({ step: "request", username }, hostname), config, { sendTelegramSignInAlert: async () => { throw new Error("No alert required"); } });
     assert.equal(form?.status, 200);
+    assert.equal(form?.headers.get("Referrer-Policy"), "same-origin");
     assert.match(await form!.text(), /autocomplete="current-password"/);
     const response = await enforceSiteAuthentication(request({ step: "password", username, password: value, returnTo: "/?view=documents" }, hostname), config);
     assert.equal(response?.status, 303);
@@ -58,6 +61,10 @@ for (const hostname of [statementPasswordHostname, financePasswordHostname]) tes
 test("password authentication fails closed, rejects cross-origin posts and rate limits guesses", async () => {
   const config = env();
   assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, statementPasswordHostname, "https://evil.example"), config))?.status, 403);
+  assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, statementPasswordHostname, "null"), config))?.status, 403);
+  const missingOrigin = request({ step: "password", username: "Ali M", password });
+  missingOrigin.headers.delete("Origin");
+  assert.equal((await enforceSiteAuthentication(missingOrigin, config))?.status, 403);
   assert.equal((await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password }, "receipts.thatcanadian.dev"), config))?.status, 403);
   for (let i = 0; i < 10; i++) {
     const response = await enforceSiteAuthentication(request({ step: "password", username: "Ali M", password: "wrong" }, i % 2 ? financePasswordHostname : statementPasswordHostname), config);
