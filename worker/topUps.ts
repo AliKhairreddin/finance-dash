@@ -11,10 +11,20 @@ import { draftApi, prepareTopUpDraft } from "./topUpDrafts";
 const client = (env: WorkerEnv) => new ConvexHttpClient(env.CONVEX_URL);
 const auth = (env: WorkerEnv) => ({ serviceToken: env.CONVEX_SERVICE_TOKEN });
 const group = (env: WorkerEnv) => env.TOPUP_TELEGRAM_CHAT_ID;
-const topUpApproverNames = ["Amin", "Ali M", "Ali"] as const;
-function telegramTopUpApprover(env: WorkerEnv, userId: string) {
-  return parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(user =>
-    user.chatId === userId && topUpApproverNames.some(name => user.normalizedUsername === name.toLowerCase()));
+const topUpNotificationNames = ["Amin", "Ali M"] as const;
+type TelegramTopUpUser = { id: number; is_bot?: boolean; first_name?: string; last_name?: string; username?: string };
+async function telegramTopUpApprover(env: WorkerEnv, from: TelegramTopUpUser | undefined) {
+  if (!from || !Number.isSafeInteger(from.id) || from.id <= 0 || from.is_bot) return null;
+  // Authorization is checked live: leaving the group must revoke request access.
+  const member = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: from.id }) as {
+    status?: string; is_member?: boolean; user?: TelegramTopUpUser;
+  };
+  if (member.user?.id !== from.id || member.user.is_bot ||
+    !(["creator", "administrator", "member"].includes(member.status ?? "") || member.status === "restricted" && member.is_member === true)) return null;
+  const chatId = String(from.id);
+  const configured = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(user => user.chatId === chatId);
+  const name = [member.user.first_name, member.user.last_name].filter(Boolean).join(" ").trim();
+  return { chatId, username: configured?.username ?? `${name || "User"} (Telegram ${chatId})` };
 }
 function telegramPerson(env: WorkerEnv, name: string) { const user = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON)?.find(u => u.normalizedUsername === name.toLowerCase()); if (!user) throw new Error(`${name} is not configured for Telegram`); return user; }
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -100,15 +110,16 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
   await convex.mutation(api.topUps.saveMessage, { ...auth(env), id, version, messageId });
 }
 export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promise<boolean> {
-  const update = value as { callback_query?: { id: string; data?: string; from: { id: number }; message?: { message_id: number; chat: { id: number } } }; message?: { chat: { id: number }; from?: { id: number }; text?: string; reply_to_message?: { message_id: number } } };
+  const update = value as { callback_query?: { id: string; data?: string; from?: TelegramTopUpUser; message?: { message_id: number; chat: { id: number } } }; message?: { chat: { id: number }; from?: TelegramTopUpUser; sender_chat?: { id: number }; text?: string; reply_to_message?: { message_id: number } } };
   const cb = update?.callback_query;
   if (cb?.data?.startsWith("tu:")) {
     let message = "Request updated", failed = false;
     try {
       if (String(cb.message?.chat.id) !== group(env)) throw new Error("Use the Top-Up Request group");
       const [, action, rawId, rawVersion, extra] = cb.data.split(":"); if (extra || !["approve", "adjust", "paid", "reject"].includes(action)) throw new Error("Invalid action");
-      const person = action === "paid" ? telegramPerson(env, "Ali M") : telegramTopUpApprover(env, String(cb.from.id));
-      if (!person || String(cb.from.id) !== person.chatId) throw new Error(action === "paid" ? "Only Ali M can confirm payment for this request" : "Only Amin, Ali M or Ali can approve, adjust or reject this request");
+      if (action === "paid" && String(cb.from?.id) !== telegramPerson(env, "Ali M").chatId) throw new Error("Only Ali M can confirm payment for this request");
+      const person = await telegramTopUpApprover(env, cb.from);
+      if (!person) throw new Error("Only current members of the Top-Up Request group can update this request");
       const id = rawId as Id<"topUpRequests">, version = Number(rawVersion), convex = client(env); const r = await convex.query(api.topUps.get, { ...auth(env), id });
       if (!r || r.deletedAt || !r.telegramMessageId || r.version !== version || r.telegramMessageId !== cb.message?.message_id) throw new Error("This message is out of date. Use the latest request message.");
       if (action === "adjust") {
@@ -121,8 +132,9 @@ export async function handleTopUpTelegram(value: unknown, env: WorkerEnv): Promi
   }
   const m = update?.message;
   if (m && String(m.chat?.id) === group(env) && m.reply_to_message && m.from) {
-    const person = telegramTopUpApprover(env, String(m.from.id)); if (!person) return true;
-    const convex = client(env); const r = await convex.query(api.topUps.findAdjustment, { ...auth(env), promptId: m.reply_to_message.message_id, userId: person.chatId }); if (!r) return true;
+    if (m.sender_chat || m.from.is_bot || !Number.isSafeInteger(m.from.id) || m.from.id <= 0) return true;
+    const convex = client(env); const r = await convex.query(api.topUps.findAdjustment, { ...auth(env), promptId: m.reply_to_message.message_id, userId: String(m.from.id) }); if (!r) return true;
+    const person = await telegramTopUpApprover(env, m.from); if (!person) return true;
     const raw = m.text?.trim() ?? "", decimals = topUpAmountDecimals(r.currency);
     try { if (!new RegExp(`^\\d+(?:\\.\\d{1,${decimals}})?$`).test(raw)) throw new Error(); validateTopUpAmount(Number(raw), r.currency); }
     catch { await convex.mutation(api.topUps.adjustmentPrompt, { ...auth(env), id: r._id, version: r.version, promptId: r.adjustPromptId!, userId: person.chatId, error: `Enter a positive amount with up to ${decimals} decimals in ${r.currency}.` }); return true; }
@@ -171,12 +183,13 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
 }
 export async function topUpSetup(env: WorkerEnv): Promise<unknown> {
   const bot = await telegramApi(env, "getMe", {}) as { id: number; username: string };
-  const recipients = topUpApproverNames.map(name => telegramPerson(env, name).username);
+  const recipients = topUpNotificationNames.map(name => telegramPerson(env, name).username);
+  const permissions = { approvalAccess: "group-members", paymentConfirmer: "Ali M" };
   try {
     const chat = await telegramApi(env, "getChat", { chat_id: group(env) }) as { title: string };
     const member = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: bot.id }) as { status: string };
     const membership = await Promise.all(recipients.map(async name => { try { const person = telegramPerson(env, name); const info = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: Number(person.chatId) }) as { status: string }; return { username: name, status: info.status }; } catch { return { username: name, status: "unknown" }; } }));
     const ready = !["left", "kicked"].includes(member.status) && membership.every(m => !["left", "kicked", "unknown"].includes(m.status));
-    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready, recipients, membership, ...(ready ? {} : { message: "Ensure Amin, Ali M and Ali are members of the Top-Up Request group and the bot can send messages" }), alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
-  } catch { return { botUsername: bot.username, groupId: group(env), ready: false, message: "Add this bot to the Top-Up Request group and allow it to send messages", recipients, alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON }; }
+    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready, ...permissions, recipients, membership, ...(ready ? {} : { message: "Ensure notification recipients Amin and Ali M are members of the Top-Up Request group and the bot can send messages" }), alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
+  } catch { return { botUsername: bot.username, groupId: group(env), ready: false, ...permissions, message: "Add this bot to the Top-Up Request group and allow it to send messages", recipients, alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON }; }
 }

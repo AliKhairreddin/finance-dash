@@ -6,21 +6,25 @@ const id = "request-abc";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
 const pending = { _id: id, version: 1, telegramMessageId: 7, status: "pending", draftStatus: "awaiting_approval", number: 10, entity: "dn", priority: "Urgent", companyName: "Example", team: "Cognitive", member: "Member", amount: 100, currency: "USD", openBalance: -20, lastThreeDaysSpend: 10, expectedThreeDaysSpend: 20, paymentMethod: "Bank Transfer", commission: "3%", createdAt: "2026-10-22T12:00:00Z", contentType: "application/pdf", documentId: "document", fileName: "invoice.pdf" };
 function callback(user: number, action = "approve", version = 1, chat = -5336756761) { return { callback_query: { id: "callback-1", data: `tu:${action}:${id}:${version}`, from: { id: user }, message: { message_id: 7, chat: { id: chat } } } }; }
-async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null) {
+async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null, membership: Record<string, unknown> | "unavailable" = { status: "member" }) {
   const original = globalThis.fetch; const calls: { path: string; body: any }[] = [];
   globalThis.fetch = async (input, init) => { const url = String(input), body = JSON.parse(String(init?.body)); const path = url.includes("api.telegram.org") ? url.split("/").at(-1)! : body.path; calls.push({ path, body });
+    if (path === "getChatMember") return membership === "unavailable"
+      ? Response.json({ ok: false, error_code: 429, parameters: { retry_after: 30 } }, { status: 429 })
+      : Response.json({ ok: true, result: { user: { id: body.user_id, is_bot: false, first_name: "Group member" }, ...membership } });
     const args = Array.isArray(body.args) ? body.args[0] : body.args;
     const adjustment = record?.adjustUserId === args?.userId && record?.adjustPromptId === args?.promptId ? record : null;
     return url.includes("api.telegram.org") ? Response.json({ ok: true, result: path === "sendMessage" ? { message_id: 8 } : true }) : Response.json({ status: "success", value: path === "topUps:rateLimit" ? true : path === "topUps:get" ? record : path === "topUps:deletedNotification" ? deletedSnapshot : path === "topUps:findAdjustment" ? adjustment : path === "topUps:transition" ? { ...record, status: "approved" } : null }); };
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
-test("Amin, Ali M and Ali can approve using their configured numeric identities", async () => {
-  for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"]] as const) {
+test("all group members can approve, including members without dashboard accounts", async () => {
+  for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"], [444, "OtherAdmin"], [999, "Group member (Telegram 999)"]] as const) {
     await mocked(async calls => {
       await handleTopUpTelegram(callback(userId), env);
       const transition = calls.find(c => c.path === "topUps:transition"); assert.ok(transition);
       assert.equal(calls.find(c => c.path === "answerCallbackQuery")!.body.show_alert, false);
       const args = transition.body.args[0]; assert.equal(args.actor, username); assert.equal(args.action, "approve");
+      assert.deepEqual(calls.find(c => c.path === "getChatMember")!.body, { chat_id: env.TOPUP_TELEGRAM_CHAT_ID, user_id: userId });
     });
   }
 });
@@ -38,25 +42,61 @@ test("existing pending cards receive Reject controls without messages or financi
     }, { ...pending, telegramVersion: 1, ...patch });
   }
 });
-test("other accounts, spoofed usernames and callbacks from other groups cannot approve or adjust", async () => {
+test("callbacks from other groups, private chats or forwarded cards cannot act", async () => {
   await mocked(async calls => {
-    for (const action of ["approve", "adjust", "reject"]) {
-      const spoofed = callback(444, action); Object.assign(spoofed.callback_query.from, { username: "Amin", first_name: "Ali" });
-      await handleTopUpTelegram(spoofed, env);
-      await handleTopUpTelegram(callback(999, action), env);
-      for (const user of [111, 222, 333]) await handleTopUpTelegram(callback(user, action, 1, -123), env);
+    for (const action of ["approve", "adjust", "reject", "paid"]) {
+      for (const user of [111, 222, 333, 999]) for (const chat of [-123, user]) await handleTopUpTelegram(callback(user, action, 1, chat), env);
     }
+    const forwarded = callback(999); forwarded.callback_query.message.message_id = 8;
+    await handleTopUpTelegram(forwarded, env);
     assert.equal(calls.filter(c => c.path === "topUps:transition" || c.path === "topUps:adjustmentPrompt" || c.path === "sendMessage").length, 0);
-    assert.match(calls[0].body.text, /Only Amin, Ali M or Ali/); assert.match(calls[2].body.text, /Top-Up Request group/);
+    assert.equal(calls.filter(c => c.path === "getChatMember").length, 1);
+    assert.match(calls[0].body.text, /Top-Up Request group/);
+    assert.match(calls.at(-1)!.body.text, /out of date/);
+  });
+});
+test("former members and unverifiable identities cannot use approval controls", async () => {
+  for (const membership of [{ status: "left" }, { status: "kicked" }, { status: "restricted", is_member: false }, { status: "unknown" }, { status: "member", user: { id: 123 } }, { status: "member", user: { id: 999, is_bot: true } }, "unavailable"] as const) {
+    await mocked(async calls => {
+      for (const action of ["approve", "adjust", "reject"]) {
+        const spoofed = callback(999, action); Object.assign(spoofed.callback_query.from, { username: "Amin", first_name: "Ali" });
+        await handleTopUpTelegram(spoofed, env);
+      }
+      assert.equal(calls.filter(c => c.path.startsWith("topUps:")).length, 0);
+      assert.equal(calls.filter(c => c.path === "getChatMember").length, 3, "No membership retries after a rate limit");
+      assert.ok(calls.filter(c => c.path === "answerCallbackQuery").every(c => c.body.show_alert));
+    }, pending, null, membership);
+  }
+});
+test("current members of every Telegram role can reject without being dashboard users", async () => {
+  for (const membership of [{ status: "creator" }, { status: "administrator" }, { status: "member" }, { status: "restricted", is_member: true }]) {
+    await mocked(async calls => {
+      await handleTopUpTelegram(callback(999, "reject"), { ...env, TELEGRAM_AUTH_USERS_JSON: "" });
+      const args = calls.find(c => c.path === "topUps:transition")!.body.args[0];
+      assert.equal(args.actor, "Group member (Telegram 999)"); assert.equal(args.action, "reject");
+    }, pending, null, membership);
+  }
+});
+test("invalid or bot identities cannot start an approval", async () => {
+  await mocked(async calls => {
+    for (const user of [0, -1, 1.5, NaN]) await handleTopUpTelegram(callback(user), env);
+    const bot = callback(999); Object.assign(bot.callback_query.from, { is_bot: true });
+    await handleTopUpTelegram(bot, env);
+    assert.ok(calls.every(c => c.path === "answerCallbackQuery" && c.body.show_alert));
   });
 });
 test("only Ali M can confirm paid, and stale message versions cannot act", async () => {
-  await mocked(async calls => { await handleTopUpTelegram(callback(333, "paid", 2), env); await handleTopUpTelegram(callback(111, "paid", 2), env); await handleTopUpTelegram(callback(222, "paid", 1), env); assert.equal(calls.filter(c => c.path === "topUps:transition").length, 0);
+  await mocked(async calls => { for (const user of [111, 333, 444, 999]) {
+      const spoofed = callback(user, "paid", 2); Object.assign(spoofed.callback_query.from, { username: "Ali M" });
+      await handleTopUpTelegram(spoofed, env);
+    }
+    assert.ok(calls.every(c => c.path === "answerCallbackQuery" && c.body.show_alert && c.body.text.includes("Only Ali M")));
+    await handleTopUpTelegram(callback(222, "paid", 1), env); assert.equal(calls.filter(c => c.path === "topUps:transition").length, 0);
     await handleTopUpTelegram(callback(222, "paid", 2), env); assert.equal(calls.filter(c => c.path === "topUps:transition").length, 1);
   }, { ...pending, version: 2, status: "approved" });
 });
 test("each approver adjusts by replying to the original card with no extra group prompt", async () => {
-  for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"]] as const) {
+  for (const userId of [333, 222, 111, 444, 999]) {
     await mocked(async calls => {
       await handleTopUpTelegram(callback(userId, "adjust"), env);
       assert.equal(calls.filter(c => c.path === "sendMessage").length, 0);
@@ -70,7 +110,7 @@ test("each approver adjusts by replying to the original card with no extra group
 });
 function amountReply(userId: number, text = "120.50", chat = -5336756761) { return { message: { chat: { id: chat }, from: { id: userId }, text, reply_to_message: { message_id: 7 } } }; }
 test("amount replies record the actual approver in the dashboard audit trail", async () => {
-  for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"]] as const) {
+  for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"], [444, "OtherAdmin"], [999, "Group member (Telegram 999)"]] as const) {
     await mocked(async calls => {
       await handleTopUpTelegram(amountReply(userId), env);
       const lookup = calls.find(c => c.path === "topUps:findAdjustment")!.body.args[0]; assert.equal(lookup.userId, String(userId)); assert.equal(lookup.promptId, 7);
@@ -78,6 +118,19 @@ test("amount replies record the actual approver in the dashboard audit trail", a
       assert.equal(args.actor, username); assert.equal(args.action, "adjust"); assert.equal(args.amount, 120.50); assert.equal(args.version, 1);
     }, { ...pending, adjustUserId: String(userId), adjustPromptId: 7 });
   }
+});
+test("leaving the group revokes a pending amount adjustment, including for configured approvers", async () => {
+  for (const userId of [333, 999]) await mocked(async calls => {
+    await handleTopUpTelegram(amountReply(userId), env);
+    assert.deepEqual(calls.map(c => c.path), ["topUps:findAdjustment", "getChatMember"]);
+  }, { ...pending, adjustUserId: String(userId), adjustPromptId: 7 }, null, { status: "left" });
+});
+test("anonymous group replies cannot adjust a request under another identity", async () => {
+  await mocked(async calls => {
+    const reply = amountReply(333); Object.assign(reply.message, { sender_chat: { id: -5336756761 } });
+    await handleTopUpTelegram(reply, env);
+    assert.equal(calls.length, 0);
+  }, { ...pending, adjustUserId: "333", adjustPromptId: 7 });
 });
 test("another approver cannot answer someone else's amount prompt", async () => {
   await mocked(async calls => {
@@ -90,7 +143,7 @@ test("another approver cannot answer someone else's amount prompt", async () => 
 });
 test("all approvers still reject stale request buttons", async () => {
   await mocked(async calls => {
-    for (const userId of [111, 222, 333]) for (const action of ["approve", "adjust", "reject"]) await handleTopUpTelegram(callback(userId, action), env);
+    for (const userId of [111, 222, 333, 444, 999]) for (const action of ["approve", "adjust", "reject"]) await handleTopUpTelegram(callback(userId, action), env);
     assert.equal(calls.filter(c => c.path === "topUps:transition" || c.path === "topUps:adjustmentPrompt" || c.path === "sendMessage").length, 0);
     assert.ok(calls.filter(c => c.path === "answerCallbackQuery").every(c => c.body.text.includes("out of date")));
   }, { ...pending, version: 2 });
@@ -143,22 +196,23 @@ test("deletion revokes signed public invoice links before storage is read", asyn
   }, { ...pending, version: 2, deletedAt: "2026-10-22T14:00:00Z", deletedBy: "Ali" });
 });
 
-test("Telegram setup checks group membership for all three approvers", async () => {
-  const original = globalThis.fetch; let aliLeft = false; const checked: number[] = [];
+test("Telegram setup reports group approval access and checks notification recipients", async () => {
+  const original = globalThis.fetch; let recipientLeft = false; const checked: number[] = [];
   globalThis.fetch = async (input, init) => {
     const path = String(input).split("/").at(-1), body = JSON.parse(String(init?.body));
     let result;
     if (path === "getMe") result = { id: 999, username: "test-bot" };
     else if (path === "getChat") result = { title: "Top-Up Request" };
-    else if (path === "getChatMember") { checked.push(body.user_id); result = { status: body.user_id === 111 ? aliLeft ? "left" : "administrator" : "member" }; }
+    else if (path === "getChatMember") { checked.push(body.user_id); result = { status: body.user_id === 222 && recipientLeft ? "left" : "member" }; }
     else throw new Error(`Unexpected Telegram write: ${path}`);
     return Response.json({ ok: true, result });
   };
   try {
-    const result = await topUpSetup(env) as { ready: boolean; recipients: string[] };
-    assert.equal(result.ready, true); assert.deepEqual(result.recipients, ["Amin", "Ali M", "Ali"]);
-    assert.deepEqual(checked.sort((a, b) => a - b), [111, 222, 333, 999]);
-    aliLeft = true; assert.equal((await topUpSetup(env) as { ready: boolean }).ready, false);
+    const result = await topUpSetup(env) as { ready: boolean; recipients: string[]; approvalAccess: string; paymentConfirmer: string };
+    assert.equal(result.ready, true); assert.deepEqual(result.recipients, ["Amin", "Ali M"]);
+    assert.equal(result.approvalAccess, "group-members"); assert.equal(result.paymentConfirmer, "Ali M");
+    assert.deepEqual(checked.sort((a, b) => a - b), [222, 333, 999]);
+    recipientLeft = true; assert.equal((await topUpSetup(env) as { ready: boolean }).ready, false);
   } finally { globalThis.fetch = original; }
 });
 

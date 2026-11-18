@@ -171,6 +171,8 @@ Use `/menu` in Telegram for the role-specific catalog and `/help <command>` for 
 
 The same report is sent **every Monday at 07:00 Asia/Beirut**, including Beirut's daylight-saving changes, to `TELEGRAM_CASH_REPORT_RECIPIENTS` (Ali and Ali M). The existing minute cron checks the local weekday/date/time and retries incomplete deliveries after 07:00 on that Monday only. Each recipient has separate durable delivery progress, including progress through a multipart report. This schedule is independent of the optional `/digest` summary. The bot's private command menu includes `/cash` for users who already have reporting access, on any day.
 
+Top-Up Request group members can approve, adjust, and reject requests using the existing Telegram card. Membership is checked with Telegram for each action and amount reply; a dashboard account is not required. Only Ali M can mark a request paid. Amount replies remain tied to the member who opened the adjustment, and stale or forwarded cards cannot change requests. Audit events use the configured account name or the member's name with their numeric Telegram ID. These permissions apply only to the configured group and do not grant dashboard or private bot command access.
+
 ### Regression Coverage
 
 The current test suite covers currency math, empty-state behavior, service-token enforcement, stale writes, atomic invoice reservations, company deletion, secret scrubbing, and API fail-closed behavior.
