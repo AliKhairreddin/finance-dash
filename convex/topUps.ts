@@ -70,6 +70,7 @@ export const transition = mutation({
     await ctx.db.patch(r._id, { status, amount, providerId, version, updatedAt: at, adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, adjustError: undefined,
       ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: prepareDraft ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
       ...(a.action === "reject" ? { draftStatus: "not_applicable" } : {}),
+      ...(a.action === "paid" && r.team.trim().toLowerCase() === "wagner" ? { wagnerPaidVersion: version } : {}),
       events: [...r.events, { at, actor: a.actor, action: a.action, amount }].slice(-200), notificationError: undefined });
     await ctx.db.insert("topUpDeliveries", { requestId: r._id, version, state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: r._id, version });
     if (a.action === "approve" && prepareDraft) await ctx.scheduler.runAfter(0, internal.topUpProcessing.draft, { id: r._id });
@@ -111,9 +112,12 @@ export const claimDelivery = internalMutation({ args: { id: v.id("topUpRequests"
 export const deliveryResult = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string(), error: v.optional(v.string()) }, returns: v.null(), handler: async (ctx, a) => {
   const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
   if (!d || d.state !== "sending" || d.token !== a.token) return null;
-  const r = await ctx.db.get(a.id), retry = !!a.error && d.attempts < 4 && r?.version === a.version;
-  await ctx.db.patch(d._id, { state: a.error ? retry ? "pending" : "failed" : "sent", error: a.error });
-  if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version ? { notificationError: a.error } : {}) });
+  const r = await ctx.db.get(a.id);
+  const missingReceipt = r?.version === a.version && r.wagnerPaidVersion === a.version && !r.wagnerMessageId;
+  const error = a.error ?? (missingReceipt ? "Wagner Paid notice delivery could not be confirmed." : undefined);
+  const retry = !!error && d.attempts < 4 && r?.version === a.version;
+  await ctx.db.patch(d._id, { state: error ? retry ? "pending" : "failed" : "sent", error });
+  if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version ? { notificationError: error } : {}) });
   if (retry) await ctx.scheduler.runAfter(Math.min(900_000, 60_000 * 2 ** d.attempts), internal.topUpProcessing.deliver, { id: a.id, version: a.version });
   if (r && r.version !== a.version) await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null;
 } });
@@ -122,6 +126,15 @@ export const saveMessage = mutation({ args: { serviceToken: v.string(), id: v.id
   authorize(a.serviceToken); const r = await ctx.db.get(a.id);
   if (r && a.version <= r.version && (!r.telegramMessageId || r.telegramMessageId === a.messageId)) await ctx.db.patch(a.id, { telegramMessageId: a.messageId, telegramVersion: Math.max(r.telegramVersion ?? 0, a.version) }); return null;
 } });
+export const saveWagnerMessage = mutation({
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), messageId: v.number() }, returns: v.null(),
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    const r = await ctx.db.get(a.id);
+    if (r?.wagnerPaidVersion === a.version && !r.wagnerMessageId) await ctx.db.patch(a.id, { wagnerMessageId: a.messageId });
+    return null;
+  }
+});
 export const claimDraft = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string() }, returns: v.boolean(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r || r.deletedAt || r.status !== "approved" || !["queued", "needs_review", "failed"].includes(r.draftStatus)) return false; await ctx.db.patch(r._id, { draftStatus: "creating", draftAttempt: a.token, draftError: undefined, draftWarning: undefined }); await ctx.scheduler.runAfter(180_000, internal.topUps.recoverDraft, { id: a.id, token: a.token }); return true; } });
 export const draftResult = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string(), status: v.union(v.literal("created"), v.literal("needs_review"), v.literal("failed"), v.literal("uncertain")), error: v.optional(v.string()), warning: v.optional(v.string()), draftId: v.optional(v.string()), details: v.optional(paymentDetails) }, returns: v.null(), handler: async (ctx, a) => {
   authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (r?.draftAttempt !== a.token || r.draftStatus !== "creating") return null;
@@ -134,7 +147,8 @@ export const draftResult = mutation({ args: { serviceToken: v.string(), id: v.id
 export const recoverDelivery = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string() }, returns: v.null(), handler: async (ctx, a) => {
   const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
   if (!d || d.state !== "sending" || d.token !== a.token) return null;
-  const r = await ctx.db.get(a.id); const delivered = r?.telegramVersion === a.version;
+  const r = await ctx.db.get(a.id);
+  const delivered = r?.telegramVersion === a.version && (r.wagnerPaidVersion !== a.version || !!r.wagnerMessageId);
   await ctx.db.patch(d._id, { state: delivered ? "sent" : "failed", error: delivered ? undefined : "Telegram delivery was interrupted. Retry from the dashboard." });
   if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version && !delivered ? { notificationError: "Telegram delivery was interrupted. Retry from the dashboard." } : {}) });
   if (r && r.version !== a.version) await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null;

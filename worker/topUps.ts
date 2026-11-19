@@ -1,8 +1,8 @@
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
-import type { Id } from "../convex/_generated/dataModel";
-import { validateTopUpInput, validateTopUpAmount, topUpAmountDecimals, isCryptoTopUp, topUpMessage, type TopUpRequest } from "../shared/topUps";
+import type { Doc, Id } from "../convex/_generated/dataModel";
+import { validateTopUpInput, validateTopUpAmount, formatTopUpAmount, topUpAmountDecimals, isCryptoTopUp, topUpMessage, type TopUpRequest } from "../shared/topUps";
 import { boundedBytes, ingestDocument, secureHeaderMatches } from "./documentIntake";
 import { documentMaximumBytes } from "../shared/financialDocuments";
 import { getDashboardSession } from "./auth";
@@ -78,9 +78,29 @@ export async function refreshTopUpButtons(env: WorkerEnv, id: Id<"topUpRequests"
 }
 export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequests">, version: number): Promise<void> {
   const convex = client(env), current = await convex.query(api.topUps.get, { ...auth(env), id });
-  if (!current || current.telegramVersion === version) return;
-  if (current.version !== version) return;
-  const r = current;
+  if (!current || current.version !== version) return;
+  const [card, wagner] = await Promise.allSettled([
+    current.telegramVersion === version ? undefined : updateTopUpCard(env, convex, current),
+    current.wagnerPaidVersion === version && !current.wagnerMessageId && current.status === "paid" && !current.deletedAt
+      ? sendWagnerPaidNotice(env, convex, current) : undefined
+  ]);
+  if (wagner.status === "rejected") throw new WagnerNoticeError("Could not confirm delivery to the Wagner group");
+  if (card.status === "rejected") throw card.reason;
+}
+export class WagnerNoticeError extends Error {}
+async function sendWagnerPaidNotice(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
+  const chatId = env.TOPUP_WAGNER_CHAT_ID;
+  if (!chatId || chatId === group(env)) throw new Error("Wagner Telegram group is not configured");
+  const message = await telegramApi(env, "sendMessage", {
+    chat_id: chatId,
+    text: `✅ Wagner top-up #${r.number} marked Paid\n${r.companyName}\n${formatTopUpAmount(r.amount, r.currency)}`,
+    link_preview_options: { is_disabled: true }
+  }) as { message_id: number };
+  if (!Number.isSafeInteger(message?.message_id) || message.message_id <= 0) throw new Error("Missing Wagner message ID");
+  await convex.mutation(api.topUps.saveWagnerMessage, { ...auth(env), id: r._id, version: r.version, messageId: message.message_id });
+}
+async function updateTopUpCard(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
+  const { _id: id, version } = r;
   if (!group(env)) throw new Error("Top-up Telegram group is not configured");
   if (r.deletedAt) {
     if (r.telegramMessageId) {
@@ -181,15 +201,35 @@ export async function handleTopUpApi(request: Request, env: WorkerEnv): Promise<
     return json({ message: "Not found" }, 404);
   } catch (e) { return json({ message: errorMessage(e, "Request could not be completed").slice(0, 500) }, 400); }
 }
+async function checkWagnerGroup(env: WorkerEnv, botId: number) {
+  const chatId = env.TOPUP_WAGNER_CHAT_ID;
+  if (!chatId || chatId === group(env)) return { ready: false };
+  try {
+    const chat = await telegramApi(env, "getChat", { chat_id: chatId }) as {
+      id: number; title: string; type: string; permissions?: { can_send_messages?: boolean }
+    };
+    const bot = await telegramApi(env, "getChatMember", { chat_id: chatId, user_id: botId }) as {
+      status: string; is_member?: boolean; can_send_messages?: boolean
+    };
+    const canSend = ["creator", "administrator"].includes(bot.status)
+      || (bot.status === "member" && chat.permissions?.can_send_messages === true)
+      || (bot.status === "restricted" && bot.is_member === true && bot.can_send_messages === true);
+    return { groupTitle: chat.title, groupId: chat.id, botStatus: bot.status,
+      ready: String(chat.id) === chatId && ["group", "supergroup"].includes(chat.type) && canSend };
+  } catch { return { ready: false }; }
+}
 export async function topUpSetup(env: WorkerEnv): Promise<unknown> {
   const bot = await telegramApi(env, "getMe", {}) as { id: number; username: string };
   const recipients = topUpNotificationNames.map(name => telegramPerson(env, name).username);
-  const permissions = { approvalAccess: "group-members", paymentConfirmer: "Ali M" };
+  const wagner = await checkWagnerGroup(env, bot.id);
+  const permissions = { approvalAccess: "group-members", paymentConfirmer: "Ali M", wagner };
   try {
     const chat = await telegramApi(env, "getChat", { chat_id: group(env) }) as { title: string };
     const member = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: bot.id }) as { status: string };
     const membership = await Promise.all(recipients.map(async name => { try { const person = telegramPerson(env, name); const info = await telegramApi(env, "getChatMember", { chat_id: group(env), user_id: Number(person.chatId) }) as { status: string }; return { username: name, status: info.status }; } catch { return { username: name, status: "unknown" }; } }));
-    const ready = !["left", "kicked"].includes(member.status) && membership.every(m => !["left", "kicked", "unknown"].includes(m.status));
-    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready, ...permissions, recipients, membership, ...(ready ? {} : { message: "Ensure notification recipients Amin and Ali M are members of the Top-Up Request group and the bot can send messages" }), alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
+    const primaryReady = !["left", "kicked"].includes(member.status) && membership.every(m => !["left", "kicked", "unknown"].includes(m.status));
+    const message = !primaryReady ? "Ensure notification recipients Amin and Ali M are members of the Top-Up Request group and the bot can send messages"
+      : !wagner.ready ? "Allow the finance bot to send messages in Wagner Group Internal" : undefined;
+    return { botUsername: bot.username, groupId: group(env), groupTitle: chat.title, botStatus: member.status, ready: primaryReady && wagner.ready, ...permissions, recipients, membership, message, alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON };
   } catch { return { botUsername: bot.username, groupId: group(env), ready: false, ...permissions, message: "Add this bot to the Top-Up Request group and allow it to send messages", recipients, alaaConfigured: !!env.TELEGRAM_TOPUP_USERS_JSON }; }
 }

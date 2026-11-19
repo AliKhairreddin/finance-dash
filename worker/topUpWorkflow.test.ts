@@ -78,6 +78,33 @@ test("Revolut requests queue an unsent draft on approval; card and crypto paymen
     assert.deepEqual((await db.ctx.db.get("state")).paymentAllocations, []);
   }
 });
+test("only marking a Wagner request Paid creates a Wagner notice and delivery requires its own receipt", async () => {
+  for (const team of ["Wagner", "Cognitive"]) {
+    const db = setup();
+    const request = await db.run(topUps.create, { ...auth, input: { ...input(), team }, documentId: "doc" });
+    const id = request._id;
+    const approve = await db.run(topUps.transition, { ...auth, id, version: 1, action: "approve", actor: "Amin" });
+    assert.equal(approve.wagnerPaidVersion, undefined);
+    const paid = await db.run(topUps.transition, { ...auth, id, version: 2, action: "paid", actor: "Ali M" });
+    assert.equal(paid.wagnerPaidVersion, team === "Wagner" ? 3 : undefined);
+    await assert.rejects(db.run(topUps.transition, { ...auth, id, version: 2, action: "paid", actor: "Ali M" }), /changed/);
+    if (team !== "Wagner") continue;
+    await db.run(topUps.claimDelivery, { id, version: 3, token: "first" });
+    await db.run(topUps.saveMessage, { ...auth, id, version: 3, messageId: 44 });
+    await db.run(topUps.deliveryResult, { id, version: 3, token: "first" });
+    const delivery = db.tables.get("topUpDeliveries")!.find(d => d.version === 3)!;
+    assert.equal(delivery.state, "pending");
+    await db.run(topUps.claimDelivery, { id, version: 3, token: "second" });
+    await db.run(topUps.recoverDelivery, { id, version: 3, token: "second" });
+    assert.equal(delivery.state, "failed");
+    await db.run(topUps.retryNotification, { ...auth, id });
+    await db.run(topUps.claimDelivery, { id, version: 3, token: "third" });
+    await db.run(topUps.saveWagnerMessage, { ...auth, id, version: 3, messageId: 77 });
+    await db.run(topUps.recoverDelivery, { id, version: 3, token: "third" });
+    assert.equal(delivery.state, "sent");
+    assert.equal((await db.ctx.db.get(id)).telegramMessageId, 44);
+  }
+});
 test("new requests reject the removed Wise payment method with a specific error", async () => {
   const db = setup();
   await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), paymentMethod: "Wise" }, documentId: "doc" }), /Select a payment method: Revolut/);

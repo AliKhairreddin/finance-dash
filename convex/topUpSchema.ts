@@ -14,6 +14,7 @@ export const topUpFields = { ...topUpInputFields,
   events: v.array(v.object({ at: v.string(), actor: v.string(), action: v.string(), amount: v.number() })),
   notificationError: v.optional(v.string()), draftStatus: v.string(), draftError: v.optional(v.string()), draftWarning: v.optional(v.string()), draftId: v.optional(v.string()),
   draftAttempt: v.optional(v.string()), paymentDetails: v.optional(paymentDetails), telegramMessageId: v.optional(v.number()), telegramVersion: v.optional(v.number()), telegramDeliveryToken: v.optional(v.string()),
-  adjustPromptId: v.optional(v.number()), adjustUserId: v.optional(v.string()), adjustExpiresAt: v.optional(v.number()), adjustError: v.optional(v.string())
+  adjustPromptId: v.optional(v.number()), adjustUserId: v.optional(v.string()), adjustExpiresAt: v.optional(v.number()), adjustError: v.optional(v.string()),
+  wagnerPaidVersion: v.optional(v.number()), wagnerMessageId: v.optional(v.number())
 };
 export const topUpRecord = v.object({ _id: v.id("topUpRequests"), _creationTime: v.number(), ...topUpFields });

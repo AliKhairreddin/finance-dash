@@ -85,6 +85,7 @@ interface ExportedHandler<Env> {
 }
 interface __BaseEnv_WorkerEnv {
   TOPUP_TELEGRAM_CHAT_ID: string;
+  TOPUP_WAGNER_CHAT_ID: string;
   TELEGRAM_TOPUP_USERS_JSON?: string;
   TOPUP_REVOLUT_DN_ACCOUNT_ID?: string;
   TOPUP_REVOLUT_LMD_ACCOUNT_ID?: string;

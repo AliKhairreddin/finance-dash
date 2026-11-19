@@ -14,7 +14,7 @@ import { fetchTuneTotals } from "../shared/tune";
 import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { routeStatementSurface, statementsInbox } from "./statementRouting";
 import { receiveStatementEmail } from "./statements";
-import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, topUpSetup } from "./topUps";
+import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, topUpSetup, WagnerNoticeError } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
 import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
 import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
@@ -9260,7 +9260,7 @@ export default {
         else if (body.job === "draft") await prepareTopUpDraft(env, body.id, { reextract: body.reextract === true });
         else return json({ message: "Unknown job" }, { status: 400 });
         return json({ ok: true });
-      } catch { return json({ message: "Top-up processing failed" }, { status: 502 }); }
+      } catch (error) { return json({ message: "Top-up processing failed" }, { status: error instanceof WagnerNoticeError ? 424 : 502 }); }
     }
     const authenticationResponse = await enforceSiteAuthentication(request, env);
     if (authenticationResponse) return authenticationResponse;

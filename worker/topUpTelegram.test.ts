@@ -3,7 +3,7 @@ import test from "node:test";
 import { handleTopUpTelegram, handlePublicTopUps, refreshTopUpButtons, sendTopUpNotification, topUpSetup } from "./topUps";
 import { validatePaymentDetails } from "./topUpDrafts";
 const id = "request-abc";
-const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
+const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", TOPUP_WAGNER_CHAT_ID: "-123", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
 const pending = { _id: id, version: 1, telegramMessageId: 7, status: "pending", draftStatus: "awaiting_approval", number: 10, entity: "dn", priority: "Urgent", companyName: "Example", team: "Cognitive", member: "Member", amount: 100, currency: "USD", openBalance: -20, lastThreeDaysSpend: 10, expectedThreeDaysSpend: 20, paymentMethod: "Bank Transfer", commission: "3%", createdAt: "2026-10-22T12:00:00Z", contentType: "application/pdf", documentId: "document", fileName: "invoice.pdf" };
 function callback(user: number, action = "approve", version = 1, chat = -5336756761) { return { callback_query: { id: "callback-1", data: `tu:${action}:${id}:${version}`, from: { id: user }, message: { message_id: 7, chat: { id: chat } } } }; }
 async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null, membership: Record<string, unknown> | "unavailable" = { status: "member" }) {
@@ -17,6 +17,27 @@ async function mocked(run: (calls: { path: string; body: any }[]) => Promise<voi
     return url.includes("api.telegram.org") ? Response.json({ ok: true, result: path === "sendMessage" ? { message_id: 8 } : true }) : Response.json({ status: "success", value: path === "topUps:rateLimit" ? true : path === "topUps:get" ? record : path === "topUps:deletedNotification" ? deletedSnapshot : path === "topUps:findAdjustment" ? adjustment : path === "topUps:transition" ? { ...record, status: "approved" } : null }); };
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
+test("a Wagner Paid transition sends a separate plain-text receipt and retries only missing deliveries", async () => {
+  const paid = { ...pending, team: "Wagner", status: "paid", version: 3, wagnerPaidVersion: 3, amount: 1234.56 };
+  for (const cardSent of [false, true]) for (const wagnerSent of [false, true]) {
+    await mocked(async calls => {
+      await sendTopUpNotification(env, id as never, 3);
+      assert.equal(calls.filter(c => c.path === "editMessageText").length, cardSent ? 0 : 1);
+      const notices = calls.filter(c => c.path === "sendMessage");
+      assert.equal(notices.length, wagnerSent ? 0 : 1);
+      if (!wagnerSent) {
+        assert.deepEqual(notices[0].body, { chat_id: env.TOPUP_WAGNER_CHAT_ID, text: "✅ Wagner top-up #10 marked Paid\nExample\n1,234.56 USD", link_preview_options: { is_disabled: true } });
+        assert.deepEqual(calls.find(c => c.path === "topUps:saveWagnerMessage")?.body.args[0], { serviceToken: "service", id, version: 3, messageId: 8 });
+      }
+    }, { ...paid, telegramVersion: cardSent ? 3 : 2, wagnerMessageId: wagnerSent ? 99 : undefined });
+  }
+  for (const patch of [{ wagnerPaidVersion: undefined }, { wagnerPaidVersion: 2 }, { deletedAt: "now" }, { status: "approved" }]) {
+    await mocked(async calls => {
+      await sendTopUpNotification(env, id as never, 3);
+      assert.equal(calls.filter(c => c.body.chat_id === env.TOPUP_WAGNER_CHAT_ID).length, 0);
+    }, { ...paid, ...patch });
+  }
+});
 test("all group members can approve, including members without dashboard accounts", async () => {
   for (const [userId, username] of [[333, "Amin"], [222, "Ali M"], [111, "Ali"], [444, "OtherAdmin"], [999, "Group member (Telegram 999)"]] as const) {
     await mocked(async calls => {
@@ -197,12 +218,13 @@ test("deletion revokes signed public invoice links before storage is read", asyn
 });
 
 test("Telegram setup reports group approval access and checks notification recipients", async () => {
-  const original = globalThis.fetch; let recipientLeft = false; const checked: number[] = [];
+  const original = globalThis.fetch; let recipientLeft = false, wagnerCanSend = true; const checked: number[] = [];
   globalThis.fetch = async (input, init) => {
     const path = String(input).split("/").at(-1), body = JSON.parse(String(init?.body));
     let result;
     if (path === "getMe") result = { id: 999, username: "test-bot" };
-    else if (path === "getChat") result = { title: "Top-Up Request" };
+    else if (path === "getChat") result = body.chat_id === env.TOPUP_WAGNER_CHAT_ID
+      ? { id: -123, type: "group", title: "Wagner Group Internal", permissions: { can_send_messages: wagnerCanSend } } : { title: "Top-Up Request" };
     else if (path === "getChatMember") { checked.push(body.user_id); result = { status: body.user_id === 222 && recipientLeft ? "left" : "member" }; }
     else throw new Error(`Unexpected Telegram write: ${path}`);
     return Response.json({ ok: true, result });
@@ -211,7 +233,8 @@ test("Telegram setup reports group approval access and checks notification recip
     const result = await topUpSetup(env) as { ready: boolean; recipients: string[]; approvalAccess: string; paymentConfirmer: string };
     assert.equal(result.ready, true); assert.deepEqual(result.recipients, ["Amin", "Ali M"]);
     assert.equal(result.approvalAccess, "group-members"); assert.equal(result.paymentConfirmer, "Ali M");
-    assert.deepEqual(checked.sort((a, b) => a - b), [222, 333, 999]);
+    assert.deepEqual(checked.sort((a, b) => a - b), [222, 333, 999, 999]);
+    wagnerCanSend = false; assert.equal((await topUpSetup(env) as { ready: boolean }).ready, false); wagnerCanSend = true;
     recipientLeft = true; assert.equal((await topUpSetup(env) as { ready: boolean }).ready, false);
   } finally { globalThis.fetch = original; }
 });
