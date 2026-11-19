@@ -14,7 +14,7 @@ Invoice links in group messages are signed bearer links expiring after 30 days. 
 
 Notification delivery is durable, retried up to four times with backoff, with visible failure and manual retry. A lost Telegram response can cause a duplicate message, but version checks prevent duplicate approvals/payments. Interrupted jobs are recovered to a visible state.
 
-When a Wagner request is marked Paid in Telegram or the dashboard, the bot also posts the request number, recipient and final amount in Wagner Group Internal (`TOPUP_WAGNER_CHAT_ID`). The request card and the Wagner notice have independent message receipts. A retry skips each confirmed delivery. The production setup check verifies the bot's group membership and send permissions without posting a payment. This applies to new Paid transitions.
+When a Wagner request is marked Paid in Telegram or the dashboard, the bot also posts the request number, recipient and final amount in Wagner Group Internal (`TOPUP_WAGNER_CHAT_ID`). The request card and the Wagner notice have independent message receipts. A retry skips each confirmed delivery. The production setup check verifies the bot's group membership and send permissions without posting a payment. This applies to new Paid transitions. To confirm delivery with an explicitly requested group-visible test, POST the fixed job `{"job":"test-wagner-notice"}` to the service-authenticated `/api/internal/top-ups/process` endpoint. It returns Telegram's chat and message IDs without creating a request. Routine releases do not send this test.
 
 ## Alaa
 

@@ -88,16 +88,26 @@ export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequest
   if (card.status === "rejected") throw card.reason;
 }
 export class WagnerNoticeError extends Error {}
-async function sendWagnerPaidNotice(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
+async function postWagnerNotice(env: WorkerEnv, text: string) {
   const chatId = env.TOPUP_WAGNER_CHAT_ID;
   if (!chatId || chatId === group(env)) throw new Error("Wagner Telegram group is not configured");
   const message = await telegramApi(env, "sendMessage", {
     chat_id: chatId,
-    text: `✅ Wagner top-up #${r.number} marked Paid\n${r.companyName}\n${formatTopUpAmount(r.amount, r.currency)}`,
+    text,
     link_preview_options: { is_disabled: true }
-  }) as { message_id: number };
-  if (!Number.isSafeInteger(message?.message_id) || message.message_id <= 0) throw new Error("Missing Wagner message ID");
-  await convex.mutation(api.topUps.saveWagnerMessage, { ...auth(env), id: r._id, version: r.version, messageId: message.message_id });
+  }) as { message_id: number; chat: { id: number } };
+  if (String(message?.chat?.id) !== chatId || !Number.isSafeInteger(message.message_id) || message.message_id <= 0) {
+    throw new WagnerNoticeError("Missing Telegram receipt for the Wagner group");
+  }
+  return { chatId, messageId: message.message_id };
+}
+export function testWagnerNotice(env: WorkerEnv) {
+  return postWagnerNotice(env, "Test: Wagner Paid notifications are live");
+}
+async function sendWagnerPaidNotice(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
+  const text = `✅ Wagner top-up #${r.number} marked Paid\n${r.companyName}\n${formatTopUpAmount(r.amount, r.currency)}`;
+  const { messageId } = await postWagnerNotice(env, text);
+  await convex.mutation(api.topUps.saveWagnerMessage, { ...auth(env), id: r._id, version: r.version, messageId });
 }
 async function updateTopUpCard(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
   const { _id: id, version } = r;

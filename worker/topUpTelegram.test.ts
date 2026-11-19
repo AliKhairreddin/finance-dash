@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleTopUpTelegram, handlePublicTopUps, refreshTopUpButtons, sendTopUpNotification, topUpSetup } from "./topUps";
+import { handleTopUpTelegram, handlePublicTopUps, refreshTopUpButtons, sendTopUpNotification, testWagnerNotice, topUpSetup } from "./topUps";
 import { validatePaymentDetails } from "./topUpDrafts";
 const id = "request-abc";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", TOPUP_WAGNER_CHAT_ID: "-123", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
@@ -14,9 +14,17 @@ async function mocked(run: (calls: { path: string; body: any }[]) => Promise<voi
       : Response.json({ ok: true, result: { user: { id: body.user_id, is_bot: false, first_name: "Group member" }, ...membership } });
     const args = Array.isArray(body.args) ? body.args[0] : body.args;
     const adjustment = record?.adjustUserId === args?.userId && record?.adjustPromptId === args?.promptId ? record : null;
-    return url.includes("api.telegram.org") ? Response.json({ ok: true, result: path === "sendMessage" ? { message_id: 8 } : true }) : Response.json({ status: "success", value: path === "topUps:rateLimit" ? true : path === "topUps:get" ? record : path === "topUps:deletedNotification" ? deletedSnapshot : path === "topUps:findAdjustment" ? adjustment : path === "topUps:transition" ? { ...record, status: "approved" } : null }); };
+    return url.includes("api.telegram.org") ? Response.json({ ok: true, result: path === "sendMessage" ? { message_id: 8, chat: { id: Number(body.chat_id) } } : true }) : Response.json({ status: "success", value: path === "topUps:rateLimit" ? true : path === "topUps:get" ? record : path === "topUps:deletedNotification" ? deletedSnapshot : path === "topUps:findAdjustment" ? adjustment : path === "topUps:transition" ? { ...record, status: "approved" } : null }); };
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
+test("the delivery test posts one labelled notice without accessing any payment", async () => {
+  await mocked(async calls => {
+    assert.deepEqual(await testWagnerNotice(env), { chatId: env.TOPUP_WAGNER_CHAT_ID, messageId: 8 });
+    assert.deepEqual(calls.map(c => [c.path, c.body.chat_id, c.body.text]), [
+      ["sendMessage", env.TOPUP_WAGNER_CHAT_ID, "Test: Wagner Paid notifications are live"]
+    ]);
+  });
+});
 test("a Wagner Paid transition sends a separate plain-text receipt and retries only missing deliveries", async () => {
   const paid = { ...pending, team: "Wagner", status: "paid", version: 3, wagnerPaidVersion: 3, amount: 1234.56 };
   for (const cardSent of [false, true]) for (const wagnerSent of [false, true]) {

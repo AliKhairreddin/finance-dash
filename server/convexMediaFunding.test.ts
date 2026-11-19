@@ -293,6 +293,39 @@ test("Google, NewsBreak and TikTok account assignments deduct credit-line spend"
   } finally { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; }
 });
 
+test("daily billing categories share fractional cents and reconcile after corrections and repeated rebuilds", async () => {
+  const previous = process.env.CONVEX_SERVICE_TOKEN;
+  process.env.CONVEX_SERVICE_TOKEN = serviceToken;
+  try {
+    const ctx = database(seed());
+    ctx.tables.mediaFundingAssignments[0].billingType = "credit_line";
+    ctx.tables.mediaFundingAssignments.push({ ...ctx.tables.mediaFundingAssignments[1], _id: "card", accountId: "3", targetKey: "ad_account:Facebook:3", billingType: "card" });
+    const source = ctx.tables.mediaSpendDaily[0];
+    const scenarios = [
+      { raw: [6348.8436, 0.2927, 0], cents: [634885, 29, 0], total: 6349.14 },
+      { raw: [5315.7649, 17.8629, 0], cents: [531577, 1786, 0], total: 5333.63 },
+      { raw: [4720.1033, 1390.7217, 0], cents: [472011, 139072, 0], total: 6110.83 },
+      { raw: [-6348.8436, -0.2927, 0], cents: [-634885, -29, 0], total: -6349.14 },
+      { raw: [0.128, -0.0349, 0.0269], cents: [13, -4, 3], total: 0.12 },
+      { raw: [0.125, 0.125, 0.125], cents: [13, 12, 13], total: 0.38 }
+    ];
+    for (const { raw, cents, total } of scenarios) {
+      ctx.tables.mediaSpendDaily = raw.map((spend, i) => ({ ...source, accountId: String(i + 1), _id: `spend-${i}`, spend }));
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await call(rebuildDate, ctx, { serviceToken, date, updatedAt });
+        for (const row of [ctx.tables.mediaFundingSpendDaily[0], ctx.tables.mediaFundingProviderTotals[0]]) {
+          assert.equal(row.spend, total);
+          assert.deepEqual(row.billingSpend, { credit_line: cents[0] / 100, unclassified: cents[1] / 100, card: cents[2] / 100, unclassifiedRows: 1 });
+          assert.equal(cents.reduce((sum, amount) => sum + amount, 0), Math.round(row.spend * 100));
+        }
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN;
+    else process.env.CONVEX_SERVICE_TOKEN = previous;
+  }
+});
+
 test("only credit-line spend reduces balances regardless of payment methods, with fees, adjustments and refunds preserved", async () => {
   const previous = process.env.CONVEX_SERVICE_TOKEN; process.env.CONVEX_SERVICE_TOKEN = serviceToken;
   try {

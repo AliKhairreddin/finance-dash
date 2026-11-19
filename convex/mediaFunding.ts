@@ -320,6 +320,24 @@ function roundBillingSpend(spend: MediaFundingBillingSpend): MediaFundingBilling
   return { card: roundMediaFundingMoney(spend.card), credit_line: roundMediaFundingMoney(spend.credit_line), unclassified: roundMediaFundingMoney(spend.unclassified), unclassifiedRows: spend.unclassifiedRows };
 }
 
+function allocateBillingCents(spend: MediaFundingBillingSpend, roundedTotal: number): MediaFundingBillingSpend {
+  // Source spend can have fractions of a cent. Use largest remainders to split
+  // the rounded daily total, including refunds. The fixed order breaks ties.
+  const categories = (["card", "credit_line", "unclassified"] as const).map(key => {
+    const rawCents = spend[key] * 100;
+    const cents = Math.floor(rawCents);
+    return { key, cents, remainder: rawCents - cents };
+  });
+  const extraCents = Math.round(roundedTotal * 100) - categories.reduce((sum, item) => sum + item.cents, 0);
+  if (extraCents < 0 || extraCents > categories.length) throw fundingError("MEDIA_FUNDING_STATE", "Billing categories do not cover daily spend");
+  categories.sort((a, b) => b.remainder - a.remainder);
+  const result = { ...spend };
+  for (const [index, category] of categories.entries()) {
+    result[category.key] = (category.cents + (index < extraCents ? 1 : 0)) / 100;
+  }
+  return result;
+}
+
 async function requestBillingRebuild(ctx: MutationCtx, providerIds: Set<Id<"mediaFundingProviders">>, from: string, updatedAt: string) {
   const totals = await Promise.all([...providerIds].map(async (providerId) => {
     const total = await totalsForProvider(ctx, providerId);
@@ -1274,13 +1292,14 @@ export const rebuildDate = mutation({
     );
     const nextRows = new Map([...allocations.values()].map((allocation) => {
       const key = [String(allocation.providerId), args.date, allocation.currency].map(encodeURIComponent).join(":");
+      const spend = roundMediaFundingMoney(allocation.spend);
       return [key, {
         key,
         providerId: allocation.providerId,
         date: args.date,
         currency: allocation.currency,
-        spend: roundMediaFundingMoney(allocation.spend),
-        billingSpend: roundBillingSpend(allocation.billingSpend),
+        spend,
+        billingSpend: allocateBillingCents(allocation.billingSpend, spend),
         billingRevision: providerTotalsCache.get(String(allocation.providerId))!.billingRevision ?? 0,
         classifiedSpend: Object.fromEntries(Object.entries(allocation.classifiedSpend).map(([method, spend]) => [method, roundMediaFundingMoney(spend)])) as unknown as MediaClassifiedSpend,
         accountCount: allocation.accountIds.size,

@@ -32,7 +32,7 @@ const overview = await convex.query(api.mediaFunding.listOverview, { serviceToke
 for (const provider of overview.providers) {
   const spend = provider.billingSpend;
   if (!spend || provider.billingRebuildPending) throw new Error("Provider billing totals are not ready");
-  if (Math.abs(roundMediaFundingMoney(spend.card + spend.credit_line + spend.unclassified) - provider.spend) > 0.02) {
+  if (roundMediaFundingMoney(spend.card + spend.credit_line + spend.unclassified) !== provider.spend) {
     throw new Error(`Billing classifications do not reconcile to account spend for provider ${provider.id}`);
   }
   const expected = !provider.balanceVerified || provider.bankFundingPaused || provider.excludedFundingCount > 0 || spend.unclassifiedRows > 0

@@ -14,7 +14,7 @@ import { fetchTuneTotals } from "../shared/tune";
 import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { routeStatementSurface, statementsInbox } from "./statementRouting";
 import { receiveStatementEmail } from "./statements";
-import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, topUpSetup, WagnerNoticeError } from "./topUps";
+import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, testWagnerNotice, topUpSetup, WagnerNoticeError } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
 import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
 import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
@@ -9256,6 +9256,7 @@ export default {
       try {
         const body = JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 4096))) as { id: import("../convex/_generated/dataModel").Id<"topUpRequests">; version: number; job: string; reextract?: boolean };
         if (body.job === "refresh-buttons") return json({ ok: true, updated: await refreshTopUpButtons(env, body.id, body.version) });
+        if (body.job === "test-wagner-notice") return json(await testWagnerNotice(env));
         if (body.job === "notification") await sendTopUpNotification(env, body.id, body.version);
         else if (body.job === "draft") await prepareTopUpDraft(env, body.id, { reextract: body.reextract === true });
         else return json({ message: "Unknown job" }, { status: 400 });
