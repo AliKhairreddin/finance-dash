@@ -1,0 +1,27 @@
+.owner-shell .transaction-reviewer-content { max-width: 1200px; width: 100%; margin-inline: auto; }
+.owner-heading, .owner-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.owner-heading h1, .owner-heading h2, .owner-panel h3 { margin: 0; }
+.owner-heading p { margin: .35rem 0 0; color: var(--muted-foreground); }
+.owner-shell label, .owner-publish label { display: grid; gap: .3rem; font-size: .8rem; font-weight: 550; }
+.owner-shell select, .owner-publish select, .owner-publish input, .owner-actions textarea { max-width: 100%; border: 1px solid var(--border); border-radius: .5rem; color: var(--foreground); background: var(--background); padding: .48rem .65rem; font: inherit; }
+.owner-shell .owner-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,185px),1fr)); gap: .75rem; margin: 1.25rem 0; }
+.owner-metrics > div, .review-signers > div { padding: 1rem; border: 1px solid var(--border); background: var(--card); border-radius: .7rem; display: flex; flex-direction: column; gap: .25rem; }
+.owner-metrics strong { font-size: clamp(1.2rem, 2vw, 1.8rem); font-variant-numeric: tabular-nums; }
+.owner-metrics span, .owner-totals span, .review-mail, .review-signers small, .owner-metrics small { font-size: .8rem; color: var(--muted-foreground); }
+.owner-nav { margin: .85rem 0; }
+.owner-panel, .owner-publish-content { padding: 1.1rem; display: grid; gap: 1rem; }
+.owner-totals { display: flex; flex-wrap: wrap; gap: .8rem 2rem; padding-block: .5rem; }
+.owner-totals > div, .owner-actions, .review-mail > div { display: grid; gap: .35rem; }
+.owner-status-button { background: none; border: 0; cursor: pointer; }
+.owner-panel .table-wrap { overflow-x: auto; }
+.owner-panel table { width: 100%; }
+.review-signers, .review-mail { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,155px),1fr)); gap: .65rem; }
+.review-signers p { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; }
+.owner-actions textarea { min-height: 5rem; resize: vertical; }
+.owner-link { background: none; border: 0; padding: 0; color: var(--foreground); text-decoration: underline; text-underline-offset: .18em; cursor: pointer; text-align: left; width: fit-content; }
+.owner-publish { margin: 0 0 1rem; }
+.owner-publish summary { cursor: pointer; font-weight: 600; padding: .8rem 1.1rem; }
+.owner-publish-content { padding-top: .35rem; }
+.owner-publish-content section { display: grid; gap: .75rem; }
+.owner-contacts { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; }
+.owner-shell button:focus-visible, .owner-publish summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

@@ -1,3 +1,5 @@
+import { handleOwnerReview } from "../worker/ownerReview";
+import { storeManagementWorkbook } from "../shared/managementReportImport";
 import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
 import { mercuryEntities } from "../shared/mercuryEntities";
 import { slashEntities } from "../shared/slashEntities";
@@ -221,6 +223,11 @@ app.post("/api/management-report/upload", express.raw({ type: () => true, limit:
     if (!Buffer.isBuffer(request.body)) throw new Error("Workbook body is required");
     const fileName = decodeURIComponent(typeof request.headers["x-file-name"] === "string" ? request.headers["x-file-name"] : "");
     const prepared = await readManagementWorkbook(new Uint8Array(request.body), fileName);
+    if (process.env.MANAGEMENT_REPORT_IMPORT_TOKEN) {
+      const result = await storeManagementWorkbook(localConvexClient(), process.env.MANAGEMENT_REPORT_IMPORT_TOKEN, prepared);
+      response.status(result.alreadyComplete ? 200 : 201).json(result);
+      return;
+    }
     await saveManagementReportDashboard({ dashboard: prepared.dashboard });
     response.status(201).json({ importId: prepared.importId, alreadyComplete: false });
   } catch (error) { next(error); }
@@ -305,6 +312,19 @@ app.use("/api/redtrack", async (request, response, next) => {
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true, service: "finance-dash-api", time: new Date().toISOString() });
+});
+
+app.use("/api/monthly-review", async (request, response, next) => {
+  try {
+    if (!process.env.MANAGEMENT_REPORT_IMPORT_TOKEN) {
+      response.status(503).json({ message: "Configure the development Convex workbook import to publish owner reviews." });
+      return;
+    }
+    const result = await handleOwnerReview(new Request(new URL(request.originalUrl, "http://localhost"), {
+      method: request.method, ...(request.method === "POST" ? { body: JSON.stringify(request.body) } : {})
+    }), { CONVEX_URL: process.env.CONVEX_URL!, CONVEX_SERVICE_TOKEN: localConvexServiceToken() }, { username: "Local developer", role: "administrator" });
+    response.status(result.status).set("Cache-Control", "private, no-store").json(await result.json());
+  } catch (error) { next(error); }
 });
 
 app.get("/api/session", (_request, response) => {
@@ -557,7 +577,9 @@ app.get("/api/analytics/category-companies", (request, response, next) => {
 
 app.get("/api/management-report", async (_request, response, next) => {
   try {
-    response.json(await loadManagementReportDashboard());
+    response.json(process.env.MANAGEMENT_REPORT_IMPORT_TOKEN
+      ? await localConvexClient().query(api.managementReport.getDashboard, { serviceToken: localConvexServiceToken() })
+      : await loadManagementReportDashboard());
   } catch (error) {
     next(error);
   }

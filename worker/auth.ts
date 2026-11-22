@@ -1,3 +1,4 @@
+import { ownerForLogin } from "../shared/ownerReview";
 import {
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
@@ -560,7 +561,7 @@ async function telegramSessionUsername(
     : subject;
   if (!config.users.some((user) => user.normalizedUsername === username)) return null;
   if (usesStatementPassword(audience, username)) return null;
-  if (passwordless && !config.passwordlessUsernames.has(username)) return null;
+  if (passwordless && (!config.passwordlessUsernames.has(username) || (audience !== "statements.thatcanadian.dev" && ownerForLogin(username)))) return null;
   return username;
 }
 
@@ -643,7 +644,7 @@ async function requestTelegramLogin(
     );
   }
 
-  if (config.passwordlessUsernames.has(user.normalizedUsername)) {
+  if (config.passwordlessUsernames.has(user.normalizedUsername) && (url.hostname === "statements.thatcanadian.dev" || !ownerForLogin(user.username))) {
     try {
       await (dependencies.sendTelegramSignInAlert ?? sendTelegramSignInAlert)(env, user.chatId, {
         username: user.username,
@@ -910,7 +911,7 @@ export async function getDashboardSession(
   if (!user) return null;
   return {
     username: user.username,
-    role: env.DASHBOARD_ADMINISTRATOR_USERS?.split(",").some(username => normalizeFinanceUsername(username) === normalizedUsername)
+    role: ownerForLogin(user.username) ? "owner" : env.DASHBOARD_ADMINISTRATOR_USERS?.split(",").some(username => normalizeFinanceUsername(username) === normalizedUsername)
       ? "administrator"
       : config.topUpUsernames.has(normalizedUsername) ? "top-up-reviewer" : config.mediaSpendUsernames.has(normalizedUsername)
       ? "media-spend-reviewer"

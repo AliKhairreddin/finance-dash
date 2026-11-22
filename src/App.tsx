@@ -227,6 +227,7 @@ import { exportBankTransactionsCsv } from "@/features/banking/exportTransactions
 import { BankSourceDropdown } from "@/features/banking/BankSourceDropdown";
 import { InvoicesView as IncomeInvoicesView, RevenueView as IncomeRevenueView } from "@/features/income/IncomeViews";
 import { ExpenseEditorDialog, ExpensesView } from "@/features/expenses/ExpensesView";
+import { OwnerDashboard } from "@/features/owner-review/OwnerDashboard";
 import { ManagementReportView } from "@/features/management-report/ManagementReportView";
 import { dashboardHomePage, dashboardPageAllowed } from "../shared/dashboardAccess";
 import { CashFlowOpenInvoicesView, CashFlowPositionView } from "@/features/cash-flow/CashFlowViews";
@@ -237,7 +238,7 @@ import { RedTrackView } from "@/features/redtrack/RedTrackView";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "top-ups", "contracts", "providers", "settings"] as const;
+const activeTabs = ["overview", "owner", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "top-ups", "contracts", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | ManualBankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -1005,7 +1006,7 @@ function App() {
       return;
     }
     setTransactionReview(null);
-    if (nextSession.role === "media-spend-reviewer" || nextSession.role === "top-up-reviewer") {
+    if (nextSession.role === "owner" || nextSession.role === "media-spend-reviewer" || nextSession.role === "top-up-reviewer") {
       setDashboard(null);
       return;
     }
@@ -2184,6 +2185,8 @@ function App() {
       </main>
     );
   }
+
+  if (session?.role === "owner") return <OwnerDashboard apiBase={apiBase} username={session.username} themeToggle={<ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />} />;
 
   if (isTransactionReviewer && transactionReview && session) {
     return (

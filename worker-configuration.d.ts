@@ -188,6 +188,7 @@ declare namespace Cloudflare {
 	interface Env extends __BaseEnv_WorkerEnv {}
 }
 interface WorkerEnv extends __BaseEnv_WorkerEnv {
+  OWNER_REVIEW_EMAIL?: { send(message: { to: string; from: string; subject: string; text: string; html: string }): Promise<{ messageId: string }> };
   FLEX_API_KEY?: string;
   FLEX_ORGANIZATION_ID?: string;
   FLEX_NOTIFICATIONS_ENABLED?: string;

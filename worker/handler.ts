@@ -16,7 +16,8 @@ import { routeStatementSurface, statementsInbox } from "./statementRouting";
 import { receiveStatementEmail } from "./statements";
 import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, testWagnerNotice, topUpSetup, WagnerNoticeError } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
-import { topUpReviewerCanAccess } from "../shared/dashboardAccess";
+import { handleOwnerReview, sendOwnerReviewEmail } from "./ownerReview";
+import { ownerReviewAccess, topUpReviewerCanAccess } from "../shared/dashboardAccess";
 import { replaceMeritInvoice, replacementRequest } from "./meritReplacement";
 import { readQuinStreetMonthly, syncQuinStreetMonthly } from "../shared/quinstreetMonthly";
 import { handleManualBankApi } from "./manualBankTransactions";
@@ -9245,6 +9246,7 @@ export default {
       await syncStatementRevolutLmd(env); return json({checked:true});
     }
     if (new URL(request.url).pathname === "/api/internal/revolut/authorize") return handleRevolutAuthorization(request, env);
+    if (new URL(request.url).pathname === "/api/internal/owner-review/email") return sendOwnerReviewEmail(request, env);
     const publicTopUpResponse = await handlePublicTopUps(request, env);
     if (publicTopUpResponse) return publicTopUpResponse;
     if (new URL(request.url).pathname === "/api/internal/top-ups/setup") {
@@ -9272,6 +9274,8 @@ export default {
       if (!session) {
         return json({ message: "Authentication required" }, { status: 401 });
       }
+      if (session.role === "owner" && !ownerReviewAccess(request)) return json({ message: "Owner dashboard access only" }, { status: 403 });
+      if (url.pathname.startsWith("/api/monthly-review/")) return handleOwnerReview(request, env, session);
       if (session.role === "top-up-reviewer" && !topUpReviewerCanAccess(request)) {
         return json({ message: "This account can access Top-up requests and Documents only" }, { status: 403 });
       }

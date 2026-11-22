@@ -3,6 +3,7 @@ import type { DashboardAccessRole } from "./types";
 export const financeOperatorPages = ["banks", "documents", "analytics", "management"] as const;
 
 export function dashboardPageAllowed(role: DashboardAccessRole, page: string): boolean {
+  if (page === "owner" || role === "owner") return role === "owner" && page === "owner";
   if (role === "top-up-reviewer") return page === "top-ups" || page === "documents";
   if (role === "administrator") return true;
   if (role === "transaction-reviewer") return page === "banks";
@@ -10,7 +11,8 @@ export function dashboardPageAllowed(role: DashboardAccessRole, page: string): b
   return financeOperatorPages.some((allowed) => allowed === page);
 }
 
-export function dashboardHomePage(role: DashboardAccessRole): "overview" | "banks" | "media-spend" | "top-ups" {
+export function dashboardHomePage(role: DashboardAccessRole): "owner" | "overview" | "banks" | "media-spend" | "top-ups" {
+  if (role === "owner") return "owner";
   if (role === "top-up-reviewer") return "top-ups";
   if (role === "administrator") return "overview";
   return role === "media-spend-reviewer" ? "media-spend" : "banks";
@@ -32,6 +34,7 @@ export function mediaSpendReviewerCanAccess(request: Request): boolean {
 
 export function financeOperatorCanAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
+  if (path.startsWith("/api/monthly-review/")) return financeReviewAccess(request);
   if (request.method === "GET") {
     return ["/api/session", "/api/dashboard", "/api/manual-bank-transactions", "/api/analytics", "/api/analytics/category-companies",
       "/api/transactions", "/api/transactions/export", "/api/transactions/lookup", "/api/transactions/summary", "/api/transactions/sync",
@@ -74,4 +77,16 @@ export function topUpReviewerCanAccess(request: Request): boolean {
   if (request.method === "POST") return ["/api/documents/upload", "/api/documents/trash", "/api/documents/restore", "/api/documents/recheck"].includes(path)
     || /^\/api\/documents\/[^/]+\/(?:review|retry|match|candidates|purchase|references)$/u.test(path);
   return false;
+}
+
+export function financeReviewAccess(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET") return ["/api/monthly-review/list", "/api/monthly-review/contacts"].includes(path);
+  return request.method === "POST" && ["publish", "contacts", "retry-email"].some(action => path === "/api/monthly-review/" + action);
+}
+
+export function ownerReviewAccess(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  if (request.method === "GET") return ["/api/session", "/api/monthly-review/list", "/api/monthly-review/report", "/api/monthly-review/transactions"].includes(path);
+  return request.method === "POST" && path === "/api/monthly-review/decision";
 }

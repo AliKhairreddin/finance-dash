@@ -574,3 +574,16 @@ test("the configured administrator grant promotes only a registered Alaa identit
     assert.equal((await getDashboardSession(request, env))?.role, role);
   }
 });
+
+test("owner roles follow the authenticated account and finance sign-off requires a verified login", async () => {
+  for (const name of ["Amin", "Sanjin", "Sani", "Ben", "Beno"]) {
+    const env = { ...(telegramEnv() as WorkerEnv), TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ [name]: "70707070" }),
+      TELEGRAM_PASSWORDLESS_USERS_JSON: JSON.stringify([name]), DASHBOARD_ADMINISTRATOR_USERS: name };
+    const host = "finance.thatcanadian.dev";
+    for (const [prefix, expected] of [["", "owner"], ["passwordless:", undefined]]) {
+      const token = await createAuthSessionToken(testSessionSecret, host, (prefix ?? "") + name.toLowerCase());
+      const request = new Request("https://" + host + "/api/session", { headers: { Cookie: "__Host-finance_session=" + token } });
+      assert.equal((await getDashboardSession(request, env))?.role, expected);
+    }
+  }
+});

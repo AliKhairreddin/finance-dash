@@ -6,6 +6,7 @@ import { revenueInvoiceLine } from "./revenueInvoiceSchema";
 import { intelligenceTables } from "./statementIntelligenceSchema";
 import { topUpFields, topUpRecord } from "./topUpSchema";
 import { replacementFields } from "./meritReplacementSchema";
+import { ownerReviewTables } from "./ownerReviewSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { redtrackRow, redtrackSource } from "./redtrackSchema";
 import { v } from "convex/values";
@@ -631,6 +632,7 @@ const profitDistributionSnapshot = v.object({
 });
 
 export default defineSchema({
+  ...ownerReviewTables,
   ...flexTables,
   ...receivablesTables,
   statementCaptureDevices: defineTable({ actor: v.string(), tokenHash: v.string(), active: v.boolean(), createdAt: v.number(), minuteStart: v.number(), minuteCount: v.number(), dayStart: v.number(), dayCount: v.number() }).index("by_actor", ["actor"]).index("by_tokenHash", ["tokenHash"]),

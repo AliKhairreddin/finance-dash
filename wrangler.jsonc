@@ -10,6 +10,7 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": true
   },
+  "send_email": [{ "name": "OWNER_REVIEW_EMAIL", "allowed_sender_addresses": ["reviews@finance.thatcanadian.dev"] }],
   "browser": {
     "binding": "BROWSER"
   },

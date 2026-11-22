@@ -1,3 +1,4 @@
+import { FinanceReview } from "../owner-review/FinanceReview";
 import { BreakdownLink, ManagementBreakdown, ReportValueLink } from "./ManagementBreakdown";
 import { platformSpendRows, type BusinessReportMetric, type ReportBreakdownTarget } from "../../../shared/managementReportBreakdown";
 import { platformReportingPeriod } from "../../../shared/managementReport";
@@ -1114,6 +1115,7 @@ export function ManagementReportView({ apiBase }: ManagementReportViewProps) {
         </div>
       </header>
       <div className="management-report-content">
+        {section === "summary" && <FinanceReview key={dashboard.metadata.importId} apiBase={apiBase} dashboard={dashboard} selectedPeriod={selectedPeriod} />}
         {section === "summary" && <SummaryTab dashboard={dashboard} selectedPeriod={selectedPeriod} setSelectedPeriod={setSelectedPeriod} />}
         {section === "breakdown" && <ManagementBreakdown dashboard={dashboard} period={selectedPeriod} />}
         {section === "performance" && <PerformanceTab dashboard={dashboard} />}
