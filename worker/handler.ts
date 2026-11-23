@@ -13,6 +13,7 @@ import { draftKissterraWeek, existingKissterraInvoices, isKissterraPartner, kiss
 import { fetchTuneTotals } from "../shared/tune";
 import { handleRevolutAuthorization } from "./revolutAuthorization";
 import { routeStatementSurface, statementsInbox } from "./statementRouting";
+import { fetchAppShell, isPublicTopUpPath } from "./appShell";
 import { receiveStatementEmail } from "./statements";
 import { handlePublicTopUps, handleTopUpApi, handleTopUpTelegram, refreshTopUpButtons, sendTopUpNotification, testWagnerNotice, topUpSetup, WagnerNoticeError } from "./topUps";
 import { prepareTopUpDraft } from "./topUpDrafts";
@@ -9298,9 +9299,8 @@ export default {
       if (topUpResponse) return topUpResponse;
       return handleApi(request, env, executionContext);
     }
-    if (["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname)) {
-      // Use the canonical asset path; fetching top-up.html redirects back here.
-      return env.ASSETS.fetch(new Request(new URL("/top-up", url), request));
+    if (isPublicTopUpPath(url.pathname)) {
+      return fetchAppShell(env.ASSETS, request, "top-up");
     }
     return env.ASSETS.fetch(request);
   },

@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import { fetchAppShell } from "./appShell";
 import { PDFDocument } from "pdf-lib";
 import { api } from "../convex/_generated/api";
 import type { DashboardSession } from "../shared/types";
@@ -51,9 +52,7 @@ export async function routeReceiptCapture(request: Request, env: WorkerEnv): Pro
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
   const publicAsset = url.pathname.startsWith("/assets/") || ["/receipt-capture.webmanifest", "/receipt-icons/camera-receipt-v1.svg", "/receipt-icons/camera-receipt-180-v1.png", "/receipt-icons/camera-receipt-192-v1.png", "/receipt-icons/camera-receipt-512-v1.png"].includes(url.pathname);
   if (url.pathname !== "/" && !publicAsset) return json({ message: "Not found" }, 404);
-  // Cloudflare canonicalizes .html URLs with a redirect. Fetch the clean asset
-  // path internally so the public app stays at its manifest start URL, /.
-  const response = await env.ASSETS.fetch(url.pathname === "/" ? new Request(new URL("/receipt-capture", url), request) : request);
+  const response = url.pathname === "/" ? await fetchAppShell(env.ASSETS, request, "receipt-capture") : await env.ASSETS.fetch(request);
   const headers = new Headers(response.headers);
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("Permissions-Policy", "camera=(self), microphone=(), geolocation=()");

@@ -1,4 +1,5 @@
 import { handleStatementAutomaticGeneration } from "./statementInvoices";
+import { fetchAppShell } from "./appShell";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { normalizeStatementActor } from "../shared/statements";
@@ -135,8 +136,6 @@ export async function routeStatementSurface(request: Request, env: WorkerEnv): P
   if (url.pathname.startsWith("/api/statements/")) return await handleMailboxApi(request, env, session) ?? await handleCaptureDevice(request, env, session) ?? await handleExactApi(request, env, session) ?? await handleStatementInvoices(request, env, session) ?? await handleStatementApi(request, env, session) ?? json({ message: "Not found" }, 404);
   if (url.pathname.startsWith("/api/")) return json({ message: "Not found" }, 404);
   if (!["GET", "HEAD"].includes(request.method)) return json({ message: "Method not allowed" }, 405);
-  // Cloudflare redirects /statements.html to /statements. Fetch the canonical
-  // asset path internally so signed-in app routes serve HTML without a loop.
-  return env.ASSETS.fetch(url.pathname.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(url.pathname)
-    ? request : new Request(new URL("/statements", url), request));
+  if (url.pathname.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(url.pathname)) return env.ASSETS.fetch(request);
+  return fetchAppShell(env.ASSETS, request, "statements");
 }
