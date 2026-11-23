@@ -50,7 +50,7 @@ const transactionCategory = v.object({
   updatedAt: v.string()
 });
 
-const cashFlowSnapshotInput = cashFlowSnapshot.omit("createdAt", "updatedAt").extend({ id: v.optional(v.string()) });
+const cashFlowSnapshotInput = cashFlowSnapshot.omit("id", "createdAt", "updatedAt").extend({ id: v.optional(v.string()) });
 
 function requireServiceToken(serviceToken: string): void {
   const expected = process.env.CONVEX_SERVICE_TOKEN;
