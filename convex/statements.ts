@@ -1,3 +1,4 @@
+import { statementProcessingLeaseMs } from "../shared/statementProcessing";
 import { statementActionPermissions } from "../shared/statements";
 import { applyStatementRules } from "./statementAutomation";
 import { enqueueMerchant } from "./statementIntelligence";
@@ -209,7 +210,29 @@ export const listDocuments = query({ args: { ...authArgs, companyId: v.optional(
   return { documents: page.page.filter(row => canReadScope(access, row) && (!context.financialAccountId || row.financialAccountId === context.financialAccountId) && (args.companyId !== "unassigned" || !row.companyId)).map(publicDocument), continueCursor: page.continueCursor, isDone: page.isDone };
 } });
 export const getDocument = query({ args: { ...authArgs, id: documentId, metadataOnly:v.optional(v.boolean()) }, returns: v.union(v.object({ document: statementDocumentPublic, url: v.union(v.string(), v.null()), emailUrl: v.union(v.string(), v.null()) }), v.null()), handler: async (ctx, args) => { const access = await member(ctx, args, args.metadataOnly ? "documents" : "download"), row = await ctx.db.get(args.id); if (!row) return null; requireScope(access, row); return { document: publicDocument(row), url: args.metadataOnly ? null : await ctx.storage.getUrl(row.storageId), emailUrl: !args.metadataOnly && row.emailRawStorageId ? await ctx.storage.getUrl(row.emailRawStorageId) : null }; } });
-export const claimDocument = mutation({ args: { serviceToken: v.string(), id: documentId }, returns: v.union(v.object({ document: statementDocumentPublic, url: v.union(v.string(), v.null()), attemptToken: v.string() }), v.null()), handler: async (ctx, args) => { authorize(args.serviceToken); const row = await ctx.db.get(args.id); if (!row || row.quarantined || !["queued", "processing"].includes(row.status) || ((row.leaseUntil ?? 0) > Date.now())) return null; if (row.attempts >= 5) { await ctx.db.patch(row._id, { status: "failed", error: "Processing attempt limit reached; review before retrying", updatedAt: now() }); return null; } const attemptToken = `${row._id}:${row.attempts + 1}:${Date.now()}`; await ctx.db.patch(row._id, { status: "processing", attempts: row.attempts + 1, attemptToken, leaseUntil: Date.now() + 10 * 60_000, updatedAt: now(), error: undefined }); await ctx.scheduler.runAfter(10 * 60_000 + 1000, internal.statementProcessing.processDocument, { id: row._id }); return { document: publicDocument({ ...row, status: "processing", attempts: row.attempts + 1 }), url: await ctx.storage.getUrl(row.storageId), attemptToken }; } });
+const statementAttemptLimit = 5;
+function processingDue(row: Doc<"statementDocuments">) {
+  return !row.quarantined && (row.status === "queued" || row.status === "processing") && (row.leaseUntil ?? 0) <= Date.now();
+}
+
+export const claimDocument = mutation({
+  args: { serviceToken: v.string(), id: documentId },
+  returns: v.union(v.object({ document: statementDocumentPublic, url: v.union(v.string(), v.null()), attemptToken: v.string() }), v.null()),
+  handler: async (ctx, args) => {
+    authorize(args.serviceToken);
+    const row = await ctx.db.get(args.id);
+    if (!row || !processingDue(row)) return null;
+    if (row.attempts >= statementAttemptLimit) {
+      await ctx.db.patch(row._id, { status: "failed", error: "Processing attempt limit reached; review before retrying", updatedAt: now() });
+      return null;
+    }
+    const attemptToken = crypto.randomUUID(), leaseUntil = Date.now() + statementProcessingLeaseMs;
+    const attempts = row.attempts + 1;
+    await ctx.db.patch(row._id, { status: "processing", attempts, attemptToken, leaseUntil, updatedAt: now(), error: undefined });
+    await ctx.scheduler.runAt(leaseUntil + 1000, internal.statementProcessing.processDocument, { id: row._id, scheduledToken: attemptToken });
+    return { document: publicDocument({ ...row, status: "processing", attempts }), url: await ctx.storage.getUrl(row.storageId), attemptToken };
+  }
+});
 export const completeDocument = mutation({ args: { serviceToken: v.string(), id: documentId, attemptToken: v.string(), documentType: statementDocumentFields.documentType, companyId: v.optional(statementCompany), evidence: v.array(statementEvidence), reviewReasons: v.array(v.string()), extracted: v.string(), rows: v.optional(v.array(statementRow)), errors: v.optional(v.array(v.string())), generationId: v.optional(v.string()), costUsd: v.optional(v.number()) }, returns: v.null(), handler: async (ctx, args) => {
   authorize(args.serviceToken); const doc = await ctx.db.get(args.id); if (!doc || doc.status !== "processing" || doc.attemptToken !== args.attemptToken) return null;
   if (new TextEncoder().encode(JSON.stringify(args)).length > 650_000 || args.extracted.length > 300_000 || args.evidence.length > 2000 || args.reviewReasons.length > 30) throw new ConvexError("Extraction exceeds supported limits");
@@ -219,17 +242,42 @@ export const completeDocument = mutation({ args: { serviceToken: v.string(), id:
   if (args.documentType === "bank_statement" && args.rows?.length) importId = await stage(ctx, { actor: "Document processing", fileName: doc.fileName, contentHash: doc.contentHash, companyId, origin: doc.origin, rows: args.rows.map(row => ({ ...row, ...(doc.financialAccountId && row.companyId === doc.companyId && !conflict ? { financialAccountId: doc.financialAccountId } : {}) })), errors: args.errors, reviewReasons, documentId: doc._id });
   await ctx.db.patch(doc._id, { documentType: args.documentType, companyId, financialAccountId: companyId === doc.companyId ? doc.financialAccountId : undefined, evidence: args.evidence, reviewReasons, extracted: args.extracted, importId, status: "needs_review", attemptToken: undefined, leaseUntil: undefined, generationId: args.generationId, costUsd: args.costUsd, updatedAt: now() }); await audit(ctx, "Document processing", "document", doc._id, "extracted"); return null;
 } });
-export const failDocument = mutation({ args: { serviceToken: v.string(), id: documentId, attemptToken: v.optional(v.string()), error: v.string(), retryAfterMs: v.optional(v.number()) }, returns: v.null(), handler: async (ctx, args) => {
-  authorize(args.serviceToken); const doc = await ctx.db.get(args.id);
-  if (doc && (!args.attemptToken || doc.attemptToken === args.attemptToken) && ["queued", "processing"].includes(doc.status)) {
-    const retryDelay = args.retryAfterMs === undefined ? undefined : Math.max(1000, args.retryAfterMs);
-    if (retryDelay !== undefined && !Number.isFinite(retryDelay)) throw new ConvexError("Invalid retry delay");
-    const retry = retryDelay !== undefined && retryDelay <= 30 * 24 * 60 * 60_000 && doc.attempts < 5;
-    await ctx.db.patch(doc._id, { status: retry ? "queued" : "failed", error: args.error.slice(0, 500), attemptToken: undefined, leaseUntil: retryDelay !== undefined ? Date.now() + retryDelay : undefined, updatedAt: now() });
-    if (retry) await ctx.scheduler.runAfter(retryDelay!, internal.statementProcessing.processDocument, { id: doc._id });
-  } return null;
-} });
-export const retryDocument = mutation({ args: { ...authArgs, id: documentId, releaseQuarantine: v.optional(v.boolean()) }, returns: v.null(), handler: async (ctx, args) => { const access = await member(ctx, args, "documents"), doc = await ctx.db.get(args.id); if (!doc) throw new ConvexError("Document not found"); requireScope(access, doc); if ((doc.leaseUntil ?? 0) > Date.now()) throw new ConvexError(`Processing is already active or rate limited until ${new Date(doc.leaseUntil!).toISOString()}`); if (doc.quarantined && !args.releaseQuarantine) throw new ConvexError("Explicit approval is required to process an unknown sender's document"); if (doc.importId) throw new ConvexError("Correct the existing import preview instead of reprocessing its original"); await ctx.db.patch(doc._id, { status: "queued", quarantined: false, attempts: 0, error: undefined, attemptToken: undefined, leaseUntil: undefined, updatedAt: now() }); await audit(ctx, access.actor, "document", doc._id, doc.quarantined ? "processing_approved" : "retry_requested"); await ctx.scheduler.runAfter(0, internal.statementProcessing.processDocument, { id: doc._id }); return null; } });
+export const failDocument = mutation({
+  args: { serviceToken: v.string(), id: documentId, attemptToken: v.string(), error: v.string(), retryAfterMs: v.optional(v.number()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    authorize(args.serviceToken);
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.status !== "processing" || doc.attemptToken !== args.attemptToken) return null;
+    const delay = args.retryAfterMs === undefined ? undefined : Math.max(1000, args.retryAfterMs);
+    if (delay !== undefined && !Number.isFinite(delay)) throw new ConvexError("Invalid retry delay");
+    const leaseUntil = delay === undefined ? undefined : Date.now() + delay;
+    const retry = delay !== undefined && delay <= 30 * 24 * 60 * 60_000 && doc.attempts < statementAttemptLimit;
+    const scheduledToken = retry ? crypto.randomUUID() : undefined;
+    await ctx.db.patch(doc._id, { status: retry ? "queued" : "failed", error: args.error.slice(0, 500), attemptToken: scheduledToken, leaseUntil, updatedAt: now() });
+    if (leaseUntil !== undefined && scheduledToken) {
+      await ctx.scheduler.runAt(leaseUntil, internal.statementProcessing.processDocument, { id: doc._id, scheduledToken });
+    }
+    return null;
+  }
+});
+export const retryDocument = mutation({
+  args: { ...authArgs, id: documentId, releaseQuarantine: v.optional(v.boolean()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const access = await member(ctx, args, "documents"), doc = await ctx.db.get(args.id);
+    if (!doc) throw new ConvexError("Document not found");
+    requireScope(access, doc);
+    if (doc.leaseUntil !== undefined && doc.leaseUntil > Date.now()) throw new ConvexError(`Processing is already active or rate limited until ${new Date(doc.leaseUntil).toISOString()}`);
+    if (doc.quarantined && !args.releaseQuarantine) throw new ConvexError("Explicit approval is required to process an unknown sender's document");
+    if (doc.importId) throw new ConvexError("Correct the existing import preview instead of reprocessing its original");
+    const scheduledToken = crypto.randomUUID();
+    await ctx.db.patch(doc._id, { status: "queued", quarantined: false, attempts: 0, error: undefined, attemptToken: scheduledToken, leaseUntil: undefined, updatedAt: now() });
+    await audit(ctx, access.actor, "document", doc._id, doc.quarantined ? "processing_approved" : "retry_requested");
+    await ctx.scheduler.runAfter(0, internal.statementProcessing.processDocument, { id: doc._id, scheduledToken });
+    return null;
+  }
+});
 function extractedDetails(value?: string): Record<string, unknown> {
   if (!value) return {}; const parsed: unknown = JSON.parse(value); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ConvexError("Document details must be an object"); return parsed as Record<string, unknown>;
 }
@@ -329,9 +377,9 @@ export const processingTarget = internalQuery({ args: {}, returns: v.object({ ur
   if (url.hostname === "statements.thatcanadian.dev" && process.env.STATEMENT_PRODUCTION_PROCESSING !== "approved") throw new ConvexError("Production processing requires an explicit deployment configuration");
   return { url: url.href, serviceToken };
 } });
-export const callbackFailed = internalMutation({ args: { id: documentId, error: v.string() }, returns: v.null(), handler: async (ctx, args) => {
+export const callbackFailed = internalMutation({ args: { id: documentId, scheduledToken: v.optional(v.string()), error: v.string() }, returns: v.null(), handler: async (ctx, args) => {
   const document = await ctx.db.get(args.id);
-  if (document?.status === "queued" && !document.quarantined && (document.leaseUntil ?? 0) <= Date.now()) await ctx.db.patch(document._id, { status: "failed", error: args.error.slice(0, 500), updatedAt: now() });
+  if (document && document.attemptToken === args.scheduledToken && processingDue(document)) await ctx.db.patch(document._id, { status: "failed", error: args.error.slice(0, 500), updatedAt: now() });
   return null;
 } });
 

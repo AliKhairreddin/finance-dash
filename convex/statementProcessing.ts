@@ -1,3 +1,4 @@
+import { statementCallbackTimeoutMs } from "../shared/statementProcessing";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -7,17 +8,14 @@ export const importBatch = internalAction({ args: { id: v.id("statementImports")
   catch (error) { await ctx.runMutation(internal.statements.failImport, { ...args, error: error instanceof Error ? error.message : "Import failed" }); }
   return null;
 } });
-export const processDocument = internalAction({ args: { id: v.id("statementDocuments") }, returns: v.null(), handler: async (ctx, args) => {
+export const processDocument = internalAction({ args: { id: v.id("statementDocuments"), scheduledToken: v.optional(v.string()) }, returns: v.null(), handler: async (ctx, args) => {
   try {
     const target = await ctx.runQuery(internal.statements.processingTarget, {});
-    // Includes downloading, browser startup/OCR, and AI generation. The ten-minute
-    // document lease remains longer so a slow callback cannot start a duplicate.
-    const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.serviceToken}` }, body: JSON.stringify(args), signal: AbortSignal.timeout(8 * 60_000) });
+    const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${target.serviceToken}` }, body: JSON.stringify({ id: args.id }), signal: AbortSignal.timeout(statementCallbackTimeoutMs) });
     if (!response.ok) throw new Error(`Document processor returned ${response.status}`);
   } catch (error) {
-    // A timeout may leave the Worker finishing. Its lease schedules a safe recovery attempt.
     console.error("Statement document callback failed", args.id, error instanceof Error ? error.message.slice(0, 200) : "Unknown error");
-    await ctx.runMutation(internal.statements.callbackFailed, { id: args.id, error: error instanceof Error ? error.message : "Document processor unavailable" });
+    await ctx.runMutation(internal.statements.callbackFailed, { ...args, error: error instanceof Error ? error.message : "Document processor unavailable" });
   }
   return null;
 } });

@@ -1,3 +1,4 @@
+import { statementRetryAfterMs } from "../shared/statementProcessing";
 import puppeteer from "@cloudflare/puppeteer";
 
 export interface StatementText {
@@ -102,9 +103,9 @@ export async function extractStatementText(env: Pick<WorkerEnv, "BROWSER">, byte
     const response = await env.BROWSER.fetch(input, init);
     if (response.status === 429 || response.status >= 500) {
       const header = response.headers.get("Retry-After");
-      const delay = header && /^\d+$/.test(header) ? Number(header) * 1000 : header ? Date.parse(header) - Date.now() : 60000;
+      const delay = header ? statementRetryAfterMs(header) : undefined;
       await response.body?.cancel();
-      throw new StatementOcrError(`Document text service returned ${response.status}; the original is preserved`, Number.isFinite(delay) ? Math.max(1000, delay) : 60000);
+      throw new StatementOcrError(`Document text service returned ${response.status}; the original is preserved`, delay ?? 60_000);
     }
     return response;
   } }, { keep_alive: 120000 });
