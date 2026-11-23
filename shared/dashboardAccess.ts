@@ -2,7 +2,13 @@ import type { DashboardAccessRole } from "./types";
 
 export const financeOperatorPages = ["banks", "documents", "analytics", "management"] as const;
 
-export function dashboardPageAllowed(role: DashboardAccessRole, page: string): boolean {
+export function canPreviewAmin(role: DashboardAccessRole, username: string | undefined): boolean {
+  const name = username?.trim().toLowerCase().replace(/\s+/g, " ");
+  return role === "administrator" && (name === "ali" || name === "ali m");
+}
+
+export function dashboardPageAllowed(role: DashboardAccessRole, page: string, username?: string): boolean {
+  if (page === "amin-preview") return canPreviewAmin(role, username);
   if (page === "owner" || role === "owner") return role === "owner" && page === "owner";
   if (role === "top-up-reviewer") return page === "top-ups" || page === "documents";
   if (role === "administrator") return true;

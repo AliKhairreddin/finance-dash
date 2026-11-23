@@ -3,7 +3,7 @@ import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
-import { financeReviewAccess, ownerReviewAccess } from "../shared/dashboardAccess";
+import { canPreviewAmin, financeReviewAccess, ownerReviewAccess } from "../shared/dashboardAccess";
 import { monthLabel, ownerForLogin, owners, type ReviewAddresses } from "../shared/ownerReview";
 import { boundedBytes, secureHeaderMatches } from "./documentIntake";
 
@@ -19,9 +19,15 @@ async function readInput(request: Request): Promise<Record<string, unknown>> {
 
 export async function handleOwnerReview(request: Request, env: Env, session: DashboardSession) {
   const url = new URL(request.url);
-  const finance = session.role === "administrator" || session.role === "finance-operator";
-  const owner = session.role === "owner" ? ownerForLogin(session.username) : null;
-  if (!(finance && financeReviewAccess(request)) && !(owner && ownerReviewAccess(request))) return json({ message: "Access denied" }, 403);
+  const preview = url.searchParams.has("preview");
+  const finance = !preview && (session.role === "administrator" || session.role === "finance-operator");
+  const owner = preview ? "Amin" : session.role === "owner" ? ownerForLogin(session.username) : null;
+  if (preview) {
+    if (url.searchParams.get("preview") !== "Amin" || !canPreviewAmin(session.role, session.username)
+      || request.method !== "GET" || !ownerReviewAccess(request)) return json({ message: "Access denied" }, 403);
+  } else if (!(finance && financeReviewAccess(request)) && !(owner && ownerReviewAccess(request))) {
+    return json({ message: "Access denied" }, 403);
+  }
   if (request.method === "POST" && request.headers.has("Origin") && request.headers.get("Origin") !== url.origin) return json({ message: "Origin mismatch" }, 403);
   let input: Record<string, unknown> = {};
   if (request.method === "POST") {

@@ -238,7 +238,7 @@ import { RedTrackView } from "@/features/redtrack/RedTrackView";
 import { SlashVirtualAccountFilter, slashVirtualAccountOptions, useSlashVirtualAccountFilter } from "./features/banking/SlashVirtualAccountFilter";
 
 const apiBase = import.meta.env.VITE_API_BASE || "/api";
-const activeTabs = ["overview", "owner", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "top-ups", "contracts", "providers", "settings"] as const;
+const activeTabs = ["overview", "owner", "amin-preview", "management", "media-spend", "redtrack", "media-funding", "banks", "analytics", "distribution", "cash-flow", "cash-flow-invoices", "revenue", "invoices", "expenses", "documents", "top-ups", "contracts", "providers", "settings"] as const;
 type ActiveTab = (typeof activeTabs)[number];
 type BankTab = "all" | BankSource | ManualBankSource | "holdings";
 type ThemeMode = "light" | "dark";
@@ -687,9 +687,9 @@ function App() {
     allowedValues: activeTabs,
     history: "push"
   });
-  const activeTab = session && !dashboardPageAllowed(session.role, requestedTab) ? dashboardHomePage(session.role) : requestedTab;
+  const activeTab = session && !dashboardPageAllowed(session.role, requestedTab, session.username) ? dashboardHomePage(session.role) : requestedTab;
   useEffect(() => {
-    if (session && !dashboardPageAllowed(session.role, requestedTab)) setActiveTab(dashboardHomePage(session.role));
+    if (session && !dashboardPageAllowed(session.role, requestedTab, session.username)) setActiveTab(dashboardHomePage(session.role));
   }, [session, requestedTab, setActiveTab]);
   const [incomeAutomationReadAt, setIncomeAutomationReadAt] = useState<string | undefined>(() => {
     return window.localStorage.getItem(incomeAutomationReadStorageKey) ?? undefined;
@@ -2186,7 +2186,10 @@ function App() {
     );
   }
 
-  if (session?.role === "owner") return <OwnerDashboard apiBase={apiBase} username={session.username} themeToggle={<ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />} />;
+  if (session && (session.role === "owner" || activeTab === "amin-preview")) {
+    return <OwnerDashboard apiBase={apiBase} username={session.username} previewAmin={activeTab === "amin-preview"}
+      themeToggle={<ThemeToggle themeMode={themeMode} onToggle={toggleThemeMode} />} />;
+  }
 
   if (isTransactionReviewer && transactionReview && session) {
     return (
@@ -2234,7 +2237,7 @@ function App() {
   }
 
   if (session?.role === "top-up-reviewer") {
-    return <main className="app-shell"><Sidebar activeTab={activeTab} role={session.role} incomeAutomationUnreadCount={0} topUpPendingCount={topUpPendingCount} themeMode={themeMode} onToggleTheme={toggleThemeMode} onSync={async () => {}} isSyncing={false} /><div className="main-column"><div className="route-stage" key={activeTab}>
+    return <main className="app-shell"><Sidebar activeTab={activeTab} role={session.role} username={session.username} incomeAutomationUnreadCount={0} topUpPendingCount={topUpPendingCount} themeMode={themeMode} onToggleTheme={toggleThemeMode} onSync={async () => {}} isSyncing={false} /><div className="main-column"><div className="route-stage" key={activeTab}>
       {activeTab === "documents" ? <DocumentsView apiBase={apiBase} /> : <TopUpsView apiBase={apiBase} />}
     </div></div></main>;
   }
@@ -2311,6 +2314,7 @@ function App() {
       <Sidebar
         activeTab={activeTab}
         role={session.role}
+        username={session.username}
         incomeAutomationUnreadCount={incomeAutomationUnreadCount}
         topUpPendingCount={topUpPendingCount}
         themeMode={themeMode}
@@ -3084,6 +3088,7 @@ function SidebarActions({
 function Sidebar({
   activeTab,
   role,
+  username,
   incomeAutomationUnreadCount,
   topUpPendingCount,
   themeMode,
@@ -3093,6 +3098,7 @@ function Sidebar({
 }: {
   activeTab: ActiveTab;
   role: DashboardSession["role"];
+  username: string;
   incomeAutomationUnreadCount: number;
   topUpPendingCount: number | null;
   themeMode: ThemeMode;
@@ -3112,6 +3118,7 @@ function Sidebar({
   ];
   const operationsItems: SidebarItem[] = [
     { id: "management", label: "Management", icon: <BookOpen size={17} /> },
+    { id: "amin-preview", label: "Preview Amin’s dashboard", icon: <UserRound size={17} /> },
     { id: "distribution", label: "Distribution", icon: <CircleDollarSign size={17} /> }
   ];
   const accountingItems: SidebarItem[] = [
@@ -3166,7 +3173,7 @@ function Sidebar({
   }
 
   function navigationLink(item: SidebarItem, nested = false, mobile = false) {
-    if (!dashboardPageAllowed(role, item.id)) return null;
+    if (!dashboardPageAllowed(role, item.id, username)) return null;
     const unreadCount = item.id === "revenue" ? incomeAutomationUnreadCount : item.id === "top-ups" ? topUpPendingCount ?? 0 : 0;
     return (
       <UrlStateLink
@@ -3218,7 +3225,7 @@ function Sidebar({
               {accountingItems.map((item) => navigationLink(item, false, true))}
               {role === "administrator" && <div className="mobile-nav-group-label">Cash Flow</div>}
               {cashFlowItems.map((item) => navigationLink(item, false, true))}
-              {operationsItems.some(item => dashboardPageAllowed(role, item.id)) && <><div className="mobile-nav-group-label has-badge">
+              {operationsItems.some(item => dashboardPageAllowed(role, item.id, username)) && <><div className="mobile-nav-group-label has-badge">
                 <span>Operations</span>
                 <span className="sidebar-beta-badge">Beta</span>
               </div>
@@ -3257,7 +3264,7 @@ function Sidebar({
         <div className="sidebar-income-group">
           {cashFlowItems.map((item) => navigationLink(item, true))}
         </div></>}
-        {operationsItems.some(item => dashboardPageAllowed(role, item.id)) && <><div className="sidebar-section-label has-badge">
+        {operationsItems.some(item => dashboardPageAllowed(role, item.id, username)) && <><div className="sidebar-section-label has-badge">
           <span>Operations</span>
           <span className="sidebar-beta-badge">Beta</span>
         </div>

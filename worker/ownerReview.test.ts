@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convexTest } from "convex-test";
 import { v } from "convex/values";
+import type { DashboardSession } from "../shared/types";
 import { ConvexHttpClient } from "convex/browser";
 import { api, internal } from "../convex/_generated/api";
 import { internalAction } from "../convex/_generated/server";
@@ -92,6 +93,35 @@ test("owner access and decisions use the authenticated login across configured a
     assert.equal((await handleOwnerReview(route("publish", {}), env, session)).status, 403);
   }
   assert.equal((await handleOwnerReview(route("decision", {}), env, { role: "administrator", username: "Ali" })).status, 403);
+});
+
+test("only Ali and Ali M can preview Amin’s published data, with owner-level reads and no review writes", async t => {
+  const env = { CONVEX_URL: "https://fixture.convex.cloud", CONVEX_SERVICE_TOKEN: auth.serviceToken };
+  const request = (action: string, preview = "Amin", method = "GET") =>
+    new Request("https://finance.example/api/monthly-review/" + action + "?id=version&preview=" + preview, { method });
+  const reads = t.mock.method(ConvexHttpClient.prototype, "query", async (_fn: unknown, args: Record<string, unknown>) => args);
+  const writes = t.mock.method(ConvexHttpClient.prototype, "mutation", async () => null);
+  for (const username of ["Ali", " Ali  M "]) {
+    const session = { role: "administrator" as const, username };
+    assert.equal(dashboardPageAllowed(session.role, "amin-preview", username), true);
+    assert.equal((await (await handleOwnerReview(request("list"), env, session)).json()).finance, false);
+    assert.equal((await (await handleOwnerReview(request("report"), env, session)).json()).owner, "Amin");
+    assert.equal((await handleOwnerReview(request("transactions"), env, session)).status, 200);
+    for (const action of ["decision", "publish", "contacts", "retry-email"]) {
+      assert.equal((await handleOwnerReview(request(action, "Amin", "POST"), env, session)).status, 403);
+    }
+    assert.equal((await handleOwnerReview(request("contacts"), env, session)).status, 403);
+    assert.equal((await handleOwnerReview(request("report", "Ben"), env, session)).status, 403);
+  }
+  for (const session of [
+    { role: "administrator", username: "Alaa" }, { role: "administrator", username: "Ali M2" },
+    { role: "finance-operator", username: "Ali" }, { role: "owner", username: "Ben" }
+  ] satisfies DashboardSession[]) {
+    assert.equal(dashboardPageAllowed(session.role, "amin-preview", session.username), false);
+    assert.equal((await handleOwnerReview(request("report"), env, session)).status, 403);
+  }
+  assert.equal(reads.mock.callCount(), 6);
+  assert.equal(writes.mock.callCount(), 0);
 });
 
 test("review emails link to the precise signed-in version and require the processor credential", async () => {
