@@ -38,7 +38,8 @@
     "test:statements:e2e": "playwright test --config playwright.statements.config.ts",
     "test:statements:fixtures": "tsx scripts/statement-fixture-server.ts",
     "test:statements:pdfs": "tsx scripts/statement-sample-pdfs.ts",
-    "test:app-shells": "tsx --test tests/appShells.e2e.test.ts"
+    "test:app-shells": "tsx --test tests/appShells.e2e.test.ts",
+    "verify:wise-imports": "bash verification/local-convex.sh verification/wise-imports/check.ts banking"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
