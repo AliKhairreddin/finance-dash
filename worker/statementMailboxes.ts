@@ -1,4 +1,4 @@
-import { ConvexHttpClient } from "convex/browser";
+import { StatementRequestClient, statementRequestError } from "./statementRequestClient";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
@@ -35,7 +35,7 @@ export async function handleMailboxApi(request: Request, env: Pick<WorkerEnv, "C
   if (url.pathname !== base && !url.pathname.startsWith(`${base}/`)) return null;
   let actor; try { if (!session) throw new Error(); actor = normalizeStatementActor(session.username); } catch { return json({ message: "Statements access is required" }, 403); }
   if (request.method !== "GET" && request.headers.get("Origin") !== url.origin) return json({ message: "Open this action from Statements" }, 403);
-  const client = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor };
+  const client = new StatementRequestClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor };
   const providerRoute = /^\/(gmail|outlook)\/(connect|callback)$/.exec(url.pathname.slice(base.length));
   try {
     if (url.pathname === base && request.method === "GET") return json(await client.query(api.statementMailboxes.status, auth));
@@ -67,8 +67,7 @@ export async function handleMailboxApi(request: Request, env: Pick<WorkerEnv, "C
     return json({ message: "Mailbox route not found" }, 404);
   } catch (error) {
     if (providerRoute?.[2] === "callback") return redirect("authorization_failed");
-    const raw = error instanceof Error ? error.message : "Mailbox request failed";
-    const safe = /Uncaught ConvexError: ([^\n]+)/.exec(raw)?.[1] ?? (raw.startsWith("[CONVEX") ? "Mailbox request failed. Try again." : raw.split("\n")[0]);
-    return json({ message: safe.slice(0, 300) }, 400);
+    const { message, status } = statementRequestError(error, "mailbox");
+    return json({ message }, status);
   }
 }

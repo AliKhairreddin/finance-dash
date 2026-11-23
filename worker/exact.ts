@@ -1,4 +1,4 @@
-import { ConvexHttpClient } from "convex/browser";
+import { StatementRequestClient, statementRequestError } from "./statementRequestClient";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
@@ -38,7 +38,7 @@ export async function handleExactApi(request: Request, env: Env, session: Dashbo
   const url = new URL(request.url); if (!url.pathname.startsWith(`${base}/`)) return null;
   let actor; try { if (!session) throw new Error(); actor = normalizeStatementActor(session.username); } catch { return json({ message: "Statement access is required" }, 403); }
   if (!["GET", "HEAD"].includes(request.method) && request.headers.get("Origin") !== url.origin) return json({ message: "Open this action from Statements" }, 403);
-  const client = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor }, path = url.pathname.slice(base.length);
+  const client = new StatementRequestClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor }, path = url.pathname.slice(base.length);
   try {
     if (path === "/status" && request.method === "GET") return json(await client.query(api.exact.status, auth));
     if (path === "/records" && request.method === "GET") { const kind = url.searchParams.get("kind"); if (!isExactKind(kind) || kind === "deleted") throw new Error("Choose an Exact view"); const selected = url.searchParams.get("division"); return json(await client.query(api.exact.records, { ...auth, kind, division: selected && selected !== "all" ? division(selected) : undefined })); }
@@ -85,9 +85,7 @@ export async function handleExactApi(request: Request, env: Env, session: Dashbo
     return json({ message: "Exact route not found" }, 404);
   } catch (error) {
     if (path === "/callback") return redirect("authorization_failed", request);
-    const raw = error instanceof Error ? error.message : "Exact request failed";
-    const safe = /Uncaught ConvexError: ([^\n]+)/.exec(raw)?.[1] ?? (raw.startsWith("[CONVEX") ? "The Exact request failed. Please try again" : raw.split("\n")[0]);
-    const message = safe.slice(0, 300);
-    return json({ message }, 400);
+    const { message, status } = statementRequestError(error, "Exact");
+    return json({ message }, status);
   }
 }
