@@ -143,6 +143,7 @@ test("one click creates a saved internal document and repeated requests reuse it
   expect(pdf.ok()).toBeTruthy();
   expect((await pdf.body()).subarray(0, 5).toString()).toBe("%PDF-");
   const fs = await import("node:fs/promises");
+  await fs.mkdir("output/pdf", { recursive: true });
   await fs.writeFile(
     "output/pdf/synthetic-supporting-document.pdf",
     await pdf.body(),

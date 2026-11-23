@@ -34,3 +34,4 @@ jobs:
       - run: bash verification/statement-retries/replay.sh
       - run: npx playwright install --with-deps chromium
       - run: npm run test:mailbox-callback
+      - run: npm run test:statements:e2e
