@@ -1,4 +1,5 @@
 import { ownerForLogin } from "../shared/ownerReview";
+import { isPublicTopUpPath } from "./appShell";
 import {
   normalizeFinanceUsername,
   parseTelegramAuthUsers,
@@ -879,7 +880,7 @@ export async function enforceSiteAuthentication(
   dependencies: AuthDependencies = {}
 ): Promise<Response | null> {
   const url = new URL(request.url);
-  if ((request.method === "GET" || request.method === "HEAD") && (PUBLIC_APP_ASSET_PATHS.has(url.pathname) || ["/top-up", "/top-up/", "/payments", "/payments/"].includes(url.pathname) || url.pathname.startsWith("/top-up-assets/"))) {
+  if ((request.method === "GET" || request.method === "HEAD") && (PUBLIC_APP_ASSET_PATHS.has(url.pathname) || isPublicTopUpPath(url.pathname) || url.pathname.startsWith("/top-up-assets/"))) {
     return null;
   }
   const response = await enforceTelegramAuth(request, env, url, dependencies);
