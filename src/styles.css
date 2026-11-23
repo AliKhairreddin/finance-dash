@@ -5873,7 +5873,6 @@ th.amount .sortable-table-heading {
   }
 }
 
-/* Income operations */
 .sidebar-section-label {
   padding: 14px 11px 4px;
   color: var(--app-muted);
@@ -8058,7 +8057,6 @@ th.amount .sortable-table-heading {
   }
 }
 
-/* Compact bank workspace */
 .banks-layout {
   gap: 8px;
 }
@@ -8682,7 +8680,6 @@ th.amount .sortable-table-heading {
   }
 }
 
-/* Management report */
 .management-report-view {
   display: grid;
   min-width: 0;
@@ -9965,7 +9962,6 @@ th.amount .sortable-table-heading {
   }
 }
 
-/* Modern finance presentation layer */
 :root {
   --ink: #09090b;
   --app-muted: #71717a;
@@ -10529,12 +10525,10 @@ body {
   vertical-align: middle;
 }
 
-/* Inline help must occupy space in its own cell, label, or action group. */
 :is(td, small, label) > .note-popover {
   margin-inline-start: 6px;
 }
 
-/* Summary cards reserve an actual grid slot for help beside their value. */
 :is(.metric-card-content, .income-summary-card, .holding-total-card, .account-group-total,
   .expense-summary-grid > article, .liquidity-hero-main,
   .liquidity-breakdown > .liability, .schedule-primary):has(> .note-popover) {
@@ -11916,7 +11910,6 @@ body {
   }
 }
 
-/* Cash Flow */
 .cash-flow-page-stack {
   display: grid;
   gap: 12px;
@@ -12609,7 +12602,6 @@ body {
 @media (max-width: 640px) { .document-toolbar > .searchable-select { flex: 1 1 160px; } }
 
 
-/* Invoice navigation, search, filters and actions share one desktop toolbar. */
 .invoice-panel {
   container: invoice-panel / inline-size;
 }
@@ -12944,7 +12936,6 @@ body {
   }
 }
 
-/* Keep the document view and company scope next to the page actions. */
 .documents-page .document-header { gap: 20px; flex-wrap: wrap; }
 .document-heading { flex: 0 0 auto; }
 .document-view-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; flex: 1; }
@@ -12991,7 +12982,6 @@ body {
 .cash-flow-account-summary .amount { text-align: right !important; font-variant-numeric: tabular-nums; }
 .cash-flow-account-summary .amount .inline-error { display: block; }
 
-/* Invoice forms use the shared focus-managed dialog without a second modal frame. */
 .invoice-editor-dialog { width: min(720px, calc(100vw - 24px)); max-width: calc(100vw - 24px); padding: 0; display: block; }
 .invoice-editor-dialog .invoice-editor-modal { width: 100%; max-width: none; margin: 0; border: 0; box-shadow: none; }
 
@@ -13017,7 +13007,6 @@ body {
   .expense-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .expense-summary-grid strong { font-size: 1.25rem; }
 
-  /* Keep every column and its sort control reachable while reflowing records. */
   .invoice-control-table, .unified-bank-table, .expense-table { display: block; min-width: 0 !important; width: 100%; }
   .invoice-control-table colgroup { display: none; }
   .invoice-control-table thead, .unified-bank-table thead, .expense-table thead,
@@ -13058,7 +13047,6 @@ body {
   .expense-table td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
 }
 
-/* Amex statement upload and review */
 .amex-import-dialog { width: min(1040px, calc(100vw - 32px)); max-width: min(1040px, calc(100vw - 32px)); max-height: 90dvh; overflow: auto; padding: 24px; }
 .amex-import-heading, .amex-statement-title, .amex-statement-summary, .amex-import-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .amex-import-heading { padding-right: 24px; }
@@ -13137,7 +13125,6 @@ body {
   .bank-manual-header > .status-pill { display: none; }
 }
 
-/* Search inputs share their enclosing control's border and focus indication. */
 .category-combobox-search input:focus-visible,
 .search-box input:focus-visible,
 .toolbar-search-field input:focus-visible,

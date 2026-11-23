@@ -1058,7 +1058,7 @@ function App() {
     const refresh = async () => {
       if (pending || document.visibilityState !== "visible") return;
       pending = true;
-      try { await loadDashboard(); } catch { /* Keep the current view until the next refresh. */ } finally { pending = false; }
+      try { await loadDashboard(); } catch { } finally { pending = false; }
     };
     window.addEventListener("finance:documents-changed", refresh);
     const timer = window.setInterval(refresh, 15_000);

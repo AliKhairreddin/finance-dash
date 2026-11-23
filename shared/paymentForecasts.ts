@@ -133,7 +133,6 @@ export function calculatePaymentHistory(input: {
     dates.add(date);
     receiptDates.set(row.id, dates);
   }
-  // Count every allocation against its bank receipt, including allocations on excluded invoices.
   const bankAllocated = new Map<string, number>();
   const byInvoice = new Map<string, PaymentAllocation[]>();
   for (const allocation of input.allocations) {
@@ -182,7 +181,6 @@ export function calculatePaymentHistory(input: {
     const id = ensureRow(client, invoice.currency).id;
     observations.set(id, [...(observations.get(id) ?? []), { date: paymentDate, delay, bankIds }]);
   }
-  // Keep explicitly tracked revenue clients visible even before their first identifiable receipt.
   for (const provider of input.providers) {
     const client = byProvider.get(provider.id);
     if (client && provider.tags.includes("Revenue partner") && provider.defaultCurrency) ensureRow(client, provider.defaultCurrency);
@@ -191,7 +189,6 @@ export function calculatePaymentHistory(input: {
     const dates = [...(receiptDates.get(row.id) ?? [])].sort();
     if (dates.length >= 3) row.receiptIntervalDays = median(dates.slice(1).map((date, index) => days(dates[index], date)));
     if (complete) row.bankPattern = estimateBankPaymentPattern(dates, toDate);
-    // One payment event cannot artificially satisfy the minimum sample count via several invoices.
     const used = new Set<string>();
     const history = (observations.get(row.id) ?? []).sort((a, b) => b.date.localeCompare(a.date) || b.delay - a.delay).filter(item => {
       if (item.bankIds.some(id => used.has(id))) return false;

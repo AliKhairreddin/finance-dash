@@ -362,7 +362,6 @@ export async function fetchSlashEntitiesActivityBatch(options: SlashActivityBatc
     nextEntity = Number(saved.nextEntity);
     entityCheckpoint = typeof saved.entityCheckpoint === "string" ? saved.entityCheckpoint : undefined;
   }
-  // Validate every entity before registering the new account set or writing any balance.
   const snapshots = [];
   const knownIds = Object.values(options.accountOwnership).flatMap(scope => [...scope.accountIds]);
   if (new Set(knownIds).size !== knownIds.length) throw new Error("Slash account ownership contains overlapping identities");
@@ -1095,8 +1094,6 @@ async function fetchSlashAccountSnapshot(
         const subtype: SlashAccountSubtype = balance.type === "credit" ? "credit" : "cash";
         const label = subtype === "credit" ? "Credit" : "Cash";
         const identity = { accountId: balance.accountId, accountName: account.name };
-        // Group-scoped transactions can only be resolved when that group has
-        // exactly one underlying account of the requested subtype.
         if (balances.filter(row => (row.type === "credit" ? "credit" : "cash") === subtype).length === 1) {
           accountIdentityByKey.set(`${subtype}:${account.id}`, identity);
         }

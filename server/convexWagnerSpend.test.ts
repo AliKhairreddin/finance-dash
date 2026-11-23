@@ -90,7 +90,6 @@ test("Wagner reconciliation preserves snapshots and shares durable provider cool
   assert.equal(reports.get(key)?.chunkCount, 1);
   assert.deepEqual(await handler(acquire)(ctx, args), { status: "throttled", retryAfter });
   assert.deepEqual(await handler(acquire)(ctx, { ...args, key: "wagner:v1:other" }), { status: "throttled", retryAfter });
-  // A shorter subsequent delay must never shorten the provider's cooldown.
   await handler(release)(ctx, { ...args, retryAfter: now + 60_000 });
   assert.deepEqual(await handler(acquire)(ctx, args), { status: "throttled", retryAfter });
   reports.set("wagner:v1:saved", { _id: "saved", key: "wagner:v1:saved", savedAt: now, refreshAfter: null, chunkCount: 1 });

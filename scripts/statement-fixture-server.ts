@@ -1,4 +1,3 @@
-// Isolated browser test harness. No dotenv loading, remote backend or real credentials.
 import http from "node:http";
 import { AsyncResource } from "node:async_hooks";
 import { convexTest } from "convex-test";
@@ -130,7 +129,6 @@ await t.run(async (ctx) => {
       intakeKey: `volume-${i}`,
     });
 });
-// All network calls from this process must stay on loopback, except Convex-test's in-memory storage URLs.
 const nativeFetch = globalThis.fetch;
 const storageObjects = new Map<string, Blob>();
 globalThis.fetch = async (input, init) => {

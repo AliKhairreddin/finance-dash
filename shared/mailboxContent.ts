@@ -27,14 +27,11 @@ export async function mailboxContent(raw: Uint8Array<ArrayBuffer>) {
       } catch { issues.push(`Could not convert image attachment ${name}. Upload it manually.`); }
     }
   }
-  // Body-only receipts become a text PDF; no remote URLs or HTML scripts execute.
-  // The excerpt is also retained for the existing document extraction pipeline.
   if (!files.length && likely && text.trim()) {
     if (text.length > 60000 || /[^\u0000-\u00ff\u2000-\u206f\u20ac]/u.test(`${subject}${text}`)) issues.push("This body-only email needs manual import because its length or characters exceed the text PDF renderer.");
     else {
       const doc = await PDFDocument.create(); doc.setCreationDate(new Date(0)); doc.setModificationDate(new Date(0));
       const font = await doc.embedFont(StandardFonts.Helvetica);
-      // Keep all printable WinAnsi characters and replace typographic spacing.
       const printable = (s: string) => [...s].map(c => { try { font.encodeText(c); return c; } catch { return /\s/.test(c) ? " " : "?"; } }).join("");
       const lines: string[] = [];
       for (const paragraph of printable(`From: ${sender}\nSubject: ${subject}\n\n${text}`).split(/\r?\n/)) {

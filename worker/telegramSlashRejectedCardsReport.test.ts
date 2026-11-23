@@ -106,7 +106,6 @@ function sourceFetcher(requests: string[]): typeof fetch {
       assert.equal(url.searchParams.get("filter:to_date"), String(period.toTime - 1));
       assert.equal(url.searchParams.get("filter:detailed_status"), "declined");
       assert.equal(url.searchParams.get("filter:category"), "card");
-      // Even if the provider returns other failed card activity, it is not a rejection.
       return Response.json(url.searchParams.has("cursor")
         ? { items: [rejection, { ...rejection, id: "second", declineReason: undefined }], metadata: {} }
         : { items: [rejection,

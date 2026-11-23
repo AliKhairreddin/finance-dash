@@ -110,7 +110,6 @@ export function summarizeQuinStreetReport(
   return {
     revenue: Number(revenue.toFixed(2)), rowCount, clicks, leads, payableLeads,
     clickRevenue: Number(clickRevenue.toFixed(2)), leadRevenue: Number(leadRevenue.toFixed(2)),
-    // Divide aggregate earnings by aggregate units; daily rounded rates cannot be averaged.
     ...(clicks > 0 ? { earningsPerClick: Number((clickRevenue / clicks).toFixed(4)) } : {}),
     ...(payableLeads > 0 ? { earningsPerLead: Number((leadRevenue / payableLeads).toFixed(4)) } : {})
   };

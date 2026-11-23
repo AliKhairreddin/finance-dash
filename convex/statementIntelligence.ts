@@ -28,7 +28,7 @@ export async function enqueueMerchant(ctx: MutationCtx, row: StatementRow, dryRu
         .eq("key", key),
     )
     .unique();
-  if (existing) return false; // Refresh is explicit; approved values cannot be replaced by imports.
+  if (existing) return false;
   const contacts = (
     await Promise.all(
       [row.companyId, "all" as const].map((companyId) =>
@@ -79,7 +79,6 @@ export async function enqueueMerchant(ctx: MutationCtx, row: StatementRow, dryRu
   return true;
 }
 
-// Activation can enqueue historical merchants without editing any financial records.
 export const enqueueExisting = internalMutation({
   args: { paginationOpts: paginationOptsValidator, dryRun: v.boolean() },
   returns: v.object({ scanned: v.number(), queued: v.number(), skipped: v.number(), isDone: v.boolean(), continueCursor: v.string() }),

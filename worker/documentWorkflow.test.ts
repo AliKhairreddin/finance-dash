@@ -4,7 +4,6 @@ import * as documents from "../convex/documents";
 import * as referenceChecks from "../convex/documentRecheck";
 import type { DocumentExtraction } from "../shared/financialDocuments";
 
-// A small indexed database harness exercises the registered mutation handlers.
 type Row = Record<string, any>;
 function database(initial: Record<string, Row[]> = {}) {
   const tables = new Map(Object.entries(initial)); let counter = 0;

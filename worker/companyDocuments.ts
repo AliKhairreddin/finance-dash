@@ -28,11 +28,9 @@ export async function receiveContractEmail(message: ForwardableEmailMessage, env
   const email = await PostalMime.parse(await boundedBytes(message.raw, 25 * 1024 * 1024));
   const files = email.attachments.filter(file => !(file.mimeType.startsWith("image/") && (file.disposition === "inline" || file.related)));
   if (!files.length) { message.setReject("Attach a contract as PDF, Word (.docx), text, PNG, JPEG, or WebP (up to 10 MB each)"); return; }
-  // Validate the whole email before saving; never acknowledge unsupported or incomplete attachments.
   try { for (const file of files) contractFileType(new Uint8Array(file.content as ArrayBuffer), file.filename ?? "document"); }
   catch (error) { message.setReject(error instanceof Error ? error.message : "Unsupported attachment"); return; }
   const sourceContext = `From: ${email.from?.address ?? message.from}\nSubject: ${email.subject ?? ""}\n${email.text ?? email.html?.replace(/<[^>]*>/g, " ") ?? ""}`.slice(0, 12000);
-  // Await durable storage and scheduling before acknowledging; hashes deduplicate provider redelivery.
   for (const file of files) await ingestCompanyDocument(env, { bytes: new Uint8Array(file.content as ArrayBuffer), fileName: file.filename ?? "contract", source: "email", sender: message.from, sourceContext });
 }
 

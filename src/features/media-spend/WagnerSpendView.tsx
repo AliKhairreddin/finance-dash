@@ -85,7 +85,6 @@ export function WagnerSpendView({ apiBase, teamPicker }: { apiBase: string; team
     return () => controller.abort();
   }, [apiBase, refresh]);
 
-  // Identifier columns are only sortable while their breakdown is visible.
   const activeSortKey = (sortKey === "accountId" && groupBy !== "ad_account")
     || (sortKey === "campaignId" && groupBy !== "rt_campaign") ? "label" : sortKey;
   const rows = useMemo(() => [...(data?.rows ?? [])].sort((a, b) =>

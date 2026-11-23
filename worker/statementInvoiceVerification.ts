@@ -5,7 +5,6 @@ import { invoiceAi } from "./statementInvoiceAi";
 import { inspectInvoiceExample, renderInvoicePdf } from "./statementInvoicePdf";
 import { expenseInvoiceDesign } from "../shared/statementInvoiceDesign";
 
-// Exercise the deployed evidence-only renderer without AI or financial writes.
 export async function verifyExpenseInvoice(env: Pick<WorkerEnv, "BROWSER">) {
   return renderInvoicePdf(env, null, {
     headerPercent: 0, footerPercent: 0,
@@ -20,7 +19,6 @@ export async function verifyExpenseInvoice(env: Pick<WorkerEnv, "BROWSER">) {
   }, false);
 }
 
-// Fixed synthetic data only. This smoke check does not write financial records.
 export async function verifyInvoiceCopy(env: Pick<WorkerEnv, "BROWSER" | "OPENROUTER_API_KEY">, model: string) {
   const pdf = await PDFDocument.create(), page = pdf.addPage([595, 842]);
   const regular = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);

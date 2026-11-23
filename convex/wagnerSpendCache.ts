@@ -12,7 +12,6 @@ function authorize(serviceToken: string) {
   }
 }
 
-// An atomic read/reservation prevents simultaneous page loads from duplicating source requests.
 export const acquire = mutation({
   args: { serviceToken: v.string(), key: v.string(), attemptId: v.string() },
   returns: v.union(

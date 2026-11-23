@@ -7,8 +7,6 @@ import worker, { handleTelegramCommand } from "./handler";
 import { createAuthSessionToken } from "./auth";
 import type { PartnerReportData, PartnerUpdateStatus } from "../shared/partnerUpdates";
 
-// Exercise the production job class in the existing Node test runner. Only the
-// Cloudflare base class is replaced; storage, rendering and Telegram are explicit fakes.
 const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === "cloudflare:workers") return { url: "data:text/javascript,export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }", shortCircuit: true };
   return next(specifier, context);

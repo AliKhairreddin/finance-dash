@@ -41,7 +41,6 @@ export async function photograph(video: HTMLVideoElement, zoom = 1): Promise<Rec
   const canvas = drawCameraFrame(video, zoom, 3200);
   const draft = await canvasDraft(canvas);
   draft.scan = { original: draft.photo, width: canvas.width, height: canvas.height, corners: fullImageCorners(), confirmed: false, detected: false };
-  // Persist the original before detection/cropping so an interruption loses nothing.
   await receiptDraft(draft);
   return draft;
 }
@@ -53,7 +52,6 @@ export async function saveScan(draft: ReceiptDraft, pixels: ScanPixels, corners:
   if (!context) throw new Error("The scan could not be saved. Try again.");
   context.putImageData(new ImageData(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height), 0, 0);
   const next = { ...await canvasDraft(canvas), scan: { ...draft.scan, corners, confirmed: true } };
-  // Every Send retry reuses this exact PDF, including after an app restart.
   await receiptDraft(next);
   return next;
 }

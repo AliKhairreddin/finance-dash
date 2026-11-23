@@ -3,8 +3,6 @@ import { spawnSync } from "node:child_process";
 import { parse } from "dotenv";
 import { productionEnvironment, productionServiceEnvironment } from "./deploy-production";
 
-// The short-lived OAuth code is read from a protected file, never a command-line
-// argument. Neither the code nor the refresh token is printed or saved in repo.
 const file = process.argv[2];
 if (!file) throw new Error("Pass the absolute path to a protected authorization-code file.");
 if ((await stat(file)).mode & 0o077) throw new Error("Authorization-code file must have mode 600.");

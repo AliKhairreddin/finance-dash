@@ -573,7 +573,6 @@ function CognitiveSpendView({
     );
   }, [providerSortDirection, providerSortKey, providerSpendGroups, search]);
   const showingAccountDetail = viewMode === "accounts" && Boolean(selectedAccountKey);
-  // Summarize every matching row in the current view, before pagination.
   const visibleSpendRows = useMemo(() => {
     if (viewMode === "providers") return visibleProviders.flatMap((group) => group.rows);
     if (viewMode === "businessManagers") return visibleBusinessManagers.flatMap((group) => group.rows);
@@ -791,8 +790,6 @@ function CognitiveSpendView({
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "LemonMax import did not complete");
     } finally {
-      // Failed attempts also change source health.
-      // Reload only saved data, including any successfully imported days.
       try {
         await loadData();
       } catch (loadError) {

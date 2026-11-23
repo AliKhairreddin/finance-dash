@@ -1,8 +1,6 @@
 import { cp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-// These are executable runtime assets, never document content. Host them ourselves
-// so an OCR job has no dependency on third-party CDNs or language-data services.
 const target = "dist/statement-ocr-assets";
 await mkdir(target, { recursive: true });
 for (const file of ["pdf.min.mjs", "pdf.worker.min.mjs"]) {

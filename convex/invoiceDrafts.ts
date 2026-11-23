@@ -5,7 +5,6 @@ import { bumpBankLedgerRevision, invoice } from "./dashboard";
 import { dashboardInvoiceDeletionBatchBlockReason, unlinkDeletedInvoiceDrafts } from "../shared/invoiceDeletion";
 import { validateOpenItemDeletion } from "../shared/manualReceivables";
 
-/** Both invoice views remove links and drafts in the same database transaction. */
 async function removeSelectedItems(ctx: MutationCtx, state: Doc<"dashboardState">, ids: Set<string>) {
   const selected = state.invoices.filter(item => ids.has(item.id));
   const linked: Doc<"bankTransactions">[] = [];

@@ -1,6 +1,5 @@
 import { initialTransactionCategories } from "./categories";
 
-/** Business definitions sent to the classifier alongside the allowed names. */
 export const transactionCategoryDescriptions: Readonly<Record<string, string>> = {
   ...Object.fromEntries(initialTransactionCategories
     .filter((category) => category.id.startsWith("offer-"))

@@ -39,7 +39,6 @@ export async function ingestTelegramDocument(env: WorkerEnv, user: TelegramAuthU
   } catch (error) { return `Couldn’t process the document: ${error instanceof Error ? error.message : "Upload failed"}`; }
 }
 
-// One inbox per chat: Ali's slow request cannot delay Ali M or a sign-in code.
 export class TelegramInbox extends DurableObject<WorkerEnv> {
   private work: Promise<void> = Promise.resolve();
   private serialize<T>(run: () => Promise<T>): Promise<T> { const result = this.work.then(run, run); this.work = result.then(() => undefined, () => undefined); return result; }

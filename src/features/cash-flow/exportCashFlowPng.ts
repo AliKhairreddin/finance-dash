@@ -50,7 +50,6 @@ function wrap(ctx: CanvasRenderingContext2D, value: string, width: number, size 
       if (ctx.measureText(candidate).width <= width) { current = candidate; continue; }
       if (current) lines.push(current);
       current = "";
-      // Unbroken identifiers still wrap without truncating the original name.
       for (const char of word) {
         if (current && ctx.measureText(current + char).width > width) { lines.push(current); current = ""; }
         current += char;
@@ -294,8 +293,6 @@ export function planCashFlowPng(ctx: CanvasRenderingContext2D, snapshot: CashFlo
       const footers = wrap(ctx, [snapshot.notes, footer].filter(Boolean).join("\n"), width - margin * 2 - 170, 14);
       const contentHeight = bodyTop + packed.height + 42 + footers.length * 21 + 25;
       const height = Math.max(Math.ceil(width / .78), contentHeight);
-      // Prefer intact company groups and familiar reading order when the space
-      // savings from splitting or moving charts first would be negligible.
       const readabilityCost = 1 + (chunks.length - sections.length) * .06 + (order.indexOf(trend) < order.indexOf(primary[0]) ? .02 : 0);
       return { width, height, columnWidth, placements: packed.placements, sections: chunks, footers,
         score: height * readabilityCost };
@@ -311,7 +308,6 @@ export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowS
   const totals = cashFlowSnapshotTotals(snapshot, rates);
   const included = cashFlowSections.flatMap((key) => snapshot[key]).filter((line) => !line.excludedFromTotals);
   const fx = convertCurrencyTotalsToUsd(included.reduce<Record<string, number>>((result, line) => {
-    // Absolute amounts keep offsetting balances from concealing a missing quote.
     result[line.currency] = (result[line.currency] ?? 0) + Math.abs(line.amount); return result;
   }, {}), rates);
   const footer = ["Totals and cash accounts in USD equivalent · Other detail balances in original currencies",
@@ -368,11 +364,9 @@ export function renderCashFlowPng(canvas: HTMLCanvasElement, snapshot: CashFlowS
   return plan;
 }
 
-/** Render one portrait image before starting the direct PNG download. */
 export async function buildCashFlowPng(snapshot: CashFlowSnapshot, history: CashFlowSnapshot[], rates: FxRate[]): Promise<Blob> {
   await document.fonts.load(`500 18px ${font}`);
   await document.fonts.load(`600 23px ${font}`);
-  // Let the browser paint the exporting state before measuring the layout.
   await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
   const canvas = document.createElement("canvas");
   try {

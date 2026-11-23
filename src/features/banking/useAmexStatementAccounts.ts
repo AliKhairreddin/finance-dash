@@ -12,7 +12,7 @@ export function useAmexStatementAccounts(enabled: boolean): StatementAccount[] {
         if (!response.ok) return;
         const rows: StatementAccount[] = await response.json();
         if (!disposed) setAccounts(rows);
-      } catch { /* The transaction request displays connection errors. */ }
+      } catch { }
     };
     void load(); window.addEventListener("amex-statements-imported", load);
     return () => { disposed = true; window.removeEventListener("amex-statements-imported", load); };

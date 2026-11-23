@@ -95,7 +95,6 @@ test("bulk provider assignment saves individual billing types and preserves date
       assert.equal(oldAssignment?.effectiveTo, date);
       assert.equal(newAssignment?.billingType, target.billingType);
     }
-    // Repeating a submission must not duplicate active assignments.
     await call(assignTargets, ctx, args);
     assert.equal(ctx.tables.mediaFundingAssignments.length, 4);
     await call(assignTargets, ctx, { ...args, effectiveFrom: "2026-09-16", targets: [{ ...targets[0], billingType: "credit_line" }] });
@@ -258,7 +257,6 @@ test("provider creation adds a supplier atomically and commissions feed cash-flo
     assert.equal(provider.fees, 2000);
     assert.equal(provider.netFunding, 98000);
     assert.equal(provider.estimatedBalance, 78000);
-    // Commission edits reprice the included funding without modifying the bank ledger.
     await call(updateProvider, ctx, { serviceToken, providerId: id, companyProviderId: company.id, defaultFeePercent: 3, openingBalance: 0, openingBalanceDate: "2026-01-01", balanceVerified: true, updatedAt });
     provider = (await call(listOverview, ctx, { serviceToken })).providers.find((p: any) => p.id === id);
     assert.equal(provider.netFunding, 97000);
@@ -348,7 +346,7 @@ test("only credit-line spend reduces balances regardless of payment methods, wit
       await call(rebuildDate, ctx, { serviceToken, date, updatedAt });
       const provider = (await call(listOverview, ctx, { serviceToken })).providers[0];
       assert.equal(provider.spend, 650);
-      assert.equal(provider.estimatedBalance, 730); // 100 + 980 + 50 - 400; card spend is excluded.
+      assert.equal(provider.estimatedBalance, 730);
       assert.deepEqual(provider.billingSpend, { credit_line: 400, card: 250, unclassified: 0, unclassifiedRows: 0 });
       await call(rebuildDate, ctx, { serviceToken, date, updatedAt });
       assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, 730);
@@ -373,7 +371,7 @@ test("backdated billing edits preserve opening-date boundaries and prevent incom
     const args = { serviceToken, providerId: "meta", effectiveFrom: date, updatedAt };
     const target = { scope: "ad_account", platform: "Facebook", businessManagerId: "bm", accountId: "3" };
     await finishRebuild(ctx, await call(assignTargets, ctx, { ...args, targets: [{ ...target, billingType: "credit_line" }] }));
-    assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, 150); // Opening date's spend and funding are excluded.
+    assert.equal((await call(listOverview, ctx, { serviceToken })).providers[0].estimatedBalance, 150);
     const first = await call(assignTargets, ctx, { ...args, effectiveFrom: "2026-09-15", targets: [{ ...target, billingType: "card" }] });
     await call(rebuildDate, ctx, { serviceToken, date: "2026-09-15", updatedAt });
     let overview = await call(listOverview, ctx, { serviceToken });
@@ -381,7 +379,7 @@ test("backdated billing edits preserve opening-date boundaries and prevent incom
     assert.equal(overview.providers[0].estimatedBalance, null);
     await assert.rejects(call(completeBillingRebuild, ctx, { serviceToken, ...first.billingRevisions[0], updatedAt }), /incomplete/);
     const second = await call(assignTargets, ctx, { ...args, effectiveFrom: "2026-09-16", targets: [{ ...target, billingType: "credit_line" }] });
-    assert.equal(second.rebuildFrom, "2026-09-15"); // Includes the unfinished earlier change.
+    assert.equal(second.rebuildFrom, "2026-09-15");
     assert.equal(await call(completeBillingRebuild, ctx, { serviceToken, ...first.billingRevisions[0], updatedAt }), false);
     await finishRebuild(ctx, second);
     overview = await call(listOverview, ctx, { serviceToken });

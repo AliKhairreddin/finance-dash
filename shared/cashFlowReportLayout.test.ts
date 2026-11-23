@@ -34,8 +34,6 @@ const snapshot = (patch: Partial<CashFlowSnapshot> = {}): CashFlowSnapshot => ({
   id: "test", asOfDate: "2026-09-07", createdAt: "2026-09-07", updatedAt: "2026-09-07",
   cashAccounts: [], receivables: [], openBalances: [], payables: [], investments: [], ...patch
 });
-// Deterministic text metrics exercise layout invariants; real font rendering is
-// separately checked using the browser-generated PNGs.
 const context = { font: "", measureText: (value: string) => ({ width: value.length * 10 }) } as CanvasRenderingContext2D;
 
 test("cash export converts and consolidates each provider while keeping Wise entities and source details separate", () => {

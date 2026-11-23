@@ -1,4 +1,3 @@
-/** A saved, explicit selection that can be shared by future bulk actions. */
 export function changeSelectedPage<T extends { _id: string }>(selected: T[], page: T[], checked: boolean): T[] {
   const rows = new Map(selected.map(row => [row._id, row]));
   for (const row of page) { if (checked) rows.set(row._id, row); else rows.delete(row._id); }

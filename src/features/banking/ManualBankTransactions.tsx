@@ -49,7 +49,6 @@ export function ManualBankTransactions({ source }: { source: ManualBankSource })
     else { setSort(key); setOrder("asc"); }
   }
   function reload() { setCursors([null]); setRefresh(value => value + 1); }
-  // Browser back/forward can change the URL sort without a header click.
   useEffect(() => { setCursors([null]); }, [sort, order]);
   useEffect(() => { if (page?.page.length === 0) tableWrap.current?.scrollTo({ left: 0 }); }, [page]);
   return <section className="panel wide-panel">
@@ -98,7 +97,6 @@ function ManualBankEditor({ source, row, onClose, onSaved }: { source: ManualBan
   const [currency, setCurrency] = useState(row?.currency ?? (source === "flex" ? "USD" : "USDC"));
   const [date, setDate] = useState(() => row?.date ?? financeOperatingDate(Date.now()));
   const [direction, setDirection] = useState<ManualBankFields["direction"]>(row?.direction ?? "out");
-  // Keep the same identity when retrying after an uncertain network response.
   const [requestId] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

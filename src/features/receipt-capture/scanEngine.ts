@@ -35,7 +35,6 @@ export function detectReceipt(pixels: ScanPixels): ScanCorners | null {
           if (polygon.rows !== 4 || !cv.isContourConvex(polygon)) continue;
           const corners = orderCorners(Array.from({ length: 4 }, (_, j) => ({ x: polygon.data32S[j * 2] / (width - 1), y: polygon.data32S[j * 2 + 1] / (height - 1) })));
           const area = cornerArea(corners);
-          // A document cut off by the image boundary is not a complete scan.
           if (area <= bestArea || area > 0.94 || !validCorners(corners) || corners.some(p => p.x < 0.007 || p.x > 0.993 || p.y < 0.007 || p.y > 0.993)) continue;
           const lengths = corners.map((p, j) => Math.hypot((p.x - corners[(j + 1) % 4].x) * width, (p.y - corners[(j + 1) % 4].y) * height));
           if (Math.max(...lengths) / Math.min(...lengths) > 14) continue;

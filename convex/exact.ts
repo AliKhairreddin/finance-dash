@@ -15,7 +15,6 @@ async function access(ctx: QueryCtx | MutationCtx, args: { serviceToken: string;
   service(args.serviceToken);
   const actor = normalizeStatementActor(args.actor);
   const member = await ctx.db.query("statementMembers").withIndex("by_actor", q => q.eq("actor", actor)).unique();
-  // Exact is an explicitly shared accounting workspace for these three full-access members.
   if (!member || !fullStatementManagement(member)) throw new ConvexError("Full Statements access is required for Exact");
   return actor;
 }
@@ -106,7 +105,6 @@ export const queueOperation = mutation({ args: { ...auth, requestId: v.string(),
   const prior = await ctx.db.query("exactOperations").withIndex("by_requestId", q => q.eq("requestId", args.requestId)).unique();
   if (prior) { if (prior.actor !== actor || prior.division !== args.division || prior.kind !== args.kind || prior.providerId !== args.providerId || prior.payloadJson !== JSON.stringify(payload)) throw new ConvexError("Request identifier was already used for a different change"); return prior._id; }
   if (args.providerId) exactGuid(args.providerId);
-  // Every foreign reference must belong to the selected company, from a completed saved dataset.
   const references: Array<[ExactKind, string]> = [];
   if (payload.Type) references.push(["documentTypes", String(payload.Type)]);
   if (payload.OrderedBy || payload.Supplier || payload.Account) references.push(["accounts", String(payload.OrderedBy ?? payload.Supplier ?? payload.Account)]);
@@ -163,7 +161,6 @@ export const fileAccess = internalQuery({ args: { ...auth, division: v.number(),
   return String(row.data.FileName ?? "attachment");
 } });
 
-// Only internal actions can retrieve encrypted credentials and drive the serialized queue.
 export const claim = internalMutation({ args: { token: v.string(), connecting: v.optional(v.boolean()) }, returns: v.union(v.null(), v.string()), handler: async (ctx, args) => {
   let c = await connection(ctx); const now = Date.now();
   if (!c && args.connecting) { const id = await ctx.db.insert("exactConnections", { key: "primary", state: "not_connected", leaseUntil: 0, nextAllowedAt: 0 }); c = await ctx.db.get(id); }

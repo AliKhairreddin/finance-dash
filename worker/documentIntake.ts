@@ -49,7 +49,6 @@ export async function ingestDocument(env: DocumentEnv, input: {
   if (!response.ok || !result.storageId) throw new Error("The document could not be saved");
   const storageId = result.storageId as Id<"_storage">;
   const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", input.bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
-  // A retry with an uncertain mutation outcome is safe: content hashes deduplicate it.
   return convex.mutation(api.documents.ingest, { ...auth(env), storageId, contentHash: hash, intakeKey: input.intakeKey ?? `sha256:${hash}`, fileName: input.fileName.replace(/[\x00-\x1f/\\]/g, "_").slice(0, 240), contentType: input.contentType, size: input.bytes.byteLength, source: input.source, sourceContext: input.sourceContext?.slice(0, 12000) ?? "", sender: input.sender, entity: input.entity, invoiceId: input.invoiceId });
 }
 
@@ -196,7 +195,6 @@ export async function receiveDocumentEmail(message: ForwardableEmailMessage, env
   const email = await PostalMime.parse(raw);
   const context = `From: ${email.from?.address ?? message.from}\nSubject: ${email.subject ?? ""}\n${email.text ?? email.html?.replace(/<[^>]*>/g, " ") ?? ""}`.slice(0, 12000);
   const attachments = email.attachments.map(file => ({ ...file, mimeType: documentContentType(new Uint8Array(file.content as ArrayBuffer)) })).filter(file => file.mimeType !== null);
-  // Save every attachment before acknowledging the email. Extraction is durably scheduled in Convex.
   if (attachments.length) {
     for (let offset = 0; offset < attachments.length; offset += 3) {
       const results = await Promise.allSettled(attachments.slice(offset, offset + 3).map(file => ingestDocument(env, { bytes: new Uint8Array(file.content as ArrayBuffer), fileName: file.filename || "email-document", contentType: file.mimeType!, source: "email", sourceContext: context, sender: message.from })));

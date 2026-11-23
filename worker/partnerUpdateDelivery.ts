@@ -4,7 +4,6 @@ import { normalizeFinanceUsername, parseTelegramAuthUsers, TelegramDeliveryError
 export function partnerRecipients(env: Pick<WorkerEnv, "TELEGRAM_AUTH_USERS_JSON">): TelegramAuthUser[] {
   const users = parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON);
   if (!users) throw new Error("Telegram recipients are not configured.");
-  // These are the existing Finance Dash names for the same people, not additional recipients.
   const aliases: Record<string, string[]> = { Sani: ["sani", "sanjin"], Ben: ["ben", "beno"] };
   return partnerUpdateRecipients.map(name => {
     const matches = users.filter(user => (aliases[name] ?? [normalizeFinanceUsername(name)]).includes(user.normalizedUsername));

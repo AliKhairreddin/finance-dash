@@ -89,7 +89,6 @@ test("dashboard creation retries preserve edits; deletion retains audit and bloc
     await call(createFromDashboard, ctx, { ...input, source: "kraken" });
     assert.equal(ctx.tables.manualBankTransactions.length, 2);
 
-    // Page through the fake database with the actual query's source/deletion predicates.
     const query = ctx.db.query.bind(ctx.db);
     const listCtx = { db: { query(table: string) { const q = query(table); return Object.assign(q, { async paginate() { return { page: await q.take(100), isDone: true, continueCursor: "" }; } }); } } };
     const page = (source: string) => call(list, listCtx, { serviceToken: "test-ledger", source, sortKey: "date", order: "desc", paginationOpts: { numItems: 50, cursor: null } });

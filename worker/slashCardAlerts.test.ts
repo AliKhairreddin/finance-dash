@@ -5,7 +5,6 @@ import type { SlashCardAlertTransaction } from "../shared/slashApi";
 import { handleSlashCardWebhook, parseSlashCardWebhookEvent, verifySlashWebhookSignature, type SlashCardWebhookEvent } from "./slashCardWebhook";
 import worker from "./handler";
 
-// Use the real durable job with explicit in-memory storage and mocked external APIs.
 const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === "cloudflare:workers") return { url: "data:text/javascript,export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }", shortCircuit: true };
   return next(specifier, context);
@@ -71,7 +70,6 @@ test("webhook requests require signatures, bound the body, and save events befor
   assert.equal((await handleSlashCardWebhook(request("x".repeat(8193)), env)).status, 413);
   assert.equal((await handleSlashCardWebhook(new Request("https://finance.example/api/slash/card-events"), env)).status, 405);
   assert.equal(received.length, 0);
-  // Signature cryptography is tested above; isolate the routing and durable acknowledgment here.
   t.mock.method(crypto.subtle, "verify", async () => true);
   assert.equal((await handleSlashCardWebhook(request(JSON.stringify(event), "AA=="), env)).status, 202);
   assert.deepEqual(received, [event]);
@@ -135,7 +133,6 @@ test("card jobs keep per-recipient order, retry only unfinished sends, and survi
   assert.deepEqual(sent.map((row) => row.chat), ["111", "111"]);
   assert.match(sent[0].text, /card declined/); assert.match(sent[1].text, /payment approved again/);
   assert.ok(store.alarm());
-  // Construct a fresh instance to prove that messages, recipient progress and card state persist.
   job = new SlashCardAlerts({ storage: store.storage }, env); failAliM = false;
   await job.alarm();
   assert.deepEqual(sent.map((row) => row.chat), ["111", "111", "222", "222"]);

@@ -10,7 +10,6 @@ export const statementPasswordMaxAttempts = 10;
 export interface StatementPasswordCredential { salt: string; hash: string }
 
 export function usesStatementPassword(hostname: string, username: string): boolean {
-  // Both dashboards use the same credentials and per-account attempt budget.
   return [statementPasswordHostname, financePasswordHostname].includes(hostname) && statementPasswordUsers.some(user => user === normalizeFinanceUsername(username));
 }
 

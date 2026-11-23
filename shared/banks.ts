@@ -13,7 +13,6 @@ export const bankSources: Array<{ id: BankSource; label: string }> = [
 
 const bankSourceIds = new Set<BankSource>(bankSources.map((source) => source.id));
 
-// Wise is retired from current balances; its saved accounts and transaction history remain available.
 export function isActiveBalanceSource(source: DataSource): boolean {
   return source !== "wise";
 }

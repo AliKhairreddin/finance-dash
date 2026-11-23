@@ -256,7 +256,6 @@ export function mediaSpendRefreshRange(startDate: string, yesterday: string, cov
   const nextMissing = coveredThrough ? shift(coveredThrough, 1) : startDate;
   const refreshStart = nextMissing < recentStart ? nextMissing : recentStart;
   const fromDate = startDate > refreshStart ? startDate : refreshStart;
-  // Catch up a long outage in bounded contiguous batches, without skipping to yesterday.
   const batchEnd = shift(fromDate, mediaSpendMaximumSyncDays - 1);
   return { fromDate, toDate: batchEnd < yesterday ? batchEnd : yesterday };
 }

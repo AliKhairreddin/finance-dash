@@ -1582,7 +1582,6 @@ function parseOfferReconciliation(records: ManagementReportCsvRecord[]): OfferPa
       const label = normalizedText(rowCell(record, 13));
       const ours = numberFromCell(rowCell(record, 14));
       const theirs = numberFromCell(rowCell(record, 15));
-      // This is the reported subtotal for the ACA detail immediately above it.
       if (/^aca revenue$/i.test(label)) continue;
       if (!label || (ours === undefined && theirs === undefined)) continue;
       entries.push({

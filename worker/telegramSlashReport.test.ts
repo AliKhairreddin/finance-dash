@@ -42,12 +42,12 @@ test("Friday funding covers three days per account and adds the reserve only onc
 
 test("funding horizon follows Beirut weekdays and weekend reports show gaps until Monday", () => {
   const cases = [
-    ["2026-09-10T20:59:00Z", 200, false], // Thursday in Beirut
-    ["2026-09-10T21:00:00Z", 600, false], // Friday in Beirut, still Thursday UTC
-    ["2026-01-08T22:00:00Z", 600, false], // Friday in Beirut in winter
+    ["2026-09-10T20:59:00Z", 200, false],
+    ["2026-09-10T21:00:00Z", 600, false],
+    ["2026-01-08T22:00:00Z", 600, false],
     ["2026-09-12T14:00:00Z", 400, true],
     ["2026-09-13T14:00:00Z", 200, true],
-    ["2026-09-13T21:00:00Z", 200, false], // Monday in Beirut, still Sunday UTC
+    ["2026-09-13T21:00:00Z", 200, false],
     ["2026-09-15T14:00:00Z", 200, false]
   ] as const;
   for (const [timestamp, expected, weekend] of cases) {

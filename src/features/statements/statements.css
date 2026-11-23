@@ -208,10 +208,8 @@
 .statement-invoice-companies { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 540px) { .statement-invoice-companies { grid-template-columns: minmax(0, 1fr); } }
 
-/* Keep controls within the available width, including portal-based dialogs. */
 @media (max-width: 800px) {
   .statement-page-heading { justify-content: flex-end; }
-  /* Keep the page heading available to screen readers without repeating the dropdown visually. */
   .statement-page-heading > div:first-child { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .statement-topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; }
   .statement-topbar-brand-group { display: contents; }
@@ -273,7 +271,6 @@
 .statement-shell .data-table .statement-merchant-inline .statement-missing-address { display: inline; margin: 0; white-space: nowrap; }
 
 
-/* One Statements design system for the shell, tables, forms and portalled dialogs. */
 .statement-shell, .statement-dialog {
   font-family: "Inter Variable", Inter, sans-serif;
   --font-sans: "Inter Variable", Inter, sans-serif;

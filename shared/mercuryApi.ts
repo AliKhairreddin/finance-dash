@@ -123,7 +123,6 @@ export function normalizeMercuryTransaction(row: RecordValue, accountMap: Map<st
   const description = optionalText(row.bankDescription, "bank description") ?? optionalText(row.externalMemo, "memo") ?? kind;
   const transfer = kind === "internalTransfer" || kind === "treasuryTransfer";
   const recipient = counterparty.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
-  // These are the same owner-confirmed related companies used for Wise funding.
   const intercompany = ["digitalnudgeou", "lovemedobv"].includes(recipient)
     && ["outgoingPayment", "incomingTransfer", "externalTransfer", "other"].includes(kind);
   const movement = transfer ? "Internal transfer" : intercompany ? "Intercompany transfer" : undefined;

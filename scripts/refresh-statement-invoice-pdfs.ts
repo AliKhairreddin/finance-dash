@@ -1,4 +1,3 @@
-// Explicit administrator maintenance. Prepare locally, review, then apply the manifest.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -112,7 +111,6 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
       await page.close(); writeFileSync(afterPath, bytes, { mode: 0o600 }); validatePdf(afterPath, saved);
       if (designRefresh) {
         // PDF extraction can split letter-spaced headings into separate words.
-        // Compare every letter/digit, ignoring only case, spacing and layout order.
         const characters = (value: string) => value.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]/gu)!.sort();
         assert.deepEqual(characters(text(afterPath)), characters(text(beforePath)), `The design must not change PDF wording: ${saved.number}`);
       }
@@ -123,7 +121,6 @@ if (mode === "--prepare" || mode === "--prepare-designs") {
   console.log(JSON.stringify({ prepared: manifest.items.length, suppliers: designs.size, distinctLayouts: new Set([...designs.values()].map(design => design.template)).size, skipped: manifest.skipped, manifest: `${dir}/manifest.json` }));
 } else {
   const manifestPath = resolve(input), manifest: Manifest = JSON.parse(readFileSync(manifestPath, "utf8")); assert.equal(manifest.productionUrl, productionUrl);
-  // Validate all reviewed files and unchanged snapshots before the first upload.
   for (const item of manifest.items) {
     assert.equal(hash(readFileSync(item.afterPath)), item.sha256); validatePdf(item.afterPath, item.saved);
     const current = await read(item.saved._id);

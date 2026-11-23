@@ -1,8 +1,6 @@
 import { invoiceAccentColors } from "../shared/statementInvoiceDesign";
 import { invoiceTotals, type InvoiceDraft, type InvoiceTemplateLayout } from "../shared/statementInvoices";
 
-// The fragments contain only existing invoice content. Each template places them
-// in a separate document structure; layout names never appear in the PDF.
 export function supplierInvoiceHtml(value: InvoiceDraft, layout: InvoiceTemplateLayout, draft: boolean, esc: (value: string) => string): string {
   const design = layout.design;
   if (!design?.template) throw new Error("Choose a saved supplier layout");

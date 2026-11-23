@@ -372,7 +372,6 @@ export const billingRebuildStatus = query({
   }
 });
 
-// Reconcile stored reporting data; never calls the upstream media API.
 export const prepareBillingRebuild = mutation({
   args: { serviceToken: v.string(), updatedAt: v.string() },
   returns: mutationResult,
@@ -383,7 +382,6 @@ export const prepareBillingRebuild = mutation({
   }
 });
 
-// Audited maintenance: extend equivalent assignment history without inventing a billing type.
 export const backdateAssignmentHistory = mutation({
   args: {
     serviceToken: v.string(),
@@ -464,7 +462,6 @@ export const completeBillingRebuild = mutation({
   }
 });
 
-// Spend review needs provider identities and assignment history, not bank funding or balances.
 export const listSpendAssignments = query({
   args: { serviceToken: v.string() },
   returns: v.object({
