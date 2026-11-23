@@ -29,8 +29,13 @@ function jsonBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
+export function ledgerTransactionId(id: string): string {
+  assertBoundedString(id, "transaction.id", 2_048, true);
+  return id;
+}
+
 export function assertBankTransactionInput(transaction: Transaction): void {
-  assertBoundedString(transaction.id, "transaction.id", 2_048, true);
+  ledgerTransactionId(transaction.id);
   assertBoundedString(transaction.providerLegacyId, "transaction.providerLegacyId", 2_048);
   assertBoundedString(transaction.accountId, "transaction.accountId", 1_024, true);
   assertBoundedString(transaction.accountName, "transaction.accountName", 512, true);

@@ -29,7 +29,6 @@ const revolutTransactionPageSize = 1000;
 const maxRevolutTransactionPages = 100;
 const maximumRevolutAccounts = 1_000;
 const maximumRevolutTransactionLegs = 100;
-// Three provider IDs are hex-encoded into one ledger ID, which is capped at 2,048 characters.
 const maximumRevolutProviderIdLength = 300;
 const maximumRevolutTextLength = 1_024;
 export const revolutSyncTransactionPageSize = 200;

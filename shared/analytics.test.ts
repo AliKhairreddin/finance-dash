@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { bankProviderTransactionId } from "./providerIdentity";
+import { assertBankTransactionInput } from "./bankRecordValidation";
 import { bankAnalyticsLimits, createBankAnalyticsAccumulator } from "./analytics";
 import type { Transaction } from "./types";
 
@@ -288,21 +290,19 @@ test("streaming bank Analytics excludes voided tombstones from every aggregate",
 });
 
 test("streaming bank Analytics accepts bounded provider transaction IDs longer than dimension labels", () => {
-  const longTransactionId = `slash:${"provider-transaction-segment/".repeat(18)}`;
-  assert.ok(longTransactionId.length > bankAnalyticsLimits.dimensionTextLength);
-  assert.ok(longTransactionId.length < bankAnalyticsLimits.transactionIdTextLength);
+  const longTransactionId = bankProviderTransactionId("slash", ["a".repeat(500), "界".repeat(173)]);
   const accumulator = createBankAnalyticsAccumulator({
     fromDate: "2026-07-01",
     toDate: "2026-07-31",
     providers: [],
     teams: []
   });
-  accumulator.addPage([
-    transaction(longTransactionId, {
-      category: "Uncategorized",
-      merchantName: "Long ID merchant"
-    })
-  ]);
+  const row = transaction(longTransactionId, {
+    source: "slash", accountId: "account", category: "Uncategorized",
+    description: "Purchase", rawName: "Purchase", counterparty: "Long ID merchant", merchantName: "Long ID merchant"
+  });
+  assertBankTransactionInput(row);
+  accumulator.addPage([row]);
   const state = accumulator.serialize();
   const resumed = createBankAnalyticsAccumulator({
     fromDate: "2026-07-01",

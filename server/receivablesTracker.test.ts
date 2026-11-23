@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { call, database } from "./convexTestDb";
 import * as tracker from "../convex/receivables";
 import { guardTrackerFinancialState } from "../convex/receivablesCore";
-import { bankProviderTransactionId } from "../shared/providerIdentity";
+import { bankMigrationIdentity, bankProviderTransactionId } from "../shared/providerIdentity";
 import { trackerWeek, trackerClock, type TrackerItem, type TrackerReportRow, type TrackerReceipt } from "../shared/receivablesTracker";
 const auth = { serviceToken: "tracker-test" }, actor = { ...auth, actor: "finance" };
 const now = new Date().toISOString(), date = trackerClock().date, week = trackerWeek(date);
@@ -35,7 +35,7 @@ test("an invoice-only tracker does not scan bank history", async () => {
 });
 test("indexed matching preserves historical Wise allocation reservations and refuses truncated candidates", async () => {
   const ctx = setup();
-  const oldId = bankProviderTransactionId("wise", ["legacy", "wise-csv-USD-transfer123"]);
+  const oldId = bankMigrationIdentity("wise", "legacy", "wise-csv-USD-transfer123");
   const currentId = `wise-v2-42-${Buffer.from(JSON.stringify(["TRANSFER-123", "account", "USD", "CREDIT", "DEPOSIT"])).toString("hex")}`;
   Object.assign(ctx.tables.bankTransactions[0], { id: currentId, source: "wise", connectionKey: "broken-feed" });
   ctx.tables.dashboardState[0].paymentAllocations.push({ invoiceId: "prior", transactionId: oldId, amount: 1000, currency: "USD" });
