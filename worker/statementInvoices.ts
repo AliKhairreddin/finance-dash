@@ -21,7 +21,8 @@ async function savePdf(client: StatementRequestClient, serviceToken: string, byt
   if (!response.ok) { await response.body?.cancel(); throw new Error("The PDF could not be saved"); }
   return (await readBoundedResponseJson<{ storageId: Id<"_storage"> }>(response, "Invoice storage", 4096)).storageId;
 }
-async function model(client: StatementRequestClient, serviceToken: string) { const settings = await client.query(api.statements.processingSettings, { serviceToken }), ai = JSON.parse(settings.aiSettingsJson); if (ai?.provider !== "openrouter" || !ai.model) throw new Error("Save an OpenRouter model in Finance settings first"); return ai.model as string; }
+class InvoiceInputError extends Error {}
+async function model(client: StatementRequestClient, serviceToken: string) { const settings = await client.query(api.statements.processingSettings, { serviceToken }), ai = JSON.parse(settings.aiSettingsJson); if (ai?.provider !== "openrouter" || !ai.model) throw new InvoiceInputError("Save an OpenRouter model in Finance settings first"); return ai.model as string; }
 function pdf(bytes: Uint8Array<ArrayBuffer>, name: string, download = false) { return new Response(bytes, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } }); }
 export async function handleStatementInvoices(request: Request, env: StatementEnv, session: DashboardSession | null, renderPdf: typeof renderInvoicePdf = renderInvoicePdf): Promise<Response | null> {
   const path = new URL(request.url).pathname.replace(/^\/api\/statements/, "");
@@ -36,16 +37,18 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
     try {
       const saved = JSON.parse(await client.query(api.statementInvoices.template, { ...auth, id })), bytes = await bytesFrom(saved.url);
       const inspected = await inspectInvoiceExample(env, bytes), selectedModel = await model(client, auth.serviceToken);
-      if (inspected.pages !== 1 || !inspected.text.some(item => item.text.trim())) throw new Error("Upload a clear, text-based one-page example PDF");
+      if (inspected.pages !== 1 || !inspected.text.some(item => item.text.trim())) throw new InvoiceInputError("Upload a clear, text-based one-page example PDF");
       const ai = await invoiceAi(env.OPENROUTER_API_KEY, selectedModel, invoiceCopyPrompt, { issuer: saved.issuerName, width: inspected.width, height: inspected.height, positions: inspected.text }, { reasoningEffort: "none", outputSchema: invoiceCopySchema });
       const mapped = ai.result as { error?: string; copy?: unknown; sellerDetails?: string; paymentDetails?: string };
-      if (mapped.error || !mapped.copy) throw new Error(mapped.error || "The example layout could not be mapped");
+      if (mapped.error || !mapped.copy) throw new InvoiceInputError("The example layout could not be mapped");
       ai.result = invoiceLayout({ ...mapped, headerPercent: 0, footerPercent: 0 });
       await client.mutation(api.statementInvoices.completeExample, { ...auth, id, token, layoutJson: JSON.stringify(invoiceLayout(ai.result)), model: ai.model, costUsd: ai.costUsd });
       return { id };
     } catch (error) {
-      const reason = error instanceof Error && !error.message.includes("[Request ID:") ? error.message.slice(0, 250) : "The example could not be read.";
-      const message = `${reason} Your PDF is saved. Choose Read again to retry.`;
+      const localMessage = error instanceof InvoiceInputError ? error.message : "The example could not be read.";
+      const { message: reason } = statementRequestError(error, "invoice", localMessage);
+      const retry = " Your PDF is saved. Choose Read again to retry.";
+      const message = reason.slice(0, 500 - retry.length) + retry;
       await client.mutation(api.statementInvoices.completeExample, { ...auth, id, token, error: message });
       return { id, message };
     }
