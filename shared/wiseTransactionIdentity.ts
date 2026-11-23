@@ -1,3 +1,5 @@
+import { ledgerTransactionId } from "./bankRecordValidation";
+
 const wiseScopedPrefix = "wise-v2-";
 const wiseUnscopedPrefix = "wise-csv-v2-";
 
@@ -56,17 +58,17 @@ export function wiseCsvLedgerEntryIdentifier(
   ] satisfies WiseCsvLedgerEntryIdentity);
 }
 
-/**
- * Creates an injective provider identity. Punctuation, case, and Unicode are
- * intentionally preserved so two different Wise references can never collapse.
- */
-export function wiseTransactionId(
+function encodeWiseTransactionId(
   balanceId: string | number,
   providerIdentifier: string
 ): string {
   return `${wiseScopedPrefix}${requiredBalanceId(balanceId)}-${encodeExact(
     requiredProviderIdentifier(providerIdentifier, "Wise transaction identifier")
   )}`;
+}
+
+export function wiseTransactionId(balanceId: string | number, providerIdentifier: string): string {
+  return ledgerTransactionId(encodeWiseTransactionId(balanceId, providerIdentifier));
 }
 
 /** Creates the temporary exact ID used while parsing a CSV before its balance is verified. */
@@ -115,7 +117,7 @@ export function canonicalWiseCsvTransactionId(value: string): string | null {
     : decoded;
   if (!components.every((component) => typeof component === "string")) return null;
   const [providerIdentifier, signedAmount, currency, transactionType, transactionDetailsType] = components;
-  return wiseTransactionId(
+  return encodeWiseTransactionId(
     match[1],
     wiseCsvLedgerEntryIdentifier(
       providerIdentifier,

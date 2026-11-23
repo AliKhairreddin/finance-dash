@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { call, database } from "./convexTestDb";
 import { reconcile } from "../convex/historicalPayments";
-import { bankProviderTransactionId } from "../shared/providerIdentity";
+import { bankMigrationIdentity } from "../shared/providerIdentity";
 import { wiseTransactionId, wiseCsvLedgerEntryIdentifier } from "../shared/wiseTransactionIdentity";
 const auth = { serviceToken: "historical-test", expectedUpdatedAt: "2026-10-01T00:00:00Z" };
 const id = wiseTransactionId("123", wiseCsvLedgerEntryIdentifier("TRANSFER-1234", "100", "USD", "CREDIT", "DEPOSIT"));
@@ -32,7 +32,7 @@ test("reconciliation links an existing settlement without changing balances, cas
 });
 test("a deliberate old-import repair requires the exact underlying transfer and preserves adjustments", async () => {
   const ctx = setup();
-  const oldId = bankProviderTransactionId("wise", ["legacy", "wise-csv-USD-transfer1234"]);
+  const oldId = bankMigrationIdentity("wise", "legacy", "wise-csv-USD-transfer1234");
   ctx.tables.bankTransactions.push({ ...ctx.tables.bankTransactions[0], _id: "old", id: oldId, matchedInvoiceId: "invoice" });
   const state = ctx.tables.dashboardState[0];
   Object.assign(state.invoices[0], { amount: 106.11, transactionId: oldId });
@@ -53,8 +53,8 @@ test("invalid evidence, double allocations and stale plans reject the whole oper
     (ctx: ReturnType<typeof setup>) => { ctx.tables.dashboardState[0].invoices[0].meritReplacementId = "locked"; },
     (ctx: ReturnType<typeof setup>) => { ctx.tables.dashboardState[0].updatedAt = "changed"; },
     (ctx: ReturnType<typeof setup>) => { ctx.tables.dashboardState[0].paymentAllocations.push({ id: "other", invoiceId: "other", transactionId: id }); },
-    (ctx: ReturnType<typeof setup>) => { ctx.tables.dashboardState[0].paymentAllocations.push({ id: "other", invoiceId: "other", transactionId: bankProviderTransactionId("wise", ["legacy", "wise-csv-USD-transfer1234"]) }); },
-    (ctx: ReturnType<typeof setup>) => { const oldId = bankProviderTransactionId("wise", ["legacy", "wise-csv-USD-transfer9999"]); ctx.tables.bankTransactions.push({ ...ctx.tables.bankTransactions[0], _id: "old", id: oldId }); ctx.tables.dashboardState[0].paymentAllocations[0].transactionId = oldId; }
+    (ctx: ReturnType<typeof setup>) => { ctx.tables.dashboardState[0].paymentAllocations.push({ id: "other", invoiceId: "other", transactionId: bankMigrationIdentity("wise", "legacy", "wise-csv-USD-transfer1234") }); },
+    (ctx: ReturnType<typeof setup>) => { const oldId = bankMigrationIdentity("wise", "legacy", "wise-csv-USD-transfer9999"); ctx.tables.bankTransactions.push({ ...ctx.tables.bankTransactions[0], _id: "old", id: oldId }); ctx.tables.dashboardState[0].paymentAllocations[0].transactionId = oldId; }
   ];
   for (const change of changes) {
     const ctx = setup(); change(ctx); const before = structuredClone(ctx.tables);

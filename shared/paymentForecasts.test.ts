@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { calculatePaymentHistory } from "./paymentForecasts";
-import { bankProviderTransactionId } from "./providerIdentity";
+import { bankMigrationIdentity, bankProviderTransactionId } from "./providerIdentity";
 import { shiftFinanceOperatingDate } from "./operatingDate";
 import type { Invoice, PaymentAllocation, Provider, Transaction } from "./types";
 
@@ -130,7 +130,7 @@ test("deduplicates exact bank IDs and rejects invoice evidence colliding with a 
   const data = fixture();
   data.transactions.push({ ...data.transactions[0] });
   assert.equal(calculatePaymentHistory(data).clients[0].received, 300);
-  const surrogate = { ...data.transactions[0], id: bankProviderTransactionId("slash", ["legacy", "old-id"]) };
+  const surrogate = { ...data.transactions[0], id: bankMigrationIdentity("slash", "legacy", "old-id") };
   data.transactions.push(surrogate);
   data.allocations.push({ ...data.allocations[0], id: "legacy", invoiceId: "legacy-invoice", transactionId: surrogate.id });
   assert.equal(calculatePaymentHistory(data).clients[0].received, 300);

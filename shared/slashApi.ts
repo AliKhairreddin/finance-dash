@@ -19,7 +19,6 @@ const maximumSlashVirtualAccountPages = 10;
 const maximumSlashCardsPerSync = 1_000;
 const maximumSlashAccountBalanceRows = 200;
 const maximumSlashBalancesPerAccount = 10;
-// Two provider IDs are hex-encoded into one ledger ID, which is capped at 2,048 characters.
 const maximumSlashProviderIdLength = 500;
 const maximumSlashTextLength = 1_024;
 const maximumSlashCursorLength = 8 * 1024;

@@ -18,7 +18,7 @@ import { transactionBusinessCategory } from "../shared/categories";
 import { isSlashDailyCardPayment } from "../shared/transactionPresentation";
 import { wiseMovementClassification } from "../shared/wiseCategorization";
 import {
-  bankProviderTransactionId,
+  bankMigrationIdentity,
   isCurrentBankTransactionId,
   isLegacySurrogateBankTransactionId
 } from "../shared/providerIdentity";
@@ -1589,7 +1589,7 @@ export async function applyActivityBatch(
         .unique();
     }
     if (storedAlias && providerLegacyId) {
-      const expectedSurrogateId = bankProviderTransactionId(args.source, ["legacy", providerLegacyId]);
+      const expectedSurrogateId = bankMigrationIdentity(args.source, "legacy", providerLegacyId);
       if (storedAlias.transactionId === expectedSurrogateId) {
         legacyExisting = await ctx.db
           .query("bankTransactions")
@@ -2275,7 +2275,7 @@ export const markLegacyBankIdentityBatch = mutation({
       const accountId = row.accountId
         ?? (matchingAccounts.length === 1
           ? matchingAccounts[0].id
-          : bankProviderTransactionId(args.source, ["legacy-account", row.id]));
+          : bankMigrationIdentity(args.source, "legacy-account", row.id));
       if (row.connectionKey && row.connectionKey !== args.connectionKey) {
         throw new ConvexError({
           code: "MIGRATION_CONNECTION_CONFLICT",
@@ -2309,7 +2309,7 @@ export const markLegacyBankIdentityBatch = mutation({
         marked += 1;
         continue;
       }
-      const targetId = bankProviderTransactionId(args.source, ["legacy", row.id]);
+      const targetId = bankMigrationIdentity(args.source, "legacy", row.id);
       const target = await ctx.db
         .query("bankTransactions")
         .withIndex("by_transaction_id", (q) => q.eq("id", targetId))

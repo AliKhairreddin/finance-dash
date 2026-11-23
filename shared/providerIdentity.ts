@@ -1,3 +1,6 @@
+import { ledgerTransactionId } from "./bankRecordValidation";
+import type { BankTransactionSource } from "./types";
+
 function exactHex(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
@@ -28,22 +31,27 @@ function decodeExactHex(value: string): string | null {
   }
 }
 
-/** Builds an injective, versioned ID from exact provider identity components. */
-export function bankProviderTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
-  components: readonly string[]
-): string {
-  if (components.length === 0 || components.length > 4) {
-    throw new Error(`${namespace} transaction identity has an invalid component count`);
-  }
+function encodeComponents(namespace: BankTransactionSource, components: readonly string[]): string {
   return `${namespace}-v2-${components.map((value, index) =>
     exactHex(value, `${namespace} transaction identity component ${index + 1}`)
   ).join(".")}`;
 }
 
+type ProviderTransactionIdentity =
+  | [source: "revolut", components: readonly [transaction: string, leg: string, account: string]]
+  | [source: "amex" | "slash" | "mercury" | "flex", components: readonly [account: string, transaction: string]];
+
+export function bankProviderTransactionId(...[source, components]: ProviderTransactionIdentity): string {
+  return ledgerTransactionId(encodeComponents(source, components));
+}
+
+export function bankMigrationIdentity(source: BankTransactionSource, kind: "legacy" | "legacy-account", id: string): string {
+  return encodeComponents(source, [kind, id]);
+}
+
 /** Verifies the exact versioned grammar emitted by each connector or the migration surrogate. */
 export function isCurrentBankTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
+  namespace: BankTransactionSource,
   value: string
 ): boolean {
   const prefix = `${namespace}-v2-`;
@@ -64,7 +72,7 @@ export function isCurrentBankTransactionId(
 }
 
 export function isLegacySurrogateBankTransactionId(
-  namespace: "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex",
+  namespace: BankTransactionSource,
   value: string
 ): boolean {
   const prefix = `${namespace}-v2-`;
