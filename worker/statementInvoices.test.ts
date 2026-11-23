@@ -100,3 +100,39 @@ test("example copies replace mapped values, escape new text and keep the origina
   assert.throws(() => invoiceCopyHtml({ ...draft, notes: "No room" }, layout, "data:image/png;base64,AAAA", false), /notes area/);
   assert.throws(() => invoiceCopyHtml(draft, layout, "https://bad.test/image.png", false), /image is missing/);
 });
+
+for (const scenario of [
+  { name: "business rejection", errorData: "Example not found", reason: "Example not found" },
+  { name: "unexpected referenced failure", reason: "The invoice request could not finish. Try again. If it happens again, share this reference: a86f31ac" },
+  { name: "storage failure", reason: "The example could not be read." },
+]) {
+  test(`saved invoice example retains its retry action after ${scenario.name}`, async t => {
+    const storage = "https://storage.invalid/example";
+    const origin = "https://statements.example";
+    const env = { CONVEX_URL: "https://invoice-test.convex.cloud", CONVEX_SERVICE_TOKEN: "fixture" } as WorkerEnv;
+    const savedErrors: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === storage) throw new Error("Private storage diagnostic");
+      const { path, args } = JSON.parse(String(init?.body));
+      if (path === "statementInvoices:claimExample") return Response.json({ status: "success", value: true });
+      if (path === "statementInvoices:template") {
+        if (scenario.name === "storage failure") return Response.json({ status: "success", value: JSON.stringify({ url: storage }) });
+        return Response.json({
+          status: "error", errorMessage: "[Request ID: a86f31ac] Server Error\nPrivate backend diagnostic", errorData: scenario.errorData,
+        }, { status: 560 });
+      }
+      if (path === "statementInvoices:completeExample") {
+        savedErrors.push(args[0].error);
+        return Response.json({ status: "success", value: null });
+      }
+      throw new Error("Unexpected request");
+    });
+    const response = await handleStatementInvoices(new Request(`${origin}/api/statements/invoice-examples/sample/read`, {
+      method: "POST", headers: { Origin: origin },
+    }), env, { username: "Ali", role: "administrator" });
+    const message = `${scenario.reason} Your PDF is saved. Choose Read again to retry.`;
+    assert.equal(response?.status, 200);
+    assert.deepEqual(await response.json(), { id: "sample", message });
+    assert.deepEqual(savedErrors, [message]);
+  });
+}

@@ -23,13 +23,16 @@ export class StatementRequestClient extends ConvexHttpClient {
   override action: ConvexHttpClient["action"] = (...args) => super.action(...args).catch(throwBackendFailure);
 }
 
-export function statementRequestError(error: unknown, request: StatementRequest): { message: string; status: number } {
+export function statementRequestError(
+  error: unknown,
+  request: StatementRequest,
+  localMessage = error instanceof Error ? error.message.split("\n")[0] : "Request failed",
+): { message: string; status: number } {
   if (error instanceof BackendFailure) {
     const support = error.reference ? ` If it happens again, share this reference: ${error.reference}` : "";
     return { message: `The ${request} request could not finish. Try again.${support}`, status: 500 };
   }
   const limit = request === "invoice" ? 500 : 300;
-  const reason = error instanceof ConvexError && typeof error.data === "string" ? error.data
-    : error instanceof Error ? error.message.split("\n")[0] : "Request failed";
+  const reason = error instanceof ConvexError && typeof error.data === "string" ? error.data : localMessage;
   return { message: reason.slice(0, limit), status: 400 };
 }
