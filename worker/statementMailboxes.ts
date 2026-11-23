@@ -28,7 +28,15 @@ export function mailboxCallbackLanding(request: Request): Response | null {
   const state = url.searchParams.get("state"), code = url.searchParams.get("code");
   if (!state || !/^[a-f0-9]{64}$/.test(state) || state !== cookie(request) || !code || code.length > 10000 || url.searchParams.has("error")) return redirect("authorization_failed");
   const nonce = random();
-  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Connecting mailbox</title><body><form method="post" action="${url.pathname}"><input type="hidden" name="state" value="${escape(state)}"><input type="hidden" name="code" value="${escape(code)}"><p>Connecting your mailbox…</p><button type="submit">Continue to Statements</button></form><script nonce="${nonce}">history.replaceState(null,"",location.pathname);document.forms[0].submit()</script></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` } });
+  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Connecting mailbox</title><body><form method="post" action="${url.pathname}"><input type="hidden" name="state" value="${escape(state)}"><input type="hidden" name="code" value="${escape(code)}"><p>Connecting your mailbox…</p><button type="submit">Continue to Statements</button></form><script nonce="${nonce}">history.replaceState(null,"",location.pathname);document.forms[0].submit()</script></body></html>`, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "strict-origin",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+    },
+  });
 }
 export async function handleMailboxApi(request: Request, env: Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN">, session: DashboardSession | null): Promise<Response | null> {
   const url = new URL(request.url);
