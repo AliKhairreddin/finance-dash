@@ -1,7 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, type MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
-import { bumpBankLedgerRevision, invoice } from "./dashboard";
+import { bumpBankLedgerRevision } from "./dashboard";
+import { invoice } from "./dashboardSchema";
 import { dashboardInvoiceDeletionBatchBlockReason, unlinkDeletedInvoiceDrafts } from "../shared/invoiceDeletion";
 import { validateOpenItemDeletion } from "../shared/manualReceivables";
 

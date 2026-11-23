@@ -20,6 +20,7 @@ import type * as companyDocumentSchema from "../companyDocumentSchema.js";
 import type * as companyDocuments from "../companyDocuments.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dashboardSchema from "../dashboardSchema.js";
 import type * as documentProcessing from "../documentProcessing.js";
 import type * as documentPurchases from "../documentPurchases.js";
 import type * as documentRecheck from "../documentRecheck.js";
@@ -99,6 +100,7 @@ declare const fullApi: ApiFromModules<{
   companyDocuments: typeof companyDocuments;
   crons: typeof crons;
   dashboard: typeof dashboard;
+  dashboardSchema: typeof dashboardSchema;
   documentProcessing: typeof documentProcessing;
   documentPurchases: typeof documentPurchases;
   documentRecheck: typeof documentRecheck;

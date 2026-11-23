@@ -1,3 +1,5 @@
+import type { Infer } from "convex/values";
+import type { profitDistributionAdjustment, revenuePartner, revenueRun, wiseCardHolderTeamAssignment } from "../convex/dashboardSchema";
 export type MercuryEntity = "mojo" | "coveragebird" | "coveragepro";
 export type SlashEntity = "mojo" | "coveragebird" | "coveragepro";
 import type { MeritInvoiceCopy } from "./meritInvoiceCopy";
@@ -232,47 +234,9 @@ export interface Team {
   createdAt: string;
 }
 
-interface RevenuePartnerBase {
-  id: string;
-  providerId: string;
-  teamId?: string;
-  name: string;
-  revenueCategory?: string;
-  currency: string;
-  timezone: string;
-  apiBaseUrlEnv?: string;
-  meritCustomerName?: string;
-  invoiceDueDays: number;
-  billingCadence: BillingCadence;
-  billingTimezone: string;
-  autoDraft: boolean;
-  defaultMeritTaxId?: string;
-  defaultMeritItemCode?: string;
-  enabled: boolean;
-  createdAt: string;
-}
-
-export interface TuneRevenuePartner extends RevenuePartnerBase {
-  source: "tune";
-  affiliateId: string;
-  externalId?: string;
-  networkTimezone: string;
-  networkIdEnv: string;
-  apiKeyEnv: string;
-}
-
-export interface QuinStreetRevenuePartner extends RevenuePartnerBase {
-  source: "quinstreet";
-  publisherName: string;
-  reportKeyEnv: string;
-  clientIdEnv: string;
-  clientSecretEnv: string;
-  revenueField: string;
-  categoryField: string;
-  categoryValue: string;
-}
-
-export type RevenuePartner = TuneRevenuePartner | QuinStreetRevenuePartner;
+export type RevenuePartner = Infer<typeof revenuePartner>;
+export type TuneRevenuePartner = Extract<RevenuePartner, { source: "tune" }>;
+export type QuinStreetRevenuePartner = Extract<RevenuePartner, { source: "quinstreet" }>;
 
 export interface AiSettings {
   provider: "openrouter";
@@ -297,35 +261,7 @@ export interface OpenRouterZdrModel {
   contextLength?: number;
 }
 
-export interface RevenueRun {
-  id: string;
-  partnerId: string;
-  providerId?: string;
-  partnerName: string;
-  revenueCategory?: string;
-  teamId?: string;
-  teamName?: string;
-  source: RevenueSource;
-  periodStart: string;
-  periodEnd: string;
-  timezone: string;
-  revenue: number;
-  currency: string;
-  clicks?: number;
-  conversions?: number;
-  leads?: number;
-  payableLeads?: number;
-  clickRevenue?: number;
-  leadRevenue?: number;
-  earningsPerClick?: number;
-  earningsPerLead?: number;
-  status: RevenueRunStatus;
-  draftDeletedAt?: string;
-  invoiceId?: string;
-  externalInvoiceId?: string;
-  error?: string;
-  createdAt: string;
-}
+export type RevenueRun = Infer<typeof revenueRun>;
 
 export interface RevenueAccrual {
   id: string;
@@ -350,11 +286,7 @@ export interface TransactionTeamAssignment {
   updatedAt: string;
 }
 
-export interface WiseCardHolderTeamAssignment {
-  cardHolderName: string;
-  teamId: string;
-  updatedAt: string;
-}
+export type WiseCardHolderTeamAssignment = Infer<typeof wiseCardHolderTeamAssignment>;
 
 export interface TransactionCategoryRule {
   id: string;
@@ -737,18 +669,7 @@ export type ProfitDistributionPartnerId = "ishan" | "ben" | "sanjan" | "amin";
 
 export type ProfitDistributionBucket = "profit-share" | "salary" | "distribution";
 
-export interface ProfitDistributionAdjustment {
-  id: string;
-  month: string;
-  currency: string;
-  partnerId: ProfitDistributionPartnerId;
-  bucket: ProfitDistributionBucket;
-  waived: boolean;
-  deferred: boolean;
-  overrideAmount?: number;
-  note?: string;
-  updatedAt: string;
-}
+export type ProfitDistributionAdjustment = Infer<typeof profitDistributionAdjustment>;
 
 export interface ProfitDistributionPartnerLedger {
   partnerId: ProfitDistributionPartnerId;

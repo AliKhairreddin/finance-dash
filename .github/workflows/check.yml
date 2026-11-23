@@ -21,3 +21,5 @@ jobs:
       - run: npm run check
       - run: npm run verify:wise-imports
       - run: bash verification/wise-imports/replay.sh
+      - run: npm run verify:dashboard-state
+      - run: bash verification/dashboard-state/replay.sh
