@@ -39,6 +39,12 @@ ln -s "$root" source
 ln -s "$root/node_modules" node_modules
 cp "$root/package.json" .
 echo 'export { default } from "../source/convex/schema";' > convex/schema.ts
+if [[ "${1:-}" == --fixture ]]; then
+  fixture_dir=${runner%/*}
+  [[ "$fixture_dir" == "$root"/verification/* && -f "$fixture_dir/fixture.ts" ]]
+  printf 'export * from "../source/%s/fixture";\n' "${fixture_dir#"$root/"}" > convex/verificationFixture.ts
+  shift
+fi
 for module in "$@"; do
   [[ "$module" =~ ^[[:alnum:]_]+$ && -f "source/convex/$module.ts" ]]
   printf 'export * from "../source/convex/%s";\n' "$module" > "convex/$module.ts"

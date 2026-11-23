@@ -1,3 +1,4 @@
+import { statementRetryAfterMs } from "../shared/statementProcessing";
 import { isStatementCompany, statementAmountMinor, validateStatementInput, type StatementCard, type StatementCompanyId, type StatementEvidence, type StatementRow, type StatementTransactionInput } from "../shared/statements";
 import { readBoundedResponseText } from "../shared/boundedHttp";
 
@@ -22,10 +23,8 @@ function rethrowStatementTransportError(error: unknown): never {
 export function statementRetryDelay(value: string | null, status: number, now = Date.now()): number | undefined {
   if (![408, 425, 429, 500, 502, 503, 504].includes(status)) return undefined;
   if (!value) return 30_000;
-  const milliseconds = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - now;
-  // Preserve a provider's deadline; an unsupported delay requires manual review,
-  // rather than automatically retrying earlier than the provider requested.
-  return Number.isFinite(milliseconds) && milliseconds <= 365 * 86400_000 ? Math.max(1000, milliseconds) : undefined;
+  const delay = statementRetryAfterMs(value, now);
+  return delay !== undefined && delay <= 365 * 86400_000 ? delay : undefined;
 }
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The extraction must be a JSON object");
