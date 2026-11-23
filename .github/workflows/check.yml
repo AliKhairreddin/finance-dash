@@ -25,3 +25,8 @@ jobs:
       - run: bash verification/dashboard-state/replay.sh
       - run: npm run verify:codegen
       - run: bash verification/convex-codegen/replay.sh
+      - name: Check management report parser version
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash verification/management-report/check.sh "$BASE_COMMIT"
+      - run: bash verification/management-report/replay.sh

@@ -12,7 +12,6 @@ export const managementReportSheetKeys = [
   "consolidated-bank"
 ] as const;
 
-/** Increment whenever normalized import semantics change. */
 export const managementReportParserVersion = "5" as const;
 
 export type ManagementReportSheetKey = (typeof managementReportSheetKeys)[number];
