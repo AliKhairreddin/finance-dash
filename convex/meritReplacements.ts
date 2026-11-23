@@ -3,7 +3,7 @@ import { mutation, query, type MutationCtx } from "./_generated/server";
 import { replacementFields, replacementPhase } from "./meritReplacementSchema";
 import { assertUnpaidInvoice } from "../shared/meritReplacement";
 import type { Invoice } from "../shared/types";
-import { invoice as invoiceValidator } from "./dashboard";
+import { invoice as invoiceValidator } from "./dashboardSchema";
 
 function authorize(token: string) {
   if (!process.env.CONVEX_SERVICE_TOKEN || token !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized");

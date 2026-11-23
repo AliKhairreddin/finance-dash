@@ -1,4 +1,12 @@
-import { flexAccount, flexTransaction } from "./flexSchema";
+import {
+  accountBalance as account,
+  bankSource,
+  invoiceMatchSource,
+  mercuryEntity,
+  slashEntity,
+  transaction as storedTransaction,
+  transactionClassificationSource
+} from "./dashboardSchema";
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { slashEntityLabel } from "../shared/slashEntities";
 import type { Doc } from "./_generated/dataModel";
@@ -33,29 +41,7 @@ import {
 type BankSource = "wise" | "revolut" | "slash" | "amex" | "mercury" | "flex";
 
 const allBankSources: BankSource[] = ["wise", "revolut", "slash", "amex", "mercury", "flex"];
-const bankSource = v.union(
-  v.literal("wise"),
-  v.literal("revolut"),
-  v.literal("slash"),
-  v.literal("flex"),
-  v.literal("mercury"),
-  v.literal("amex")
-);
 const bankConnection = v.object({ source: bankSource, connectionKey: v.string() });
-const transactionClassificationSource = v.union(v.literal("ai"), v.literal("rule"), v.literal("manual"));
-const invoiceMatchSource = v.union(v.literal("exact"), v.literal("tolerance"), v.literal("ai"), v.literal("manual"));
-const mercuryEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
-const slashEntity = v.union(v.literal("mojo"), v.literal("coveragebird"), v.literal("coveragepro"));
-const slashAccountSubtype = v.union(v.literal("cash"), v.literal("credit"));
-const slashVirtualAccount = v.object({
-  balance: v.optional(v.number()),
-  id: v.string(),
-  name: v.string(),
-  accountId: v.string(),
-  accountType: v.union(v.literal("primary"), v.literal("default")),
-  closedAt: v.optional(v.string())
-});
-const wiseEntity = v.union(v.literal("dn"), v.literal("lmd"));
 const maximumActivityPageSize = 200;
 const maximumActivityRowsRead = 250;
 const maximumActivityBytesRead = 4 * 1024 * 1024;
@@ -83,60 +69,7 @@ type InvoiceCandidateCursor = {
   id: string;
 };
 
-const transaction = v.object({
-  id: v.string(),
-  source: bankSource,
-  wiseEntity: v.optional(wiseEntity),
-  mercuryEntity: v.optional(mercuryEntity),
-  slashEntity: v.optional(slashEntity),
-  slashAccountSubtype: v.optional(slashAccountSubtype),
-  slashVirtualAccountId: v.optional(v.string()),
-  slashVirtualAccountName: v.optional(v.string()),
-  slashVirtualAccountMetadataVersion: v.optional(v.number()),
-  accountId: v.optional(v.string()),
-  accountName: v.string(),
-  date: v.string(),
-  description: v.string(),
-  reference: v.optional(v.string()),
-  rawName: v.string(),
-  counterparty: v.string(),
-  cardHolderName: v.optional(v.string()),
-  cardId: v.optional(v.string()),
-  cardLastFour: v.optional(v.string()),
-  cardMetadataVersion: v.optional(v.number()),
-  flex: v.optional(flexTransaction),
-  amount: v.number(),
-  currency: v.string(),
-  cashback: v.optional(v.object({
-    amount: v.number(),
-    rate: v.number()
-  })),
-  direction: v.union(v.literal("in"), v.literal("out")),
-  status: v.union(
-    v.literal("posted"),
-    v.literal("pending"),
-    v.literal("settled"),
-    v.literal("voided")
-  ),
-  category: v.string(),
-  merchantName: v.optional(v.string()),
-  merchantKey: v.optional(v.string()),
-  classificationComplete: v.optional(v.boolean()),
-  categorySource: v.optional(transactionClassificationSource),
-  categoryConfidence: v.optional(v.number()),
-  categoryReason: v.optional(v.string()),
-  matchedProviderId: v.optional(v.string()),
-  companyMatchSource: v.optional(transactionClassificationSource),
-  companyConfidence: v.optional(v.number()),
-  companyMatchReason: v.optional(v.string()),
-  matchedInvoiceId: v.optional(v.string()),
-  invoiceMatchSource: v.optional(invoiceMatchSource),
-  invoiceMatchConfidence: v.optional(v.number()),
-  invoiceMatchReason: v.optional(v.string()),
-  teamId: v.optional(v.string()),
-  confidence: v.optional(v.number()),
-  matchReason: v.optional(v.string())
-});
+const transaction = storedTransaction.extend({ source: bankSource });
 const ingestTransaction = v.object({
   ...transaction.fields,
   providerLegacyId: v.optional(v.string())
@@ -186,21 +119,6 @@ const profitDistributionFact = v.object({
   payments: v.array(profitDistributionPaymentFact)
 });
 
-const account = v.object({
-  id: v.string(),
-  name: v.string(),
-  source: bankSource,
-  wiseEntity: v.optional(wiseEntity),
-  mercuryEntity: v.optional(mercuryEntity),
-  slashEntity: v.optional(slashEntity),
-  slashAccountSubtype: v.optional(slashAccountSubtype),
-  slashVirtualAccounts: v.optional(v.array(slashVirtualAccount)),
-  flex: v.optional(flexAccount),
-  balance: v.number(),
-  currency: v.string(),
-  updatedAt: v.string(),
-  status: v.union(v.literal("live"), v.literal("seeded"), v.literal("manual"))
-});
 
 type ActivityBatchArgs = {
   source: BankSource;
