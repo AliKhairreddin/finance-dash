@@ -64,6 +64,7 @@ export function syntheticManagementReportSheets(): Record<ManagementReportSheetK
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "ACA revenue", 10, 11],
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "Final Calculation"]
     ]),
+    "vb-dg": "",
     "vb-acp": businessCsv(30, 20, 2),
     "vb-rest": csv([
       ["", "Atlantic Ocean + Affiliates"],

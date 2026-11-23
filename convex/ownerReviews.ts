@@ -4,10 +4,13 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { addresses, decisionState, owner } from "./ownerReviewSchema";
 import { canPublishPeriod, ownerReport, owners, ownerTransaction } from "../shared/ownerReview";
 import type { ManagementReportDashboard } from "../shared/managementReport";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+import type { QueryCtx } from "./_generated/server";
 
 const service = { serviceToken: v.string() };
 const reviewId = v.id("ownerReviews");
+const readTarget = v.union(reviewId, v.object({ importId: v.string(), period: v.string() }));
 const attemptArgs = { id: reviewId, owner, attempt: v.number() };
 const pageArgs = { cursor: v.union(v.string(), v.null()) };
 
@@ -54,11 +57,42 @@ export const saveContacts = mutation({
   }
 });
 
+function latestWorkbook(ctx: QueryCtx) {
+  return ctx.db.query("managementReportImports").withIndex("by_status_reporting_through_imported_at",
+    q => q.eq("status", "complete")).order("desc").first();
+}
+
+export const imported = query({
+  args: service, returns: v.object({ importId: v.string(), periods: v.array(v.string()) }),
+  handler: async (ctx, args) => {
+    authorize(args.serviceToken);
+    const source = await latestWorkbook(ctx);
+    const dashboard: ManagementReportDashboard | undefined = source?.dashboard;
+    return { importId: source?.importId ?? "", periods: dashboard?.trend
+      .map(point => point.period).filter(period => canPublishPeriod(dashboard, period)) ?? [] };
+  }
+});
+
+async function readableMonth(ctx: QueryCtx, id: Id<"ownerReviews"> | { importId: string; period: string }) {
+  if (typeof id !== "string") {
+    const source = await latestWorkbook(ctx);
+    if (!source?.dashboard || source.importId !== id.importId || !canPublishPeriod(source.dashboard, id.period)) {
+      throw new ConvexError("This imported month is unavailable. Reload the dashboard.");
+    }
+    return { review: null, source, period: id.period };
+  }
+  const review = await ctx.db.get(id);
+  if (!review) throw new ConvexError("Published month not found");
+  const source = await ctx.db.query("managementReportImports").withIndex("by_import_id", q => q.eq("importId", review.importId)).unique();
+  if (!source?.dashboard || source.status !== "complete") throw new ConvexError("Published workbook unavailable");
+  return { review, source, period: review.period };
+}
+
 export const publish = mutation({
   args: { ...service, importId: v.string(), period: v.string(), actor: v.string(), expectedRevision: v.number() },
   returns: reviewId, handler: async (ctx, args) => {
     authorize(args.serviceToken);
-    const latest = await ctx.db.query("managementReportImports").withIndex("by_status_reporting_through_imported_at", q => q.eq("status", "complete")).order("desc").first();
+    const latest = await latestWorkbook(ctx);
     if (!latest?.dashboard || latest.importId !== args.importId) throw new ConvexError("The workbook changed. Reload Management Report before publishing.");
     if (!canPublishPeriod(latest.dashboard, args.period)) throw new ConvexError("This month needs a validated report with revenue, gross profit and net profit.");
     const previous = await ctx.db.query("ownerReviews").withIndex("by_current_period", q => q.eq("current", true).eq("period", args.period)).unique();
@@ -79,23 +113,19 @@ export const publish = mutation({
 });
 
 export const report = query({
-  args: { ...service, id: reviewId, owner }, returns: v.any(), handler: async (ctx, args) => {
+  args: { ...service, id: readTarget, owner }, returns: v.any(), handler: async (ctx, args) => {
     authorize(args.serviceToken);
-    const row = await ctx.db.get(args.id);
-    if (!row) throw new ConvexError("Published month not found");
-    const source = await ctx.db.query("managementReportImports").withIndex("by_import_id", q => q.eq("importId", row.importId)).unique();
-    if (!source?.dashboard || source.status !== "complete") throw new ConvexError("Published workbook unavailable");
-    return { review: summary(row, false), report: ownerReport(source.dashboard as ManagementReportDashboard, row.period, args.owner) };
+    const { review, source, period } = await readableMonth(ctx, args.id);
+    return { review: review ? summary(review, false) : null, report: ownerReport(source.dashboard, period, args.owner) };
   }
 });
 
 export const transactions = query({
-  args: { ...service, id: reviewId, ...pageArgs }, returns: v.any(), handler: async (ctx, args) => {
+  args: { ...service, id: readTarget, ...pageArgs }, returns: v.any(), handler: async (ctx, args) => {
     authorize(args.serviceToken);
-    const row = await ctx.db.get(args.id);
-    if (!row) throw new ConvexError("Published month not found");
+    const { source, period } = await readableMonth(ctx, args.id);
     const result = await ctx.db.query("managementReportBankEntries").withIndex("by_import_date", q =>
-      q.eq("importId", row.importId).gte("date", row.period.slice(0, 7) + "-01").lte("date", row.period)).order("desc")
+      q.eq("importId", source.importId).gte("date", period.slice(0, 7) + "-01").lte("date", period)).order("desc")
       .paginate({ cursor: args.cursor, numItems: 150 });
     return { rows: result.page.map(entry => ownerTransaction(entry.payload)), next: result.isDone ? null : result.continueCursor };
   }

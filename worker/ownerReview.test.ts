@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convexTest } from "convex-test";
 import { v } from "convex/values";
+import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
 import { ConvexHttpClient } from "convex/browser";
 import { api, internal } from "../convex/_generated/api";
@@ -37,6 +38,19 @@ test("publication pins the import, redacts unrelated data, requires three distin
     });
   }
   await addImport("first", "2026-06-01");
+  const draft = { importId: "first", period };
+  assert.deepEqual(await t.query(api.ownerReviews.imported, auth), { importId: "first", periods: [period] });
+  for (const owner of owners) {
+    const result = await t.query(api.ownerReviews.report, { ...auth, id: draft, owner });
+    assert.equal(result.review, null);
+    assert.equal(result.report.balance, owner === "Amin" ? 200 : null);
+  }
+  const draftLedger = await t.query(api.ownerReviews.transactions, { ...auth, id: draft, cursor: null });
+  assert.equal(draftLedger.rows.length, 2);
+  assert.doesNotMatch(JSON.stringify(draftLedger), /POST_CLOSE|SECRET_|reference|userName/);
+  await assert.rejects(t.query(api.ownerReviews.report, { ...auth, id: { ...draft, period: "2026-06-30" }, owner: "Amin" }));
+  await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id: draft.importId as Id<"ownerReviews">, owner: "Amin", state: "approved", comment: "" }));
+  assert.deepEqual((await t.query(api.ownerReviews.list, { ...auth, finance: true, cursor: null })).rows, []);
   const publish = { ...auth, importId: "first", period, actor: "Finance", expectedRevision: 0 };
   await assert.rejects(t.mutation(api.ownerReviews.publish, publish), /email/);
   const addresses = { Amin: "amin@example.com", Sanjin: "sanjin@example.com", Ben: "ben@example.com" };
@@ -47,6 +61,7 @@ test("publication pins the import, redacts unrelated data, requires three distin
   const first = await t.query(api.ownerReviews.report, { ...auth, id, owner: "Amin" });
   assert.equal(first.report.balance, 200);
   assert.equal(first.report.units.find((u: { id: string }) => u.id === "acp")?.metrics[0].value, 30);
+  assert.ok(first.review);
   assert.equal(first.review.mail, undefined);
   assert.doesNotMatch(JSON.stringify(first), /Ishan|@example|SECRET_REFERENCE/);
   const ledger = await t.query(api.ownerReviews.transactions, { ...auth, id, cursor: null });
@@ -55,11 +70,13 @@ test("publication pins the import, redacts unrelated data, requires three distin
   for (const owner of owners) {
     await t.mutation(api.ownerReviews.decide, { ...auth, id, owner, state: "approved", comment: "" });
     const { review } = await t.query(api.ownerReviews.report, { ...auth, id, owner });
+    assert.ok(review);
     assert.equal(reviewStatus(review.decisions), owner === "Ben" ? "Signed off" : "Awaiting approval");
   }
   await t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Ben", state: "approved", comment: "" });
   await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Ben", state: "changes", comment: "Edit" }));
   await addImport("revised", "2026-06-02");
+  await assert.rejects(t.query(api.ownerReviews.report, { ...auth, id: draft, owner: "Amin" }), /unavailable/);
   const revised = await t.mutation(api.ownerReviews.publish, { ...publish, importId: "revised", expectedRevision: 1 });
   await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Amin", state: "approved", comment: "" }), /newer/);
   await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id: revised, owner: "Ben", state: "changes", comment: " " }));
@@ -95,7 +112,7 @@ test("owner access and decisions use the authenticated login across configured a
   assert.equal((await handleOwnerReview(route("decision", {}), env, { role: "administrator", username: "Ali" })).status, 403);
 });
 
-test("only Ali and Ali M can preview Amin’s published data, with owner-level reads and no review writes", async t => {
+test("only Ali and Ali M can preview Amin’s imported and published data, with owner-level reads and no review writes", async t => {
   const env = { CONVEX_URL: "https://fixture.convex.cloud", CONVEX_SERVICE_TOKEN: auth.serviceToken };
   const request = (action: string, preview = "Amin", method = "GET") =>
     new Request("https://finance.example/api/monthly-review/" + action + "?id=version&preview=" + preview, { method });
@@ -107,6 +124,7 @@ test("only Ali and Ali M can preview Amin’s published data, with owner-level r
     assert.equal((await (await handleOwnerReview(request("list"), env, session)).json()).finance, false);
     assert.equal((await (await handleOwnerReview(request("report"), env, session)).json()).owner, "Amin");
     assert.equal((await handleOwnerReview(request("transactions"), env, session)).status, 200);
+    assert.equal((await handleOwnerReview(request("imported"), env, session)).status, 200);
     for (const action of ["decision", "publish", "contacts", "retry-email"]) {
       assert.equal((await handleOwnerReview(request(action, "Amin", "POST"), env, session)).status, 403);
     }
@@ -120,7 +138,7 @@ test("only Ali and Ali M can preview Amin’s published data, with owner-level r
     assert.equal(dashboardPageAllowed(session.role, "amin-preview", session.username), false);
     assert.equal((await handleOwnerReview(request("report"), env, session)).status, 403);
   }
-  assert.equal(reads.mock.callCount(), 6);
+  assert.equal(reads.mock.callCount(), 8);
   assert.equal(writes.mock.callCount(), 0);
 });
 

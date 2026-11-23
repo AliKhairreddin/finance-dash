@@ -50,7 +50,7 @@ export function ownerReport(dashboard: ManagementReportDashboard, period: string
   const equity = balance && dashboard.ownership.assetsLiabilities.find(row => row.section === "equity" && row.sourceRow === balance.sourceRow);
   return {
     balance: equity && (equity.amount !== undefined || equity.secondaryAmount !== undefined) ? balance!.balance : null,
-    balanceAsOf: dashboard.metadata.asOf,
+    balanceAsOf: balance?.balanceAsOf ?? dashboard.metadata.asOf,
     company: unitReport(dashboard.consolidated, period)!,
     units: dashboard.businessUnits.flatMap(unit => {
       const report = unitReport(unit, period);

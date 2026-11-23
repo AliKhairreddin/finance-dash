@@ -6,13 +6,14 @@ export const managementReportSheetKeys = [
   "vb-hcp",
   "vb-rest",
   "vb-acp",
+  "vb-dg",
   "plp",
   "wag-aff",
   "consolidated-bank"
 ] as const;
 
 /** Increment whenever normalized import semantics change. */
-export const managementReportParserVersion = "4" as const;
+export const managementReportParserVersion = "5" as const;
 
 export type ManagementReportSheetKey = (typeof managementReportSheetKeys)[number];
 
@@ -31,6 +32,7 @@ export const managementReportSheetDefinitions: Record<ManagementReportSheetKey, 
   "vb-hcp": { key: "vb-hcp", title: "3. VB - HCP", gid: "1190727950", kind: "business-performance" },
   "vb-rest": { key: "vb-rest", title: "4. VB - Rest", gid: "1731002992", kind: "business-performance" },
   "vb-acp": { key: "vb-acp", title: "5. VB - ACP", gid: "119552608", kind: "business-performance" },
+  "vb-dg": { key: "vb-dg", title: "5. VB - Data Grande", gid: "174032551", kind: "business-performance" },
   plp: { key: "plp", title: "6. PLP", gid: "1000794575", kind: "platform-profitability" },
   "wag-aff": { key: "wag-aff", title: "B. Wag & Aff", gid: "1598290578", kind: "offer-reconciliation" },
   "consolidated-bank": { key: "consolidated-bank", title: "E. Consolidated Bank", gid: "1830813046", kind: "bank-ledger" }
@@ -229,6 +231,7 @@ export interface ManagementReportShareholderBalance {
   name: string;
   canonicalName: string;
   balance: number;
+  balanceAsOf?: string;
   profitBalance?: number;
   profitWithdrawals?: number;
   currency: "USD";
@@ -736,7 +739,7 @@ function linePercentage(line: ManagementReportBusinessLine | undefined, key: str
 }
 
 function businessUnitFromTable(
-  sheetKey: "vb-consolidated" | "vb-cp" | "vb-wag" | "vb-hcp" | "vb-acp",
+  sheetKey: "vb-consolidated" | "vb-cp" | "vb-wag" | "vb-hcp" | "vb-acp" | "vb-dg",
   records: ManagementReportCsvRecord[]
 ): BusinessParseResult {
   const checks: ManagementReportCheck[] = [];
@@ -754,6 +757,7 @@ function businessUnitFromTable(
     "vb-cp": { id: "cognitive-pixel", name: "Cognitive Pixel", kind: "team" as const, active: true },
     "vb-wag": { id: "wagner", name: "Wagner", kind: "team" as const, active: true },
     "vb-hcp": { id: "hcp", name: "HCP", kind: "offer" as const, active: true },
+    "vb-dg": { id: "data-grande", name: "Data Grande", kind: "offer" as const, active: true },
     "vb-acp": { id: "acp", name: "ACP", kind: "offer" as const, active: true }
   };
   const definition = definitions[sheetKey];
@@ -1256,20 +1260,12 @@ interface OwnershipParseResult {
 }
 
 function canonicalShareholderName(value: string): string {
-  const normalized = normalizedText(value).replace(/^[-–—]\s*/, "").toLowerCase();
+  const normalized = normalizedText(value).replace(/^[-–—]\s*/, "").replace(/:$/, "").toLowerCase();
   if (normalized === "ishaan" || normalized === "ishan") return "Ishan";
   if (normalized === "benos" || normalized === "ben") return "Ben";
   if (normalized === "sanjin") return "Sanjin";
   if (normalized === "amin") return "Amin";
   return normalizedText(value).replace(/^[-–—]\s*/, "");
-}
-
-function firstNumberAfter(record: ManagementReportCsvRecord, index: number, width = 3): number | undefined {
-  for (let offset = 1; offset <= width; offset += 1) {
-    const value = numberFromCell(rowCell(record, index + offset));
-    if (value !== undefined) return value;
-  }
-  return undefined;
 }
 
 function emptyOwnership(): ManagementReportOwnership {
@@ -1352,17 +1348,31 @@ function parseOwnership(records: ManagementReportCsvRecord[]): OwnershipParseRes
       });
   const latestProfit = [...profitAllocations].reverse().find((allocation) => /total profit as of/i.test(allocation.label));
   const withdrawals = profitAllocations.find((allocation) => /less:\s*profit withdrawals/i.test(allocation.label));
+  const equity = lines.filter(line => line.section === "equity");
   const balances: ManagementReportShareholderBalance[] = shareholderColumns.map((shareholder) => {
-    const source = records.find((record) => canonicalShareholderName(rowCell(record, equityIndex)) === shareholder.canonicalName);
+    const start = equity.findIndex(line => canonicalShareholderName(line.label) === shareholder.canonicalName);
+    let source: ManagementReportAssetLiabilityLine | undefined = equity[start];
+    let balanceAsOf: string | undefined;
+    if (source?.label.endsWith(":")) {
+      const block = equity.slice(start + 1);
+      const end = block.findIndex(line => line.label.endsWith(":") || line.isTotal);
+      const withdrawal = block.slice(0, end < 0 ? block.length : end)
+        .find(line => /withdrawal/i.test(line.label) && line.secondaryAmount !== undefined);
+      if (!withdrawal) checks.push(check(sheetKey, "partner-subtotal-missing", "error", `Missing reported balance for ${shareholder.name}.`));
+      source = withdrawal;
+      const date = source?.label.match(/till\s+(\d{1,2}\s+\w{3}\s+\d{2,4})/i)?.[1];
+      balanceAsOf = isoDateFromCell(date?.replace(/\s+/g, "-"));
+    }
     return {
       id: normalizedKey(shareholder.canonicalName),
       name: shareholder.name,
       canonicalName: shareholder.canonicalName,
-      balance: source ? (firstNumberAfter(source, equityIndex) ?? 0) : 0,
+      balance: source?.secondaryAmount ?? source?.amount ?? 0,
+      balanceAsOf,
       profitBalance: latestProfit?.byShareholder[shareholder.canonicalName],
       profitWithdrawals: withdrawals?.byShareholder[shareholder.canonicalName],
       currency: "USD",
-      sourceRow: source?.recordNumber ?? header.recordNumber
+      sourceRow: source?.sourceRow ?? header.recordNumber
     };
   });
   const partnerBalanceLine = lines.find((line) => line.section === "equity" && normalizedText(line.label).toLowerCase() === "partner's balance");
@@ -1910,7 +1920,8 @@ export function buildManagementReport(
   const sheetSummaries = new Map<ManagementReportSheetKey, ManagementReportSheetSummary>();
   const sourceRows: ManagementReportSourceRow[] = [];
 
-  for (const key of managementReportSheetKeys) {
+  const includedSheets = managementReportSheetKeys.filter(key => key !== "vb-dg" || csvBySheet[key]?.trim());
+  for (const key of includedSheets) {
     const definition = managementReportSheetDefinitions[key];
     const csv = csvBySheet[key];
     if (typeof csv !== "string" || csv.trim().length === 0) {
@@ -1994,7 +2005,7 @@ export function buildManagementReport(
   updateSummary("vb-consolidated", consolidatedResult.parsedRecordCount, consolidatedResult.checks);
 
   const businessUnits: ManagementReportBusinessUnit[] = [];
-  for (const key of ["vb-cp", "vb-wag", "vb-hcp", "vb-acp"] as const) {
+  for (const key of ["vb-cp", "vb-wag", "vb-hcp", "vb-acp", "vb-dg"] as const) {
     const records = recordsBySheet.get(key);
     if (!records) continue;
     const result = businessUnitFromTable(key, records);
@@ -2091,7 +2102,7 @@ export function buildManagementReport(
     { id: "offer-variance", label: "Offer reconciliation variance", value: summary.offerVariance, unit: "currency", currency: "USD", tone: Math.abs(summary.offerVariance) < 1 ? "positive" : "warning" }
   ];
 
-  const checks = managementReportSheetKeys.flatMap((key) => sheetSummaries.get(key)!.checks);
+  const checks = includedSheets.flatMap((key) => sheetSummaries.get(key)!.checks);
   const status: ManagementReportDashboard["status"] = checks.some((item) => item.severity === "error")
     ? "invalid"
     : checks.some((item) => item.severity === "warning")
@@ -2112,7 +2123,7 @@ export function buildManagementReport(
       officialBankThrough: reportAsOf
     },
     status,
-    sheetSummaries: managementReportSheetKeys.map((key) => sheetSummaries.get(key)!),
+    sheetSummaries: includedSheets.map((key) => sheetSummaries.get(key)!),
     checks,
     kpis,
     summary,

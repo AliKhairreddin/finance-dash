@@ -31,3 +31,22 @@ test("invalid or unrelated uploads are rejected before a report can be saved", a
   await assert.rejects(readManagementWorkbook(new Uint8Array([1, 2]), "report.xlsx"), /could not be read/);
   await assert.rejects(readManagementWorkbook(managementWorkbookBytes([{ sheet: "Unrelated", data: [["hello"]] }]), "report.xlsx"), /Consolidated is required/);
 });
+
+test("renumbered tabs, additional business units and dated partner subtotals are read from the workbook", async () => {
+  const sheets = managementWorkbookSheets();
+  const company = sheets.find(s => s.sheet === "VB - Consolidated")!;
+  company.sheet = "VB - Consol";
+  const acp = sheets.find(s => s.sheet === "5. VB - ACP")!;
+  acp.sheet = "3. VB - ACP";
+  sheets.push({ sheet: "5. VB - Data Grande", data: acp.data });
+  const equity = sheets[0].data;
+  const i = equity.findIndex(row => row[1] === "- Amin");
+  equity.splice(i, 1, ["", "Amin:"], ["", " - Profit", 250], ["", "- Withdrawal (till 10 Jun 26)", -50, 200]);
+  const report = await prepareManagementWorkbook(sheets, "updated.xlsx");
+  const amin = report.dashboard.ownership.balances.find(row => row.canonicalName === "Amin");
+  assert.equal(amin?.balance, 200);
+  assert.equal(amin?.balanceAsOf, "2026-06-10");
+  assert.equal(report.dashboard.businessUnits.find(unit => unit.id === "data-grande")?.actual.netProfit, 8);
+  equity[i + 2][3] = null;
+  await assert.rejects(prepareManagementWorkbook(sheets, "incomplete.xlsx"), /Missing reported balance for Amin/);
+});

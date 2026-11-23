@@ -36,9 +36,12 @@ export async function handleOwnerReview(request: Request, env: Env, session: Das
   const db = new ConvexHttpClient(env.CONVEX_URL);
   const auth = { serviceToken: env.CONVEX_SERVICE_TOKEN };
   const id = (request.method === "POST" ? input.id : url.searchParams.get("id")) as Id<"ownerReviews">;
+  const target = url.searchParams.has("importId")
+    ? { importId: url.searchParams.get("importId")!, period: url.searchParams.get("period") ?? "" } : id;
   const cursor = url.searchParams.get("cursor");
   try {
     switch (url.pathname) {
+      case "/api/monthly-review/imported": return json(await db.query(api.ownerReviews.imported, auth));
       case "/api/monthly-review/list": return json(await db.query(api.ownerReviews.list, { ...auth, finance, cursor }));
       case "/api/monthly-review/contacts":
         if (request.method === "GET") return json(await db.query(api.ownerReviews.contacts, auth));
@@ -46,8 +49,8 @@ export async function handleOwnerReview(request: Request, env: Env, session: Das
       case "/api/monthly-review/publish":
         return json(await db.mutation(api.ownerReviews.publish, { ...auth, period: String(input.period), actor: session.username,
           importId: String(input.importId), expectedRevision: Number(input.expectedRevision) }));
-      case "/api/monthly-review/report": return json(await db.query(api.ownerReviews.report, { ...auth, id, owner: owner! }));
-      case "/api/monthly-review/transactions": return json(await db.query(api.ownerReviews.transactions, { ...auth, id, cursor }));
+      case "/api/monthly-review/report": return json(await db.query(api.ownerReviews.report, { ...auth, id: target, owner: owner! }));
+      case "/api/monthly-review/transactions": return json(await db.query(api.ownerReviews.transactions, { ...auth, id: target, cursor }));
       case "/api/monthly-review/decision":
         if (input.state !== "approved" && input.state !== "changes") return json({ message: "Choose a review decision" }, 400);
         return json(await db.mutation(api.ownerReviews.decide, { ...auth, id, owner: owner!, state: input.state, comment: String(input.comment ?? "") }));

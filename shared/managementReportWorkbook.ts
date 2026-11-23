@@ -68,19 +68,20 @@ function normalizedSheetName(value: string): string {
 
 const visibleSheetAliases: Record<ManagementReportSheetKey, string[]> = {
   shareholders: ["partners balance", "partner s balance"],
-  "vb-consolidated": ["vb consolidated"],
-  "vb-cp": ["1 vb cp"],
-  "vb-wag": ["2 vb wag"],
-  "vb-hcp": ["3 vb hcp"],
-  "vb-rest": ["4 vb rest"],
-  "vb-acp": ["5 vb acp"],
-  plp: ["6 plp"],
+  "vb-consolidated": ["vb consolidated", "vb consol"],
+  "vb-cp": ["vb cp"],
+  "vb-wag": ["vb wag"],
+  "vb-hcp": ["vb hcp"],
+  "vb-rest": ["vb rest"],
+  "vb-acp": ["vb acp"],
+  "vb-dg": ["vb data grande"],
+  plp: ["plp"],
   "wag-aff": ["b wag and aff"],
   "consolidated-bank": ["e consolidated bank"]
 };
 
 function visibleSheetKey(name: string): ManagementReportSheetKey | undefined {
-  const normalized = normalizedSheetName(name);
+  const normalized = normalizedSheetName(name).replace(/^\d+ /, "");
   return managementReportSheetKeys.find((sheetKey) => visibleSheetAliases[sheetKey].includes(normalized));
 }
 
