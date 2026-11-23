@@ -23,3 +23,5 @@ jobs:
       - run: bash verification/wise-imports/replay.sh
       - run: npm run verify:dashboard-state
       - run: bash verification/dashboard-state/replay.sh
+      - run: npm run verify:codegen
+      - run: bash verification/convex-codegen/replay.sh

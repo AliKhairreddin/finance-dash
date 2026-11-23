@@ -40,7 +40,8 @@
     "test:statements:pdfs": "tsx scripts/statement-sample-pdfs.ts",
     "test:app-shells": "tsx --test tests/appShells.e2e.test.ts",
     "verify:wise-imports": "bash verification/local-convex.sh verification/wise-imports/check.ts banking",
-    "verify:dashboard-state": "bash verification/local-convex.sh verification/dashboard-state/check.ts dashboard"
+    "verify:dashboard-state": "bash verification/local-convex.sh verification/dashboard-state/check.ts dashboard",
+    "verify:codegen": "bash verification/local-convex.sh verification/convex-codegen/check.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
