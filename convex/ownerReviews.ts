@@ -21,6 +21,7 @@ function authorize(token: string) {
 function summary(row: Doc<"ownerReviews">, finance: boolean) {
   const { _id: id, period, revision, importId, current, publishedAt, decisions } = row;
   return { id, period, revision, importId, current, publishedAt, decisions,
+    ...(row.signOffSource ? { priorConfirmation: { by: row.publishedBy, at: publishedAt } } : {}),
     ...(finance ? { mail: row.mail.map(({ owner, state, error }) => ({ owner, state, error })) } : {}) };
 }
 
@@ -112,6 +113,35 @@ export const publish = mutation({
   }
 });
 
+// One-time recording of Ali’s confirmation for the January–October 2026 workbook.
+export const recordConfirmedMonthsThroughOctober2026 = internalMutation({
+  args: {}, returns: v.number(),
+  handler: async ctx => {
+    const source = await latestWorkbook(ctx);
+    const confirmedImport = "management-c4de092aded41763e3d2d34d";
+    if (source?.importId !== confirmedImport || !source.dashboard || source.reportingThrough !== "2026-10-31") {
+      throw new ConvexError("The current workbook differs from the confirmed October snapshot.");
+    }
+    const recordedAt = Date.now();
+    let inserted = 0;
+    for (let month = 1; month <= 10; month++) {
+      const period = new Date(Date.UTC(2026, month, 0)).toISOString().slice(0, 10);
+      if (!canPublishPeriod(source.dashboard, period)) throw new ConvexError("Missing confirmed figures for " + period);
+      const existing = await ctx.db.query("ownerReviews").withIndex("by_period_revision", q => q.eq("period", period)).order("desc").first();
+      if (existing) {
+        if (existing.current && existing.importId === confirmedImport && existing.signOffSource === "historical-confirmation") continue;
+        throw new ConvexError("A review already exists for " + period);
+      }
+      await ctx.db.insert("ownerReviews", {
+        period, revision: 1, importId: confirmedImport, current: true, publishedAt: recordedAt,
+        publishedBy: "Ali", signOffSource: "historical-confirmation", decisions: [], mail: []
+      });
+      inserted++;
+    }
+    return inserted;
+  }
+});
+
 export const report = query({
   args: { ...service, id: readTarget, owner }, returns: v.any(), handler: async (ctx, args) => {
     authorize(args.serviceToken);
@@ -137,6 +167,7 @@ export const decide = mutation({
     authorize(args.serviceToken);
     const row = await ctx.db.get(args.id);
     if (!row?.current) throw new ConvexError("Finance published a newer version. Open the current version to sign off.");
+    if (row.signOffSource) throw new ConvexError("This version was already signed off.");
     const comment = args.comment.trim();
     if (comment.length > 2000 || (args.state === "changes" && !comment)) throw new ConvexError("Describe the requested changes in 1 to 2,000 characters.");
     const existing = row.decisions.find(d => d.owner === args.owner);
@@ -152,8 +183,8 @@ export const retryEmail = mutation({
     authorize(args.serviceToken);
     const row = await ctx.db.get(args.id);
     if (!row?.current) throw new ConvexError("Open the current version.");
-    const item = row.mail.find(m => m.owner === args.owner)!;
-    if (item.state !== "failed" && item.state !== "unconfirmed") return null;
+    const item = row.mail.find(m => m.owner === args.owner);
+    if (!item || (item.state !== "failed" && item.state !== "unconfirmed")) return null;
     const contacts = await ctx.db.query("ownerReviewContacts").unique();
     if (!contacts) throw new ConvexError("Save all three email addresses first.");
     const attempt = item.attempt + 1;

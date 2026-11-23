@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Banknote, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUrlState } from "@/lib/url-state";
-import { monthLabel, ownerForLogin, type Owner, type OwnerReport, type OwnerTransaction, type ReviewSummary } from "../../../shared/ownerReview";
+import { monthLabel, needsOwnerReview, ownerForLogin, reviewStatus, type Owner, type OwnerReport, type OwnerTransaction, type ReviewSummary } from "../../../shared/ownerReview";
 import { reportMetricLabels } from "../../../shared/managementReportBreakdown";
 import { ReviewStatus, ReviewTable, Signers } from "./ReviewDetails";
 import { reviewApi, usd, useReviewData } from "./reviewApi";
@@ -33,7 +33,7 @@ export function OwnerDashboard({ apiBase, username, previewAmin, themeToggle }: 
   const selectedChoice = choices.find(item => item.id === selected) ?? choices.find(item => "pending-" + item.period === selected);
   const choice = selectedReview ? publishedMonth(selectedReview) : selected
     ? selectedChoice
-    : choices.find(item => item.review && !item.review.decisions.some(d => d.owner === owner)) ?? choices[0];
+    : choices.find(item => item.review && needsOwnerReview(item.review, owner)) ?? choices[0];
   const latest = current.find(r => r.period === choice?.period);
   const query = choice && choice.query + (previewAmin ? "&preview=Amin" : "");
   const detail = useReviewData<{ report: OwnerReport; review: ReviewSummary | null }>(apiBase, query ? "report?" + query : null, refresh);
@@ -46,9 +46,10 @@ export function OwnerDashboard({ apiBase, username, previewAmin, themeToggle }: 
       {choices.length > 0 && <label>Report month<select value={choice?.id ?? ""} onChange={e => setSelected(e.target.value)}>
         {!choice && <option value="">Choose a month</option>}
         {choice?.review && !choice.review.current && <option value={choice.id}>{monthLabel(choice.period)} · v{choice.review.revision} (superseded)</option>}
-        {choices.map(({ id, period, review }) => <option key={id} value={id}>{monthLabel(period)} · {review
-          ? review.decisions.some(d => d.owner === owner) ? "Published" : "Needs your review"
-          : "Pending finance review"}</option>)}</select></label>}</header>
+        {choices.map(({ id, period, review }) => {
+          const status = review && needsOwnerReview(review, owner) ? "Needs your review" : review ? reviewStatus(review) : "Pending finance review";
+          return <option key={id} value={id}>{monthLabel(period)} · {status}</option>;
+        })}</select></label>}</header>
       {error ? <div role="alert">{error} <Button variant="outline" onClick={() => setRefresh(n => n + 1)}>Retry</Button></div>
         : !list.data || !imported.data ? <p role="status">Loading report months…</p>
         : !choice || !query ? <section className="panel owner-panel"><h2>{selected ? "Report month unavailable" : "No monthly figures available yet"}</h2>
@@ -74,7 +75,7 @@ function MonthlyReport({ query, apiBase, owner, previewAmin, report, review, sho
   const [error, setError] = useState("");
   const transactions = useReviewData<OwnerTransaction[]>(apiBase, "transactions?" + query, attempt, true);
   const selected = report.units.find(u => u.id === scope) ?? report.company;
-  const decision = review?.decisions.find(d => d.owner === owner);
+  const canDecide = !!review && needsOwnerReview(review, owner);
   const matches = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
   const unitSegment = selected.id === report.company.id ? "" : selected.name;
   const ledgerLabels = new Set(transactions.data?.filter(t => !unitSegment || matches(t.segment, unitSegment))
@@ -83,7 +84,7 @@ function MonthlyReport({ query, apiBase, owner, previewAmin, report, review, sho
   const associated = (row: OwnerTransaction, label: string) => matches(row.segment, label) || matches(row.nature, label);
   function openTransactions(label: string) { setFilter(label); setSegment(unitSegment); setTab("transactions"); }
   async function decide(state: "changes" | "approved") {
-    if (previewAmin || !review?.current) return;
+    if (previewAmin || !review || !canDecide) return;
     setBusy(true); setError("");
     try {
       await reviewApi(apiBase, "decision", { id: review.id, state, comment: state === "changes" ? comment.trim() : "" });
@@ -126,7 +127,7 @@ function MonthlyReport({ query, apiBase, owner, previewAmin, report, review, sho
             { key: "type", label: "Account type" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount", show: r => r.amount.toLocaleString("en-US", { minimumFractionDigits: 2 }) }, { key: "usd", label: "USD", show: r => usd(r.usd) }]} />}</section>}
     {tab === "sign-off" && <section className="panel owner-panel"><div className="owner-heading"><h2>Monthly sign-off</h2><ReviewStatus review={review} /></div>
       {review ? <Signers review={review} /> : <p>Finance will email you when this month is ready to approve or request changes.</p>}
-      {review?.current && !decision && <div className="owner-actions">{showComment && <label>What should finance change?<textarea autoFocus maxLength={2000} value={comment} onChange={e => setComment(e.target.value)} /></label>}
+      {review && canDecide && <div className="owner-actions">{showComment && <label>What should finance change?<textarea autoFocus maxLength={2000} value={comment} onChange={e => setComment(e.target.value)} /></label>}
         <div>{showComment ? <><Button disabled={busy || !comment.trim()} onClick={() => decide("changes")}>Send change request</Button> <Button variant="outline" disabled={busy} onClick={() => setShowComment(false)}>Cancel</Button></>
           : <><Button disabled={previewAmin || busy} onClick={() => decide("approved")}>Approve {monthLabel(review.period)}</Button> <Button variant="outline" disabled={previewAmin || busy} onClick={() => setShowComment(true)}>Request changes</Button></>}</div></div>}
       {error && <p role="alert">{error} <button onClick={onDecision}>Reload report</button></p>}</section>}

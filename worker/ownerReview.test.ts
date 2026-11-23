@@ -10,7 +10,7 @@ import { internalAction } from "../convex/_generated/server";
 import schema from "../convex/schema";
 import { buildManagementReport } from "../shared/managementReport";
 import { syntheticManagementReportSheets } from "../shared/testFixtures/managementReport";
-import { canPublishPeriod, owners, ownerForLogin, reviewStatus } from "../shared/ownerReview";
+import { canPublishPeriod, needsOwnerReview, owners, ownerForLogin, reviewStatus } from "../shared/ownerReview";
 import { dashboardHomePage, dashboardPageAllowed, ownerReviewAccess } from "../shared/dashboardAccess";
 import { handleOwnerReview, sendOwnerReviewEmail } from "./ownerReview";
 
@@ -71,7 +71,7 @@ test("publication pins the import, redacts unrelated data, requires three distin
     await t.mutation(api.ownerReviews.decide, { ...auth, id, owner, state: "approved", comment: "" });
     const { review } = await t.query(api.ownerReviews.report, { ...auth, id, owner });
     assert.ok(review);
-    assert.equal(reviewStatus(review.decisions), owner === "Ben" ? "Signed off" : "Awaiting approval");
+    assert.equal(reviewStatus(review), owner === "Ben" ? "Signed off" : "Awaiting approval");
   }
   await t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Ben", state: "approved", comment: "" });
   await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Ben", state: "changes", comment: "Edit" }));
@@ -83,7 +83,7 @@ test("publication pins the import, redacts unrelated data, requires three distin
   await t.mutation(api.ownerReviews.decide, { ...auth, id: revised, owner: "Sanjin", state: "changes", comment: "Please reconcile subscriptions." });
   const finance = await t.query(api.ownerReviews.list, { ...auth, finance: true, cursor: null });
   assert.equal(finance.rows[0].decisions.length, 1);
-  assert.equal(reviewStatus(finance.rows[0].decisions), "Changes requested");
+  assert.equal(reviewStatus(finance.rows[0]), "Changes requested");
   assert.equal(finance.rows[1].decisions.length, 3);
   const mail = { id: revised, owner: "Amin" as const, attempt: 1 };
   assert.equal((await t.mutation(internal.ownerReviews.claimMail, mail))?.email, addresses.Amin);
@@ -151,4 +151,48 @@ test("review emails link to the precise signed-in version and require the proces
   assert.equal((await sendOwnerReviewEmail(request(auth.serviceToken), env)).status, 200);
   assert.match(JSON.stringify(mail), /page=owner&review=review01/);
   assert.match(JSON.stringify(mail), /May 2026 \(version 2\)/);
+});
+
+test("historical sign-off records only the confirmed workbook atomically without owner decisions or email", async () => {
+  const t = convexTest(schema, modules);
+  const record = () => t.mutation(internal.ownerReviews.recordConfirmedMonthsThroughOctober2026, {});
+  const confirmedImport = "management-c4de092aded41763e3d2d34d";
+  const periods = Array.from({ length: 10 }, (_, i) => new Date(Date.UTC(2026, i + 1, 0)).toISOString().slice(0, 10));
+  const { dashboard } = buildManagementReport(syntheticManagementReportSheets(), { asOf: periods[9], importedAt: "2026-11-01" });
+  const col = dashboard.consolidated.columns.find(c => c.kind === "month")!;
+  dashboard.consolidated.columns = periods.map(period => ({ ...col, period, key: period }));
+  for (const line of dashboard.consolidated.lines) {
+    if (line.values[col.key] !== undefined) for (const period of periods) line.values[period] = line.values[col.key];
+  }
+  const trend = periods.map(period => ({ ...dashboard.trend[0], period }));
+  dashboard.trend = trend.slice(0, 9);
+  const source = await t.run(ctx => ctx.db.insert("managementReportImports", {
+    importId: "other", importedAt: "2026-11-01", contentHash: "test", parserVersion: "5", attemptId: "test", leaseExpiresAt: "",
+    sourceName: "test", reportingThrough: periods[9], status: "complete", sheetSummaries: [], sourceRowCount: 0, bankEntryCount: 0,
+    factCount: 0, dashboard: JSON.parse(JSON.stringify(dashboard))
+  }));
+  await assert.rejects(record(), /differs/);
+  await t.run(ctx => ctx.db.patch(source, { importId: confirmedImport }));
+  await assert.rejects(record(), /Missing confirmed figures/);
+  const list = () => t.query(api.ownerReviews.list, { ...auth, finance: true, cursor: null });
+  assert.equal((await list()).rows.length, 0);
+  dashboard.trend = trend;
+  await t.run(ctx => ctx.db.patch(source, { dashboard: JSON.parse(JSON.stringify(dashboard)) }));
+  assert.equal(await record(), 10);
+  const rows = (await list()).rows;
+  assert.deepEqual(rows.map(r => r.period), [...periods].reverse());
+  for (const row of rows) {
+    assert.equal(reviewStatus(row), "Signed off");
+    assert.deepEqual(row.priorConfirmation, { by: "Ali", at: row.publishedAt });
+    assert.deepEqual(row.decisions, []);
+    assert.deepEqual(row.mail, []);
+    for (const owner of owners) assert.equal(needsOwnerReview(row, owner), false);
+  }
+  const id = rows[0].id;
+  await assert.rejects(t.mutation(api.ownerReviews.decide, { ...auth, id, owner: "Ben", state: "approved", comment: "" }), /already signed off/);
+  assert.equal(await t.mutation(api.ownerReviews.retryEmail, { ...auth, id, owner: "Ben" }), null);
+  assert.equal(await t.mutation(api.ownerReviews.publish, { ...auth, importId: confirmedImport, period: periods[9], actor: "Ali", expectedRevision: 1 }), id);
+  assert.equal(await record(), 0);
+  assert.deepEqual((await list()).rows, rows);
+  assert.deepEqual(await t.run(ctx => ctx.db.system.query("_scheduled_functions").take(1)), []);
 });

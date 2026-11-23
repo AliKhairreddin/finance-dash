@@ -4,6 +4,7 @@ import { compareTableValues, SortableTableHead } from "@/components/ui/sortable-
 import { owners, reviewStatus, type ReviewSummary } from "../../../shared/ownerReview";
 
 export function Signers({ review }: { review: ReviewSummary }) {
+  if (review.priorConfirmation) return <p>Prior sign-off recorded by {review.priorConfirmation.by} on {new Date(review.priorConfirmation.at).toLocaleDateString()}.</p>;
   return <div className="review-signers">{owners.map(owner => {
     const decision = review.decisions.find(d => d.owner === owner);
     return <div key={owner}><strong>{owner}</strong><span>{decision?.state === "approved" ? "Approved" : decision ? "Changes requested" : "Pending"}</span>
@@ -13,7 +14,7 @@ export function Signers({ review }: { review: ReviewSummary }) {
 
 export function ReviewStatus({ review }: { review: ReviewSummary | null }) {
   if (!review) return <span className="total-pill">Pending finance review</span>;
-  return <span className="total-pill">{review.current ? reviewStatus(review.decisions) : "Superseded"} · {review.decisions.filter(d => d.state === "approved").length}/3 approved</span>;
+  return <span className="total-pill">{review.current ? reviewStatus(review) : "Superseded"}{!review.priorConfirmation && ` · ${review.decisions.filter(d => d.state === "approved").length}/3 approved`}</span>;
 }
 
 type Column<T> = { key: keyof T & string; label: string; show?: (row: T) => ReactNode };

@@ -47,7 +47,10 @@ function PublishForm({ apiBase, dashboard, selectedPeriod }: { apiBase: string; 
   }
   const sameImport = current?.importId === dashboard.metadata.importId;
   return <div className="owner-publish-content"><div className="owner-heading"><label>Month to publish<select value={period} onChange={e => { setPeriod(e.target.value); setVersion(""); setMessage(""); setError(""); }}>
-    {allPeriods.map(p => <option value={p} key={p}>{monthLabel(p)}{list.data?.some(r => r.current && r.period === p && reviewStatus(r.decisions) === "Changes requested") ? " · changes requested" : ""}</option>)}</select></label>
+    {allPeriods.map(p => {
+      const review = list.data?.find(r => r.current && r.period === p);
+      return <option value={p} key={p}>{monthLabel(p)}{review ? " · " + reviewStatus(review) : ""}</option>;
+    })}</select></label>
     <Button disabled={busy || !list.data || !contacts.data || !!sameImport || !canPublishPeriod(dashboard, period)}
       onClick={() => save("publish", { period, importId: dashboard.metadata.importId, expectedRevision: current?.revision ?? 0 }, "Month published. Review emails queued.")}>
       {sameImport ? "Workbook already published" : current ? "Publish revised month and request new approvals" : "Publish month and email owners"}</Button></div>

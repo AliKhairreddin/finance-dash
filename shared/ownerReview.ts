@@ -18,13 +18,19 @@ export type MailState = "queued" | "sending" | "sent" | "failed" | "unconfirmed"
 export type ReviewSummary = {
   id: string; period: string; revision: number; current: boolean; publishedAt: number;
   decisions: ReviewDecision[]; importId: string;
+  priorConfirmation?: { by: string; at: number };
   mail?: { owner: Owner; state: MailState; error: string }[];
 };
 export type ReviewAddresses = Record<Owner, string>;
 
-export function reviewStatus(decisions: ReviewDecision[]) {
+export function reviewStatus({ decisions, priorConfirmation }: Pick<ReviewSummary, "decisions" | "priorConfirmation">) {
+  if (priorConfirmation) return "Signed off";
   if (decisions.some(row => row.state === "changes")) return "Changes requested";
   return owners.every(owner => decisions.some(row => row.owner === owner && row.state === "approved")) ? "Signed off" : "Awaiting approval";
+}
+
+export function needsOwnerReview(review: ReviewSummary, owner: Owner) {
+  return review.current && !review.priorConfirmation && !review.decisions.some(d => d.owner === owner);
 }
 
 function unitReport(unit: ManagementReportBusinessUnit, period: string) {
