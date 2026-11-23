@@ -44,7 +44,7 @@ const handler = (fn: object) => {
 function memory() {
   const tables = new Map<string, Array<Record<string, any>>>();
   const table = (name: string) => { if (!tables.has(name)) tables.set(name, []); return tables.get(name)!; };
-  const scheduled: unknown[] = [], deletedFiles: string[] = [];
+  const deletedFiles: string[] = [];
   const ctx = {
     db: {
       query(name: string) {
@@ -60,9 +60,9 @@ function memory() {
       delete: async (id: string) => { for (const rows of tables.values()) { const index = rows.findIndex(row => row._id === id); if (index >= 0) rows.splice(index, 1); } }
     },
     storage: { delete: async (id: string) => { deletedFiles.push(id); }, getUrl: async (id: string) => `https://storage.example/${id}`, generateUploadUrl: async () => "https://storage.example/upload" },
-    scheduler: { runAfter: async (...args: unknown[]) => { scheduled.push(args); } }
+    scheduler: { runAfter: async () => {}, runAt: async () => {} }
   };
-  return { ctx, table, scheduled, deletedFiles, tables };
+  return { ctx, table, deletedFiles, tables };
 }
 const auth = { serviceToken: "statement-test-token", actor: "Ali" };
 async function fixture() {
