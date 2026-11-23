@@ -1,5 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
-import { ConvexError } from "convex/values";
+import { StatementRequestClient, statementRequestError } from "./statementRequestClient";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DashboardSession } from "../shared/types";
@@ -15,20 +15,20 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 type Saved = { _id: Id<"statementInvoices">; state: string; revision: number; error?: string; leaseUntil: number; draft: InvoiceDraft; sources: Array<{ transactionId: string; description: string; date: string; amount: string; counterparty: string }>; instructions: string; pairDetailsJson?: string; layout: InvoiceTemplateLayout; templateUrl: string | null; pdfUrl: string | null };
 const safeInvoice = (row: Saved) => ({ id: row._id, state: row.state, revision: row.revision, error: row.error, leaseUntil: row.leaseUntil, draft: row.draft, sources: row.sources, layout: row.layout });
 async function bytesFrom(url: string, max = 5 * 1024 * 1024) { const response = await fetch(url, { signal: AbortSignal.timeout(30000) }); if (!response.ok) { await response.body?.cancel(); throw new Error("The saved PDF could not be read"); } return boundedBytes(response.body, max); }
-async function savePdf(client: ConvexHttpClient, serviceToken: string, bytes: Uint8Array<ArrayBuffer>) {
+async function savePdf(client: StatementRequestClient, serviceToken: string, bytes: Uint8Array<ArrayBuffer>) {
   const url = await client.mutation(api.statements.generateUploadUrl, { serviceToken });
   const response = await fetch(url, { method: "POST", body: new Blob([bytes], { type: "application/pdf" }), headers: { "Content-Type": "application/pdf" }, signal: AbortSignal.timeout(30000) });
   if (!response.ok) { await response.body?.cancel(); throw new Error("The PDF could not be saved"); }
   return (await readBoundedResponseJson<{ storageId: Id<"_storage"> }>(response, "Invoice storage", 4096)).storageId;
 }
-async function model(client: ConvexHttpClient, serviceToken: string) { const settings = await client.query(api.statements.processingSettings, { serviceToken }), ai = JSON.parse(settings.aiSettingsJson); if (ai?.provider !== "openrouter" || !ai.model) throw new Error("Save an OpenRouter model in Finance settings first"); return ai.model as string; }
+async function model(client: StatementRequestClient, serviceToken: string) { const settings = await client.query(api.statements.processingSettings, { serviceToken }), ai = JSON.parse(settings.aiSettingsJson); if (ai?.provider !== "openrouter" || !ai.model) throw new Error("Save an OpenRouter model in Finance settings first"); return ai.model as string; }
 function pdf(bytes: Uint8Array<ArrayBuffer>, name: string, download = false) { return new Response(bytes, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } }); }
 export async function handleStatementInvoices(request: Request, env: StatementEnv, session: DashboardSession | null, renderPdf: typeof renderInvoicePdf = renderInvoicePdf): Promise<Response | null> {
   const path = new URL(request.url).pathname.replace(/^\/api\/statements/, "");
   if (!/^\/(invoice-examples|created-invoices)(\/|$)/.test(path)) return null;
   let actor: string; try { if (!session) throw new Error(); actor = normalizeStatementActor(session.username); } catch { return json({ message: "Statement access is required" }, 403); }
   if (!["GET", "HEAD"].includes(request.method) && request.headers.get("Origin") !== new URL(request.url).origin) return json({ message: "Open this action from Statements" }, 403);
-  const client = new ConvexHttpClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor };
+  const client = new StatementRequestClient(env.CONVEX_URL), auth = { serviceToken: env.CONVEX_SERVICE_TOKEN, actor };
   const body = async () => JSON.parse(new TextDecoder().decode(await boundedBytes(request.body, 250000))) as Record<string, unknown>;
   async function readExample(id: Id<"statementInvoiceTemplates">) {
     const token = crypto.randomUUID();
@@ -152,12 +152,8 @@ export async function handleStatementInvoices(request: Request, env: StatementEn
     }
     return json({ message: "Invoice route not found" }, 404);
   } catch (error) {
-    // Production Convex messages hide the reason; expected errors carry it in data.
-    if (error instanceof ConvexError && typeof error.data === "string") return json({ message: error.data.slice(0, 500) }, 400);
-    const raw = error instanceof Error ? error.message : "Invoice request failed";
-    const reference = /\[Request ID: ([a-f0-9]+)\]/i.exec(raw)?.[1];
-    if (reference) return json({ message: `The invoice request could not finish. Try again. If it happens again, share this reference: ${reference}` }, 500);
-    return json({ message: raw.split("\n")[0].slice(0, 500) }, 400);
+    const { message, status } = statementRequestError(error, "invoice");
+    return json({ message }, status);
   }
 }
 
