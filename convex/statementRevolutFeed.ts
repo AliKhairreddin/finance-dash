@@ -40,7 +40,8 @@ export const directory = mutation({
     const old=await feed(ctx,a);
     if(!a.accounts.length || a.accounts.length>1000 || new Set(a.accounts.map(x=>x.id)).size!==a.accounts.length) throw new ConvexError("Incomplete LMD account directory");
     if(a.accounts.some(x=>revolutOwnerCompany(x.beneficiaries)!=="lovemedo")) throw new ConvexError("LMD account ownership could not be verified");
-    await ctx.db.patch(old._id,{accounts:a.accounts.map(x=>{const prior=old.accounts.find(p=>p.id===x.id);return {...x,...(prior?.balance!==undefined?{balance:prior.balance}:{}),...(prior?.syncedAt?{syncedAt:prior.syncedAt}:{})};}),verifiedAt:Date.now()});
+    // Publish directory changes and balances together after the complete snapshot validates.
+    await ctx.db.patch(old._id, { pendingDirectory: a.accounts, verifiedAt: Date.now() });
     return null;
   }
 });
@@ -53,7 +54,7 @@ export const ingest = mutation({
     if(!state.verifiedAt || state.verifiedAt<Date.now()-26*60*60_000) throw new ConvexError("LMD ownership verification expired");
     if(a.transactions.length>50) throw new ConvexError("Revolut transaction batch is too large");
     for(const row of a.transactions){
-      const account=state.accounts.find(x=>x.id===row.accountId);
+      const account=(state.pendingDirectory ?? state.accounts).find(x=>x.id===row.accountId);
       if(!account || account.currency!==row.currency || !Number.isFinite(row.amount) || row.amount<0 || !/^\d{4}-\d{2}-\d{2}/.test(row.date)) throw new ConvexError("Transaction does not match a verified LMD account");
       await saveRevolutStatementRow(ctx,row,"lovemedo");
     }
@@ -66,11 +67,12 @@ export const finish = mutation({
   args:{...auth,checkpoint:v.union(v.string(),v.null()),accounts:v.array(v.object({id:v.string(),currency:v.string(),balance:v.number()}))},returns:v.null(),
   handler:async(ctx,a)=>{
     const state=await feed(ctx,a), now=Date.now();
-    if(!a.accounts.length || new Set(a.accounts.map(x=>x.id)).size!==a.accounts.length || a.accounts.length!==state.accounts.length || a.accounts.some(x=>!Number.isFinite(x.balance)||!state.accounts.some(s=>s.id===x.id&&s.currency===x.currency))) throw new ConvexError("Incomplete LMD account balance snapshot");
+    const directory = state.pendingDirectory ?? state.accounts;
+    if(!a.accounts.length || new Set(a.accounts.map(x=>x.id)).size!==a.accounts.length || a.accounts.length!==directory.length || a.accounts.some(x=>!Number.isFinite(x.balance)||!directory.some(s=>s.id===x.id&&s.currency===x.currency))) throw new ConvexError("Incomplete LMD account balance snapshot");
     if(a.checkpoint){const cursor=decodeBankSyncCheckpoint(a.checkpoint,"revolut");if(cursor.windowStart.slice(0,10)!==state.fromDate || cursor.windowEnd.slice(0,10)!==state.toDate)throw new ConvexError("Revolut checkpoint window mismatch");}
     await ctx.db.patch(state._id,{
       checkpoint:a.checkpoint,leaseUntil:0,nextRunAt:now+(a.checkpoint?60_000:15*60_000),error:undefined,
-      accounts:state.accounts.map(x=>({...x,balance:a.accounts.find(s=>s.id===x.id)!.balance,syncedAt:new Date(now).toISOString()})),
+      pendingDirectory:undefined,accounts:directory.map(x=>({...x,balance:a.accounts.find(s=>s.id===x.id)!.balance,syncedAt:new Date(now).toISOString()})),
       ...(!a.checkpoint?{lastSyncedAt:now,coverageThrough:new Date(now).toISOString(),...(state.full?{lastFullAt:now,coverageFrom:state.fromDate}:{})}:{})
     });
     return null;

@@ -31,7 +31,7 @@ test("all scheduled reports allow copying and cash has one button for individual
         TELEGRAM_SLASH_CASHBACK_REPORT_RECIPIENTS: "Ali", TELEGRAM_SLASH_REJECTED_CARDS_REPORT_RECIPIENTS: "Ali"
       } as WorkerEnv);
       const before = payloads.length;
-      const bankTotals = "Revolut ≈ USD 300.00\nSlash ≈ USD 400.00";
+      const bankTotals = "Revolut · DN ≈ USD 100.00\nRevolut · LMD ≈ USD 200.00\nSlash ≈ USD 400.00";
       const report = kind === "weekly-cash" ? `Bank total ≈ USD 700.00\n${bankTotals}\nCrypto (separate)\n• BTC 1.00000000 ≈ USD 80,000.00` : "Daily report";
       assert.equal(await state.deliverCashReport("2026-10-05", "Ali", report, kind), true);
       assert.equal(payloads.at(-1)?.chat_id, "111");
@@ -64,12 +64,12 @@ test("a scheduled cash retry copies the saved amounts even when the newly built 
     return Response.json({ ok: true, result: {} });
   };
   try {
-    const report = "Revolut ≈ USD 100.00\n" + Array.from({ length: 80 }, (_, i) => `Currency line ${i}: ${"x".repeat(70)}`).join("\n") + "\nSlash ≈ USD 200.00";
+    const report = "Revolut · DN ≈ USD 100.00\n" + Array.from({ length: 80 }, (_, i) => `Currency line ${i}: ${"x".repeat(70)}`).join("\n") + "\nSlash ≈ USD 200.00";
     await assert.rejects(state.deliverCashReport("2026-10-05", "Ali", report, "weekly-cash"));
     fail = false;
-    await state.deliverCashReport("2026-10-05", "Ali", "Revolut ≈ USD 999.00", "weekly-cash");
+    await state.deliverCashReport("2026-10-05", "Ali", "Revolut · DN ≈ USD 999.00", "weekly-cash");
     assert.ok(payloads.length > 1);
-    assert.deepEqual(payloads[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Revolut ≈ USD 100.00\nSlash ≈ USD 200.00" } }]] });
+    assert.deepEqual(payloads[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Revolut · DN ≈ USD 100.00\nSlash ≈ USD 200.00" } }]] });
     assert.ok(payloads.slice(1).every((payload) => payload.reply_markup === undefined));
   } finally { globalThis.fetch = originalFetch; }
 });

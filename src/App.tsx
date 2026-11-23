@@ -11,6 +11,7 @@ import { AmexStatementImport } from "./features/banking/AmexStatementImport";
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
 import { claimAutomaticHistoryRequests, waitForBankHistorySync } from "../shared/bankHistorySync";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
+import { revolutEntities, revolutLabel, revolutBalanceIssue } from "../shared/revolutBalances";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { DocumentsView } from "@/features/expenses/DocumentsView";
 import {
@@ -3343,7 +3344,8 @@ function Overview({
   const netOperatingAssetsTone = currencyTotalsTone(dashboard.metrics.netOperatingAssets);
   const assetsTone = currencyTotalsTone(dashboard.metrics.totalAssets);
   const activeAccounts = dashboard.accounts.filter(account => isActiveBalanceSource(account.source) && hasNonZeroAccountBalance(account));
-  const balanceGroups = accountBalanceGroups(activeAccounts, dashboard.fxRates);
+  const balanceGroups = accountBalanceGroups(dashboard.accounts.filter(account => account.revolutEntity || hasNonZeroAccountBalance(account)), dashboard.fxRates);
+  const missingRevolutEntities = revolutEntities.filter(entity => !dashboard.accounts.some(account => account.revolutEntity === entity));
 
   return (
     <div className="overview-grid">
@@ -3353,12 +3355,13 @@ function Overview({
             <h2>Account balances</h2>
             <span className="total-pill" title={nativeCurrencyBreakdown(dashboard.metrics.totalCash)}>{formatUsdCurrencyTotal(dashboard.metrics.totalCash, dashboard.fxRates)}</span>
           </div>
-          {balanceGroups.length > 0 && (
+          {(balanceGroups.length > 0 || missingRevolutEntities.length > 0) && (
             <div className="account-group-totals">
+              {missingRevolutEntities.map(entity => <article className="account-group-total" key={entity}><span>{revolutLabel(entity)}</span><strong>Pending</strong></article>)}
               {balanceGroups.map(group => (
                 <article className="account-group-total" key={group.id}>
                   <span>{group.name}</span>
-                  <strong>{group.excludedCurrencies.length ? "Estimate unavailable" : `≈ ${money(group.totalUsd, "USD")}`}</strong>
+                  <strong>{group.excludedCurrencies.length || (group.accounts[0]?.revolutEntity && group.staleCurrencies.length) ? "Estimate unavailable" : `≈ ${money(group.totalUsd, "USD")}`}</strong>
                   <InfoPopover label={`${group.name} balances`}>
                     {group.id === "slash" && <p>Cash held in Slash accounts, included in available liquidity.</p>}
                     {group.id === "slash-credit" && <p>Card debt, excluded from available liquidity and this panel’s cash total.</p>}
@@ -3686,7 +3689,7 @@ function BankDetailsAccountTable({
             <tr key={row.id} className="bank-details-account-row">
               <td><div className="bank-details-account-name"><strong title={row.title}>{row.name}</strong></div></td>
               <td><span className={`source-pill ${row.source.toLowerCase()}`}>{row.source}</span></td>
-              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}{row.observedAt && <InfoPopover label={`balance timestamp for ${row.name}`}>Last confirmed by Flex: {new Date(row.observedAt).toLocaleString()}</InfoPopover>}</td>
+              <td className={`amount ${row.amount < 0 ? "danger-text" : ""}`}>{money(row.amount, row.currency)}{row.observedAt && <InfoPopover label={`balance timestamp for ${row.name}`}>Balance confirmed {new Date(row.observedAt).toLocaleString()}</InfoPopover>}</td>
             </tr>
           ))}
           {sortedRows.length === 0 && <tr><td colSpan={3}>{emptyLabel}</td></tr>}
@@ -3974,6 +3977,16 @@ function BanksView({
       )
     )
     : [];
+  const revolutGroups = accountBalanceGroups(dashboard.accounts.filter(account => account.source === "revolut"), dashboard.fxRates);
+  const revolutCashMetrics = revolutEntities.map(entity => {
+    const group = revolutGroups.find(group => group.id === `revolut-${entity}`);
+    const issue = revolutBalanceIssue(dashboard.accounts, entity, Date.parse(dashboard.asOf));
+    return {
+      label: revolutLabel(entity),
+      value: !group ? "Pending" : group.excludedCurrencies.length || group.staleCurrencies.length ? "USD unavailable" : money(group.totalUsd, "USD"),
+      detail: issue ?? (group && nativeCurrencyBreakdown(group.native))
+    };
+  });
   const mercuryBalanceAvailable = mercuryEntities.filter(entity => mercuryEntityView === "all" || entity.id === mercuryEntityView)
     .every(entity => detailAccounts.some(account => account.mercuryEntity === entity.id));
   const activeBankLabel = activeSource
@@ -4011,7 +4024,9 @@ function BanksView({
     </>
   ) : activeSource ? (
     <>
-      <BankHeadlineMetric
+      {activeSource.id === "revolut" ? revolutCashMetrics.map(metric =>
+        <BankHeadlineMetric key={metric.label} label={metric.label} value={metric.value} title={metric.detail} />
+      ) : (<BankHeadlineMetric
         label={activeSource.id === "slash" ? "Available card credit" : activeSource.id === "flex" ? "Available cash" : "Live balance"}
         value={activeSource.id === "flex" && !activeSourceDisplayAccounts.length ? "Pending" : activeSource.id === "mercury" && !mercuryBalanceAvailable ? "Pending" : activeSource.id === "slash"
           ? formatUsdCurrencyTotal(slashCardCredit, dashboard.fxRates)
@@ -4021,7 +4036,7 @@ function BanksView({
           : (activeSource.id === "mercury" ? detailAccounts : activeSourceDisplayAccounts).length > 0
             ? nativeCurrencyBreakdown(activeSourceBalance)
             : "No live balance available"}
-      />
+      />)}
       {activeSource.id === "flex" && activeSourceAccounts.some(account => account.flex?.type === "rewardCard") && <BankHeadlineMetric label="Available credit" value={formatUsdCurrencyTotal(sumCurrencyTotals(activeSourceAccounts.filter(account => account.flex?.type === "rewardCard"), account => account.flex!.available), dashboard.fxRates)} />}
       {activeSource.id === "slash" ? (
         <>
@@ -4042,14 +4057,14 @@ function BanksView({
       ) : (
         <>
           <BankHeadlineMetric
-            label="Period money in"
+            label={activeSource.id === "revolut" ? "DN money in" : "Period money in"}
             value={activePeriodActivity
               ? formatUsdCurrencyTotal(activePeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
               : periodMetricPlaceholder}
             title={activePeriodActivity ? nativeCurrencyBreakdown(activePeriodActivity.moneyIn.volume) : undefined}
           />
           <BankHeadlineMetric
-            label="Period money out"
+            label={activeSource.id === "revolut" ? "DN money out" : "Period money out"}
             value={activePeriodActivity
               ? formatUsdCurrencyTotal(activePeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
               : periodMetricPlaceholder}
@@ -4066,6 +4081,9 @@ function BanksView({
         <h3>Connected sources</h3>
         <div className="bank-details-summary-grid">
           {bankSources.filter(source => bankSourceMatches(allBankSource, source.id)).map((source) => {
+            if (source.id === "revolut") return revolutCashMetrics.map(metric =>
+              <SummaryTile key={metric.label} label={metric.label} value={metric.value} detail={metric.detail} />
+            );
             const accounts = accountsBySource.get(source.id) ?? [];
             const status = statusBySource.get(source.id);
             const sourceSlashAccounts = source.id === "slash" ? slashAccounts : [];
@@ -4119,7 +4137,7 @@ function BanksView({
             title: account.name,
             amount: account.balance,
             currency: account.currency,
-            observedAt: account.source === "flex" ? account.updatedAt : undefined,
+            observedAt: account.revolutEntity ? account.syncedAt : account.source === "flex" ? account.updatedAt : undefined,
             source: activeSource.id === "slash"
               ? account.slashAccountSubtype === "credit" ? "Available card credit" : "Cash"
               : activeSource.id === "flex" ? account.flex?.type === "rewardCard" ? "Card debt" : "Cash" : activeSource.label
@@ -4128,7 +4146,7 @@ function BanksView({
         />
       </section>
       <section className="bank-details-section">
-        <h3>Selected period</h3>
+        <h3>{activeSource.id === "revolut" ? "DN activity for selected period" : "Selected period"}</h3>
         <div className="bridge">
           <div className="bridge-row"><span>Money in</span><strong className="good-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyIn.volume) : periodMetricPlaceholder}</strong></div>
           <div className="bridge-row"><span>Money out</span><strong className="danger-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyOut.volume) : periodMetricPlaceholder}</strong></div>
@@ -4730,7 +4748,7 @@ function BankReconciliationView({
   const statementAccounts = useAmexStatementAccounts(source === "amex");
   const accountOptions = [...new Map([
     ...statementAccounts.map(account => [account.id, account] as const),
-    ...dashboard.accounts.filter(account => account.source === source && (source !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView) && (source !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)).map(account => [account.id, { id: account.id, name: account.name }] as const),
+    ...dashboard.accounts.filter(account => account.source === source && account.revolutEntity !== "lmd" && (source !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView) && (source !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)).map(account => [account.id, { id: account.id, name: account.name }] as const),
     ...rows.filter(row => row.accountId).map(row => [row.accountId!, { id: row.accountId!, name: row.accountName }] as const)
   ]).values()].sort((left, right) => left.name.localeCompare(right.name));
   const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts.filter(account => slashEntityView === "all" || account.slashEntity === slashEntityView));

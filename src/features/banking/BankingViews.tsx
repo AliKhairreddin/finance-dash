@@ -200,7 +200,7 @@ export function AllBankTransactionsView({
   );
   const statementAccounts = useAmexStatementAccounts(bankSourceMatches(source, "amex"));
   const accountOptions = useMemo(
-    () => [...dashboard.accounts, ...statementAccounts]
+    () => [...dashboard.accounts.filter(account => account.revolutEntity !== "lmd"), ...statementAccounts]
       .filter((item) => bankSources.some((bankSource) => bankSource.id === item.source))
       .sort((left, right) => sourceLabel(left.source).localeCompare(sourceLabel(right.source)) || left.name.localeCompare(right.name)),
     [dashboard.accounts, statementAccounts]

@@ -44,6 +44,7 @@ import { handleSlashCardWebhook } from "./slashCardWebhook";
 import { manualReceivableFromPayload } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
+import { revolutBalanceIssue, revolutEntities } from "../shared/revolutBalances";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { configureTelegramWebhook, telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
 import { handleDocumentApi, extractDocument, DocumentExtractionError, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
@@ -4221,7 +4222,7 @@ export async function getTelegramCashReport(env: Env): Promise<string> {
   const slashAccounts = savedSlashVirtualBalances(accounts);
   if (connections.some(connection => connection.source === "mercury")) assertSavedMercuryBalances(accounts);
   for (const { source } of connections) {
-    if (!accounts.some((account) => account.source === source && account.status === "live")) {
+    if (source !== "revolut" && !accounts.some((account) => account.source === source && account.status === "live")) {
       throw new ApiError(503, `${source} bank balances are unavailable; cash report cannot be totaled`);
     }
   }
@@ -4236,7 +4237,7 @@ export async function getTelegramCashReport(env: Env): Promise<string> {
     // Keep native balances visible and explicitly mark USD valuation as unavailable.
     rates = [];
   }
-  return buildTelegramCashReport({ accounts, slashAccounts, rates, asOf: new Date().toISOString() });
+  return buildTelegramCashReport({ accounts, slashAccounts, rates, includeRevolut: connections.some(connection => connection.source === "revolut"), asOf: new Date().toISOString() });
 }
 
 async function sendTelegramDigestIfDue(env: Env, scheduledTime: number): Promise<number> {
@@ -4543,6 +4544,10 @@ async function getSnapshot(
     } else if (Number.isFinite(lastSuccess) && now - lastSuccess > 30 * 60_000) {
       bankIssues[source] = `Bank data has not synced successfully since ${health.lastSuccessAt}.`;
     }
+  }
+  if (env.REVOLUT_CONNECTION_ID) {
+    const issues = revolutEntities.map(entity => revolutBalanceIssue(state.bankAccounts, entity, now)).filter(Boolean);
+    if (issues.length) bankIssues.revolut = [bankIssues.revolut, ...issues].filter(Boolean).join(" ");
   }
   if (
     env.WISE_API_TOKEN
@@ -8339,7 +8344,7 @@ async function telegramQuestion(env: Env, user: TelegramAuthUser, question: stri
   const [state, history] = await Promise.all([loadPersisted(env), conversational ? inbox.history() : Promise.resolve([])]);
   const context = {
     today: financeOperatingDate(), dashboard: env.PUBLIC_APP_URL,
-    balances: accountBalanceGroups(state.bankAccounts, state.fxRates).map(({ accounts, ...group }) => ({ ...group, updatedAt: accounts.map(a => a.updatedAt).sort()[0] })),
+    balances: accountBalanceGroups(state.bankAccounts, state.fxRates).map(({ accounts, ...group }) => ({ ...group, updatedAt: accounts.map(a => a.syncedAt ?? a.updatedAt).sort()[0] })),
     invoiceCounts: { open: state.invoices.filter(i => i.status === "open").length, paid: state.invoices.filter(i => i.status === "paid").length, matched: state.invoices.filter(i => i.transactionId).length },
     companies: state.providers.map(p => ({ name: p.name, aliases: p.aliases })).slice(0, 150)
   };
@@ -8637,6 +8642,14 @@ async function telegramReadCommand(
       : snapshot.accounts.filter((account) => isActiveBalanceSource(account.source) && (filter === "all" || account.source === filter)).map((account) =>
           `${account.name}: ${telegramMoney(account.balance, account.currency)} · ${account.source}`
         );
+    if (filter === "revolut" || filter === "all") {
+      const accounts = snapshot.accounts.filter(account => account.source === "revolut");
+      const totals = accountBalanceGroups(accounts, snapshot.fxRates).map(group =>
+        group.excludedCurrencies.length || group.staleCurrencies.length ? `${group.name} — USD total unavailable` : `${group.name} ≈ USD ${group.totalUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      );
+      const issues = revolutEntities.map(entity => revolutBalanceIssue(accounts, entity, Date.now())).filter((issue): issue is string => !!issue);
+      lines.unshift(...totals, ...issues);
+    }
     return telegramList("💰 Balances", lines, "No balances match this filter.");
   }
   if (command === "cashflow") {

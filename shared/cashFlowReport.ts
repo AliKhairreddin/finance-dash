@@ -1,3 +1,4 @@
+import { isCashCurrency, revolutLabel } from "./revolutBalances";
 import { convertCurrencyTotalsToUsd } from "./currencyTotals";
 import type { CashFlowLine, CashFlowSnapshot, CurrencyTotals, FxRate } from "./types";
 import { wiseEntityFromAccountName, wiseEntityShortLabel } from "./wiseEntities";
@@ -5,7 +6,7 @@ import { wiseEntityFromAccountName, wiseEntityShortLabel } from "./wiseEntities"
 export const cashFlowSections = ["cashAccounts", "receivables", "openBalances", "payables", "investments"] as const;
 type Position = Pick<CashFlowSnapshot, (typeof cashFlowSections)[number]>;
 
-export const cashFlowCashAccountOrder = ["Wise LMD", "Wise DN", "Revolut", "Trust Crypto", "Slash", "Kraken", "Slash Cashback", "Mercury"] as const;
+export const cashFlowCashAccountOrder = ["Wise LMD", "Wise DN", revolutLabel("dn"), revolutLabel("lmd"), "Trust Crypto", "Slash", "Kraken", "Slash Cashback", "Mercury"] as const;
 
 /** Share the account order between the dashboard and reports without changing
  * source balances, currencies, exclusions, formulas or notes. Empty groups are
@@ -19,15 +20,22 @@ export function cashFlowCashAccountGroups(lines: CashFlowLine[], includeEmpty = 
     if (words.length > 1 && words.at(-1)?.toUpperCase() === line.currency.trim().toUpperCase()) {
       name = words.slice(0, -1).join(" ").replace(/[\s·–—-]+$/, "");
     }
-    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex|mercury|flex)-/)?.[1];
-    if (/^slash[\s·–—-]+cashback$/i.test(name)) {
+    const source = line.id.match(/^cash-flow-account-(wise|revolut|slash|amex|mercury|flex)[-:]/)?.[1];
+    if (source === "revolut" || /^revolut\b/i.test(name)) {
+      // Provider-linked snapshots before the LMD feed was included came from the DN connection.
+      const tagged = line.id.match(/^cash-flow-account-revolut:(dn|lmd):/);
+      const named = name.match(/^revolut[\s·–—-]+(dn|lmd)\b/i);
+      const entity = (tagged?.[1] ?? named?.[1])?.toLowerCase() ?? (source === "revolut" ? "dn" : undefined);
+      if (entity === "dn" || entity === "lmd") name = revolutLabel(entity) + (isCashCurrency(line.currency) ? "" : " · Crypto");
+      else if (/^revolut$/i.test(name)) name = "Revolut · Unassigned";
+    } else if (/^slash[\s·–—-]+cashback$/i.test(name)) {
       name = "Slash Cashback";
     } else if (source === "wise" || /\bwise\b/i.test(name)) {
       const entity = wiseEntityFromAccountName(name);
       const shortEntity = name.match(/^wise[\s·–—-]+(dn|lmd)$/i)?.[1].toUpperCase();
       if (entity || shortEntity) name = `Wise ${entity ? wiseEntityShortLabel(entity) : shortEntity}`;
     } else if (source) {
-      name = { revolut: "Revolut", slash: "Slash", amex: "Amex", mercury: "Mercury", flex: "Flex" }[source]!;
+      name = { slash: "Slash", amex: "Amex", mercury: "Mercury", flex: "Flex" }[source]!;
     }
     name = cashFlowCashAccountOrder.find(account => account.toLowerCase() === name.toLowerCase()) ?? name;
     const key = name ? name.toLowerCase() : line.id;

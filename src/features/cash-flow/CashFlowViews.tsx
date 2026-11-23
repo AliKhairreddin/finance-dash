@@ -148,7 +148,7 @@ function liveCashFlowDraft(dashboard: DashboardSnapshot, funding: MediaFundingAp
   const cashAccounts = [
     ...dashboard.accounts
       .filter(isLiquidAccountBalance)
-      .map((item) => line(`cash-flow-account-${item.id}`, item.name, item.balance, item.currency)),
+      .map((item) => line(item.revolutEntity ? `cash-flow-account-revolut:${item.revolutEntity}:${item.id}` : `cash-flow-account-${item.id}`, item.name, item.balance, item.currency)),
     ...dashboard.holdings
       .filter((item) => item.kind === "cash")
       .map((item) => line(`cash-flow-holding-${item.id}`, item.name, item.balance, item.asset, item.notes))

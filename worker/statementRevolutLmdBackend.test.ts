@@ -10,7 +10,7 @@ import { RevolutApiError } from "../shared/revolutApi";
 
 process.env.CONVEX_SERVICE_TOKEN="lmd-test";
 const auth={serviceToken:"lmd-test",token:"one"};
-const modules={"../convex/_generated/server.ts":()=>import("../convex/_generated/server"),"../convex/statementRevolut.ts":()=>import("../convex/statementRevolut"),"../convex/statementRevolutFeed.ts":()=>import("../convex/statementRevolutFeed")};
+const modules={"../convex/banking.ts":()=>import("../convex/banking"),"../convex/_generated/server.ts":()=>import("../convex/_generated/server"),"../convex/statementRevolut.ts":()=>import("../convex/statementRevolut"),"../convex/statementRevolutFeed.ts":()=>import("../convex/statementRevolutFeed")};
 const account={id:"revolut-lmd-eur",name:"Main",currency:"EUR",beneficiaries:["LoveMeDo B.V."]};
 const tx={id:"revolut-tx",accountId:account.id,date:"2026-11-01",description:"Supplier",counterparty:"Supplier",amount:12.34,currency:"EUR",direction:"out" as const,status:"posted" as const};
 
@@ -89,4 +89,37 @@ test("provider corrections retain LMD's original amount and require review",asyn
  await t.mutation(api.statementRevolutFeed.ingest,{...auth,transactions:[{...tx,amount:20}]});
  await t.mutation(api.statementRevolutFeed.ingest,{...auth,transactions:[{...tx,amount:20}]});
  const rows=await t.run(ctx=>ctx.db.query("statementTransactions").collect());assert.equal(rows.length,1);assert.equal(rows[0].amountMinor,"1234");assert.equal(JSON.parse(rows[0].sourceCorrectionJson!).amountMinor,"2000");assert.equal(rows[0].revision,2);
+});
+
+test("Finance and Telegram read the same complete DN and LMD snapshots across discovery and a failed sync", async () => {
+  const t = convexTest(schema, modules);
+  const connectionKey = "a".repeat(64);
+  const args = { serviceToken: auth.serviceToken, connections: [{ source: "revolut" as const, connectionKey }] };
+  await t.run(async ctx => {
+    await ctx.db.insert("bankConnectionBindings", { source: "revolut", connectionKey, boundAt: "2026-11-01" });
+    await ctx.db.insert("bankAccounts", { source: "revolut", connectionKey, id: "dn-eur", name: "Main", currency: "EUR", balance: 50, status: "live", syncedAt: "2026-11-01", updatedAt: "2026-10-30" });
+  });
+  await t.mutation(api.statementRevolutFeed.acquire, auth);
+  await t.mutation(api.statementRevolutFeed.directory, { ...auth, accounts: [account] });
+  assert.equal((await t.query(api.banking.getCashReportAccounts, args)).length, 1);
+  await t.mutation(api.statementRevolutFeed.finish, { ...auth, accounts: [{ id: account.id, currency: "EUR", balance: 75 }], checkpoint: null });
+
+  // A wallet visible through both connections must contribute only its LMD balance.
+  await t.run(ctx => ctx.db.insert("bankAccounts", { source: "revolut", connectionKey, id: account.id, name: "Main", currency: "EUR", balance: 70, status: "live", syncedAt: "2026-11-01", updatedAt: "2026-10-30" }));
+  const saved = await t.query(api.banking.getCashReportAccounts, args);
+  assert.deepEqual(saved.map(row => [row.name, row.revolutEntity, row.balance]), [
+    ["Revolut · DN · Main", "dn", 50], ["Revolut · LMD · Main", "lmd", 75]
+  ]);
+  assert.deepEqual((await t.query(api.banking.getActivityMetadata, args)).accounts, saved);
+  assert.deepEqual(await t.query(api.banking.getCashReportAccounts, { ...args, connections: [{ source: "revolut", connectionKey: "b".repeat(64) }] }), []);
+
+  await t.run(async ctx => {
+    const feed = await ctx.db.query("statementRevolutFeeds").unique();
+    await ctx.db.patch(feed!._id, { nextRunAt: 0 });
+  });
+  await t.mutation(api.statementRevolutFeed.acquire, auth);
+  await t.mutation(api.statementRevolutFeed.directory, { ...auth, accounts: [{ ...account, id: "new-usd", currency: "USD" }] });
+  assert.deepEqual(await t.query(api.banking.getCashReportAccounts, args), saved);
+  await t.mutation(api.statementRevolutFeed.failed, { ...auth, error: "Balance sync failed" });
+  assert.deepEqual(await t.query(api.banking.getCashReportAccounts, args), [saved[0], { ...saved[1], balanceSyncFailed: true }]);
 });

@@ -61,9 +61,9 @@ test("customer invoice waits for explicit tax and date choices before generation
   expect(saved.draft.lines[0].taxPercent).toBe("0");
 });
 test("LMD shows saved balances and incomplete history without claiming DN coverage",async({page})=>{
-  await page.route("**/api/statements/revolut?companyId=lovemedo",route=>route.fulfill({json:{mode:"direct",accounts:[{id:"fixture-eur",name:"Main",currency:"EUR",owner:"LoveMeDo B.V.",balance:1234.56,syncedAt:"2026-11-01T12:00:00Z"}],error:"LMD Revolut returned HTTP 429; saved data retained.",discoveredAt:1,importedThrough:null,historyPending:true,coverageFrom:null,coverageThrough:null}}));
+  await page.route("**/api/statements/revolut?companyId=lovemedo",route=>route.fulfill({json:{mode:"direct",rates:[{asset:"EUR",rateUsd:1.2,asOf:"2026-11-01",provider:"coinbase"}],accounts:[{id:"fixture-eur",name:"Main",currency:"EUR",owner:"LoveMeDo B.V.",balance:1234.56,syncedAt:"2026-11-01T12:00:00Z"}],error:"LMD Revolut returned HTTP 429; saved data retained.",discoveredAt:1,importedThrough:null,historyPending:true,coverageFrom:null,coverageThrough:null}}));
   await page.goto("/statements?company=revolut-lmd");
-  const panel=page.locator("details").filter({has:page.locator("summary",{hasText:"Revolut · 1 connected accounts"})});
+  const panel=page.locator("details").filter({has:page.locator("summary",{hasText:/Revolut · LMD · USD\s+1,481\.47/})});
   await panel.locator("summary").click();
   await expect(panel.getByRole("cell",{name:"LoveMeDo B.V.",exact:true})).toBeVisible();
   await expect(panel.getByRole("cell",{name:"1,234.56",exact:true})).toBeVisible();

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { packCashFlowReportCards, splitCashFlowReportRows } from "./cashFlowReportLayout";
 import { planCashFlowPng } from "../src/features/cash-flow/exportCashFlowPng";
-import { cashFlowSections, cashFlowUsdTotal } from "./cashFlowReport";
+import { cashFlowCashAccountGroups, cashFlowSections, cashFlowUsdTotal } from "./cashFlowReport";
 import type { CashFlowLine, CashFlowSnapshot, FxRate } from "./types";
 
 test("packing reserves space for charts beside tall cards without overlap", () => {
@@ -44,7 +44,7 @@ test("cash export converts and consolidates each provider while keeping Wise ent
     { id: "cash-flow-account-wise-2-1", name: "LOVEMEDO B.V. · Wise USD", amount: 7, currency: "USD" },
     { id: "cash-flow-account-wise-2-2", name: "LOVEMEDO B.V. · Wise EUR", amount: 900, currency: "EUR", excludedFromTotals: true },
     { id: "cash-flow-account-revolut-eur", name: "Main", amount: 10, currency: "EUR" },
-    { id: "cash-flow-account-revolut-usd", name: "WGNR", amount: 8, currency: "USD" },
+    { id: "cash-flow-account-revolut:lmd:abc", name: "Main", amount: 8, currency: "USD" },
     { id: "cash-flow-account-slash-cash", name: "Business Platinum Cash", amount: 15, currency: "USD" },
     { id: "manual-eur", name: "Kraken EUR", amount: 5, currency: "EUR" },
     { id: "manual-usd", name: "Kraken USD", amount: 4, currency: "USD" }
@@ -58,7 +58,7 @@ test("cash export converts and consolidates each provider while keeping Wise ent
   const cash = plan.sections.filter(section => section.id.startsWith("cash:"));
   const rows = cash.flatMap(section => section.rows);
   assert.deepEqual(rows.map(row => [row.name, row.usd?.totalUsd]), [
-    ["Wise LMD", 7], ["Wise DN", 127], ["Revolut", 20], ["Slash", 15], ["Kraken", 10]
+    ["Wise LMD", 7], ["Wise DN", 127], ["Revolut · DN", 12], ["Revolut · LMD", 8], ["Slash", 15], ["Kraken", 10]
   ]);
   assert.deepEqual(rows.flatMap(row => row.lines).map(row => row.id).sort(), cashAccounts.map(row => row.id).sort());
   assert.equal(cash.reduce((sum, section) => sum + section.total, 0), 179);
@@ -123,3 +123,13 @@ for (const [name, input] of Object.entries({
     }
   });
 }
+
+
+test("an unattributed manual Revolut snapshot stays separate from DN and LMD", () => {
+  const lines = [row("manual", "Revolut"), row("manual-lmd", "Revolut LMD"), row("cash-flow-account-revolut-usd", "Main")];
+  assert.deepEqual(cashFlowCashAccountGroups(lines).map(group => [group.name, group.lines.map(line => line.id)]), [
+    ["Revolut · DN", ["cash-flow-account-revolut-usd"]],
+    ["Revolut · LMD", ["manual-lmd"]],
+    ["Revolut · Unassigned", ["manual"]]
+  ]);
+});

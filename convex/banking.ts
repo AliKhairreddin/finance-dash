@@ -7,11 +7,12 @@ import {
   transaction as storedTransaction,
   transactionClassificationSource
 } from "./dashboardSchema";
+import { revolutLabel } from "../shared/revolutBalances";
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { slashEntityLabel } from "../shared/slashEntities";
 import type { Doc } from "./_generated/dataModel";
 import { wiseDescriptionReference } from "../shared/bankReferences";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { mutation, query, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { ConvexError, v, type Infer } from "convex/values";
 import {
@@ -1074,9 +1075,47 @@ export const getInvoicePaymentCandidates = query({
   }
 });
 
+const reportedAccount = account.extend({
+  revolutEntity: v.optional(v.union(v.literal("dn"), v.literal("lmd"))),
+  balanceSyncFailed: v.optional(v.boolean()),
+  syncedAt: v.string()
+});
+
+async function readBalanceAccounts(ctx: QueryCtx, source: BankSource, connectionKey: string): Promise<Infer<typeof reportedAccount>[]> {
+  const rows = await ctx.db.query("bankAccounts")
+    .withIndex("by_source_connection", q => q.eq("source", source).eq("connectionKey", connectionKey))
+    .take(maximumBankAccountsPerSource + 1);
+  if (rows.length > maximumBankAccountsPerSource) throw new ConvexError({ code: "BANK_ACCOUNT_LIMIT_EXCEEDED", source });
+  const accounts = rows.map(({ _id, _creationTime, connectionKey, ...item }) => item);
+  if (source !== "revolut") return accounts;
+
+  // Only the bound primary (DN) connection may include the independent, verified LMD feed.
+  const binding = await ctx.db.query("bankConnectionBindings").withIndex("by_source", q => q.eq("source", source)).unique();
+  if (binding?.connectionKey !== connectionKey) return [];
+  const [feed, directory] = await Promise.all([
+    ctx.db.query("statementRevolutFeeds").withIndex("by_key", q => q.eq("key", "lmd")).unique(),
+    ctx.db.query("statementRevolutAccounts").withIndex("by_connection", q => q.eq("connectionKey", connectionKey)).take(maximumBankAccountsPerSource + 1)
+  ]);
+  if (directory.length > maximumBankAccountsPerSource) throw new ConvexError("Incomplete Revolut account directory");
+  const owners = new Map(directory.map(row => [row.accountId, row.companyId]));
+  const lmdIds = new Set(feed?.accounts.map(row => row.id));
+  if (accounts.some(row => lmdIds.has(row.id) && owners.get(row.id) === "digital-nudge")) {
+    throw new ConvexError("Conflicting verified owners for a Revolut account");
+  }
+  // A wallet visible to both connections counts once, in its verified LMD feed.
+  const primary = accounts.filter(row => !lmdIds.has(row.id) && owners.get(row.id) !== "lovemedo")
+    .map(row => ({ ...row, revolutEntity: "dn" as const, name: `${revolutLabel("dn")} · ${row.name}` }));
+  if (!feed || feed.accounts.some(row => row.balance === undefined || !row.syncedAt)) return primary;
+  return [...primary, ...feed.accounts.map(row => ({
+    id: row.id, name: `${revolutLabel("lmd")} · ${row.name}`, source: "revolut" as const,
+    revolutEntity: "lmd" as const, status: "live" as const, balance: row.balance!, currency: row.currency,
+    updatedAt: row.syncedAt!, syncedAt: row.syncedAt!, ...(feed.error ? { balanceSyncFailed: true } : {})
+  }))];
+}
+
 export const getCashReportAccounts = query({
   args: { serviceToken: v.string(), connections: v.array(bankConnection) },
-  returns: v.array(v.object({ ...account.fields, syncedAt: v.string() })),
+  returns: v.array(reportedAccount),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     if (
@@ -1084,15 +1123,7 @@ export const getCashReportAccounts = query({
       || new Set(args.connections.map((connection) => connection.source)).size !== args.connections.length
       || args.connections.some((connection) => !/^[0-9a-f]{64}$/u.test(connection.connectionKey))
     ) throw new ConvexError({ code: "INVALID_BANK_CONNECTION_DIRECTORY" });
-    const rows = await Promise.all(args.connections.map(async ({ source, connectionKey }) => {
-      const accounts = await ctx.db.query("bankAccounts")
-        .withIndex("by_source_connection", (q) => q.eq("source", source).eq("connectionKey", connectionKey))
-        .take(maximumBankAccountsPerSource + 1);
-      if (accounts.length > maximumBankAccountsPerSource) {
-        throw new ConvexError({ code: "BANK_ACCOUNT_LIMIT_EXCEEDED", source });
-      }
-      return accounts.map(({ _id: _id, _creationTime: _creationTime, connectionKey: _connectionKey, ...item }) => item);
-    }));
+    const rows = await Promise.all(args.connections.map(({ source, connectionKey }) => readBalanceAccounts(ctx, source, connectionKey)));
     return rows.flat();
   }
 });
@@ -1184,7 +1215,7 @@ export const getActivityMetadata = query({
     connections: v.array(bankConnection)
   },
   returns: v.object({
-    accounts: v.array(account),
+    accounts: v.array(reportedAccount),
     syncStates: v.array(syncState),
     syncHealth: v.array(syncHealth)
   }),
@@ -1204,12 +1235,7 @@ export const getActivityMetadata = query({
     const activityBySource = await Promise.all(
       sources.map(async (source) => {
         const [accounts, state, health] = await Promise.all([
-          ctx.db
-            .query("bankAccounts")
-            .withIndex("by_source_connection", (q) =>
-              q.eq("source", source).eq("connectionKey", connectionKeyBySource.get(source)!)
-            )
-            .take(maximumBankAccountsPerSource),
+          readBalanceAccounts(ctx, source, connectionKeyBySource.get(source)!),
           ctx.db
             .query("bankSyncState")
             .withIndex("by_source_connection", (q) =>
@@ -1229,13 +1255,7 @@ export const getActivityMetadata = query({
     );
 
     return {
-      accounts: activityBySource.flatMap(({ accounts }) => accounts.map(({
-        _creationTime: _creationTime,
-        _id: _id,
-        syncedAt: _syncedAt,
-        connectionKey: _connectionKey,
-        ...item
-      }) => item)),
+      accounts: activityBySource.flatMap(({ accounts }) => accounts),
       syncStates: activityBySource.flatMap(({ state }) => state
         ? [{
             source: state.source,

@@ -1,8 +1,9 @@
+import { isCashCurrency, revolutBalanceIssue, revolutEntities, revolutLabel } from "../shared/revolutBalances";
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { isActiveBalanceSource } from "../shared/banks";
 import { slashEntityLabel } from "../shared/slashEntities";
 import { slashReportDateIfDue } from "./telegramSlashReport";
-import type { AccountBalance, FxRate } from "../shared/types";
+import type { AccountBalance, FxRate, RevolutEntity } from "../shared/types";
 import type { SlashVirtualAccountBalance } from "../shared/slashApi";
 import { normalizeFinanceUsername, parseTelegramAuthUsers, type TelegramCopyButton } from "./telegram";
 import { parseTelegramCommandUsers } from "./telegramCommandCatalog";
@@ -10,19 +11,18 @@ import { parseTelegramCommandUsers } from "./telegramCommandCatalog";
 export const cashReportTimezone = "Asia/Beirut";
 export const cashReportDeliveryStateKey = "cash-report-delivery";
 const maximumMessageLength = 3_800;
-const cashCurrencies = new Set(Intl.supportedValuesOf("currency"));
 
 export type CashReportAccount = AccountBalance & { syncedAt: string };
 
 export function isCashReportAccount(account: CashReportAccount): boolean {
   return isActiveBalanceSource(account.source)
     && (account.source === "revolut" || account.source === "mercury" || account.source === "flex" && account.flex?.type === "banking")
-    && account.status === "live" && cashCurrencies.has(account.currency.toUpperCase());
+    && account.status === "live" && isCashCurrency(account.currency);
 }
 
 export function isCashReportCryptoAccount(account: CashReportAccount): boolean {
   return account.source === "revolut" && account.status === "live"
-    && !cashCurrencies.has(account.currency.toUpperCase());
+    && !isCashCurrency(account.currency);
 }
 
 export function cashReportDateIfDue(timestamp: number): string | null {
@@ -55,6 +55,7 @@ export function buildTelegramCashReport(input: {
   slashAccounts: readonly SlashVirtualAccountBalance[];
   rates: readonly FxRate[];
   asOf: string;
+  includeRevolut?: boolean;
 }): string {
   // Slash virtual accounts partition its funds. Never add its parent cash/credit rows again.
   const bankAccounts = input.accounts.filter(isCashReportAccount);
@@ -67,8 +68,12 @@ export function buildTelegramCashReport(input: {
     !rate.stale && Number.isFinite(rate.rateUsd) && rate.rateUsd > 0
   ).map((rate) => [rate.asset.toUpperCase(), rate]));
   const totals = new Map<string, number>();
-  const cryptoBalances = new Map<string, number>();
-  const groups = new Map(["Revolut", "Slash", "Mercury"].map((name) => [name, new Map<string, number>()]));
+  const revolutAccounts = input.accounts.filter(account => account.source === "revolut" && account.status === "live");
+  if (revolutAccounts.some(row => !row.revolutEntity)) throw new Error("Revolut balance company is unavailable");
+  const expectedEntities = input.includeRevolut ? revolutEntities : revolutEntities.filter(entity => revolutAccounts.some(row => row.revolutEntity === entity));
+  const missingEntities = expectedEntities.filter(entity => !revolutAccounts.some(row => row.revolutEntity === entity));
+  const cryptoBalances = new Map<RevolutEntity, Map<string, number>>();
+  const groups = new Map([...expectedEntities.map(revolutLabel), "Slash", "Mercury"].map((name) => [name, new Map<string, number>()]));
   const add = (group: string, currency: string, balance: number) => {
     if (!Number.isFinite(balance)) throw new Error("Invalid bank balance");
     const asset = currency.toUpperCase();
@@ -79,14 +84,17 @@ export function buildTelegramCashReport(input: {
   };
   for (const account of bankAccounts) {
     if (account.source === "mercury" && !account.mercuryEntity) throw new Error("Mercury balance company is unavailable; cash report could not be grouped");
-    const group = account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : account.source === "flex" ? "Flex · Mojo Labs LLC" : "Revolut";
+    const group = account.source === "mercury" ? `Mercury · ${mercuryEntityLabel(account.mercuryEntity!)}` : account.source === "flex" ? "Flex · Mojo Labs LLC" : revolutLabel(account.revolutEntity!);
     add(group, account.currency, account.balance);
   }
   for (const account of slashAccounts) add(account.slashEntity ? `Slash · ${slashEntityLabel(account.slashEntity)}` : "Slash", account.currency, account.balance);
   for (const account of cryptoAccounts) {
     if (!Number.isFinite(account.balance)) throw new Error("Invalid crypto balance");
     const asset = account.currency.toUpperCase();
-    cryptoBalances.set(asset, (cryptoBalances.get(asset) ?? 0) + account.balance);
+    const entity = account.revolutEntity!;
+    const balances = cryptoBalances.get(entity) ?? new Map<string, number>();
+    balances.set(asset, (balances.get(asset) ?? 0) + account.balance);
+    cryptoBalances.set(entity, balances);
   }
   const missing = [...totals].filter(([asset, balance]) => balance !== 0 && asset !== "USD" && !rates.has(asset))
     .map(([asset]) => asset).sort();
@@ -97,11 +105,19 @@ export function buildTelegramCashReport(input: {
     "🏦 Bank balances",
     `${timestampLabel(input.asOf)} · Beirut`,
     "",
-    missing.length === 0 ? `Bank total ≈ ${amountLabel(totalUsd, "USD")}` : "Bank USD total unavailable — missing exchange rates",
+    missingEntities.length ? "Bank USD total unavailable — missing Revolut balances" : missing.length === 0 ? `Bank total ≈ ${amountLabel(totalUsd, "USD")}` : "Bank USD total unavailable — missing exchange rates",
     ""
   ];
+  for (const entity of expectedEntities) {
+    if (!missingEntities.includes(entity) && !groups.get(revolutLabel(entity))!.size) {
+      groups.get(revolutLabel(entity))!.set("USD", 0);
+    }
+  }
   for (const [group, balances] of groups) {
-    if (balances.size === 0) continue;
+    if (balances.size === 0) {
+      if (missingEntities.some(entity => revolutLabel(entity) === group)) lines.push(`${group} — USD total unavailable`, "");
+      continue;
+    }
     const missingGroupQuote = [...balances].some(([asset, balance]) => balance !== 0 && asset !== "USD" && !rates.has(asset));
     const groupUsd = [...balances].reduce((total, [asset, balance]) =>
       total + balance * (asset === "USD" ? 1 : rates.get(asset)?.rateUsd ?? 0), 0
@@ -121,11 +137,18 @@ export function buildTelegramCashReport(input: {
   }
   if (cryptoBalances.size > 0) {
     lines.push("", "Crypto (separate)");
-    for (const [asset, balance] of [...cryptoBalances].sort(([a], [b]) => a.localeCompare(b))) {
-      const quote = rates.get(asset);
-      lines.push(`• ${amountLabel(balance, asset, 8)}${quote
-        ? ` ≈ ${amountLabel(balance * quote.rateUsd, "USD")}` : " · USD value unavailable"}`);
+    for (const [entity, balances] of cryptoBalances) {
+      lines.push(revolutLabel(entity));
+      for (const [asset, balance] of [...balances].sort(([a], [b]) => a.localeCompare(b))) {
+        const quote = rates.get(asset);
+        lines.push(`• ${amountLabel(balance, asset, 8)}${quote
+          ? ` ≈ ${amountLabel(balance * quote.rateUsd, "USD")}` : " · USD value unavailable"}`);
+      }
     }
+  }
+  for (const entity of expectedEntities) {
+    const issue = revolutBalanceIssue(input.accounts, entity, Date.parse(input.asOf));
+    if (issue) lines.push(`⚠️ ${issue}`);
   }
   if (missing.length > 0) lines.push(`⚠️ No current USD quote: ${missing.join(", ")}. Native balances shown.`);
   const usedQuotes = [...totals].filter(([asset, balance]) => asset !== "USD" && balance !== 0)
@@ -134,7 +157,7 @@ export function buildTelegramCashReport(input: {
     const oldestQuote = usedQuotes.map((rate) => rate.asOf).sort()[0];
     lines.push(`FX: ${timestampLabel(oldestQuote)} · Coinbase`);
   }
-  const cryptoQuotes = [...cryptoBalances.keys()].flatMap((asset) => rates.has(asset) ? [rates.get(asset)!] : []);
+  const cryptoQuotes = [...cryptoBalances.values()].flatMap(balances => [...balances.keys()]).flatMap((asset) => rates.has(asset) ? [rates.get(asset)!] : []);
   if (cryptoQuotes.length > 0) {
     lines.push(`Crypto quotes: ${timestampLabel(cryptoQuotes.map((rate) => rate.asOf).sort()[0])} · Coinbase`);
   }
@@ -144,9 +167,9 @@ export function buildTelegramCashReport(input: {
 export function cashReportCopyButton(message: string): TelegramCopyButton | undefined {
   const totals = new Map<string, number | null>();
   for (const line of message.split("\n")) {
-    const match = /^(Revolut|Slash|Mercury)(?: · [^\n]+)? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
+    const match = /^(Revolut · (?:DN|LMD)|Slash|Mercury)(?: · [^\n]+)? ≈ USD (-?[\d,]+\.\d{2})$/u.exec(line);
     if (match && totals.get(match[1]) !== null) totals.set(match[1], (totals.get(match[1]) ?? 0) + Number(match[2].replaceAll(",", "")));
-    const unavailable = /^(Revolut|Slash|Mercury)(?: · [^\n]+)? — USD total unavailable$/u.exec(line);
+    const unavailable = /^(Revolut · (?:DN|LMD)|Slash|Mercury)(?: · [^\n]+)? — USD total unavailable$/u.exec(line);
     if (unavailable) totals.set(unavailable[1], null);
   }
   const text = [...totals].map(([name, total]) => total === null ? `${name} — USD total unavailable` : `${name} ≈ ${amountLabel(total, "USD")}`).join("\n");

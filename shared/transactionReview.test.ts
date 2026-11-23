@@ -14,6 +14,9 @@ test("transaction review bootstrap exposes only matching reference data", () => 
       updatedAt: "2026-09-02T00:00:00.000Z",
       status: "live"
     }, {
+      id: "statement-lmd-wallet", name: "Revolut · LMD · Main", source: "revolut", revolutEntity: "lmd",
+      balance: 100, currency: "USD", updatedAt: "2026-09-02", status: "live"
+    }, {
       id: "manual-cash",
       name: "Office cash",
       source: "manual",

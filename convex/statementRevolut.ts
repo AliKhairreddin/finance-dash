@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Transaction } from "../shared/types";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -33,17 +33,24 @@ export const discovered = mutation({args:{serviceToken:v.string(),connectionKey:
   for(const old of await ctx.db.query("statementRevolutAccounts").withIndex("by_connection",q=>q.eq("connectionKey",a.connectionKey)).take(1000))if(!currentIds.has(old.accountId))await ctx.db.delete(old._id);
   await ctx.db.patch(state._id,{discoveredAt:verifiedAt,error:undefined,leaseUntil:0,retryAt:0,...(backfill?{scanSince:"",scanUntil:"",scanCursor:null}:{})});return null;
 }});
+async function accountRates(ctx: QueryCtx, accounts: { currency: string }[]) {
+  if (!accounts.length) return [];
+  const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
+  const currencies = new Set(accounts.map(account => account.currency));
+  return (state?.fxRates ?? []).filter(rate => currencies.has(rate.asset));
+}
+
 export const status=query({args:{serviceToken:v.string(),actor:v.string(),companyId:v.union(v.literal("lovemedo"),v.literal("digital-nudge"))},returns:v.string(),handler:async(ctx,a)=>{
  const member=await statementMember(ctx,a);requireScope(member,{companyId:a.companyId,...(a.companyId==="lovemedo"?{financialAccountId:"revolut-lmd"}:{})});
  if(a.companyId==="lovemedo"){
   const direct=await ctx.db.query("statementRevolutFeeds").withIndex("by_key",q=>q.eq("key","lmd")).unique();
-  if(!direct)return JSON.stringify({mode:"direct",accounts:[],discoveredAt:0,error:"",importedThrough:null,historyPending:false,coverageFrom:null,coverageThrough:null});
-  return JSON.stringify({mode:"direct",accounts:direct.accounts.map(row=>({id:row.id,name:row.name,currency:row.currency,owner:row.beneficiaries.join(" / "),balance:row.balance??null,syncedAt:row.syncedAt??null})),discoveredAt:direct.verifiedAt,error:direct.error??"",importedThrough:direct.lastSyncedAt?new Date(direct.lastSyncedAt).toISOString():null,historyPending:!direct.lastFullAt||Boolean(direct.full&&direct.checkpoint),coverageFrom:direct.coverageFrom??null,coverageThrough:direct.coverageThrough??null});
+  if(!direct)return JSON.stringify({mode:"direct",accounts:[],rates:[],discoveredAt:0,error:"",importedThrough:null,historyPending:false,coverageFrom:null,coverageThrough:null});
+  return JSON.stringify({mode:"direct",rates:await accountRates(ctx,direct.accounts),accounts:direct.accounts.map(row=>({id:row.id,name:row.name,currency:row.currency,owner:row.beneficiaries.join(" / "),balance:row.balance??null,syncedAt:row.syncedAt??null})),discoveredAt:direct.verifiedAt,error:direct.error??"",importedThrough:direct.lastSyncedAt?new Date(direct.lastSyncedAt).toISOString():null,historyPending:!direct.lastFullAt||Boolean(direct.full&&direct.checkpoint),coverageFrom:direct.coverageFrom??null,coverageThrough:direct.coverageThrough??null});
  }
  const rows=await ctx.db.query("statementRevolutAccounts").withIndex("by_company",q=>q.eq("companyId",a.companyId)).take(1000);
  const states=await ctx.db.query("statementRevolutState").take(5);
  const accounts=await Promise.all(rows.filter(row=>states.some(s=>s.connectionKey===row.connectionKey&&s.discoveredAt===row.verifiedAt&&!s.error)).map(async row=>{const saved=await ctx.db.query("bankAccounts").withIndex("by_account_id",q=>q.eq("id",row.accountId)).unique();return {id:row.accountId,name:row.name,currency:row.currency,owner:row.beneficiaries.join(" / "),balance:saved?.connectionKey===row.connectionKey?saved.balance:null,syncedAt:saved?.syncedAt??null};}));
- return JSON.stringify({accounts,discoveredAt:Math.max(0,...states.map(s=>s.discoveredAt)),error:states.map(s=>s.error).filter(Boolean).join("; "),importedThrough:states.map(s=>s.scanSince).filter(Boolean).sort()[0]??null});
+ return JSON.stringify({accounts,rates:await accountRates(ctx,accounts),discoveredAt:Math.max(0,...states.map(s=>s.discoveredAt)),error:states.map(s=>s.error).filter(Boolean).join("; "),importedThrough:states.map(s=>s.scanSince).filter(Boolean).sort()[0]??null});
 }});
 export const pump=internalMutation({args:{},returns:v.null(),handler:async(ctx)=>{
  const states=await ctx.db.query("statementRevolutState").take(5);

@@ -24,7 +24,7 @@ function account(overrides: Partial<CashReportAccount> = {}): CashReportAccount 
   return {
     id: "wise-usd", name: "Wise USD", source: "wise", wiseEntity: "dn",
     balance: 100, currency: "USD", status: "live", updatedAt: "2026-01-01T00:00:00Z",
-    syncedAt: "2026-09-07T03:55:00.000Z", ...overrides
+    syncedAt: "2026-09-07T03:55:00.000Z", ...(overrides.source === "revolut" ? { revolutEntity: "dn" as const } : {}), ...overrides
   };
 }
 function slash(overrides: Partial<SlashVirtualAccountBalance> = {}): SlashVirtualAccountBalance {
@@ -61,7 +61,7 @@ test("cash report groups banks in the requested order and shows crypto separatel
       account({ id: "wise-eur2", currency: "EUR", balance: 25 }),
       account({ id: "wise-lmd", wiseEntity: "lmd", balance: 300 }),
       account({ id: "revolut-main", name: "Main", source: "revolut", balance: 400 }),
-      account({ id: "revolut-wgnr", name: "WGNR", source: "revolut", balance: 50 }),
+      account({ id: "revolut-wgnr", name: "Main", source: "revolut", revolutEntity: "lmd", balance: 50 }),
       account({ id: "revolut-eur", source: "revolut", currency: "EUR", balance: 10 }),
       account({ id: "zero", currency: "GBP", balance: 0 }),
       account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 0.12345678 }),
@@ -77,12 +77,12 @@ test("cash report groups banks in the requested order and shows crypto separatel
       slash({ id: "closed", name: "Closed", balance: 99_999, closedAt: now })]
   });
   assert.match(report, /Bank total ≈ USD 1,662\.00/u);
-  assert.match(report, /Revolut ≈ USD 462\.00\n• EUR 10\.00\n• USD 450\.00\n\nSlash ≈ USD 1,200\.00\n• USD 1,200\.00/u);
-  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Revolut ≈ USD 462.00\nSlash ≈ USD 1,200.00" });
+  assert.match(report, /Revolut · DN ≈ USD 412\.00\n• EUR 10\.00\n• USD 400\.00\n\nRevolut · LMD ≈ USD 50\.00\n• USD 50\.00\n\nSlash ≈ USD 1,200\.00\n• USD 1,200\.00/u);
+  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Revolut · DN ≈ USD 412.00\nRevolut · LMD ≈ USD 50.00\nSlash ≈ USD 1,200.00" });
   assert.ok(cashReportCopyButton(report)!.text.length <= 256);
   assert.doesNotMatch(report, /Balances checked|Wise|Revolut:|Slash:|Crypto:/u);
   assert.match(report, /Bank totals by currency\n• EUR 10\.00\n• USD 1,650\.00/u);
-  assert.match(report, /Crypto \(separate\)\n• BTC 0\.12345678 ≈ USD 9,876\.54\n• ETH 100\.00000000 · USD value unavailable\n• USDT 1,000\.00000000 · USD value unavailable/u);
+  assert.match(report, /Crypto \(separate\)\nRevolut · DN\n• BTC 0\.12345678 ≈ USD 9,876\.54\n• ETH 100\.00000000 · USD value unavailable\n• USDT 1,000\.00000000 · USD value unavailable/u);
   assert.match(report, /Crypto quotes:.*Coinbase/u);
   assert.doesNotMatch(report.split("\n\nCrypto (separate)\n")[0], /Bitcoin|BTC|ETH|USDT/u);
   assert.match(report, /7:00|07:00/u);
@@ -94,12 +94,12 @@ test("missing or stale quotes mark only the affected bank total unavailable", ()
     accounts: [account({ source: "revolut", name: "Main", currency: "EUR", balance: 250, syncedAt: "2026-09-05T01:00:00Z" })],
     slashAccounts: [slash()], rates: rates.map((rate) => ({ ...rate, stale: true })), asOf: now
   });
-  assert.match(report, /Revolut — USD total unavailable\n• EUR 250\.00/u);
+  assert.match(report, /Revolut · DN — USD total unavailable\n• EUR 250\.00/u);
   assert.match(report, /USD total unavailable/u);
   assert.doesNotMatch(report, /Balances checked|⚠️ stale/u);
   assert.match(report, /No current USD quote: EUR/u);
   assert.doesNotMatch(report, /Bank total ≈/u);
-  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Revolut — USD total unavailable\nSlash ≈ USD 1,000.00" });
+  assert.deepEqual(cashReportCopyButton(report), { label: "Copy bank totals", text: "Revolut · DN — USD total unavailable\nSlash ≈ USD 1,000.00" });
 });
 
 test("missing crypto quotes and stale crypto balances do not affect bank totals or bank freshness", () => {
@@ -110,10 +110,10 @@ test("missing crypto quotes and stale crypto balances do not affect bank totals 
     slashAccounts: [slash({ balance: 0 })], rates: [], asOf: now
   });
   assert.match(report, /Bank total ≈ USD 0\.00/u);
-  for (const group of ["Revolut", "Slash"]) {
+  for (const group of ["Revolut · DN", "Slash"]) {
     assert.ok(report.includes(`${group} ≈ USD 0.00\n• USD 0.00`));
   }
-  assert.match(report, /Crypto \(separate\)\n• BTC 10\.00000000 · USD value unavailable/u);
+  assert.match(report, /Crypto \(separate\)\nRevolut · DN\n• BTC 10\.00000000 · USD value unavailable/u);
   assert.doesNotMatch(report, /Balances checked|⚠️ stale/u);
   assert.doesNotMatch(report, /^Revolut:.*stale|Bank USD total unavailable|No current USD quote|FX:|Crypto quotes:/mu);
 });
@@ -152,7 +152,7 @@ test("retired Wise balances never require company metadata or FX quotes", () => 
   });
   assert.match(report, /Bank total ≈ USD 200\.00/u);
   assert.doesNotMatch(report, /Wise|EUR|unavailable|99,999/u);
-  assert.equal(cashReportCopyButton(report)?.text, "Revolut ≈ USD 200.00");
+  assert.equal(cashReportCopyButton(report)?.text, "Revolut · DN ≈ USD 200.00");
 });
 
 test("duplicate Slash virtual accounts cannot inflate a cash report", () => {
@@ -294,6 +294,7 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
       assert.equal(body.path, "banking:getCashReportAccounts");
       assert.equal(body.args[0].connections.some((connection: { source: string }) => connection.source === "wise"), false);
       return Response.json({ status: "success", value: [
+        account({ id: "lmd-usd", source: "revolut", revolutEntity: "lmd", balance: 30 }),
         account({ id: "eur", source: "revolut", currency: "EUR", balance: 100 }),
         account({ id: "btc", name: "Bitcoin", source: "revolut", currency: "BTC", balance: 2 }),
         ...slashEntities.map(entity => account({ id: entity.id, source: "slash", slashEntity: entity.id, syncedAt: new Date().toISOString(), balance: entity.id === "mojo" ? 1200 : 0, slashVirtualAccounts: [{ id: entity.id, name: "Primary", accountId: entity.id, accountType: "primary", balance: entity.id === "mojo" ? 1200 : 0 }] }))] });
@@ -316,18 +317,18 @@ test("/cash fetches fiat and crypto quotes, keeps their values separate, and rem
   try {
     const reply = await handleTelegramCommand(env as never, { username: "Ali", normalizedUsername: "ali", chatId: "111" }, "administrator", "/cash");
     assert.ok(typeof reply !== "string" && "messages" in reply);
-    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Revolut ≈ USD 120.00\nSlash ≈ USD 1,200.00" });
+    assert.deepEqual(reply.copyButton, { label: "Copy bank totals", text: "Revolut · DN ≈ USD 120.00\nRevolut · LMD ≈ USD 30.00\nSlash ≈ USD 1,200.00" });
     assert.equal(reply.messages.length, 1);
-    assert.match(reply.messages[0], /Bank total ≈ USD 1,320\.00/u);
+    assert.match(reply.messages[0], /Bank total ≈ USD 1,350\.00/u);
     assert.match(reply.messages[0], /Slash · Mojo Labs LLC ≈ USD 1,200\.00\n• USD 1,200\.00/u);
-    assert.match(reply.messages[0], /Crypto \(separate\)\n• BTC 2\.00000000 ≈ USD 160,000\.00/u);
+    assert.match(reply.messages[0], /Crypto \(separate\)\nRevolut · DN\n• BTC 2\.00000000 ≈ USD 160,000\.00/u);
     assert.doesNotMatch(reply.messages[0].split("\n\nCrypto (separate)\n")[0], /BTC|Bitcoin|160,000|Wagner/u);
     assert.ok(requests.includes("/v2/prices/EUR-USD/spot"));
     assert.ok(requests.includes("/v2/prices/BTC-USD/spot"));
     assert.equal(requests.filter((path) => path === "/virtual-account").length, 0);
     cryptoQuoteUnavailable = true;
     const reportWithoutCryptoQuote = await getTelegramCashReport(env as never);
-    assert.match(reportWithoutCryptoQuote, /Bank total ≈ USD 1,320\.00/u);
+    assert.match(reportWithoutCryptoQuote, /Bank total ≈ USD 1,350\.00/u);
     assert.match(reportWithoutCryptoQuote, /BTC 2\.00000000 · USD value unavailable/u);
     assert.equal(requests.includes("/api/mutation"), false);
     globalThis.fetch = async () => { throw new Error("Source unavailable"); };
@@ -385,4 +386,12 @@ test("other authenticated readers cannot request the restricted Slash report", a
     }
     assert.equal(requests, 0);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("a missing Revolut entity leaves the known subtotal and copy text available", () => {
+  const report = buildTelegramCashReport({ includeRevolut: true, asOf: now, rates, slashAccounts: [], accounts: [
+    account({ source: "revolut", revolutEntity: "lmd", currency: "EUR", balance: 25 })
+  ] });
+  assert.match(report, /Bank USD total unavailable — missing Revolut balances/);
+  assert.equal(cashReportCopyButton(report)?.text, "Revolut · DN — USD total unavailable\nRevolut · LMD ≈ USD 30.00");
 });

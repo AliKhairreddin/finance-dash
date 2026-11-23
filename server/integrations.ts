@@ -1,3 +1,6 @@
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../convex/_generated/api";
+import { bankConnectionKey } from "../shared/bankConnectionIdentity";
 import { mercuryConnections, mercuryTokenNames } from "../shared/mercuryEntities";
 import { meritCopyRequest } from "../shared/meritInvoiceCopy";
 import { fetchTuneTotals } from "../shared/tune";
@@ -314,14 +317,22 @@ export async function fetchWiseActivity(): Promise<WiseActivityResult> {
 export async function fetchRevolutActivity(
   dateRange?: RevolutTransactionDateRange
 ): Promise<{ accounts: AccountBalance[]; transactions: Transaction[] }> {
-  return fetchRevolutApiActivity({
-    environment: process.env.REVOLUT_ENVIRONMENT,
-    clientId: process.env.REVOLUT_CLIENT_ID,
-    issuer: process.env.REVOLUT_ISSUER,
-    privateKeyPem: process.env.REVOLUT_PRIVATE_KEY_PEM,
-    refreshToken: process.env.REVOLUT_REFRESH_TOKEN,
-    dateRange
-  });
+  const connectionKey = await bankConnectionKey({ REVOLUT_CONNECTION_ID: process.env.REVOLUT_CONNECTION_ID, REVOLUT_ENVIRONMENT: process.env.REVOLUT_ENVIRONMENT }, "revolut");
+  if (!connectionKey) return { accounts: [], transactions: [] };
+  const url = process.env.CONVEX_URL, serviceToken = process.env.CONVEX_SERVICE_TOKEN;
+  if (!url || !serviceToken) throw new Error("Saved Revolut balances require Convex configuration");
+  const [accounts, activity] = await Promise.all([
+    new ConvexHttpClient(url).query(api.banking.getCashReportAccounts, { serviceToken, connections: [{ source: "revolut", connectionKey }] }),
+    fetchRevolutApiActivity({
+      environment: process.env.REVOLUT_ENVIRONMENT,
+      clientId: process.env.REVOLUT_CLIENT_ID,
+      issuer: process.env.REVOLUT_ISSUER,
+      privateKeyPem: process.env.REVOLUT_PRIVATE_KEY_PEM,
+      refreshToken: process.env.REVOLUT_REFRESH_TOKEN,
+      dateRange
+    })
+  ]);
+  return { accounts, transactions: activity.transactions };
 }
 
 export async function fetchSlashActivity(

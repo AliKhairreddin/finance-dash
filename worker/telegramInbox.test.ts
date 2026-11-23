@@ -38,7 +38,8 @@ test("the webhook inbox persists the bank totals button and retries the saved re
       return Response.json({ status: "success", value: [
         { id: "lmd", source: "wise", wiseEntity: "lmd", name: "LMD", balance: 100, currency: "USD", status: "live" },
         { id: "dn", source: "wise", wiseEntity: "dn", name: "DN", balance: 200, currency: "USD", status: "live" },
-        { id: "revolut", source: "revolut", name: "Main", balance: 300, currency: "USD", status: "live" },
+        { id: "revolut-lmd", source: "revolut", revolutEntity: "lmd", name: "Main", balance: 50, currency: "USD", status: "live" },
+        { id: "revolut", source: "revolut", revolutEntity: "dn", name: "Main", balance: 250, currency: "USD", status: "live" },
         ...slashEntities.map(entity => ({ id: entity.id, name: entity.label, source: "slash", slashEntity: entity.id, syncedAt: new Date().toISOString(), status: "live", currency: "USD", balance: entity.id === "mojo" ? 400 : 0, slashVirtualAccounts: [{ id: entity.id, name: "Primary", accountId: entity.id, accountType: "primary", balance: entity.id === "mojo" ? 400 : 0 }] }))
       ] });
     }
@@ -63,7 +64,7 @@ test("the webhook inbox persists the bank totals button and retries the saved re
     assert.equal(messages.length, 1);
     assert.doesNotMatch(String(messages[0].text), /Wise/);
     assert.equal(messages[0].protect_content, undefined);
-    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Revolut ≈ USD 300.00\nSlash ≈ USD 400.00" } }]] });
+    assert.deepEqual(messages[0].reply_markup, { inline_keyboard: [[{ text: "Copy bank totals", copy_text: { text: "Revolut · DN ≈ USD 250.00\nRevolut · LMD ≈ USD 50.00\nSlash ≈ USD 400.00" } }]] });
     assert.equal(values.has("reply:1"), false);
   } finally { globalThis.fetch = originalFetch; }
 });

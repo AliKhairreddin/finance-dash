@@ -10,6 +10,7 @@ export type BankTransactionSource = Extract<DataSource, "wise" | "revolut" | "sl
 
 export type Direction = "in" | "out";
 
+export type RevolutEntity = "dn" | "lmd";
 export type WiseEntity = "dn" | "lmd";
 
 export type ProviderType = "client" | "supplier";
@@ -67,6 +68,9 @@ export interface SlashVirtualAccount {
 }
 
 export interface AccountBalance {
+  revolutEntity?: RevolutEntity;
+  syncedAt?: string;
+  balanceSyncFailed?: boolean;
   id: string;
   name: string;
   source: DataSource;

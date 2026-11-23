@@ -3,7 +3,7 @@ import type { DashboardSnapshot, TransactionReviewBootstrap } from "./types";
 
 export function transactionReviewBootstrap(snapshot: DashboardSnapshot): TransactionReviewBootstrap {
   return {
-    accounts: snapshot.accounts.flatMap((account) => isBankSource(account.source)
+    accounts: snapshot.accounts.flatMap((account) => isBankSource(account.source) && account.revolutEntity !== "lmd"
       ? [{ id: account.id, name: account.name, source: account.source }]
       : []),
     companies: snapshot.providers.map((provider) => ({
