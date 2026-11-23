@@ -2898,8 +2898,6 @@ export const applyMerchantCategory = mutation({
   }
 });
 
-// One-time, resumable enrichment from already-saved explicit Wise payment notes.
-// No upstream pull and no changes to financial values or transaction identity.
 export const backfillWiseReferences = mutation({
   args: { serviceToken: v.string(), dryRun: v.boolean(), cursor: v.union(v.string(), v.null()) },
   returns: v.object({ scanned: v.number(), changed: v.number(), isDone: v.boolean(), continueCursor: v.string() }),

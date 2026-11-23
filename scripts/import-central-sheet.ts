@@ -10,8 +10,6 @@ import { mediaFundingDefaultEffectiveFrom, type MediaFundingBillingType } from "
 import { centralSheetHistoryConflict, matchCentralSheetAccount, type CentralSheetProvider, type CentralSheetCatalogAccount } from "../shared/centralSheetImport";
 import { productionEnvironment, productionServiceEnvironment, productionUrl } from "./deploy-production";
 
-// Explicit, reviewed import only. No upstream reporting requests and no inferred opening dates/fees.
-// npx tsx scripts/import-central-sheet.ts .local/reviewed-central-sheet.json [--apply]
 const input = process.argv[2];
 assert(input && !input.startsWith("--"), "Supply a reviewed JSON plan");
 const definitions: CentralSheetProvider[] = JSON.parse(readFileSync(input, "utf8"));

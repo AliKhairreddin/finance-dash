@@ -31,7 +31,6 @@ export const stage = mutation({
     if (new Set(args.rows.map(row => row.id)).size !== args.rows.length) throw new ConvexError("Duplicate statement row IDs");
     const existing = await ctx.db.query("amexStatementImports").withIndex("by_content_hash", q => q.eq("contentHash", args.contentHash)).unique();
     if (existing) {
-      // A retry cannot silently change which card or currency an original belongs to.
       if (existing.currency !== args.currency || existing.cardLastFour !== args.cardLastFour || JSON.stringify(existing.rows) !== JSON.stringify(args.rows)) {
         await ctx.storage.delete(args.storageId);
         throw new ConvexError("This file was already uploaded with different details. Use its existing preview.");

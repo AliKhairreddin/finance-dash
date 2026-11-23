@@ -16,7 +16,6 @@ const percent = (value: number) => new Intl.NumberFormat("en-US", { style: "perc
 export function BreakdownLink({ children, target, className = "management-report-value-link", label }: {
   children: ReactNode; target: ReportBreakdownTarget; className?: string; label?: string;
 }) {
-  // Subscribe to URL changes so links always retain the current filters and sorting.
   const current = useUrlStateHref("page", "management", "overview");
   const href = reportBreakdownUrl(new URL(current, window.location.origin).href, target);
   return <a className={className} href={href} aria-label={label} onClick={event => {

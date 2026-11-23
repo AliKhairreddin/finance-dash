@@ -38,7 +38,6 @@ async function accessToken(ctx: ActionCtx, row: Doc<"statementMailboxes">, token
   if (row.expiresAt <= Date.now() + 60_000) {
     try { saved = tokens(await exchange(row.provider, { grant_type: "refresh_token", refresh_token: saved.refresh_token, ...(row.provider === "outlook" ? { scope: mailScopes.outlook } : {}) }), saved.refresh_token); }
     catch (error) { if (error instanceof MailboxHttpError && [400, 401, 403].includes(error.status)) throw new MailboxHttpError("Mailbox authorization needs to be renewed. Reconnect this mailbox.", 401); throw error; }
-    // Persist refresh-token rotation before reading any mail.
     await ctx.runMutation(internal.statementMailboxes.saveTokens, { id: row._id, token, encryptedTokens: await mailboxEncrypt(JSON.stringify(saved), key()), expiresAt: Date.now() + saved.expires_in * 1000 });
   }
   return saved.access_token;

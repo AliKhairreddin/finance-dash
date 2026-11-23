@@ -36,7 +36,6 @@ export function splitCashFlowReportRows<T>(rows: T[], maximumHeight: number, mea
     current.push(row);
   }
   if (current.length) chunks.push(current);
-  // Balance a short final continuation against its preceding card.
   for (let index = chunks.length - 1; index > 0; index--) {
     const previous = chunks[index - 1];
     const next = chunks[index];

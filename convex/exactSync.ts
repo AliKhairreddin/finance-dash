@@ -33,7 +33,6 @@ async function accessToken(ctx: ActionCtx, c: Doc<"exactConnections">, token: st
   if (!c.expiresAt || c.expiresAt <= Date.now() + 30_000) {
     try {
       saved = await exchange({ grant_type: "refresh_token", refresh_token: saved.refresh_token });
-      // Persist the rotated refresh token before any subsequent API call.
       await ctx.runMutation(internal.exact.saveConnection, { token, encryptedTokens: await exactEncrypt(JSON.stringify(saved), encryptionKey()), expiresAt: Date.now() + saved.expires_in * 1000 });
     } catch { throw new ExactHttpError("Exact credentials could not be refreshed safely; reconnect Exact", 401); }
   }

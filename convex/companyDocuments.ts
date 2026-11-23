@@ -29,7 +29,6 @@ export const ingest = mutation({
     const duplicate = await ctx.db.query("companyDocuments").withIndex("by_content_hash", q => q.eq("contentHash", args.contentHash)).unique();
     if (duplicate) {
       if (duplicate.storageId !== args.storageId) await ctx.storage.delete(args.storageId);
-      // An explicit upload can assign an unassigned copy; never silently move a filed contract.
       if (args.providerId && (!duplicate.providerId || !state?.providers.some(p => p.id === duplicate.providerId))) await ctx.db.patch(duplicate._id, { providerId: args.providerId, status: "assigned", attemptToken: undefined, error: undefined, matchReason: "Assigned during upload", updatedAt: now() });
       return { id: duplicate._id, duplicate: true };
     }

@@ -45,7 +45,6 @@ export const get = query({
     if (!state) throw new ConvexError({ code: "DASHBOARD_STATE_MISSING" });
     if (bindings.length > bankSources.length) throw new ConvexError({ code: "BANK_CONNECTION_BINDING_LIMIT_EXCEEDED" });
     // A bounded query never presents partial history as complete totals or learned dates.
-    // Sources are durable bank records; reloads do not contact banking APIs.
     const active = new Map(bindings.map(binding => [binding.source, binding.connectionKey]));
     return calculatePaymentHistory({
       providers: state.providers, invoices: state.invoices, allocations: state.paymentAllocations,

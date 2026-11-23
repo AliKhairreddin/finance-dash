@@ -183,7 +183,6 @@ test("remember is optional, stale updates cannot overwrite saved details, and fa
   const create = { ...input, plainDetailsJson: JSON.stringify(pair), remember: false, profileRevision: 0 };
   const id = await t.mutation(api.statementInvoices.begin, create);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: pair.other.name })), null);
-  // A business-key retry returns the existing document without overwriting saved profiles.
   assert.equal(await t.mutation(api.statementInvoices.begin, { ...create, remember: true, requestId: crypto.randomUUID() }), id);
   assert.equal(JSON.parse(await t.query(api.statementInvoices.profile, { ...auth, companyId: "amg-holding", otherName: pair.other.name })), null);
   await t.mutation(api.statementInvoices.discard, { ...auth, id });

@@ -137,7 +137,6 @@ export async function trackerReminderEvents(ctx: MutationCtx) {
   const tariq = open.filter(i => i.kind === "tariq" && i.checkedDate !== date);
   if ([1, 3, 5].includes(new Date(`${date}T12:00:00Z`).getUTCDay()) && tariq.length) await queueTrackerEvent(ctx, `tariq:${date}`, `Ask Tariq if he received any payment\n${tariq.map(i => i.payer).join(" · ")}`, now);
   const overdue = open.filter(i => trackerTiming(i, 1, date) === "Overdue");
-  // One event per expectation/date, grouped into one digest per recipient at delivery time.
   for (const item of overdue) await queueTrackerEvent(ctx, `overdue:${item.key}:${item.expectedDate}`, `Expected overdue · ${item.payer} · ${item.currency} ${trackerAmounts(item, receipts, state.invoices, state.paymentAllocations).outstanding}\nExpected ${item.expectedDate}`, now);
   for (const item of items.filter(i => i.kind === "monthly" && !i.sent)) await queueTrackerEvent(ctx, `invoice-task:${item.key}`, `Invoice to send · ${item.payer} · ${item.period}`, now);
 }

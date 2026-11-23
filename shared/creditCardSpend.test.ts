@@ -52,7 +52,6 @@ test("a EUR 100 Amex purchase and repayment produce EUR 100 spend without repaym
     assert.equal(bankMerchantGroupKey(payment), undefined);
     assert.equal(bankCardGroupKey(payment), undefined);
   }
-  // Account activity retains the actual movements for reconciliation.
   assert.deepEqual(activity.accountGroups.find(row => row.source === "wise")?.spend, { EUR: 100 });
   assert.deepEqual(activity.accountGroups.find(row => row.source === "amex")?.credits, { EUR: 100 });
 });

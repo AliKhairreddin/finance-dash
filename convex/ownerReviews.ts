@@ -113,7 +113,6 @@ export const publish = mutation({
   }
 });
 
-// One-time recording of Ali’s confirmation for the January–October 2026 workbook.
 export const recordConfirmedMonthsThroughOctober2026 = internalMutation({
   args: {}, returns: v.number(),
   handler: async ctx => {

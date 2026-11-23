@@ -39,7 +39,6 @@ export const directory = mutation({
   handler:async(ctx,a)=>{
     const old=await feed(ctx,a);
     if(!a.accounts.length || a.accounts.length>1000 || new Set(a.accounts.map(x=>x.id)).size!==a.accounts.length) throw new ConvexError("Incomplete LMD account directory");
-    // Every imported account must have an unambiguous LMD legal beneficiary.
     if(a.accounts.some(x=>revolutOwnerCompany(x.beneficiaries)!=="lovemedo")) throw new ConvexError("LMD account ownership could not be verified");
     await ctx.db.patch(old._id,{accounts:a.accounts.map(x=>{const prior=old.accounts.find(p=>p.id===x.id);return {...x,...(prior?.balance!==undefined?{balance:prior.balance}:{}),...(prior?.syncedAt?{syncedAt:prior.syncedAt}:{})};}),verifiedAt:Date.now()});
     return null;
@@ -86,7 +85,6 @@ export const failed = mutation({
   }
 });
 
-// Operator reconciliation queues history without deleting saved records or bypassing a live lease/cooldown.
 export const reconcile = mutation({args:{serviceToken:v.string()},returns:v.null(),handler:async(ctx,a)=>{
   service(a.serviceToken);
   const state=await ctx.db.query("statementRevolutFeeds").withIndex("by_key",q=>q.eq("key","lmd")).unique();

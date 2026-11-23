@@ -1,4 +1,3 @@
-/** Isolates the new scheduler job while legacy notification tests exercise their existing sources. */
 export async function withTrackerSchedulerFixture<T>(env: T, run: (env: T) => Promise<void>) {
   const original = globalThis.fetch;
   globalThis.fetch = async (input, init) => {

@@ -86,8 +86,6 @@ export const claim = internalMutation({ args: claimArgs, returns: v.union(v.stri
 } });
 export const saveTokens = internalMutation({ args: { ...claimArgs, encryptedTokens: v.string(), expiresAt: v.number() }, returns: v.null(), handler: async (ctx, args) => { await lease(ctx, args.id, args.token); await ctx.db.patch(args.id, { encryptedTokens: args.encryptedTokens, expiresAt: args.expiresAt }); return null; } });
 export const seen = internalQuery({ args: { ...claimArgs, providerId: v.string() }, returns: v.boolean(), handler: async (ctx, args) => { await lease(ctx, args.id, args.token); return Boolean(await ctx.db.query("statementMailboxMessages").withIndex("by_mailboxId_and_providerId", q => q.eq("mailboxId", args.id).eq("providerId", args.providerId)).unique()); } });
-// Document creation and provider-message checkpoint are one transaction. A stale
-// action cannot import after disconnect, and a replay never schedules duplicate AI.
 export const record = internalMutation({ args: { ...claimArgs, providerId: v.string(), sender: v.string(), subject: v.string(), receivedAt: v.string(), sourceContext: v.string(), emailRawStorageId: v.optional(v.id("_storage")), issue: v.optional(v.string()), files: v.array(v.object({ storageId: v.id("_storage"), contentHash: v.string(), fileName: v.string(), size: v.number() })) }, returns: v.null(), handler: async (ctx, args) => {
   const row = await lease(ctx, args.id, args.token);
   if (args.files.length > 10 || args.sourceContext.length > 12000 || args.subject.length > 500 || args.providerId.length > 1000 || args.files.some(file => !/^[a-f0-9]{64}$/.test(file.contentHash) || file.size <= 0 || file.size > 15 * 1024 * 1024 || file.fileName.length > 240)) throw new ConvexError("Invalid mailbox document batch");

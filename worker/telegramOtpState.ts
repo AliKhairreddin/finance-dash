@@ -101,8 +101,6 @@ export class TelegramOtpState extends DurableObject<WorkerEnv> {
 
   async consumeStatementPasswordAttempt(): Promise<number> {
     return this.serialize(async () => {
-      // Dedicated statement-password:<username> objects keep this separate from OTPs.
-      // At most ten timestamps per account; expired attempts are pruned on access.
       const times = await this.ctx.storage.get<number[]>("statement-password-attempts") ?? [];
       const result = statementPasswordAttempt(times, Date.now());
       await this.ctx.storage.put("statement-password-attempts", result.times);

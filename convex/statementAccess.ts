@@ -46,7 +46,6 @@ export function canReadScope(
       : !statementCompanies.every((c) => member.companyIds.includes(c.id))
   )
     return false;
-  // Unresolved LoveMeDo records are available only to members authorized for every LMD account.
   if (row.companyId === "lovemedo" && !row.financialAccountId)
     return ["revolut-lmd", "amex-lmd", "wise-lmd"].every((id) =>
       member.accountIds?.includes(id),

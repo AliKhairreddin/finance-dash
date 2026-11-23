@@ -48,7 +48,6 @@ export async function researchMerchant(apiKey: string, model: string, name: stri
       { role: "user", content: JSON.stringify({ merchant: name }) },
     ],
   }, deadline);
-  // Use search-service excerpts, not the model's prose or plausible URLs it invents.
   const evidence = (searched.annotations ?? []).flatMap(a => {
     const citation = a.url_citation;
     return a.type === "url_citation" && citation?.url?.startsWith("https://") && typeof citation.content === "string" && citation.content.trim()
@@ -79,7 +78,6 @@ export async function handleStatementResearch(request: Request, env: ResearchEnv
     const client = new ConvexHttpClient(env.CONVEX_URL);
     let name: string, model: string;
     if (verify) {
-      // A fixed public company verifies the integration without financial data or writes.
       const settings = await client.query(api.statements.processingSettings, { serviceToken: env.CONVEX_SERVICE_TOKEN });
       const ai = JSON.parse(settings.aiSettingsJson);
       if (ai?.provider !== "openrouter" || !ai.model) throw new ResearchError("Select the statement AI model in Settings", 503, true);

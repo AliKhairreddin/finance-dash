@@ -109,7 +109,6 @@ const textField = (v: unknown, name: string, required = false, max = 240) => {
 };
 const dateField = (v: unknown) => { const s = textField(v, "date", true, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || exactDate(s) !== s) throw new Error("Enter a valid date"); return s; };
 export function exactWritePayload(kind: ExactWriteKind, input: Record<string, unknown>, editing: boolean): Record<string, unknown> {
-  // Build an allowlisted payload. Browser-supplied provider IDs, statuses, posting flags and URLs are never forwarded.
   if (kind === "accounts") {
     const result: Record<string, unknown> = { Name: textField(input.Name, "name", true, 100) };
     for (const key of ["Email", "Phone", "AddressLine1", "AddressLine2", "City", "Postcode", "Country"] as const) if (input[key] !== undefined) result[key] = textField(input[key], key, false, key === "Country" ? 2 : 100);

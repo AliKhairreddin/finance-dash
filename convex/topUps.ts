@@ -103,7 +103,6 @@ export const claimDelivery = internalMutation({ args: { id: v.id("topUpRequests"
   if (!d || d.state !== "pending") return false;
   const r = await ctx.db.get(a.id);
   if (!r || r.version !== a.version) { await ctx.db.patch(d._id, { state: "sent" }); return false; }
-  // Serialize every version of one card, including its first send.
   if (r.telegramDeliveryToken) { await ctx.scheduler.runAfter(1000, internal.topUpProcessing.deliver, { id: a.id, version: a.version }); return false; }
   await ctx.db.patch(r._id, { telegramDeliveryToken: a.token });
   await ctx.db.patch(d._id, { state: "sending", token: a.token, attempts: d.attempts + 1 });

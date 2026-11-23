@@ -671,7 +671,7 @@ export async function prepareTelegramReply(env: WorkerEnv, update: TelegramUpdat
   const text = message.text?.trim() ?? "";
   let reply: TelegramCommandReply;
   if (!account) reply = onboardingReply(message, parseTelegramAuthUsers(env.TELEGRAM_AUTH_USERS_JSON) ?? []);
-  else if (dependencies.handleReceivables && (reply = await dependencies.handleReceivables(env, account.user, account.role, message) ?? "")) { /* Explicitly scoped weekly intake. */ }
+  else if (dependencies.handleReceivables && (reply = await dependencies.handleReceivables(env, account.user, account.role, message) ?? "")) { }
   else if (message.attachment) {
     reply = account.role === "administrator" && ["ali", "ali m"].includes(account.user.normalizedUsername)
       ? await dependencies.handleAttachment(env, account.user, message)

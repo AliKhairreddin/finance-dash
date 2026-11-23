@@ -11,7 +11,6 @@ function fixture(corners = receipt, background = 40, paper = 240): ScanPixels {
       const q = corners[(i + 1) % 4];
       return (q.x - p.x) * (y / (height - 1) - p.y) - (q.y - p.y) * (x / (width - 1) - p.x) >= 0;
     });
-    // Text-like horizontal marks, surrounded by unprinted paper.
     const ink = inside && x > 155 && x < 255 && y > 150 && y < 450 && y % 36 < 4;
     const value = inside ? ink ? 35 : paper : background, offset = (y * width + x) * 4;
     data.set([value, value, value, 255], offset);

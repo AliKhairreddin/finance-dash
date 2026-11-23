@@ -137,7 +137,6 @@ export function documentMatchCandidates(extraction: DocumentExtraction, transact
     const text = normalized([transaction.counterparty, transaction.rawName, transaction.merchantName, transaction.description].filter(Boolean).join(" "));
     const reference = number.length >= 4 && ` ${text} `.includes(` ${number} `);
     const identity = words.length > 0 && words.every(word => text.split(" ").includes(word));
-    // Without account ownership metadata, require both a reference and company evidence.
     return entity ? reference || identity : reference && identity;
   });
 }

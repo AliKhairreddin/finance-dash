@@ -15,7 +15,6 @@ export const get = query({ args: { serviceToken: v.string(), connectionKey: v.st
 export const update = mutation({ args: { ...credential, modifiedThrough: v.optional(v.string()), retryAt: v.optional(v.number()) }, returns: control, handler: async (ctx, args) => {
   auth(args.serviceToken);
   await assertActiveBankSyncLease(ctx, "flex", args);
-  // Alert history is operational data; the financial ledger is retained separately.
   for (const expired of await ctx.db.query("flexAlertDeliveries").withIndex("by_created", q => q.lt("createdAt", Date.now() - 90 * 86400_000)).take(100)) await ctx.db.delete(expired._id);
   const row = await ctx.db.query("flexSyncControls").withIndex("by_connection", q => q.eq("connectionKey", args.connectionKey)).unique();
   const next = { activatedAt: row?.activatedAt ?? new Date().toISOString(),

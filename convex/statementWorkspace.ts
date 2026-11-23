@@ -355,7 +355,6 @@ export const migrateAccess = internalMutation({
           ),
           accountIds: [],
         });
-    // Existing membership is preserved; no LoveMeDo or historical account access is inferred.
     return JSON.stringify({
       members: pending.map((m) => m.actor),
       accountGrants: [],
@@ -482,8 +481,6 @@ export const migrationManifest = query({
   },
 });
 
-// Deployment-operator entry point for explicit initial grants. It is never called by
-// startup, a public route or a migration automatically; old membership is not guessed.
 export const configureAccess = internalMutation({
   args: {
     memberActor: statementActor,

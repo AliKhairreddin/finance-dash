@@ -3,7 +3,6 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import { productionEnvironment, productionUrl } from "./deploy-production";
 
-// Preview by default; --apply updates references only, in bounded, resumable batches.
 const dryRun = !process.argv.includes("--apply");
 const env = productionEnvironment(process.env);
 const selection = env.CONVEX_DEPLOY_KEY ? [] : ["--deployment", "famous-oyster-878"];

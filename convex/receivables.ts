@@ -204,7 +204,6 @@ export const match = mutation({ args: auth, returns: v.object({ matched: v.numbe
   const pairs: { item: Doc<"receivableItems">; bank: Doc<"bankTransactions"> }[] = [];
   let readCount = 0;
   for (const group of groups.values()) {
-    // Scope the durable ledger read to the balances being matched; decode consumed identities only once.
     const rows = await ctx.db.query("bankTransactions").withIndex("by_direction_currency_amount", q => q.eq("direction", "in").eq("currency", group.currency).gte("amount", (group.cents - 1) / 100).lte("amount", (group.cents + 1) / 100)).take(1001);
     readCount += rows.length;
     if (rows.length > 1000 || readCount > 3000) return { matched: 0, complete: false, candidates: 0 };

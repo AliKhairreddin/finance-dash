@@ -75,8 +75,6 @@ export async function fetchRedTrackRows(apiKey: string, fromDate: string, toDate
     // When pagination is disabled, RedTrack returns the entire result.
     if (batch.length !== pageSize) break;
   }
-  // An independent daily rollup detects truncated pages and changing reports
-  // before any saved day is replaced, including empty results.
   const controls = await get("/report", { date_from: fromDate, date_to: toDate, timezone: redTrackTimezone,
     group: "date", fields: "date,revenue,conversions,total_revenue,total_conversions", click_time: "false", page: "1", per: String(pageSize) });
   const totals = new Map<string, number[]>();

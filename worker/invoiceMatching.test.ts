@@ -35,7 +35,6 @@ test("automatic matching persists exact payments before AI and rechecks manual d
       assert.equal(stateWrites, 1, "Exact link must be durable before starting AI");
       assert.equal(invoices[0].transactionId, transaction.id);
       assert.equal(transactions[0].matchedInvoiceId, invoice.id);
-      // Someone explicitly excludes this transaction while AI is running.
       transactions = transactions.map(item => item.id === "payment-ai" ? { ...item, invoiceMatchSource: "manual" } : item);
       updatedAt = "manual-revision";
       return Response.json({ choices: [{ message: { content: JSON.stringify({ matches: [

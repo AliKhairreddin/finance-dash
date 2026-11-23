@@ -13,7 +13,6 @@ const auth = (env: TrackerEnv) => ({ serviceToken: env.CONVEX_SERVICE_TOKEN });
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "private, no-store" } });
 export function trackerEligibleUsers(env: TrackerEnv) {
   const allowed = new Set(`${env.TELEGRAM_COMMAND_ADMIN_USERS},${env.TELEGRAM_COMMAND_READ_ONLY_USERS},${env.DASHBOARD_ADMINISTRATOR_USERS ?? ""}`.split(",").map(normalizeFinanceUsername));
-  // Finance login merges these existing private-chat directories. Eligibility still requires a full Finance role.
   const directories = [env.TELEGRAM_AUTH_USERS_JSON, env.TELEGRAM_TOPUP_USERS_JSON, env.TELEGRAM_TRANSACTION_REVIEWER_USERS_JSON, env.TELEGRAM_MEDIA_SPEND_USERS_JSON].filter((value): value is string => Boolean(value?.trim()));
   const parsed = directories.map(value => parseTelegramAuthUsers(value));
   if (!parsed.length || parsed.some(users => !users)) return [];

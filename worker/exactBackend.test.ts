@@ -14,7 +14,6 @@ process.env.EXACT_ENCRYPTION_KEY = "11".repeat(32);
 const modules = {
   "../convex/_generated/server.ts": () => import("../convex/_generated/server"),
   "../convex/exact.ts": () => import("../convex/exact"),
-  // Queue tests must never call the network or use real credentials.
   "../convex/exactSync.ts": async () => ({ pump: internalAction({ args: {}, returns: v.null(), handler: async () => null }) })
 };
 const auth = { serviceToken: "test-service", actor: "Ali" }, division = 3503006;

@@ -86,7 +86,6 @@ export class PartnerUpdates extends DurableObject<WorkerEnv> {
   private async process(): Promise<void> {
     const job = await this.ctx.storage.get<UpdateJob>("job");
     if (!job || ["complete", "partial", "failed"].includes(job.status.status)) return;
-    // Watchdog resumes safe work if the instance is interrupted.
     await this.ctx.storage.setAlarm(Date.now() + 240_000);
     if (job.images.length < partnerUpdateReportKinds.length) {
       job.status.status = "preparing";

@@ -66,7 +66,6 @@ export function inferMediaFundingAssignments(
     const providers = evidence.get(`${row.platform}:${pattern}`);
     if (!providers || providers.size !== 1) continue;
     const [providerId, examples] = [...providers][0];
-    // Repeated days/workspaces of one account are not independent examples.
     if ([...examples].filter((id) => id !== row.accountId).length < 2) continue;
     const target: MediaFundingAssignmentTarget = {
       scope: "ad_account", platform: row.platform, businessManagerId: row.businessManagerId,

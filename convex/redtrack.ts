@@ -37,8 +37,6 @@ export const report = action({
         };
         let sources: RedTrackSource[] | undefined;
         if (!saved.sourcesSavedAt || args.force || Date.now() - saved.sourcesSavedAt > 86_400_000) sources = await fetchRedTrackSources(apiKey, pacedFetch);
-        // Only missing or expired days are requested. A different filter or an
-        // overlapping date window reuses the same saved daily data.
         for (const interval of redTrackSyncRanges(needed())) {
           const rows = await fetchRedTrackRows(apiKey, interval.fromDate, interval.toDate, pacedFetch);
           await ctx.runMutation(internal.redtrackCache.save, { attemptId, ...interval, rows, savedAt: Date.now(), ...(sources ? { sources } : {}) });

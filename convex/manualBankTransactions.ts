@@ -83,7 +83,6 @@ export const remove = mutation({
     if (row.deletedAt) return null;
     if (row.revision !== args.expectedRevision) throw new ConvexError("This transaction was edited by someone else. Refresh and reopen it before deleting.");
     const now = new Date().toISOString();
-    // Retain the intake identity and financial fields so retries cannot recreate a deleted entry.
     await ctx.db.patch(row._id, { deletedAt: now, deletedBy: args.deletedBy, updatedAt: now, revision: row.revision + 1 });
     return null;
   }

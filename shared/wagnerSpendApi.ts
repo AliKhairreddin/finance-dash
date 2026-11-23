@@ -60,7 +60,6 @@ export function parseWagnerSpend(value: unknown, fromDate: string, toDate: strin
       spend, commission, total: totalCost(spend, commission)
     };
   });
-  // Each source row is rounded separately; retain exact source totals and allow only cent-rounding drift.
   for (const [field, exact] of [["spend", spend], ["commission", commission]] as const) {
     if (Math.abs(rows.reduce((sum, row) => sum + row[field], 0) - exact) > (rows.length + 1) * 0.005 + 0.000001) return invalid();
   }
@@ -116,8 +115,6 @@ export async function handleWagnerSpendApi(url: URL, apiKey: string | undefined,
         upstream.searchParams.set(filter, value.split(",").map(item => item.trim().toLowerCase()).filter(Boolean).sort().join(","));
       }
     }
-    // Refresh the dimensions contract once so older snapshots cannot hide the new campaign list.
-    // Existing spend reports retain their identities and saved financial data.
     const key = `wagner:v1:${upstream.pathname}?${dimensions ? "schema=rt_campaign" : upstream.searchParams}`;
     let cached = await cache.acquire(key, attemptId);
     for (let wait = 0; cached.status === "busy" && wait < 8; wait++) {

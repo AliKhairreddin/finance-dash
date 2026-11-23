@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import test, { after, mock } from "node:test";
-// Convex schedules cleanup for twelve minutes later. Virtual timers keep those
-// persisted jobs testable without retaining real timers in the test process.
 mock.timers.enable({ apis: ["setTimeout"] });
 after(() => mock.timers.reset());
 import { convexTest } from "convex-test";

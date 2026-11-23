@@ -56,7 +56,6 @@ export function amexStatementAmount(value: string): number {
   let text = value.trim().replace(/\s|\u00a0/g, "").replace(/^(?:EUR|USD|GBP|CAD|€|\$|£)/i, "");
   const credit = /CR$/i.test(text) || /^\(.*\)$/.test(text) || /-$/.test(text);
   text = text.replace(/CR$/i, "").replace(/^\((.*)\)$/, "$1").replace(/-$/, "");
-  // Separators must be valid decimal/thousands groups; never parse a numeric prefix.
   if (/^[+-]?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}$/.test(text)) text = text.replaceAll(".", "").replace(",", ".");
   else if (/^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?$/.test(text)) text = text.replaceAll(",", "");
   else throw new Error(`Invalid amount: ${value}`);

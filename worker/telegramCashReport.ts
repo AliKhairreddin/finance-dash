@@ -209,7 +209,6 @@ export function cashReportDelivered(state: CashReportDeliveryState | undefined, 
   return Boolean(state && (state.date > date || (state.date === date && state.nextPart === state.parts.length)));
 }
 
-// Called inside the recipient Durable Object's serialized operation, including the sends.
 export async function deliverCashReportParts(
   storage: Pick<DurableObjectStorage, "get" | "put">,
   date: string,

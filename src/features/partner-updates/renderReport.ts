@@ -12,7 +12,6 @@ async function render() {
   const canvas = document.getElementById("report") as HTMLCanvasElement;
   if (kind === "cash-flow") renderCashFlowPng(canvas, data.cashFlow, data.history, data.rates);
   else renderPartnerInvoices(canvas, data);
-  // The screenshot waits for this marker; failed rendering cannot send an empty image.
   canvas.id = "partner-report-ready";
 }
 

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as contracts from "../convex/companyDocuments";
-// A small indexed database harness exercises the registered mutation handlers.
 type Row = Record<string, any>;
 function database(initial: Record<string, Row[]> = {}) {
   const tables = new Map(Object.entries(initial)); let counter = 0;

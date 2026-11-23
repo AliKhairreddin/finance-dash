@@ -140,8 +140,6 @@ async function recordAndMatchDocuments(ctx: MutationCtx, inputs: DocumentMatchIn
   const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
   if (!state) throw new ConvexError("Dashboard is not initialized");
   const { invoices, expenses } = state;
-  // Keep one transaction-local ledger so later documents see earlier matches.
-  // Bank and document claims still read their current values within this mutation.
   for (const input of inputs) {
     const current = await ctx.db.get(input.document._id);
     if (current) await recordAndMatch(ctx, state, current, input.extraction, input.transactionId, input.confirmCurrencyConversion, input.allowCreate);
@@ -237,7 +235,6 @@ async function recordAndMatch(ctx: MutationCtx, state: Doc<"dashboardState">, do
   if (manualTransactionId && !match) throw new ConvexError("This transaction no longer fits the document or is already claimed");
   const foreignCurrency = match && match.currency !== extraction.currency;
   if (manualTransactionId && foreignCurrency && !confirmCurrencyConversion) throw new ConvexError("Confirm the bank charge and document amounts in their different currencies");
-  // Never replace a separate link on an existing accounting record silently.
   if (existingTransactionId && (!match || match.id !== existingTransactionId)) {
     await ctx.db.patch(document._id, { invoiceId, expenseId, status: "needs_review", matchReason: "An existing bank link needs review before this document can be attached" }); return;
   }
@@ -279,7 +276,6 @@ async function recordAndMatch(ctx: MutationCtx, state: Doc<"dashboardState">, do
   const reason = inherited ? `Linked to the ${existingExpense ? "expense" : "invoice"}’s existing bank match; payment status unchanged` : match ? manualTransactionId ? foreignCurrency ? `Foreign-currency match confirmed by the finance team: ${extraction.amount} ${extraction.currency} document / ${match.amount} ${match.currency} bank charge; payment remains unchanged` : "Match confirmed by the finance team; payment remains unchanged" : "Exact total and currency, document date, company ownership, and counterparty/reference evidence" : available.length > 1 ? "Several bank transactions fit; review required" : "Waiting for a unique matching bank transaction";
   await ctx.db.patch(document._id, { invoiceId, expenseId, status: match ? "matched" : "unmatched", transactionId: match?.id, matchReason: reason, matchedAt: match ? now : undefined, nextMatchAt: match ? undefined : new Date(Date.now() + 5 * 60_000).toISOString() });
   for (const file of related) {
-    // Trashed originals retain their identity and accounting link without returning to the library.
     if (file.deletedAt) continue;
     if (file.entity !== extraction.entity) await moveFolder(ctx, file, { entity: extraction.entity, month: file.month });
     await ctx.db.patch(file._id, { purchaseId, entity: extraction.entity, invoiceId, expenseId,
@@ -400,7 +396,6 @@ export const rematch = mutation({
   }
 });
 
-// Backfill the archive from existing protected expense files, without copying their bytes.
 export const archiveExpenses = mutation({
   args: { serviceToken: v.string() }, returns: v.number(),
   handler: async (ctx, args) => {

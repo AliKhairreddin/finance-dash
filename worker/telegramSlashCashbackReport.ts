@@ -51,7 +51,6 @@ export function buildTelegramSlashCashbackReport(input: {
     const account = tx.virtualAccountId ? accounts.get(tx.virtualAccountId) : undefined;
     group.accounts.add(account ? cleanName(account.name) : `Virtual account unavailable (${cleanName(tx.accountId)})`);
     const spend = -tx.amountCents;
-    // Integer arithmetic expresses 2.3% without binary floating-point threshold drift.
     if (!Number.isSafeInteger(spend * 23)) throw new Error("Slash purchase exceeds the cashback calculation limit");
     const expected = Math.round(spend * 23 / 1000);
     group.purchases += 1;
@@ -68,7 +67,6 @@ export function buildTelegramSlashCashbackReport(input: {
       group.knownSpendCents += spend;
       group.cashbackCents += amountCents;
       group.expectedCents += expected;
-      // Accept per-purchase cent rounding, but still flag an explicitly lower provider rate.
       if (rate < slashCashbackTargetRate - 1e-10 || amountCents < Math.floor(spend * 23 / 1000)) {
         group.belowTarget += 1;
         group.shortfallCents += Math.max(0, expected - amountCents);

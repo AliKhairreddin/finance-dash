@@ -178,7 +178,6 @@ export const begin = mutation({ args: { ...auth, requestId: v.string(), ids: v.a
   if (current && !a.regenerate) return current._id;
   if (current && a.regenerate && current.state !== "ready") return current._id;
   let predecessorId = current?._id ?? active.find(i => i.state === "stale")?._id;
-  // An overlapping request cannot produce a second active document for a transaction.
   for (const row of rows) {
     const links = await ctx.db.query("statementInvoiceTransactions").withIndex("by_transaction", q => q.eq("transactionId", row!._id)).take(201);
     if (links.length > 200) throw new ConvexError("Review document history before generation");
@@ -265,7 +264,6 @@ export const finalize = mutation({ args: { ...auth, id: v.id("statementInvoices"
   const docId = await ctx.db.insert("statementDocuments", { companyId: row.companyId, financialAccountId: row.financialAccountId, fileName: `${row.number}.pdf`, contentType: "application/pdf", size: file.size, storageId: a.storageId, contentHash: `generated:${row._id}`, origin: "file", status: "ready", documentType: row.documentType === "sales_invoice" ? "invoice" : "supporting", evidence: [], reviewReasons: [], attempts: 0, quarantined: false, transactionIds: sources.map(s => s.transactionId), createdAt: stamp, updatedAt: stamp, generatedInvoiceId: row._id, extracted: JSON.stringify({ amount: invoiceTotals(draft).total, currency: draft.currency }) });
   for (const source of sources) { const txn = (await ctx.db.get(source.transactionId))!;
     const links = await ctx.db.query("statementLinks").withIndex("by_transactionId", q => q.eq("transactionId", txn._id)).take(201);
-    // Superseded generated allocations are removed; the original document and its audit remain.
     for (const link of links) { const old = await ctx.db.get(link.documentId); if (old?.generatedInvoiceId) await ctx.db.delete(link._id); }
     const nonGenerated = await Promise.all(links.map(async l => ({ l, doc: await ctx.db.get(l.documentId) })));
     const allocated = nonGenerated.filter(x => !x.doc?.generatedInvoiceId).reduce((sum, x) => sum + BigInt(x.l.amountMinor), 0n);
@@ -277,7 +275,6 @@ export const finalize = mutation({ args: { ...auth, id: v.id("statementInvoices"
 } });
 export const discard = mutation({ args: { ...auth, id: v.id("statementInvoices") }, returns: v.null(), handler: async (ctx, a) => {
   const row = await invoice(ctx, a); requirePermission(await access(ctx, a), "generate"); if (!["draft", "failed"].includes(row.state)) throw new ConvexError("Only unfinished drafts can be discarded");
-  // Retain the draft and source history while releasing its unused invoice number.
   await ctx.db.patch(row._id, { state: "discarded", number: `discarded:${row._id}`, revision: row.revision + 1, updatedAt: Date.now() }); await indexInvoice(ctx, row._id); await audit(ctx, a.actor, row._id, "draft_discarded"); return null;
 } });
 export const profile = query({ args: { ...auth, companyId: statementCompany, financialAccountId:v.optional(v.string()), otherName: v.string() }, returns: v.string(), handler: async (ctx, a) => {
@@ -295,7 +292,6 @@ export const history = query({args:{...auth,id:v.id("statementInvoices")},return
   return JSON.stringify(rows);
 }});
 
-// Administrator-only rendering maintenance. Financial snapshots and links stay fixed.
 export const shareSupplierDesign = internalMutation({
   args: { actor: v.string(), aliasKey: v.string(), targetKey: v.string(), expectedAliasVersion: v.number(), expectedTargetVersion: v.number() },
   returns: v.boolean(),

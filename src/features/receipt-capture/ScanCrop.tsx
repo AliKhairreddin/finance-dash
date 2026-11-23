@@ -11,7 +11,6 @@ export function ScanCrop({ photo, width, height, corners, onChange, disabled }: 
   useEffect(() => {
     const element = container.current!;
     const observer = new ResizeObserver(() => {
-      // Inset the photo so a 44px touch target remains reachable at every edge.
       const scale = Math.min(Math.max(1, element.clientWidth - 48) / width, Math.max(1, element.clientHeight - 48) / height);
       setRect({ left: (element.clientWidth - width * scale) / 2, top: (element.clientHeight - height * scale) / 2, width: width * scale, height: height * scale });
     });

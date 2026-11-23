@@ -68,7 +68,6 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
   async alarm(): Promise<void> {
     if (this.env.SLASH_SPEND_NOTIFICATIONS_ENABLED !== "true") { await this.ctx.storage.deleteAlarm(); return; }
     await this.serialize(async () => {
-      // A persisted watchdog survives interruptions during provider reads or Telegram sends.
       await this.ctx.storage.setAlarm(Date.now() + 60_000);
       const event = await this.ctx.storage.get<EventJob>("event-job");
       if (event) {
@@ -118,10 +117,8 @@ export class SlashCardAlerts extends DurableObject<WorkerEnv> {
           for (const recipient of job.recipients) blockedRecipients.add(recipient.name);
           console.error(JSON.stringify({ event: "slash_card_alert_retry", transactionId: job.notification.transaction.id, error: error instanceof Error ? error.message : "Card alert failed" }));
         }
-        // Preserve each recipient's incident order without blocking the other user.
       }
       if (jobs.size === 25) {
-        // Continue past failed deliveries so a healthy recipient can receive the whole backlog.
         await this.ctx.storage.put("delivery-scan", { after: [...jobs.keys()].at(-1), blocked: [...blockedRecipients], failed } satisfies DeliveryScan);
         await this.ctx.storage.setAlarm(Date.now() + 1);
       } else {

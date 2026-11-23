@@ -18,7 +18,7 @@ export async function replacementRequest(url: (path: string, body: string) => st
     throw new Error(`Merit request failed (${response.status}); check replacement status before retrying`);
   }
   const text = await readBoundedResponseText(response, "Merit", 25 * 1024 * 1024, 30_000);
-  if (path.startsWith("/v2/deleteinvoice/")) return null; // Confirm deletion from a separate read, regardless of response body.
+  if (path.startsWith("/v2/deleteinvoice/")) return null;
   if (!text) throw new Error("Merit returned an empty response");
   return JSON.parse(text);
 }

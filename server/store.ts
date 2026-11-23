@@ -3035,7 +3035,6 @@ export function getAnalyticsSnapshot(fromDate: string, toDate: string): Analytic
       .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
   );
   // The local in-memory store has no verified history intervals.
-  // Its existing records are useful, but must not be presented as complete history.
   const sources: BankTransactionSource[] = ["wise", "revolut", "slash", "amex", "mercury", "flex"];
   return { ...accumulator.finish(), coverage: sources.map((source) => ({ source, missingRanges: [{ fromDate, toDate }] })) };
 }
