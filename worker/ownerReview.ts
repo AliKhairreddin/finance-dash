@@ -1,3 +1,6 @@
+import { bankConnectionKey, type BankConnectionIdentityEnvironment } from "../shared/bankConnectionIdentity";
+import { bankSources, isActiveBalanceSource } from "../shared/banks";
+import { ownerBankBalances } from "../shared/ownerBankBalances";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
@@ -7,7 +10,7 @@ import { canPreviewAmin, financeReviewAccess, ownerReviewAccess } from "../share
 import { monthLabel, ownerForLogin, owners, type ReviewAddresses } from "../shared/ownerReview";
 import { boundedBytes, secureHeaderMatches } from "./documentIntake";
 
-type Env = Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OWNER_REVIEW_EMAIL">;
+type Env = BankConnectionIdentityEnvironment & Pick<WorkerEnv, "CONVEX_URL" | "CONVEX_SERVICE_TOKEN" | "OWNER_REVIEW_EMAIL">;
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
 }
@@ -41,6 +44,18 @@ export async function handleOwnerReview(request: Request, env: Env, session: Das
   const cursor = url.searchParams.get("cursor");
   try {
     switch (url.pathname) {
+      case "/api/monthly-review/bank-balances": {
+        const configured = await Promise.all(bankSources.filter(bank => isActiveBalanceSource(bank.id)).map(async ({ id: source }) => {
+          const connectionKey = await bankConnectionKey(env, source);
+          return connectionKey ? { source, connectionKey } : null;
+        }));
+        const connections = configured.filter(c => c !== null);
+        const [accounts, rates] = await Promise.all([
+          db.query(api.banking.getCashReportAccounts, { ...auth, connections }),
+          db.query(api.dashboard.getSavedFxRates, auth)
+        ]);
+        return json(ownerBankBalances(accounts, rates, connections.map(c => c.source)));
+      }
       case "/api/monthly-review/imported": return json(await db.query(api.ownerReviews.imported, auth));
       case "/api/monthly-review/list": return json(await db.query(api.ownerReviews.list, { ...auth, finance, cursor }));
       case "/api/monthly-review/contacts":

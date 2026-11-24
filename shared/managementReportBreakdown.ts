@@ -77,7 +77,10 @@ function lineRow(line: ManagementReportBusinessLine, unit: ManagementReportBusin
 /** Only exact sheet/unit names are linked; a similarly named customer is not a unit. */
 export function consolidatedLineUnit(dashboard: ManagementReportDashboard, line: ManagementReportBusinessLine) {
   const key = line.label.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const units = dashboard.businessUnits.filter(unit => key === unit.sourceSheet.replace(/[^a-z0-9]/g, "") || key === unit.name.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const units = dashboard.businessUnits.filter(unit => {
+    const name = unit.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return key === unit.sourceSheet.replace(/[^a-z0-9]/g, "") || key === name || key === "vb" + name;
+  });
   return units.length === 1 ? units[0] : undefined;
 }
 

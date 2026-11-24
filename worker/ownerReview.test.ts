@@ -196,3 +196,24 @@ test("historical sign-off records only the confirmed workbook atomically without
   assert.deepEqual((await list()).rows, rows);
   assert.deepEqual(await t.run(ctx => ctx.db.system.query("_scheduled_functions").take(1)), []);
 });
+
+test("owners and the Amin preview receive saved balances only, with debt outside the cash total", async t => {
+  const env = { CONVEX_URL: "https://fixture.convex.cloud", CONVEX_SERVICE_TOKEN: auth.serviceToken, SLASH_BASE_URL: "https://example.com", SLASH_CONNECTION_ID: "fixture" };
+  const cash = { source: "slash", name: "Settlement", id: "raw-bank-id", currency: "USD", balance: 85, updatedAt: "2026-11-24T07:00:00Z",
+    slashVirtualAccounts: [{ accountNumber: "private-routing" }] };
+  const reads = t.mock.method(ConvexHttpClient.prototype, "query", async (_fn: unknown, args: { connections?: unknown[] }) =>
+    args.connections ? [cash, { ...cash, id: "raw-credit-id", name: "Card", slashAccountSubtype: "credit", balance: 45 }] : []);
+  const url = "https://finance.example/api/monthly-review/bank-balances";
+  for (const username of ["Amin", "Sani", "Ben", "Ali", "Ali M"]) {
+    const preview = username.startsWith("Ali");
+    const response = await handleOwnerReview(new Request(url + (preview ? "?preview=Amin" : "")), env, { username, role: preview ? "administrator" : "owner" });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.cashUsd, 85);
+    assert.equal(result.groups.find((g: { debt: boolean }) => g.debt)?.usd, 45);
+    assert.doesNotMatch(JSON.stringify(result), /raw-bank-id|raw-credit-id|private-routing|slashVirtualAccounts/);
+  }
+  assert.equal((await handleOwnerReview(new Request(url + "?preview=Amin"), env, { username: "Other", role: "administrator" })).status, 403);
+  assert.equal((await handleOwnerReview(new Request(url, { method: "POST" }), env, { username: "Ben", role: "owner" })).status, 403);
+  assert.equal(reads.mock.callCount(), 10);
+});

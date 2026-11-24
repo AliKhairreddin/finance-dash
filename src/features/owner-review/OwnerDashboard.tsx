@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from "react";
-import { Banknote, LogOut } from "lucide-react";
+import { Banknote, ChevronDown, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useUrlState } from "@/lib/url-state";
 import { monthLabel, needsOwnerReview, ownerForLogin, reviewStatus, type Owner, type OwnerReport, type OwnerTransaction, type ReviewSummary } from "../../../shared/ownerReview";
 import { reportMetricLabels } from "../../../shared/managementReportBreakdown";
 import { ReviewStatus, ReviewTable, Signers } from "./ReviewDetails";
 import { reviewApi, usd, useReviewData } from "./reviewApi";
+import { OwnerBankCards } from "./OwnerBankCards";
+import { OwnerProfitCards } from "./OwnerProfitCards";
 import "./ownerReview.css";
 
 type MonthChoice = { id: string; period: string; query: string; review: ReviewSummary | null };
@@ -50,6 +52,7 @@ export function OwnerDashboard({ apiBase, username, previewAmin, themeToggle }: 
           const status = review && needsOwnerReview(review, owner) ? "Needs your review" : review ? reviewStatus(review) : "Pending finance review";
           return <option key={id} value={id}>{monthLabel(period)} · {status}</option>;
         })}</select></label>}</header>
+      <OwnerBankCards apiBase={apiBase} preview={previewAmin} />
       {error ? <div role="alert">{error} <Button variant="outline" onClick={() => setRefresh(n => n + 1)}>Retry</Button></div>
         : !list.data || !imported.data ? <p role="status">Loading report months…</p>
         : !choice || !query ? <section className="panel owner-panel"><h2>{selected ? "Report month unavailable" : "No monthly figures available yet"}</h2>
@@ -65,6 +68,7 @@ function MonthlyReport({ query, apiBase, owner, previewAmin, report, review, sho
   query: string; apiBase: string; owner: Owner; previewAmin: boolean; report: OwnerReport; review: ReviewSummary | null; showLatest?: () => void; onDecision: () => void;
 }) {
   const [tab, setTab] = useUrlState<"results" | "transactions" | "sign-off">("ownerView", "results", { allowedValues: ["results", "transactions", "sign-off"] });
+  const [activeCategory, setActiveCategory] = useUrlState("ownerCategory", "");
   const [scope, setScope] = useUrlState("ownerUnit", "company");
   const [filter, setFilter] = useUrlState("ownerTxnFilter", "");
   const [segment, setSegment] = useUrlState("ownerTxnSegment", "");
@@ -96,21 +100,20 @@ function MonthlyReport({ query, apiBase, owner, previewAmin, report, review, sho
   function lineLabel(label: string) {
     return ledgerLabels.has(label.trim().toLowerCase()) ? <button className="owner-link" onClick={() => openTransactions(label)}>{label}</button> : label;
   }
-  const category = (group: string) => group.replaceAll("-", " ").replace(/^./, c => c.toUpperCase());
+  function drillTo(unit: string, metric: string) {
+    setScope(unit); setActiveCategory(metric); setTab("results");
+    requestAnimationFrame(() => document.getElementById("owner-profit")?.scrollIntoView({ block: "start" }));
+  }
   return <>{review && !review.current && <div role="status" className="owner-panel panel">This version was superseded. <Button variant="outline" onClick={showLatest}>Open current version</Button></div>}
-    <div className="owner-metrics">{headline.map(m => <div key={m.key}><span>{reportMetricLabels[m.key]}</span><strong>{usd(m.value)}</strong></div>)}
+    <div className="owner-metrics">{headline.map(m => <button key={m.key} type="button" className="owner-drill-card" aria-label={reportMetricLabels[m.key] + " " + usd(m.value) + ", view breakdown"} onClick={() => drillTo(report.company.id, m.key)}><span>{reportMetricLabels[m.key]}</span><ChevronDown size={14} aria-hidden="true" /><strong>{usd(m.value)}</strong></button>)}
       <div><span>My partner balance</span><strong>{usd(report.balance)}</strong><small>As of {report.balanceAsOf}</small></div></div>
     <div className="owner-nav"><nav className="segmented-control" aria-label="Owner views">
       {(["results", "transactions", "sign-off"] as const).map((key, i) => <button key={key} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{["Monthly results", "Transactions", "Sign-off"][i]}</button>)}</nav>
       <button className="owner-status-button" aria-label="View month sign-off" onClick={() => setTab("sign-off")}><ReviewStatus review={review} /></button></div>
-    {tab === "results" && <section className="panel owner-panel"><div className="owner-heading"><h2>Profit and loss</h2>
+    {tab === "results" && <section id="owner-profit" className="panel owner-panel"><div className="owner-heading"><h2>Profit and loss</h2>
       <label>Business unit<select value={selected.id} onChange={e => setScope(e.target.value)}>
         {[report.company, ...report.units].map(u => <option value={u.id} key={u.id}>{u.name}</option>)}</select></label></div>
-      <div className="owner-totals">{selected.metrics.map(m => <div key={m.key}><span>{reportMetricLabels[m.key]}</span><strong>{usd(m.value)}</strong></div>)}</div>
-      <h3>Report lines</h3><ReviewTable name="ownerLines" caption="Monthly report lines" empty="No itemized lines reported." rows={selected.lines}
-        mobileRow={row => <div className="owner-mobile-line"><div>{lineLabel(row.label)}<small>{category(row.group)}</small></div><strong>{usd(row.value)}</strong></div>}
-        columns={[{ key: "label", label: "Line", show: row => lineLabel(row.label) },
-          { key: "group", label: "Category", show: row => category(row.group) }, { key: "value", label: "Amount (USD)", show: row => usd(row.value) }]} />
+      <OwnerProfitCards unit={selected} active={activeCategory} setActive={setActiveCategory} drillTo={drillTo} lineLabel={lineLabel} />
       {ledgerLabels.has(selected.name.trim().toLowerCase()) && <Button variant="outline" onClick={() => openTransactions("")}>View {selected.name} transactions</Button>}</section>}
     {tab === "transactions" && <section className="panel owner-panel"><div className="owner-heading"><h2>Reported bank transactions</h2>
       {segment && <Button variant="outline" onClick={() => setSegment("")}>{segment} · Clear segment</Button>}

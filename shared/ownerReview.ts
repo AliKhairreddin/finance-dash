@@ -1,5 +1,5 @@
 import type { ManagementReportBankEntry, ManagementReportBusinessUnit, ManagementReportDashboard } from "./managementReport";
-import { reportColumn, reportMetricValue } from "./managementReportBreakdown";
+import { businessMetricBreakdown, reportColumn, reportMetricValue } from "./managementReportBreakdown";
 
 export const owners = ["Amin", "Sanjin", "Ben"] as const;
 export type Owner = typeof owners[number];
@@ -33,12 +33,18 @@ export function needsOwnerReview(review: ReviewSummary, owner: Owner) {
   return review.current && !review.priorConfirmation && !review.decisions.some(d => d.owner === owner);
 }
 
-function unitReport(unit: ManagementReportBusinessUnit, period: string) {
+function unitReport(dashboard: ManagementReportDashboard, unit: ManagementReportBusinessUnit, period: string) {
   const column = reportColumn(unit, period);
   if (!column) return null;
   return {
     id: unit.id, name: unit.name,
-    metrics: ownerMetrics.map(key => ({ key, value: reportMetricValue(unit, period, key) ?? null })),
+    metrics: ownerMetrics.map(key => {
+      const detail = businessMetricBreakdown(dashboard, unit, period, key);
+      const rows = detail.rows
+        .filter(row => row.value !== undefined || key === "gross-profit" || key === "net-profit")
+        .map(row => ({ id: row.id, label: row.label, value: row.value ?? null, scope: row.scope ?? null, metric: row.metric ?? null }));
+      return { key, value: detail.reported ?? null, rows };
+    }),
     lines: unit.lines.filter(line => !line.isRatio && !line.isSubtotal && line.values[column.key] !== undefined)
       .map(line => ({ id: line.lineId, label: line.label, group: line.subsection || line.section, value: line.values[column.key] }))
   };
@@ -52,16 +58,14 @@ export function canPublishPeriod(dashboard: ManagementReportDashboard, period: s
 }
 
 export function ownerReport(dashboard: ManagementReportDashboard, period: string, owner: Owner) {
+  const periodDashboard = { ...dashboard, businessUnits: dashboard.businessUnits.filter(unit => reportColumn(unit, period)) };
   const balance = dashboard.ownership.balances.find(row => row.canonicalName === owner);
   const equity = balance && dashboard.ownership.assetsLiabilities.find(row => row.section === "equity" && row.sourceRow === balance.sourceRow);
   return {
     balance: equity && (equity.amount !== undefined || equity.secondaryAmount !== undefined) ? balance!.balance : null,
     balanceAsOf: balance?.balanceAsOf ?? dashboard.metadata.asOf,
-    company: unitReport(dashboard.consolidated, period)!,
-    units: dashboard.businessUnits.flatMap(unit => {
-      const report = unitReport(unit, period);
-      return report ? [report] : [];
-    })
+    company: unitReport(periodDashboard, dashboard.consolidated, period)!,
+    units: periodDashboard.businessUnits.map(unit => unitReport(periodDashboard, unit, period)!)
   };
 }
 export type OwnerReport = ReturnType<typeof ownerReport>;

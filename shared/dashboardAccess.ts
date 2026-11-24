@@ -93,6 +93,6 @@ export function financeReviewAccess(request: Request): boolean {
 
 export function ownerReviewAccess(request: Request): boolean {
   const path = new URL(request.url).pathname;
-  if (request.method === "GET") return ["/api/session", "/api/monthly-review/imported", "/api/monthly-review/list", "/api/monthly-review/report", "/api/monthly-review/transactions"].includes(path);
+  if (request.method === "GET") return ["/api/session", "/api/monthly-review/bank-balances", "/api/monthly-review/imported", "/api/monthly-review/list", "/api/monthly-review/report", "/api/monthly-review/transactions"].includes(path);
   return request.method === "POST" && path === "/api/monthly-review/decision";
 }

@@ -472,6 +472,15 @@ export const getAnalyticsDirectory = query({
   }
 });
 
+export const getSavedFxRates = query({
+  args: { serviceToken: v.string() }, returns: dashboardFields.fxRates,
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const state = await ctx.db.query("dashboardState").withIndex("by_key", q => q.eq("key", "default")).unique();
+    return state?.fxRates ?? [];
+  }
+});
+
 export const getState = query({
   args: { serviceToken: v.string() },
   returns: v.union(
