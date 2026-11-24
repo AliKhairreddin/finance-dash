@@ -552,6 +552,9 @@ export interface MeritTax {
 
 export interface Transaction {
   id: string;
+  /** Entity and read-only provenance on the Revolut activity view. */
+  revolutEntity?: RevolutEntity;
+  statementOnly?: boolean;
   /** Ingestion-only alias used to atomically rekey a pre-v2 provider row. */
   providerLegacyId?: string;
   source: DataSource;
@@ -785,6 +788,7 @@ export interface TransactionPage {
   continueCursor: string | null;
   isDone: boolean;
   totalCount?: number;
+  revolutPeriod?: Pick<BankPeriodSourceMetrics, "moneyIn" | "moneyOut">;
   coverage?: Array<{
     source: BankTransactionSource;
     missingRanges: Array<{ fromDate: string; toDate: string }>;

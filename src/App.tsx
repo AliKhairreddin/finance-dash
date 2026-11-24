@@ -11,7 +11,7 @@ import { AmexStatementImport } from "./features/banking/AmexStatementImport";
 import { fetchAnalyticsRange, type AnalyticsResponse } from "../shared/analyticsRequest";
 import { claimAutomaticHistoryRequests, waitForBankHistorySync } from "../shared/bankHistorySync";
 import { LinkedDocumentTransaction } from "./features/expenses/LinkedDocumentTransaction";
-import { revolutEntities, revolutLabel, revolutBalanceIssue } from "../shared/revolutBalances";
+import { revolutEntityViews, type RevolutEntityView, revolutEntities, revolutLabel, revolutBalanceIssue } from "../shared/revolutBalances";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { DocumentsView } from "@/features/expenses/DocumentsView";
 import {
@@ -255,6 +255,7 @@ type TransactionPageRequest = {
   source?: BankSource;
   sources?: BankSource[];
   direction?: "in" | "out";
+  revolutEntity?: RevolutEntityView;
   wiseEntity?: WiseEntity;
   mercuryEntity?: import("../shared/types").MercuryEntity;
   slashEntity?: SlashEntity;
@@ -270,6 +271,7 @@ type TransactionPageRequest = {
 };
 type BankPeriodActivityMetrics = Pick<BankPeriodSourceMetrics, "moneyIn" | "moneyOut">;
 type TransactionPageState = {
+  revolutPeriod?: BankPeriodActivityMetrics;
   requestKey: string;
   transactions: Transaction[];
   cursor: string | null;
@@ -712,6 +714,7 @@ function App() {
   });
   const [mercuryEntityView] = useUrlState<MercuryEntityView>("mercuryEntity", "all", { allowedValues: mercuryEntityViews });
   const [slashEntityView] = useUrlState<SlashEntityView>("slashEntity", "all", { allowedValues: slashEntityViews });
+  const [revolutEntityView, setRevolutEntityView] = useUrlState<RevolutEntityView>("revolutEntity", "all", { allowedValues: revolutEntityViews });
   const [wiseEntityView, setWiseEntityView] = useUrlState<WiseEntityView>(
     "wiseEntity",
     "all",
@@ -847,6 +850,7 @@ function App() {
       ...(source ? { source } : {}),
       ...(sources ? { sources } : {}),
       ...(direction ? { direction } : {}),
+      ...(effectiveBankTab === "revolut" ? { revolutEntity: revolutEntityView } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(mercuryEntity ? { mercuryEntity } : {}),
       ...(slashEntity ? { slashEntity } : {}),
@@ -876,6 +880,7 @@ function App() {
     debouncedSearchTerm,
     matchFilter,
     revolutDateRange,
+    revolutEntityView,
     slashDateRange,
     teamFilter,
     transactionSortDirection,
@@ -932,7 +937,7 @@ function App() {
     return request;
   }, []);
 
-  const bankPeriodRange = !isTransactionReviewer && activeTab === "banks" && bankTab !== "holdings"
+  const bankPeriodRange = !isTransactionReviewer && activeTab === "banks" && bankTab !== "holdings" && bankTab !== "revolut"
     ? transactionPageRequest?.dateRange ?? null
     : null;
   const bankPeriodRangeKey = bankPeriodRange ? analyticsSnapshotKey(bankPeriodRange) : null;
@@ -1092,6 +1097,7 @@ function App() {
     if (request.source) query.set("source", request.source);
     if (request.sources) query.set("source", request.sources.join(","));
     if (request.direction) query.set("direction", request.direction);
+    if (request.revolutEntity) query.set("revolutEntity", request.revolutEntity);
     if (request.wiseEntity) query.set("wiseEntity", request.wiseEntity);
     if (request.mercuryEntity) query.set("mercuryEntity", request.mercuryEntity);
     if (request.slashEntity) query.set("slashEntity", request.slashEntity);
@@ -1187,6 +1193,7 @@ function App() {
       previousCursors: current.requestKey === request.key ? current.previousCursors : [],
       continueCursor: current.requestKey === request.key ? current.continueCursor : null,
       isDone: current.requestKey === request.key ? current.isDone : false,
+      revolutPeriod: current.requestKey === request.key ? current.revolutPeriod : undefined,
       totalCount: current.requestKey === request.key ? current.totalCount : undefined,
       isLoading: true,
       error: null
@@ -1207,6 +1214,7 @@ function App() {
         continueCursor: page.continueCursor,
         isDone: page.isDone,
         totalCount: page.totalCount,
+        revolutPeriod: page.revolutPeriod,
         isLoading: false,
         error: null
       });
@@ -1618,7 +1626,7 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
-    if (scope === "merchant") await refreshCurrentTransactionPage();
+    if (scope === "merchant" || transaction.revolutEntity) await refreshCurrentTransactionPage();
     setNotice(
       scope === "merchant"
         ? `Matched all ${transaction.merchantName ?? transaction.counterparty} transactions to this company.`
@@ -1642,7 +1650,7 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
-    if (scope === "merchant") await refreshCurrentTransactionPage();
+    if (scope === "merchant" || transaction.revolutEntity) await refreshCurrentTransactionPage();
     setNotice(
       scope === "merchant"
         ? `Applied ${category} to all ${transaction.merchantName ?? transaction.counterparty} transactions.`
@@ -1676,6 +1684,7 @@ function App() {
       return;
     }
     applyTransactionUpdate((await response.json()) as Transaction);
+    if (transaction.revolutEntity) await refreshCurrentTransactionPage();
     setNotice(teamId ? `Assigned ${transaction.counterparty} to ${teamsById.get(teamId)?.name ?? "owner"}.` : "Transaction owner cleared.");
   }
 
@@ -2477,6 +2486,9 @@ function App() {
           onOpenMerchantGroup={(group) => openBankActivityGroup("merchant", group.key, group.name)}
           onOpenCardGroup={(group) => openBankActivityGroup("card", group.key, group.label)}
           onOpenAccountGroup={(group) => openBankActivityGroup("account", group.key, group.accountName)}
+          revolutEntityView={revolutEntityView}
+          setRevolutEntityView={setRevolutEntityView}
+          revolutPeriod={transactionPageIsCurrent ? transactionPageState.revolutPeriod : undefined}
           wiseEntityView={wiseEntityView}
           setWiseEntityView={setWiseEntityView}
           bankDirection={bankDirection}
@@ -3712,6 +3724,9 @@ function BanksView({
   onOpenMerchantGroup,
   onOpenCardGroup,
   onOpenAccountGroup,
+  revolutEntityView,
+  setRevolutEntityView,
+  revolutPeriod,
   wiseEntityView,
   setWiseEntityView,
   bankDirection,
@@ -3786,6 +3801,9 @@ function BanksView({
   onOpenMerchantGroup: (group: BankMerchantGroupSummary) => void;
   onOpenCardGroup: (group: BankCardGroupSummary) => void;
   onOpenAccountGroup: (group: BankCardGroupSummary) => void;
+  revolutEntityView: RevolutEntityView;
+  setRevolutEntityView: (entity: RevolutEntityView) => void;
+  revolutPeriod?: BankPeriodActivityMetrics;
   wiseEntityView: WiseEntityView;
   setWiseEntityView: (entity: WiseEntityView) => void;
   bankDirection: "all" | "in" | "out";
@@ -3885,7 +3903,13 @@ function BanksView({
   const activeSourceBalance = sumCurrencyTotals(activeSource?.id === "mercury"
     ? dashboard.accounts.filter(account => account.source === "mercury" && (mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView))
     : activeSourceDisplayAccounts, (account) => account.balance);
-  const activeSourceStatus = activeSource ? statusBySource.get(activeSource.id) : undefined;
+  const lmdIssue = activeBank === "revolut" && revolutEntityView === "lmd"
+    ? revolutBalanceIssue(dashboard.accounts, "lmd", Date.parse(dashboard.asOf)) : undefined;
+  const activeSourceStatus: DashboardSnapshot["integrationStatus"][number] | undefined =
+    activeBank === "revolut" && revolutEntityView === "lmd"
+      ? { id: "revolut", label: revolutLabel("lmd"), configured: dashboard.accounts.some(account => account.revolutEntity === "lmd"),
+          needs: [], mode: lmdIssue ? "partial" : "live", message: "Saved LMD Revolut feed", issue: lmdIssue }
+      : activeSource ? statusBySource.get(activeSource.id) : undefined;
   const relevantIntegrationStatuses = activeSourceStatus
     ? [activeSourceStatus]
     : activeBank === "all"
@@ -3910,7 +3934,7 @@ function BanksView({
     : periodMetricsReady
       ? bankPeriodMetrics.wiseEntities.find((item) => item.wiseEntity === wiseEntityView) ?? null
       : null;
-  const periodMetricPlaceholder = bankPeriodMetricsError
+  const periodMetricPlaceholder = activeBank === "revolut" ? (transactionLoadError ? "Unavailable" : "Calculating…") : bankPeriodMetricsError
     ? "Unavailable"
     : isLoadingBankPeriodMetrics || !bankPeriodMetrics
       ? "Calculating…"
@@ -3932,7 +3956,7 @@ function BanksView({
   const slashPeriodEntity = bankPeriodMetrics?.slashEntities.find(entity => entity.slashEntity === slashEntityView);
   const slashPeriodActivity = slashEntityView === "all" ? periodSourceById.get("slash") ?? null : slashPeriodEntity ?? null;
   const mercuryPeriodActivity = mercuryEntityView === "all" ? periodSourceById.get("mercury") ?? null : bankPeriodMetrics?.mercuryEntities.find(entity => entity.mercuryEntity === mercuryEntityView) ?? null;
-  const activePeriodActivity = activeSource?.id === "mercury" ? mercuryPeriodActivity : activeSource?.id === "slash" ? slashPeriodActivity : activeSource?.id === "wise"
+  const activePeriodActivity = activeSource?.id === "revolut" ? revolutPeriod ?? null : activeSource?.id === "mercury" ? mercuryPeriodActivity : activeSource?.id === "slash" ? slashPeriodActivity : activeSource?.id === "wise"
     ? wisePeriodActivity
     : activeSource
       ? periodSourceById.get(activeSource.id) ?? null
@@ -3968,6 +3992,7 @@ function BanksView({
   const detailAccounts = activeSource
     ? dashboard.accounts.filter((account) =>
       account.source === activeSource.id
+      && (activeSource.id !== "revolut" || revolutEntityView === "all" || account.revolutEntity === revolutEntityView)
       && (activeSource.id !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView)
       && (activeSource.id !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)
       && (
@@ -3978,7 +4003,7 @@ function BanksView({
     )
     : [];
   const revolutGroups = accountBalanceGroups(dashboard.accounts.filter(account => account.source === "revolut"), dashboard.fxRates);
-  const revolutCashMetrics = revolutEntities.map(entity => {
+  const revolutCashMetrics = revolutEntities.filter(entity => activeBank !== "revolut" || revolutEntityView === "all" || entity === revolutEntityView).map(entity => {
     const group = revolutGroups.find(group => group.id === `revolut-${entity}`);
     const issue = revolutBalanceIssue(dashboard.accounts, entity, Date.parse(dashboard.asOf));
     return {
@@ -3990,7 +4015,7 @@ function BanksView({
   const mercuryBalanceAvailable = mercuryEntities.filter(entity => mercuryEntityView === "all" || entity.id === mercuryEntityView)
     .every(entity => detailAccounts.some(account => account.mercuryEntity === entity.id));
   const activeBankLabel = activeSource
-    ? activeSource.id === "mercury" && mercuryEntityView !== "all" ? `Mercury · ${mercuryEntityLabel(mercuryEntityView)}` : activeSource.id === "slash" && slashEntityView !== "all" ? `Slash · ${slashEntityLabel(slashEntityView)}` : activeSource.id === "wise" && wiseEntityView !== "all"
+    ? activeSource.id === "revolut" && revolutEntityView !== "all" ? revolutLabel(revolutEntityView) : activeSource.id === "mercury" && mercuryEntityView !== "all" ? `Mercury · ${mercuryEntityLabel(mercuryEntityView)}` : activeSource.id === "slash" && slashEntityView !== "all" ? `Slash · ${slashEntityLabel(slashEntityView)}` : activeSource.id === "wise" && wiseEntityView !== "all"
       ? `Wise · ${wiseEntityShortLabel(wiseEntityView)}`
       : activeSource.label
     : activeBank === "holdings"
@@ -3999,7 +4024,7 @@ function BanksView({
 
   useEffect(() => {
     setBankDetailsOpen(false);
-  }, [activeBank, allBankSource, wiseEntityView, slashEntityView, mercuryEntityView]);
+  }, [activeBank, allBankSource, wiseEntityView, slashEntityView, mercuryEntityView, revolutEntityView]);
 
   const headerMetrics = activeBank === "all" ? (
     <>
@@ -4057,14 +4082,14 @@ function BanksView({
       ) : (
         <>
           <BankHeadlineMetric
-            label={activeSource.id === "revolut" ? "DN money in" : "Period money in"}
+            label="Period money in"
             value={activePeriodActivity
               ? formatUsdCurrencyTotal(activePeriodActivity.moneyIn.volume, dashboard.fxRates, money(0))
               : periodMetricPlaceholder}
             title={activePeriodActivity ? nativeCurrencyBreakdown(activePeriodActivity.moneyIn.volume) : undefined}
           />
           <BankHeadlineMetric
-            label={activeSource.id === "revolut" ? "DN money out" : "Period money out"}
+            label="Period money out"
             value={activePeriodActivity
               ? formatUsdCurrencyTotal(activePeriodActivity.moneyOut.volume, dashboard.fxRates, money(0))
               : periodMetricPlaceholder}
@@ -4146,7 +4171,7 @@ function BanksView({
         />
       </section>
       <section className="bank-details-section">
-        <h3>{activeSource.id === "revolut" ? "DN activity for selected period" : "Selected period"}</h3>
+        <h3>Selected period</h3>
         <div className="bridge">
           <div className="bridge-row"><span>Money in</span><strong className="good-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyIn.volume) : periodMetricPlaceholder}</strong></div>
           <div className="bridge-row"><span>Money out</span><strong className="danger-text">{activePeriodActivity ? formatCurrencyTotals(activePeriodActivity.moneyOut.volume) : periodMetricPlaceholder}</strong></div>
@@ -4215,6 +4240,16 @@ function BanksView({
               }}>
                 <NativeSelectOption value="all">All entities</NativeSelectOption>
                 {slashEntities.map(entity => <NativeSelectOption key={entity.id} value={entity.id}>{entity.label}</NativeSelectOption>)}
+              </NativeSelect>
+            )}
+            {activeBank === "revolut" && (
+              <NativeSelect aria-label="Revolut entity" value={revolutEntityView} onValueChange={value => {
+                setRevolutEntityView(value as RevolutEntityView);
+                setBankAccountFilter("all");
+                onClearBankGroup();
+              }}>
+                <NativeSelectOption value="all">All entities</NativeSelectOption>
+                {revolutEntities.map(entity => <NativeSelectOption key={entity} value={entity}>{entity.toUpperCase()}</NativeSelectOption>)}
               </NativeSelect>
             )}
             {activeBank === "wise" && (
@@ -4396,10 +4431,11 @@ function BanksView({
           bankActivitySummary={bankActivitySummary}
           isLoadingBankActivitySummary={isLoadingBankActivitySummary}
           bankActivitySummaryError={bankActivitySummaryError}
-          periodActivity={activeBank === "mercury" ? mercuryPeriodActivity : periodSourceById.get(activeBank) ?? null}
-          periodMetricsError={bankPeriodMetricsError}
-          periodMetricsLoading={isLoadingBankPeriodMetrics}
-          periodMetricsReady={periodMetricsReady}
+          revolutEntityView={revolutEntityView}
+          periodActivity={activePeriodActivity}
+          periodMetricsError={activeBank === "revolut" ? transactionLoadError : bankPeriodMetricsError}
+          periodMetricsLoading={activeBank === "revolut" ? isLoadingTransactions : isLoadingBankPeriodMetrics}
+          periodMetricsReady={activeBank === "revolut" ? Boolean(revolutPeriod) : periodMetricsReady}
           onLoadMoreTransactions={onLoadMoreTransactions}
           onLoadPreviousTransactions={onLoadPreviousTransactions}
           onRetryBankActivitySummary={onRetryBankActivitySummary}
@@ -4652,6 +4688,7 @@ type BankReconciliationViewProps = {
   onOpenMerchantGroup: (group: BankMerchantGroupSummary) => void;
   onOpenCardGroup: (group: BankCardGroupSummary) => void;
   onOpenAccountGroup: (group: BankCardGroupSummary) => void;
+  revolutEntityView?: RevolutEntityView;
   wiseEntityView?: WiseEntityView;
   onMatch: (transaction: Transaction, providerId: string | undefined, scope: TransactionOverrideScope) => void;
   onAssignTeam: (transaction: Transaction, teamId?: string) => void;
@@ -4710,6 +4747,7 @@ function BankReconciliationView({
   onOpenCardGroup,
   onOpenAccountGroup,
   wiseEntityView,
+  revolutEntityView,
   onMatch,
   onAssignTeam,
   onUpdateCategory,
@@ -4748,7 +4786,7 @@ function BankReconciliationView({
   const statementAccounts = useAmexStatementAccounts(source === "amex");
   const accountOptions = [...new Map([
     ...statementAccounts.map(account => [account.id, account] as const),
-    ...dashboard.accounts.filter(account => account.source === source && account.revolutEntity !== "lmd" && (source !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView) && (source !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)).map(account => [account.id, { id: account.id, name: account.name }] as const),
+    ...dashboard.accounts.filter(account => account.source === source && (source !== "revolut" || revolutEntityView === "all" || account.revolutEntity === revolutEntityView) && (source !== "mercury" || mercuryEntityView === "all" || account.mercuryEntity === mercuryEntityView) && (source !== "slash" || slashEntityView === "all" || account.slashEntity === slashEntityView)).map(account => [account.id, { id: account.id, name: account.name }] as const),
     ...rows.filter(row => row.accountId).map(row => [row.accountId!, { id: row.accountId!, name: row.accountName }] as const)
   ]).values()].sort((left, right) => left.name.localeCompare(right.name));
   const slashVirtualAccounts = slashVirtualAccountOptions(dashboard.accounts.filter(account => slashEntityView === "all" || account.slashEntity === slashEntityView));
@@ -6820,6 +6858,11 @@ function TransactionTable({
                   )}
                   <td className="counterparty-cell">
                     <div className="transaction-counterparty-heading">
+                      {transaction.revolutEntity && (
+                        <span className={`wise-entity-badge entity-${transaction.revolutEntity}`} title={revolutLabel(transaction.revolutEntity)}>
+                          {transaction.revolutEntity.toUpperCase()}
+                        </span>
+                      )}
                       {showWiseEntity && transaction.wiseEntity && (
                         <span
                           className={`wise-entity-badge entity-${transaction.wiseEntity}`}
@@ -6849,6 +6892,12 @@ function TransactionTable({
                     </span>
                   </td>
                   <td className="amount">{money(transaction.amount, transaction.currency)}</td>
+                  {transaction.statementOnly ? <>
+                    <td>—</td>
+                    <td>{displayCategory}</td>
+                    <td>—</td>
+                    {!reviewMode && <><td>Statements</td><td>—</td></>}
+                  </> : <>
                   <td>
                     <div className="team-select">
                       <NativeSelect
@@ -6941,6 +6990,7 @@ function TransactionTable({
                       </Button>
                     </div>
                   </td>}
+                  </>}
                 </tr>
               );
             })

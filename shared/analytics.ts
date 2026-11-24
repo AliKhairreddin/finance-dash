@@ -567,6 +567,23 @@ function addBoundedDimension<T>(map: Map<string, T>, key: string, maximum: numbe
   return next;
 }
 
+function recordPeriodTransaction(activity: MutableBankPeriodActivity, transaction: Transaction, needsReview: boolean): void {
+  const direction = transaction.direction === "in" ? activity.moneyIn : activity.moneyOut;
+  direction.transactionCount += 1;
+  if (!needsReview) direction.categorizedTransactionCount += 1;
+  if (!transaction.teamId) direction.unassignedOwnerTransactionCount += 1;
+  incrementMoney(direction.volume, transaction.currency, transaction.amount);
+}
+
+export function bankPeriodForTransactions(transactions: readonly Transaction[]) {
+  const activity = emptyBankPeriodActivity();
+  for (const transaction of transactions) {
+    if (transaction.status === "pending" || isNonOperatingMovementTransaction(transaction)) continue;
+    recordPeriodTransaction(activity, transaction, isReviewOnlyTransactionCategory(transaction.category));
+  }
+  return finalizeBankPeriodActivity(activity);
+}
+
 export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulatorOptions): BankAnalyticsAccumulator {
   const fromDate = assertIsoDate(options.fromDate, "Analytics fromDate");
   const toDate = assertIsoDate(options.toDate, "Analytics toDate");
@@ -988,11 +1005,7 @@ export function createBankAnalyticsAccumulator(options: BankAnalyticsAccumulator
   function addBankPeriodTransaction(transaction: Transaction, source: BankTransactionSource, needsReview: boolean) {
     bankPeriodTransactionCount += 1;
     const activity = bankPeriodSources.get(source) ?? emptyBankPeriodActivity();
-    const direction = transaction.direction === "in" ? activity.moneyIn : activity.moneyOut;
-    direction.transactionCount += 1;
-    if (!needsReview) direction.categorizedTransactionCount += 1;
-    if (!transaction.teamId) direction.unassignedOwnerTransactionCount += 1;
-    incrementMoney(direction.volume, transaction.currency, transaction.amount);
+    recordPeriodTransaction(activity, transaction, needsReview);
     bankPeriodSources.set(source, activity);
 
     if (source === "wise" && transaction.wiseEntity) {

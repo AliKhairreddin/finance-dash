@@ -1,3 +1,4 @@
+import { isRevolutEntityView } from "../shared/revolutBalances";
 import { handleOwnerReview } from "../worker/ownerReview";
 import { storeManagementWorkbook } from "../shared/managementReportImport";
 import { isBankSourceFilter, selectedBankSources } from "../shared/banks";
@@ -632,6 +633,10 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       throw new ClientRequestError("Transaction limit must be between 1 and 200");
     }
     const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : null;
+    const revolutEntity = request.query.revolutEntity;
+    if (revolutEntity !== undefined && (source !== "revolut" || !isRevolutEntityView(revolutEntity))) {
+      throw new ClientRequestError("Revolut entity filter is invalid");
+    }
     const mercuryEntity = request.query.mercuryEntity;
     if (mercuryEntity !== undefined && !mercuryEntities.some(entity => entity.id === mercuryEntity)) throw new Error("Mercury entity filter is invalid");
     const slashEntity = request.query.slashEntity;
@@ -667,6 +672,7 @@ function localTransactionPageOptions(request: express.Request): Parameters<typeo
       ...(source ? { source } : {}),
       ...(sources ? { sources } : {}),
       ...(direction ? { direction } : {}),
+      ...(revolutEntity ? { revolutEntity } : {}),
       ...(wiseEntity ? { wiseEntity } : {}),
       ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
       ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),

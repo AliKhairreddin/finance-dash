@@ -7,6 +7,7 @@ import {
   transaction as storedTransaction,
   transactionClassificationSource
 } from "./dashboardSchema";
+import { statementAmountDecimal, type StatementRow } from "../shared/statements";
 import { revolutLabel } from "../shared/revolutBalances";
 import { mercuryEntityLabel } from "../shared/mercuryEntities";
 import { slashEntityLabel } from "../shared/slashEntities";
@@ -734,6 +735,62 @@ export const getProfitFactsPage = query({
         ...fact
       }) => fact)
     };
+  }
+});
+
+export const getRevolutActivityDirectory = query({
+  args: { serviceToken: v.string() },
+  returns: v.object({
+    lmdAccounts: v.array(v.object({ id: v.string(), name: v.string() })),
+    coverageFrom: v.optional(v.string()),
+    coverageThrough: v.optional(v.string())
+  }),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    const [binding, feed] = await Promise.all([
+      ctx.db.query("bankConnectionBindings").withIndex("by_source", q => q.eq("source", "revolut")).unique(),
+      ctx.db.query("statementRevolutFeeds").withIndex("by_key", q => q.eq("key", "lmd")).unique()
+    ]);
+    const owners = binding ? await ctx.db.query("statementRevolutAccounts")
+      .withIndex("by_connection", q => q.eq("connectionKey", binding.connectionKey)).take(maximumBankAccountsPerSource + 1) : [];
+    if (owners.length > maximumBankAccountsPerSource) throw new ConvexError("Incomplete Revolut account directory");
+    const lmd = new Map(feed?.accounts.map(account => [account.id, account.name]));
+    for (const owner of owners) {
+      if (owner.companyId === "lovemedo") lmd.set(owner.accountId, owner.name);
+      if (owner.companyId === "digital-nudge" && lmd.has(owner.accountId)) throw new ConvexError("Conflicting Revolut wallet owners");
+    }
+    return {
+      lmdAccounts: Array.from(lmd, ([id, name]) => ({ id, name })),
+      coverageFrom: feed?.coverageFrom, coverageThrough: feed?.coverageThrough
+    };
+  }
+});
+
+export const getRevolutLmdActivityPage = query({
+  args: { serviceToken: v.string(), fromDate: v.string(), toDate: v.string(), paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(transaction),
+  handler: async (ctx, args) => {
+    requireServiceToken(args.serviceToken);
+    assertDateRange(args.fromDate, args.toDate);
+    const result = await ctx.db.query("statementTransactions").withIndex("by_financialAccountId_and_date", q =>
+      q.eq("financialAccountId", "revolut-lmd").gte("date", args.fromDate).lte("date", args.toDate)
+    ).paginate({ ...args.paginationOpts, numItems: Math.min(args.paginationOpts.numItems, maximumActivityPageSize),
+      maximumRowsRead: maximumActivityPageSize, maximumBytesRead: maximumActivityBytesRead });
+    const page = result.page.filter(row => row.origin === "api" && row.companyId === "lovemedo").map(row => {
+      // Use the provider snapshot, including corrections, independently of the Statements review workflow.
+      if (!row.sourceSnapshot) throw new ConvexError("Missing LMD bank transaction snapshot");
+      const bank = JSON.parse(row.sourceSnapshot) as StatementRow & { status: "posted" | "settled" | "pending" | "voided" };
+      if (!bank.account || !bank.providerId || bank.date !== row.date || bank.financialAccountId !== "revolut-lmd") {
+        throw new ConvexError("LMD bank transaction needs source reconciliation");
+      }
+      const counterparty = bank.counterparty ?? bank.description;
+      return { id: bank.providerId, source: "revolut" as const, accountId: bank.account, accountName: bank.account,
+        date: bank.date, description: bank.description, rawName: counterparty, counterparty, reference: bank.reference,
+        amount: Number(statementAmountDecimal(bank.amountMinor, bank.currency)), currency: bank.currency,
+        direction: bank.direction, status: bank.status, cardLastFour: bank.cardLastFour,
+        category: !bank.reference && bank.description === "exchange" ? "Currency conversion" : "Uncategorized" };
+    });
+    return { ...result, page };
   }
 });
 

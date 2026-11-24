@@ -929,7 +929,7 @@ export function transactionReviewerCanAccess(request: Request): boolean {
   if (request.method === "GET") {
     return url.pathname === "/api/session"
       || url.pathname === "/api/transaction-review"
-      || url.pathname === "/api/transactions";
+      || (url.pathname === "/api/transactions" && !url.searchParams.has("revolutEntity"));
   }
   if (request.method !== "POST") return false;
   return /^\/api\/transactions\/[^/]+\/(?:category|company|team)$/u.test(url.pathname);

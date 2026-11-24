@@ -42,6 +42,12 @@ function storage(t: TestContext, options: { missing?: boolean; brokenCursor?: bo
     const args = body.args[0];
     let value: unknown;
     if (body.path === "dashboard:getAnalyticsDirectory") value = { providers: [], teams: [], transactionCategories: [], documentedTransactionIds: [] };
+    else if (body.path === "banking:getRevolutActivityDirectory") value = {
+      lmdAccounts: [{ id: "lmd", name: "Test account" }], coverageFrom: "2025-01-01", coverageThrough: options.missing ? "2026-09-20" : "2026-10-01"
+    };
+    else if (body.path === "banking:getRevolutLmdActivityPage") value = {
+      page: [{ ...rows[0], id: "lmd-1", accountId: "lmd", amount: 9, direction: "in" }], isDone: true, continueCursor: ""
+    };
     else if (body.path === "banking:getActivityCoverage") value = [
       { source: "slash", missingRanges: options.missing ? [{ fromDate: "2026-09-01", toDate: "2026-09-30" }] : [] },
       { source: "wise", missingRanges: [{ fromDate: "2026-09-01", toDate: "2026-09-30" }] }
@@ -112,5 +118,33 @@ test("multi-bank source validation rejects unknown sources before accessing stor
   for (const path of ["", "/summary", "/export"]) {
     const response = await request(path, `${period}&source=slash,unknown`);
     assert.equal(response.status, 400);
+  }
+});
+
+test("Revolut entity scopes pages, group summaries, period totals and CSV to the same saved activity", async t => {
+  storage(t);
+  const scope = (entity: string) => `${period}&source=revolut&revolutEntity=${entity}`;
+  const all = await (await request("", scope("all"))).json() as TransactionPage;
+  const dn = await (await request("", scope("dn"))).json() as TransactionPage;
+  const lmd = await (await request("", scope("lmd"))).json() as TransactionPage;
+  assert.equal(all.totalCount, dn.totalCount! + lmd.totalCount!);
+  assert.deepEqual(dn.revolutPeriod?.moneyIn.volume, {});
+  assert.deepEqual(lmd.revolutPeriod?.moneyIn.volume, { USD: 9 });
+  assert.deepEqual(all.revolutPeriod?.moneyIn.volume, { USD: 9 });
+  assert.ok(dn.transactions.every(row => row.revolutEntity === "dn" && !row.statementOnly));
+  assert.deepEqual(lmd.transactions.map(row => [row.id, row.accountName, row.statementOnly]), [["lmd-1", "Revolut · LMD · Test account", true]]);
+  assert.equal((await (await request("/summary", scope("lmd"))).json() as { transactionCount: number }).transactionCount, 1);
+  const exported = await (await request("/export", scope("lmd"))).json() as TransactionPage;
+  assert.deepEqual(exported.transactions, lmd.transactions);
+  const filtered = await (await request("", scope("lmd") + "&direction=out")).json() as TransactionPage;
+  assert.deepEqual(filtered.transactions, []);
+  assert.deepEqual(filtered.revolutPeriod, lmd.revolutPeriod);
+});
+
+test("incomplete LMD coverage cannot become an empty result or a successful export", async t => {
+  storage(t, { missing: true });
+  for (const path of ["", "/summary", "/export"]) {
+    assert.equal((await request(path, `${period}&source=revolut&revolutEntity=lmd`)).status, 409);
+    assert.equal((await request(path, `${period}&source=slash&revolutEntity=lmd`)).status, 400);
   }
 });

@@ -148,6 +148,7 @@ test("transaction reviewer API access is limited to review reads and manual over
     assert.equal(transactionReviewerCanAccess(new Request(`https://finance.example${path}`, { method })), true, `${method} ${path}`);
   }
   for (const [method, path] of [
+    ["GET", "/api/transactions?source=revolut&revolutEntity=all"],
     ["GET", "/api/dashboard"],
     ["GET", "/api/analytics"],
     ["POST", "/api/matches"],

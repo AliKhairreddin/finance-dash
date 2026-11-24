@@ -1,6 +1,13 @@
 import type { AccountBalance, RevolutEntity } from "./types";
 
 export const revolutEntities = ["dn", "lmd"] as const satisfies readonly RevolutEntity[];
+export const revolutEntityViews = ["all", ...revolutEntities] as const;
+export type RevolutEntityView = typeof revolutEntityViews[number];
+
+export function isRevolutEntityView(value: unknown): value is RevolutEntityView {
+  return revolutEntityViews.some(entity => entity === value);
+}
+
 let cashCurrencies: Set<string> | undefined;
 
 export function isCashCurrency(currency: string): boolean {

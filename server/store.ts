@@ -84,7 +84,9 @@ import {
   type BankActivityGroupType,
   type BankActivitySummary
 } from "../shared/bankMerchantGroups";
-import { createBankAnalyticsAccumulator } from "../shared/analytics";
+import { revolutEntityActivity } from "../shared/revolutActivity";
+import { type RevolutEntityView, revolutLabel } from "../shared/revolutBalances";
+import { bankPeriodForTransactions, createBankAnalyticsAccumulator } from "../shared/analytics";
 import { aggregateAnalyticsCategoryCompanies } from "../shared/categoryCompanies";
 import {
   defaultAiSettings,
@@ -2824,7 +2826,7 @@ export async function syncExternalActivity(
   }
   if (revolut.status === "fulfilled") {
     if (revolut.value.accounts.length > 0) {
-      accounts = [...accounts.filter((account) => account.source !== "revolut"), ...revolut.value.accounts];
+      accounts = [...accounts.filter((account) => account.source !== "revolut"), ...revolut.value.accounts.map(account => ({ ...account, revolutEntity: "dn" as const, name: `${revolutLabel("dn")} · ${account.name}` }))];
     }
     liveTransactions.push(...revolut.value.transactions);
   }
@@ -2876,6 +2878,7 @@ export async function syncExternalActivity(
 }
 
 type LocalTransactionPageOptions = {
+  revolutEntity?: RevolutEntityView;
   sources?: BankTransactionSource[];
   slashVirtualAccountId?: string;
   fromDate: string;
@@ -2955,9 +2958,17 @@ function localTransactionPage(rows: Transaction[], options: LocalTransactionPage
   };
 }
 
-function localScopedTransactions(options: LocalTransactionPageOptions): Transaction[] {
+function localPeriodTransactions(options: LocalTransactionPageOptions): Transaction[] {
+  const rows = getMatchedTransactions().filter(row => row.date >= options.fromDate && row.date <= options.toDate);
+  if (!options.revolutEntity) return rows;
+  // The Express store syncs the primary connection. The independent LMD feed lives in Convex.
+  if (options.revolutEntity !== "dn") throw new Error("LMD history is unavailable on the local server. Select DN or use the deployed dashboard.");
+  return revolutEntityActivity("dn", rows.filter(row => row.source === "revolut"), [], new Map());
+}
+
+function localScopedTransactions(options: LocalTransactionPageOptions, rows = localPeriodTransactions(options)): Transaction[] {
   const normalizedSearch = options.search?.trim().toLowerCase();
-  return getMatchedTransactions().filter((transaction) => {
+  return rows.filter((transaction) => {
       const categorized = !transactionNeedsCategoryReview(transaction, transactionCategories);
       const provider = transaction.matchedProviderId
         ? providers.find((item) => item.id === transaction.matchedProviderId)
@@ -2995,14 +3006,15 @@ function localScopedTransactions(options: LocalTransactionPageOptions): Transact
       && (!options.groupType || transactionBankActivityGroupKey(transaction, options.groupType, providers) === options.groupKey)
       && (options.match === "all" || (options.match === "matched" ? categorized : !categorized))
       && matchesSearch
-      && transaction.date >= options.fromDate
-      && transaction.date <= options.toDate
       );
     });
 }
 
 export function getTransactionPage(options: LocalTransactionPageOptions): TransactionPage {
-  return localTransactionPage(localScopedTransactions(options), options);
+  const rows = localPeriodTransactions(options);
+  const page = localTransactionPage(localScopedTransactions(options, rows), options);
+  if (options.revolutEntity) page.revolutPeriod = bankPeriodForTransactions(rows);
+  return page;
 }
 
 export function getTransactionExport(options: LocalTransactionPageOptions): TransactionPage {

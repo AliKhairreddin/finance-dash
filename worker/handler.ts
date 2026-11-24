@@ -44,7 +44,9 @@ import { handleSlashCardWebhook } from "./slashCardWebhook";
 import { manualReceivableFromPayload } from "../shared/manualReceivables";
 import { cashFlowSectionKeys, evaluateCashFlowAmount } from "../shared/cashFlow";
 import { answerFinanceQuestion, type FinanceLookup } from "./telegramAssistant";
-import { revolutBalanceIssue, revolutEntities } from "../shared/revolutBalances";
+import { bankPeriodForTransactions } from "../shared/analytics";
+import { revolutEntityActivity } from "../shared/revolutActivity";
+import { isRevolutEntityView, type RevolutEntityView, revolutBalanceIssue, revolutEntities } from "../shared/revolutBalances";
 import { accountBalanceGroups } from "../shared/accountBalanceGroups";
 import { configureTelegramWebhook, telegramWebhookSecret, telegramUpdate, getTelegramWebhookInfo } from "./telegram";
 import { handleDocumentApi, extractDocument, DocumentExtractionError, receiveDocumentEmail, secureHeaderMatches, boundedBytes, ingestDocument } from "./documentIntake";
@@ -2270,6 +2272,7 @@ interface TransactionPageOptions {
   toDate: string;
   source?: BankTransactionSource;
   direction?: Transaction["direction"];
+  revolutEntity?: RevolutEntityView;
   wiseEntity?: "dn" | "lmd";
   mercuryEntity?: import("../shared/types").MercuryEntity;
   slashEntity?: SlashEntity;
@@ -2372,6 +2375,7 @@ function transactionPageNeedsScopeScan(options: TransactionPageOptions): boolean
   return Boolean(
     options.sources?.length
     || options.search
+    || options.revolutEntity
     || options.wiseEntity
     || options.mercuryEntity
     || options.slashEntity
@@ -2446,6 +2450,7 @@ function filterAndSortActivity(
     if (transaction.date < options.fromDate || transaction.date > options.toDate) return false;
     if (options.source && transaction.source !== options.source) return false;
     if (options.sources && !options.sources.includes(transaction.source as BankTransactionSource)) return false;
+    if (options.direction && transaction.direction !== options.direction) return false;
     if (options.wiseEntity && transaction.wiseEntity !== options.wiseEntity) return false;
     if (options.mercuryEntity && transaction.mercuryEntity !== options.mercuryEntity) return false;
     if (options.slashEntity && transaction.slashEntity !== options.slashEntity) return false;
@@ -2500,7 +2505,34 @@ function filterAndSortActivity(
   });
 }
 
+async function readRevolutEntityActivity(env: Env, options: TransactionPageOptions, primary: Transaction[], maximum: number) {
+  const convex = getConvexClient(env);
+  const serviceToken = getConvexServiceToken(env);
+  const directory = await convex.query(api.banking.getRevolutActivityDirectory, { serviceToken });
+  const statements: Transaction[] = [];
+  if (options.revolutEntity !== "dn") {
+    if (!directory.coverageFrom || !directory.coverageThrough || directory.coverageFrom > options.fromDate
+      || directory.coverageThrough.slice(0, 10) < options.toDate) {
+      throw new ApiError(409, "Revolut LMD history is incomplete for these dates.");
+    }
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    do {
+      const result: import("convex/server").PaginationResult<Transaction> = await convex.query(api.banking.getRevolutLmdActivityPage, {
+        serviceToken, fromDate: options.fromDate, toDate: options.toDate, paginationOpts: { cursor, numItems: bankMutationBatchSize }
+      });
+      statements.push(...result.page);
+      if (statements.length > maximum) throw new ApiError(422, "Select a shorter Revolut date range.");
+      cursor = result.isDone ? null : result.continueCursor;
+      if (!result.isDone && (!cursor || seenCursors.has(cursor))) throw new ApiError(503, "LMD history pagination did not advance.");
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+  }
+  return revolutEntityActivity(options.revolutEntity!, primary, statements, new Map(directory.lmdAccounts.map(row => [row.id, row.name])));
+}
+
 async function collectActivityTransactions(env: Env, options: TransactionPageOptions, maximumTransactions = Infinity): Promise<{
+  revolutPeriod?: TransactionPage["revolutPeriod"];
   directory: ActivityDirectory;
   transactions: Transaction[];
 }> {
@@ -2518,7 +2550,7 @@ async function collectActivityTransactions(env: Env, options: TransactionPageOpt
         fromDate: options.fromDate,
         toDate: options.toDate,
         source,
-        direction: options.direction,
+        direction: options.revolutEntity ? undefined : options.direction,
         order: "asc",
         cursor,
         limit: bankMutationBatchSize
@@ -2537,9 +2569,12 @@ async function collectActivityTransactions(env: Env, options: TransactionPageOpt
       }
     } while (cursor);
   }
+  const rows = options.revolutEntity ? await readRevolutEntityActivity(env, options, transactions, maximumTransactions) : transactions;
+  if (rows.length > maximumTransactions) throw new ApiError(422, "Too many transactions to export. Select a shorter date range.");
   return {
     directory,
-    transactions: filterAndSortActivity(transactions, options, directory)
+    ...(options.revolutEntity ? { revolutPeriod: bankPeriodForTransactions(rows) } : {}),
+    transactions: filterAndSortActivity(rows, options, directory)
   };
 }
 
@@ -2569,7 +2604,8 @@ async function readScopedTransactionPage(env: Env, options: TransactionPageOptio
     continueCursor: isDone ? null : `activity-offset:${nextOffset}`,
     isDone,
     totalCount: collected.transactions.length,
-    coverage: options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage
+    revolutPeriod: collected.revolutPeriod,
+    coverage: options.revolutEntity === "lmd" ? [] : options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage
   };
 }
 
@@ -7197,6 +7233,10 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
   }
   const order = url.searchParams.get("order") ?? "desc";
   if (order !== "asc" && order !== "desc") throw new ApiError(400, "Transaction order is invalid");
+  const revolutEntity = url.searchParams.get("revolutEntity");
+  if (revolutEntity !== null && (source !== "revolut" || !isRevolutEntityView(revolutEntity))) {
+    throw new ApiError(400, "Revolut entity filter is invalid");
+  }
   const mercuryEntity = url.searchParams.get("mercuryEntity");
   if (mercuryEntity !== null && !mercuryEntities.some(entity => entity.id === mercuryEntity)) throw new ApiError(400, "Mercury entity filter is invalid");
   const slashEntity = url.searchParams.get("slashEntity");
@@ -7252,6 +7292,7 @@ function transactionPageOptions(url: URL): TransactionPageOptions {
     ...(source ? { source } : {}),
     ...(sources ? { sources } : {}),
     ...(direction ? { direction } : {}),
+    ...(revolutEntity ? { revolutEntity } : {}),
     ...(wiseEntity ? { wiseEntity } : {}),
     ...(mercuryEntity ? { mercuryEntity: mercuryEntity as import("../shared/types").MercuryEntity } : {}),
     ...(slashEntity ? { slashEntity: slashEntity as SlashEntity } : {}),
@@ -7521,7 +7562,7 @@ async function handleApi(
         fromDate: options.fromDate,
         toDate: options.toDate
       });
-      const selectedCoverage = options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage;
+      const selectedCoverage = options.revolutEntity === "lmd" ? [] : options.sources ? coverage.filter(item => options.sources!.includes(item.source)) : coverage;
       if (selectedCoverage.some(item => item.missingRanges.length > 0)) {
         throw new ApiError(409, "Bank history for the selected dates is incomplete. Wait for history sync to finish before downloading.");
       }

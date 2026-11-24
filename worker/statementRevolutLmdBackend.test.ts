@@ -89,6 +89,9 @@ test("provider corrections retain LMD's original amount and require review",asyn
  await t.mutation(api.statementRevolutFeed.ingest,{...auth,transactions:[{...tx,amount:20}]});
  await t.mutation(api.statementRevolutFeed.ingest,{...auth,transactions:[{...tx,amount:20}]});
  const rows=await t.run(ctx=>ctx.db.query("statementTransactions").collect());assert.equal(rows.length,1);assert.equal(rows[0].amountMinor,"1234");assert.equal(JSON.parse(rows[0].sourceCorrectionJson!).amountMinor,"2000");assert.equal(rows[0].revision,2);
+ const page = await t.query(api.banking.getRevolutLmdActivityPage, { serviceToken: auth.serviceToken, fromDate: tx.date, toDate: tx.date, paginationOpts: { numItems: 10, cursor: null } });
+ assert.deepEqual(page.page.map(row => [row.id, row.accountId, row.status, row.amount]), [[tx.id, tx.accountId, "posted", 20]]);
+
 });
 
 test("Finance and Telegram read the same complete DN and LMD snapshots across discovery and a failed sync", async () => {
