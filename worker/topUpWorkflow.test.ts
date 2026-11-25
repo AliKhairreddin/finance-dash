@@ -152,8 +152,8 @@ test("Alaa's role exposes only Top-up requests and Documents and blocks bank dat
   for (const path of ["/api/top-ups/abc/action", "/api/top-ups/abc/draft", "/api/top-ups/abc/delete", "/api/top-ups/abc/restore", "/api/sync"]) assert.equal(topUpReviewerCanAccess(new Request(`https://finance.test${path}`, { method: "POST" })), false);
 });
 test("Telegram message includes both USD spend fields, signed balance, and status", () => {
-  const text = topUpMessage({ ...input(), number: 352, status: "pending", createdAt: "2026-10-17T20:09:40Z" } as any, "https://finance.test/invoice", "@AminGhossein");
-  for (const expected of ["New Topup Request #352", "-11,111.38 USD", "Last 3 days spend: 1,500 USD", "Expected next 3 days spend: 2,000 USD", "Status: Pending", "@AminGhossein"]) assert.ok(text.includes(expected), expected);
+  const text = topUpMessage({ ...input(), number: 352, status: "pending", createdAt: "2026-10-17T20:09:40Z" } as any, "https://finance.test/invoice");
+  for (const expected of ["New Topup Request #352", "-11,111.38 USD", "Last 3 days spend: 1,500 USD", "Expected next 3 days spend: 2,000 USD", "Status: Pending"]) assert.ok(text.includes(expected), expected);
   assert.match(text, /📉 Last 3 days spend: 1,500 USD\n\n📈 Expected next 3 days spend: 2,000 USD/);
   assert.throws(() => topUpTransition("pending", "paid", "queued"));
 });
@@ -237,8 +237,8 @@ test("crypto requests save without an invoice, follow approval/payment status, a
   await assert.rejects(db.run(topUps.create, { ...auth, input: { ...input(), submissionId: "22345678-1234-1234-1234-123456789abc" } }), /Upload an invoice/);
 });
 test("crypto Telegram messages show wallet, network and full precision without ad spend or absent invoice links", () => {
-  const text = topUpMessage({ ...cryptoInput("BTC", 0.00001234), number: 3, status: "pending", createdAt: "2026-10-22T12:00:00Z" } as any, "", "@AminGhossein");
-  for (const expected of ["Purchase Request #3", "0.00001234 BTC", "Network: Bitcoin", "Wallet: 0x", "Cognitive →", "@AminGhossein"]) assert.ok(text.includes(expected), expected);
+  const text = topUpMessage({ ...cryptoInput("BTC", 0.00001234), number: 3, status: "pending", createdAt: "2026-10-22T12:00:00Z" } as any, "");
+  for (const expected of ["Purchase Request #3", "0.00001234 BTC", "Network: Bitcoin", "Wallet: 0x", "Cognitive →"]) assert.ok(text.includes(expected), expected);
   assert.doesNotMatch(text, /Open Balance|days spend|Commission|View Invoice/);
 });
 
@@ -329,7 +329,7 @@ test("rejection closes a pending request without creating a supplier or payment 
   assert.equal((await db.ctx.db.get("state")).providers.length, 0);
   assert.equal(db.scheduled.filter((job: any) => getFunctionName(job[1]) === "topUpProcessing:draft").length, 0);
   for (const action of ["approve", "adjust", "paid", "reject"]) await assert.rejects(db.run(topUps.transition, { ...auth, id: saved._id, version: 2, action, actor: "Amin" }), /changed/);
-  assert.match(topUpMessage(rejected, "", ""), /Rejected Topup Request/);
+  assert.match(topUpMessage(rejected, ""), /Rejected Topup Request/);
 });
 
 test("bulk deletion validates every version before changing rows and preserves invoices and history", async () => {

@@ -179,10 +179,25 @@ test("all approvers still reject stale request buttons", async () => {
 });
 test("notifications use real ID mentions, expiring invoice links and stage-specific buttons", async () => {
   await mocked(async calls => { await sendTopUpNotification(env, id as never, 1); const sent = calls.find(c => c.path === "editMessageText")!.body;
-    assert.equal(sent.chat_id, "-5336756761"); assert.match(sent.text, /tg:\/\/user\?id=333/); assert.match(sent.text, /expires=\d+&amp;token=[a-f0-9]{64}/); assert.match(sent.text, /View Invoice \(pdf link\)/);
+    assert.equal(sent.chat_id, "-5336756761"); assert.match(sent.text, /For approval: <a href="tg:\/\/user\?id=333">@AminGhossein<\/a>/); assert.match(sent.text, /expires=\d+&amp;token=[a-f0-9]{64}/); assert.match(sent.text, /View Invoice \(pdf link\)/);
+    assert.doesNotMatch(sent.text, /Approved by|Payment contact/);
     assert.deepEqual(sent.reply_markup.inline_keyboard[0].map((b: any) => b.text), ["Approve", "Adjust amount", "Reject"]);
   });
-  await mocked(async calls => { await sendTopUpNotification(env, id as never, 2); const sent = calls.find(c => c.path === "editMessageText")!.body; assert.match(sent.text, /tg:\/\/user\?id=222/); assert.equal(sent.reply_markup.inline_keyboard[0][0].text, "Paid"); }, { ...pending, version: 2, status: "approved" });
+  await mocked(async calls => {
+    await sendTopUpNotification(env, id as never, 2);
+    const sent = calls.find(c => c.path === "editMessageText")!.body;
+    assert.match(sent.text, /Status: Approved\n✅ Approved by Amin\nPayment contact: <a href="tg:\/\/user\?id=222">@AliMUser<\/a>/);
+    assert.equal(sent.reply_markup.inline_keyboard[0][0].text, "Paid");
+  }, { ...pending, version: 2, status: "approved", approvedBy: "Amin" });
+});
+test("paid purchase cards keep the original approver and escape their Telegram display name", async () => {
+  await mocked(async calls => {
+    await sendTopUpNotification(env, id as never, 3);
+    const sent = calls.find(c => c.path === "editMessageText")!.body;
+    assert.match(sent.text, /Paid Purchase Request/);
+    assert.match(sent.text, /Status: Paid\n✅ Approved by Lee &amp; Jo &lt;team&gt; \(Telegram 999\)\nPayment contact:/);
+    assert.deepEqual(sent.reply_markup.inline_keyboard, []);
+  }, { ...pending, currency: "USDC", walletAddress: "wallet", version: 3, status: "paid", approvedBy: "Lee & Jo <team> (Telegram 999)", paidBy: "Ali M" });
 });
 test("public submission rejects cross-origin writes and unsigned invoice access without touching storage", async () => {
   await mocked(async calls => { const cross = await handlePublicTopUps(new Request("https://finance.test/api/public/top-ups", { method: "POST", headers: { Origin: "https://evil.test" } }), env); assert.equal(cross?.status, 403);

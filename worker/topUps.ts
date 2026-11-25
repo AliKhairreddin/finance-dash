@@ -120,11 +120,13 @@ async function updateTopUpCard(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<
     return;
   }
   const person = r.status === "pending" ? telegramPerson(env, "Amin") : telegramPerson(env, "Ali M");
-  const mention = r.status === "rejected" ? "" : `<a href="tg://user?id=${person.chatId}">${r.status === "pending" ? "@AminGhossein" : "@AliMUser"}</a>`;
+  const mention = r.status === "rejected" ? "" : r.status === "pending"
+    ? `\nFor approval: <a href="tg://user?id=${person.chatId}">@AminGhossein</a>`
+    : `\nPayment contact: <a href="tg://user?id=${person.chatId}">@AliMUser</a>`;
   const link = r.documentId ? await invoiceLink(env, id) : "";
-  const escaped = topUpMessage(r as TopUpRequest, link, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const buttons = topUpButtons(r);
   const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escaped = escape(topUpMessage(r, link));
   const adjustment = r.status === "pending" && r.adjustPromptId && (r.adjustExpiresAt ?? 0) > Date.now()
     ? `\n\n✏️ <a href="tg://user?id=${r.adjustUserId}">Adjusting amount</a>: reply to this request with the new amount in ${r.currency} within 10 minutes.${r.adjustError ? `\n${escape(r.adjustError)}` : ""}` : "";
   const draft = r.status === "approved" && !isCryptoTopUp(r.currency) && r.draftStatus !== "not_applicable"

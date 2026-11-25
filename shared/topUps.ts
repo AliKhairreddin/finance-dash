@@ -79,17 +79,24 @@ export function topUpTransition(status: TopUpStatus, action: "approve" | "adjust
   if (action === "adjust" && status === "pending") return "pending";
   throw new Error("This request has changed. Refresh before acting.");
 }
-export function topUpMessage(r: TopUpRequest, invoiceUrl: string, approver: string): string {
+export function topUpMessage(r: TopUpRequest, invoiceUrl: string): string {
   const money = (n: number, c = r.currency) => formatTopUpAmount(n, c);
+  const footer = [
+    `📅 ${new Date(r.createdAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`,
+    `📊 Status: ${r.status[0].toUpperCase() + r.status.slice(1)}`,
+  ];
+  if (r.status === "approved" || r.status === "paid") {
+    footer.push(r.approvedBy ? `✅ Approved by ${r.approvedBy}` : "Approver not recorded");
+  }
   if (isCryptoTopUp(r.currency)) return [`🛒 ${r.events?.at(-1)?.action === "restored" ? "Restored" : r.status === "pending" ? "New" : r.status === "approved" ? "Approved" : r.status === "rejected" ? "Rejected" : "Paid"} Purchase Request #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"}`, "",
     `🏢 Recipient: ${r.companyName}`, `👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, ...(r.network ? [`🌐 Network: ${r.network}`] : []), `👛 Wallet: ${r.walletAddress}`, "",
     ...(r.documentId ? [`📎 View Invoice: ${invoiceUrl}`, ""] : []), ...(r.notes ? [`📝 Notes: ${r.notes}`, ""] : []),
-    `📅 ${new Date(r.createdAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`, `📊 Status: ${r.status[0].toUpperCase() + r.status.slice(1)}`, approver].join("\n");
+    ...footer].join("\n");
   return [`💸 ${r.events?.at(-1)?.action === "restored" ? "Restored Topup Request" : r.status === "pending" ? "New Topup Request" : r.status === "approved" ? "Approved Topup Request" : r.status === "rejected" ? "Rejected Topup Request" : "Paid Topup Request"} #${r.number}`, "",
     `${r.priority === "Urgent" ? "🔴 URGENT" : "🟢 NORMAL"} | 🏦 ${r.entity === "dn" ? "Digital Nudge OU" : "LoveMeDo BV"}`, "",
     `🏢 Company: ${r.companyName} | 👥 ${r.team} → ${r.member}`, "", `💰 Amount: ${money(r.amount)}`, `💳 Open Balance: ${r.openBalance === undefined ? "—" : money(r.openBalance)}`,
     "", `📉 Last 3 days spend: ${r.lastThreeDaysSpend === undefined ? "—" : money(r.lastThreeDaysSpend, "USD")}`, "", `📈 Expected next 3 days spend: ${r.expectedThreeDaysSpend === undefined ? "—" : money(r.expectedThreeDaysSpend, "USD")}`, "",
     `🏦 Payment: ${r.paymentMethod || "Not specified"}`, `Commission: ${r.commission}`, "", `📎 View Invoice: ${invoiceUrl}`, "",
-    `📅 ${new Date(r.createdAt).toLocaleString("en-US", { timeZone: "America/Toronto" })}`, `📊 Status: ${r.status[0].toUpperCase() + r.status.slice(1)}`, approver].join("\n");
+    ...footer].join("\n");
 }
