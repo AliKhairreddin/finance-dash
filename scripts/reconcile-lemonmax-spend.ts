@@ -82,7 +82,7 @@ for (let offset = 0; offset < dates.length; offset += mediaSpendMaximumSyncDays)
     };
     verification.push(result);
   }
-  if (savedRowCount !== imported.rowCount || Math.abs(savedSpend - imported.totalSpend) > 0.005) {
+  if (savedRowCount !== imported.rowCount + imported.retainedZeroRows || Math.abs(savedSpend - imported.totalSpend) > 0.005) {
     throw new Error("Saved account rows and spend do not reconcile to the validated source response");
   }
   writeFileSync(checkpoint, JSON.stringify(verification, null, 2), { flag: "wx", mode: 0o600 });

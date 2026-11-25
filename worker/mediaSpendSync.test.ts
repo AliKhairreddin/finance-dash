@@ -34,7 +34,7 @@ test("daily schedule imports every platform with exactly one unfiltered range re
     const body = JSON.parse(String(init?.body));
     if (body.path === "mediaSpend:getSyncState") return Response.json({ status: "success", value: { status: "healthy", coveredFrom: "2026-10-04", coveredThrough: "2026-10-04" } });
     mutations.push({ path: body.path, args: body.args[0] });
-    return Response.json({ status: "success", value: body.path === "mediaSpend:startSync" ? "started" : body.path === "mediaSpend:replaceDate" ? { inserted: 2, replaced: 0, deleted: 0, unchanged: 1 } : true });
+    return Response.json({ status: "success", value: body.path === "mediaSpend:startSync" ? "started" : body.path === "mediaSpend:replaceDate" ? { inserted: 2, replaced: 0, deleted: 0, unchanged: 1, retainedZeroRows: 0 } : true });
   });
   await worker.scheduled(scheduled, env);
   assert.equal(sourceCalls, 1);
@@ -78,7 +78,7 @@ test("unpublished days preserve stored rows and report failure without a second 
     const body = JSON.parse(String(init?.body));
     if (body.path === "mediaSpend:replaceDate") saves.push(body.args[0].date);
     if (body.path === "mediaSpend:completeSync" || body.path === "mediaSpend:failSync") completed.push(body.path);
-    return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? null : body.path === "mediaSpend:startSync" ? "started" : true });
+    return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? null : body.path === "mediaSpend:startSync" ? "started" : body.path === "mediaSpend:replaceDate" ? { retainedZeroRows: 0 } : true });
   });
   await assert.rejects(worker.scheduled(scheduled, env), /no account rows for 2026-10-05/);
   assert.equal(sourceCalls, 1);
@@ -101,7 +101,7 @@ test("a full fourteen-day account report over 4 MB fits in a single request", as
     }
     const body = JSON.parse(String(init?.body));
     if (body.path === "mediaSpend:replaceDate") savedRows += body.args[0].rows.length;
-    return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? { status: "healthy", coveredThrough: "2026-10-04" } : body.path === "mediaSpend:startSync" ? "started" : true });
+    return Response.json({ status: "success", value: body.path === "mediaSpend:getSyncState" ? { status: "healthy", coveredThrough: "2026-10-04" } : body.path === "mediaSpend:startSync" ? "started" : body.path === "mediaSpend:replaceDate" ? { retainedZeroRows: 0 } : true });
   });
   await worker.scheduled(scheduled, { ...env as object, LEMONMAX_SYNC_START_DATE: "2026-08-01" } as never);
   assert.equal(sourceCalls, 1);

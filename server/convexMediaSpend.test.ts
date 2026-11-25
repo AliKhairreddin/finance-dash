@@ -106,7 +106,7 @@ test("reconciliation preserves unchanged document IDs and imports new platforms 
     replace: async () => { assert.fail("Unchanged financial rows should retain their ID and values"); },
     insert: async (_table: string, row: unknown) => { inserted.push(row); }
   } };
-  assert.deepEqual(await handlerOf(replaceDate)(ctx, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows: incoming }), { inserted: 2, replaced: 0, deleted: 0, unchanged: 1 });
+  assert.deepEqual(await handlerOf(replaceDate)(ctx, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows: incoming }), { inserted: 2, replaced: 0, deleted: 0, unchanged: 1, retainedZeroRows: 0 });
   assert.deepEqual(inserted, incoming.slice(1));
 });
 
@@ -121,7 +121,9 @@ test("reconciliation enriches, changes and clears source metadata while preservi
     mediaSpendDaily: [
       { ...base, _id: "original-1", key: "one", accountId: "one", spend: 5 },
       { ...base, _id: "original-2", key: "two", accountId: "two", spend: 0, agencyId: 10, agencyName: "Old", reportedPaymentMethod: "Credit Card" },
-      { ...base, _id: "original-3", key: "three", accountId: "three", spend: 8, agencyId: 11, agencyName: "Removed", reportedPaymentMethod: "Credit Line" }
+      { ...base, _id: "original-3", key: "three", accountId: "three", spend: 8, agencyId: 11, agencyName: "Removed", reportedPaymentMethod: "Credit Line" },
+      { ...base, _id: "original-4", key: "four", accountId: "four", spend: 0, reportedPaymentMethod: "Credit Card" },
+      { ...base, _id: "corrected", key: "five", accountId: "five", spend: 3 }
     ]
   });
   const rows = [
@@ -130,12 +132,12 @@ test("reconciliation enriches, changes and clears source metadata while preservi
     { ...base, key: "three", accountId: "three", spend: 8, reportedPaymentMethod: null }
   ];
   assert.deepEqual(await handlerOf(replaceDate)({ db }, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows }),
-    { inserted: 0, replaced: 3, deleted: 0, unchanged: 0 });
-  assert.deepEqual(tables.mediaSpendDaily.map(row => row._id), ["original-1", "original-2", "original-3"]);
+    { inserted: 0, replaced: 3, deleted: 1, unchanged: 0, retainedZeroRows: 1 });
+  assert.deepEqual(tables.mediaSpendDaily.map(row => row._id), ["original-1", "original-2", "original-3", "original-4"]);
   const saved = await handlerOf(listDate)({ db }, { serviceToken: "media-test", date: base.date, includeZeroSpend: true });
-  assert.deepEqual(saved, { rows, storedRowCount: 3 });
+  assert.deepEqual(saved, { rows: [...rows, { ...base, key: "four", accountId: "four", spend: 0, reportedPaymentMethod: "Credit Card" }], storedRowCount: 4 });
   assert.deepEqual(await handlerOf(replaceDate)({ db }, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows }),
-    { inserted: 0, replaced: 0, deleted: 0, unchanged: 3 });
+    { inserted: 0, replaced: 0, deleted: 0, unchanged: 3, retainedZeroRows: 1 });
 });
 
 test("an expired import is visibly failed instead of appearing to run forever", async () => {

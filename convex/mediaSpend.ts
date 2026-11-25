@@ -239,7 +239,9 @@ export const replaceDate = mutation({
     date: v.string(),
     rows: v.array(mediaSpendRow)
   },
-  returns: v.object({ inserted: v.number(), replaced: v.number(), deleted: v.number(), unchanged: v.number() }),
+  returns: v.object({
+    inserted: v.number(), replaced: v.number(), deleted: v.number(), unchanged: v.number(), retainedZeroRows: v.number()
+  }),
   handler: async (ctx, args) => {
     requireServiceToken(args.serviceToken);
     requireIsoDate(args.date);
@@ -273,6 +275,11 @@ export const replaceDate = mutation({
     if (existingByKey.size !== existing.length) {
       throw new ConvexError({ code: "DUPLICATE_MEDIA_SPEND_STORAGE_KEYS" });
     }
+    const omitted = existing.filter((row) => !incomingKeys.has(row.key));
+    const retainedZeroRows = omitted.filter((row) => row.spend === 0).length;
+    if (args.rows.length + retainedZeroRows > maximumRowsPerDate) {
+      throw new ConvexError({ code: "MEDIA_SPEND_DAY_TOO_LARGE" });
+    }
 
     let inserted = 0;
     let replaced = 0;
@@ -294,13 +301,13 @@ export const replaceDate = mutation({
         inserted += 1;
       }
     }
-    for (const row of existing) {
-      if (!incomingKeys.has(row.key)) {
+    for (const row of omitted) {
+      if (row.spend !== 0) {
         await ctx.db.delete(row._id);
         deleted += 1;
       }
     }
-    return { inserted, replaced, deleted, unchanged };
+    return { inserted, replaced, deleted, unchanged, retainedZeroRows };
   }
 });
 

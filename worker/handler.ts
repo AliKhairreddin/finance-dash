@@ -999,7 +999,7 @@ export async function syncMediaSpend(
   fromDate: string,
   toDate: string,
   options: { scheduled?: boolean } = {}
-): Promise<{ rowCount: number; totalSpend: number } | false> {
+): Promise<{ rowCount: number; totalSpend: number; retainedZeroRows: number } | false> {
   const dates = mediaSpendDates(fromDate, toDate);
   if (dates.length > mediaSpendMaximumSyncDays) throw new ApiError(400, `Choose at most ${mediaSpendMaximumSyncDays} days per LemonMax import`);
   const credentials = requireLemonMaxCredentials(env);
@@ -1022,6 +1022,7 @@ export async function syncMediaSpend(
   try {
     let rowCount = 0;
     let totalSpend = 0;
+    let retainedZeroRows = 0;
     // Each import uses one unfiltered range request for every platform/account.
     const fetchedRows = await fetchLemonMaxSpend(env, fromDate, toDate, startedAt, credentials);
     const rowsByDate = new Map<string, MediaSpendRow[]>();
@@ -1057,6 +1058,7 @@ export async function syncMediaSpend(
       });
       if (!coverageAdvanced) throw new Error("Media spend sync attempt was superseded");
       console.log(JSON.stringify({ event: "media_spend_date_reconciled", date, accounts: new Set(rows.map((row) => `${row.platform}:${row.accountId}`)).size, ...changes }));
+      retainedZeroRows += changes.retainedZeroRows;
       rowCount += rows.length;
       totalSpend += rows.reduce((total, row) => total + row.spend, 0);
     }
@@ -1077,7 +1079,7 @@ export async function syncMediaSpend(
       toDate,
       rows: rowCount
     }));
-    return { rowCount, totalSpend };
+    return { rowCount, totalSpend, retainedZeroRows };
   } catch (error) {
     const message = cleanLemonMaxError(error, credentials);
     await convex.mutation(api.mediaSpend.failSync, {
