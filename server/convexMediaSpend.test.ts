@@ -111,7 +111,7 @@ test("reconciliation preserves unchanged document IDs and imports new platforms 
 });
 
 
-test("agency reconciliation enriches, changes and clears metadata without changing document IDs or spend", async (t) => {
+test("reconciliation enriches, changes and clears source metadata while preserving IDs and spend", async (t) => {
   const previous = process.env.CONVEX_SERVICE_TOKEN;
   process.env.CONVEX_SERVICE_TOKEN = "media-test";
   t.after(() => { if (previous === undefined) delete process.env.CONVEX_SERVICE_TOKEN; else process.env.CONVEX_SERVICE_TOKEN = previous; });
@@ -120,14 +120,14 @@ test("agency reconciliation enriches, changes and clears metadata without changi
     mediaSpendSyncState: [{ _id: "state", key: "lemonmax", status: "running", attemptId: "attempt", leaseExpiresAt: Date.now() + 120_000 }],
     mediaSpendDaily: [
       { ...base, _id: "original-1", key: "one", accountId: "one", spend: 5 },
-      { ...base, _id: "original-2", key: "two", accountId: "two", spend: 0, agencyId: 10, agencyName: "Old" },
-      { ...base, _id: "original-3", key: "three", accountId: "three", spend: 8, agencyId: 11, agencyName: "Removed" }
+      { ...base, _id: "original-2", key: "two", accountId: "two", spend: 0, agencyId: 10, agencyName: "Old", reportedPaymentMethod: "Credit Card" },
+      { ...base, _id: "original-3", key: "three", accountId: "three", spend: 8, agencyId: 11, agencyName: "Removed", reportedPaymentMethod: "Credit Line" }
     ]
   });
   const rows = [
-    { ...base, key: "one", accountId: "one", spend: 5, agencyId: 11, agencyName: "Hustle Blink" },
-    { ...base, key: "two", accountId: "two", spend: 0, agencyId: 15, agencyName: "FALKYN" },
-    { ...base, key: "three", accountId: "three", spend: 8 }
+    { ...base, key: "one", accountId: "one", spend: 5, agencyId: 11, agencyName: "Hustle Blink", reportedPaymentMethod: "Credit Line" },
+    { ...base, key: "two", accountId: "two", spend: 0, agencyId: 15, agencyName: "FALKYN", reportedPaymentMethod: "Credit Line" },
+    { ...base, key: "three", accountId: "three", spend: 8, reportedPaymentMethod: null }
   ];
   assert.deepEqual(await handlerOf(replaceDate)({ db }, { serviceToken: "media-test", attemptId: "attempt", date: base.date, rows }),
     { inserted: 0, replaced: 3, deleted: 0, unchanged: 0 });

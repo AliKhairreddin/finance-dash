@@ -452,6 +452,7 @@ export default defineSchema({
     accountName: v.optional(v.string()),
     agencyId: v.optional(v.number()),
     agencyName: v.optional(v.string()),
+    reportedPaymentMethod: v.optional(v.union(v.string(), v.null())),
     spend: v.number(),
     currency: v.string(),
     syncedAt: v.string()

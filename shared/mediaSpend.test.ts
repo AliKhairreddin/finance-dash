@@ -31,6 +31,7 @@ const response = {
       "Account Name": "Hustle 483 LB x M x HD x USD",
       "Agency ID": 11,
       "Agency Name": "Hustle Blink",
+      "Payment Method": { Type: "Credit Line", "Has Credit Line": true, "Has Credit Card": false },
       Spend: 3119.71
     },
     {
@@ -43,6 +44,7 @@ const response = {
       "Account Name": "1331 - 70163 - SeanX Meta 19",
       "Agency ID": null,
       "Agency Name": null,
+      "Payment Method": null,
       Spend: 2392.19
     }
   ]
@@ -61,6 +63,8 @@ test("parses the exact LemonMax account spend contract", () => {
   assert.equal(rows[0].agencyName, "Hustle Blink");
   assert.equal(rows[1].agencyId, undefined);
   assert.equal(rows[1].agencyName, undefined);
+  assert.equal(rows[0].reportedPaymentMethod, "Credit Line");
+  assert.equal(rows[1].reportedPaymentMethod, null);
   assert.equal(rows[0].spend, 3119.71);
   assert.match(rows[0].key, /^2026-08-01:/);
   assert.deepEqual(summarizeMediaSpend(rows), {
@@ -70,6 +74,33 @@ test("parses the exact LemonMax account spend contract", () => {
     businessManagers: 2,
     accounts: 2
   });
+});
+
+test("uses only the reported method type, including other and unreported methods", () => {
+  for (const [method, expected] of [
+    [{ Type: "Credit Card", Description: "Private billing details", "Funding Source ID": "private-id" }, "Credit Card"],
+    [{ Type: "Ad Credits Only" }, "Ad Credits Only"],
+    [{ Type: null, "Has Credit Card": true }, null],
+    [null, null]
+  ] as const) {
+    const data = [{ ...response.data[0], "Payment Method": method }, response.data[1]];
+    const [row] = parseLemonMaxSpendSummary({ ...response, data }, response.from_date, "USD", "2026-08-02T08:30:00Z");
+    assert.equal(row.reportedPaymentMethod, expected);
+    assert.doesNotMatch(JSON.stringify(row), /Private billing details|private-id/);
+  }
+  for (const method of [undefined, "Credit Card", [], {}, { Type: 4 }]) {
+    const data = [{ ...response.data[0], "Payment Method": method }, response.data[1]];
+    assert.throws(() => parseLemonMaxSpendSummary({ ...response, data }, response.from_date, "USD", "2026-08-02T08:30:00Z"), /invalid (Payment Method|Type)/);
+  }
+});
+
+test("account reports distinguish mixed, unreported and previously unimported methods", () => {
+  const [credit, unreported] = parseLemonMaxSpendSummary(response, response.from_date, "USD", "2026-08-02T08:30:00Z");
+  const [mixed] = groupMediaSpendByAccount([credit, { ...credit, key: "later", date: "2026-08-02", reportedPaymentMethod: "Credit Card" }]);
+  assert.equal(mixed.reportedPaymentMethodLabel, "Mixed");
+  assert.ok(mixed.searchText.includes("credit card"));
+  assert.equal(groupMediaSpendByAccount([unreported])[0].reportedPaymentMethodLabel, "Not reported");
+  assert.equal(groupMediaSpendByAccount([{ ...credit, reportedPaymentMethod: undefined }])[0].reportedPaymentMethodLabel, "Not imported");
 });
 
 test("rejects data outside the requested day", () => {

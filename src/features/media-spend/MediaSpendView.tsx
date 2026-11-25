@@ -59,6 +59,7 @@ import {
 } from "../../../shared/mediaFunding";
 import {
   groupMediaSpendByAccount,
+  reportedPaymentMethodLabel,
   summarizeMediaSpend,
   validateMediaSpendDateRange,
   type MediaSpendAccountGroup,
@@ -67,8 +68,8 @@ import {
 } from "../../../shared/mediaSpend";
 import { financeOperatingDate, shiftFinanceOperatingDate } from "../../../shared/operatingDate";
 
-type AccountSpendSortKey = "agency" | "billingType" | "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
-type DailySpendSortKey = "agency" | "billingType" | "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
+type AccountSpendSortKey = "agency" | "reportedPaymentMethod" | "billingType" | "paymentMethod" | "account" | "businessManager" | "days" | "platform" | "provider" | "spend" | "workspace";
+type DailySpendSortKey = "agency" | "reportedPaymentMethod" | "billingType" | "paymentMethod" | "businessManager" | "date" | "platform" | "provider" | "spend" | "workspace";
 type BusinessManagerSortKey = "billingType" | "accounts" | "businessManager" | "platform" | "provider" | "spend" | "workspace";
 type ProviderSpendSortKey = "accounts" | "businessManagers" | "days" | "platforms" | "provider" | "spend" | "workspaces";
 type MediaSpendViewMode = "accounts" | "businessManagers" | "providers";
@@ -89,6 +90,7 @@ type BusinessManagerSpendGroup = {
 
 const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
   "agency",
+  "reportedPaymentMethod",
   "billingType",
   "paymentMethod",
   "account",
@@ -101,6 +103,7 @@ const accountSpendSortKeys: readonly AccountSpendSortKey[] = [
 ];
 const dailySpendSortKeys: readonly DailySpendSortKey[] = [
   "agency",
+  "reportedPaymentMethod",
   "billingType",
   "paymentMethod",
   "businessManager",
@@ -158,6 +161,7 @@ function accountSpendSortValue(
   sortKey: AccountSpendSortKey
 ): number | string | undefined {
   if (sortKey === "agency") return group.agencyName;
+  if (sortKey === "reportedPaymentMethod") return group.reportedPaymentMethodLabel;
   if (sortKey === "account") return group.accountName ?? group.accountId;
   if (sortKey === "businessManager") return group.businessManagerName ?? group.businessManagerId;
   if (sortKey === "days") return group.dayCount;
@@ -169,6 +173,7 @@ function accountSpendSortValue(
 
 function dailySpendSortValue(row: MediaSpendRow, sortKey: DailySpendSortKey): number | string | undefined {
   if (sortKey === "agency") return row.agencyName;
+  if (sortKey === "reportedPaymentMethod") return reportedPaymentMethodLabel(row.reportedPaymentMethod);
   if (sortKey === "businessManager") return row.businessManagerName;
   if (sortKey === "date") return row.date;
   if (sortKey === "platform") return row.platform;
@@ -351,6 +356,9 @@ function CognitiveSpendView({
   const [funding, setFunding] = useState<MediaSpendAssignmentsResponse | null>(null);
   const [search, setSearch] = useState("");
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
+  const [reportedMethodFilter, setReportedMethodFilter] = useUrlState("mediaReportedMethod", "", {
+    isValid: (value) => value.length <= 100
+  });
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [paymentFilter, setPaymentFilter] = useUrlState<MediaPaymentMethod | "">("mediaPayment", "", { allowedValues: ["", ...mediaPaymentMethods] });
   const [billingFilter, setBillingFilter] = useUrlState<MediaFundingBillingType | "needs_choice" | "">("mediaBilling", "", { allowedValues: ["", "card", "credit_line", "needs_choice"] });
@@ -397,6 +405,11 @@ function CognitiveSpendView({
   const spendRows = useMemo(() => includeZeroSpend
     ? (data?.rows ?? [])
     : (data?.rows ?? []).filter((row) => row.spend !== 0), [data?.rows, includeZeroSpend]);
+  const reportedMethodOptions = useMemo(() => {
+    const methods = new Set((data?.rows ?? []).map((row) => reportedPaymentMethodLabel(row.reportedPaymentMethod)));
+    if (reportedMethodFilter) methods.add(reportedMethodFilter);
+    return [...methods].sort((left, right) => left.localeCompare(right));
+  }, [data?.rows, reportedMethodFilter]);
   const platformOptions = useMemo(() => {
     const platforms = new Set((data?.rows ?? []).map((row) => row.platform));
     if (selectedPlatform) platforms.add(selectedPlatform);
@@ -480,13 +493,14 @@ function CognitiveSpendView({
       (!selectedAccountKey || mediaFundingAccountKey(row.platform, row.accountId) === selectedAccountKey)
       && (!selectedPlatform || row.platform === selectedPlatform)
       && (!selectedBusinessManagerKey || businessManagerKey(row) === selectedBusinessManagerKey)
+      && (!reportedMethodFilter || reportedPaymentMethodLabel(row.reportedPaymentMethod) === reportedMethodFilter)
       && (!paymentFilter || paymentMethodForRow(row) === paymentFilter)
       && (!billingFilter || (billingFilter === "needs_choice"
         ? Boolean(assigned?.assignment && !assigned.assignment.billingType)
         : assigned?.assignment?.billingType === billingFilter))
       && (!selectedProviderId || (assigned?.provider?.id ?? "unassigned") === selectedProviderId)
     );
-  }), [funding?.paymentMethods, paymentFilter, billingFilter, funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedPlatform, selectedProviderId, spendRows]);
+  }), [funding?.paymentMethods, paymentFilter, reportedMethodFilter, billingFilter, funding?.assignments, providersById, selectedAccountKey, selectedBusinessManagerKey, selectedPlatform, selectedProviderId, spendRows]);
   const businessManagerGroups = useMemo(() => groupBusinessManagers(scopedSpendRows), [scopedSpendRows]);
   const providerSpendGroups = useMemo(() => groupMediaSpendByFundingProvider(
     scopedSpendRows,
@@ -523,6 +537,7 @@ function CognitiveSpendView({
           row.accountName,
           row.agencyName,
           row.agencyId?.toString(),
+          reportedPaymentMethodLabel(row.reportedPaymentMethod),
           row.businessManagerId,
           row.businessManagerName,
           row.date,
@@ -632,6 +647,7 @@ function CognitiveSpendView({
     setPage(0);
   }, [
     accountSortDirection,
+    reportedMethodFilter,
     paymentFilter,
     billingFilter,
     accountSortKey,
@@ -753,11 +769,11 @@ function CognitiveSpendView({
         return [group.businessManagerName, group.businessManagerId, group.platform, group.workspaces.join(", "), group.accountCount, state.provider?.name ?? (state.childAssignments ? `${state.childAssignments} account assignments` : "Unassigned"), billingTypeLabel(group.rows), group.spend.toFixed(2), group.currency];
       });
     } else if (showingAccountDetail) {
-      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "Account provider", "Billing type", "Payment method", "Spend", "Currency"];
-      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, row.agencyName, row.agencyId, rowFunding(row).provider?.name ?? "Unassigned", billingTypeLabel([row]), paymentLabel([row]), row.spend.toFixed(2), row.currency]);
+      headers = ["Date", "Platform", "Workspace", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "LemonMax method", "Account provider", "Billing type", "Payment method", "Spend", "Currency"];
+      rows = visibleDailyRows.map((row) => [row.date, row.platform, row.workspace, row.businessManagerName, row.businessManagerId, row.accountName, row.accountId, row.agencyName, row.agencyId, reportedPaymentMethodLabel(row.reportedPaymentMethod), rowFunding(row).provider?.name ?? "Unassigned", billingTypeLabel([row]), paymentLabel([row]), row.spend.toFixed(2), row.currency]);
     } else {
-      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "Account provider", "Billing type", "Payment method", "Reported days", "Spend", "Currency"];
-      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, group.agencyName, group.agencyId, accountFunding(group).provider?.name ?? "Unassigned", billingTypeLabel(group.rows), paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
+      headers = ["Platform", "Workspaces", "Business manager", "BM ID", "Ad account", "Account ID", "Agency", "Agency ID", "LemonMax method", "Account provider", "Billing type", "Payment method", "Reported days", "Spend", "Currency"];
+      rows = visibleAccountGroups.map((group) => [group.platform, group.workspaces.join(", "), group.businessManagerName, group.businessManagerId, group.accountName, group.accountId, group.agencyName, group.agencyId, group.reportedPaymentMethodLabel, accountFunding(group).provider?.name ?? "Unassigned", billingTypeLabel(group.rows), paymentLabel(group.rows), group.dayCount, group.spend.toFixed(2), group.currency]);
     }
     const csv = [headers, ...rows].map((row) => row.map((value) => {
       const text = String(value ?? "");
@@ -935,7 +951,7 @@ function CognitiveSpendView({
                   : "Search provider, account, BM"}
               value={search}
             />
-            <FilterPopover activeCount={Number(Boolean(selectedPlatform)) + Number(Boolean(selectedProviderId)) + Number(Boolean(selectedBusinessManagerKey)) + Number(Boolean(paymentFilter)) + Number(Boolean(billingFilter))} title="Filter media spend">
+            <FilterPopover activeCount={Number(Boolean(selectedPlatform)) + Number(Boolean(selectedProviderId)) + Number(Boolean(selectedBusinessManagerKey)) + Number(Boolean(paymentFilter)) + Number(Boolean(billingFilter)) + Number(Boolean(reportedMethodFilter))} title="Filter media spend">
               <FilterFieldGroup title="Accounts">
                 <label>Platform
                   <NativeSelect aria-label="Filter media spend by platform" value={selectedPlatform} onValueChange={setSelectedPlatform}>
@@ -954,6 +970,12 @@ function CognitiveSpendView({
                   <NativeSelect aria-label="Filter media spend by business manager" searchable value={selectedBusinessManagerKey} onValueChange={setSelectedBusinessManagerKey}>
                     <NativeSelectOption value="">All business managers</NativeSelectOption>
                     {[...allBusinessManagerGroups].sort((a, b) => (a.businessManagerName ?? a.businessManagerId).localeCompare(b.businessManagerName ?? b.businessManagerId)).map((group) => <NativeSelectOption key={group.key} value={group.key}>{group.businessManagerName ?? group.businessManagerId} · {group.businessManagerId}</NativeSelectOption>)}
+                  </NativeSelect>
+                </label>
+                <label>LemonMax method
+                  <NativeSelect aria-label="Filter by LemonMax method" value={reportedMethodFilter} onValueChange={setReportedMethodFilter}>
+                    <NativeSelectOption value="">All reported methods</NativeSelectOption>
+                    {reportedMethodOptions.map((method) => <NativeSelectOption key={method} value={method}>{method}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
                 <label>Billing type
@@ -979,6 +1001,7 @@ function CognitiveSpendView({
         <ActiveFilterBar
           filters={[
             ...(selectedPlatform ? [{ key: "platform", label: `Platform: ${selectedPlatform}`, onRemove: () => setSelectedPlatform("") }] : []),
+            ...(reportedMethodFilter ? [{ key: "reportedPaymentMethod", label: `LemonMax: ${reportedMethodFilter}`, onRemove: () => setReportedMethodFilter("") }] : []),
             ...(billingFilter ? [{ key: "billingType", label: `Billing: ${billingFilter === "needs_choice" ? "Needs billing choice" : mediaFundingBillingTypeLabels[billingFilter]}`, onRemove: () => setBillingFilter("") }] : []),
             ...(paymentFilter ? [{ key: "paymentMethod", label: `Payment: ${mediaPaymentMethodLabels[paymentFilter]}`, onRemove: () => setPaymentFilter("") }] : []),            ...(selectedAccountKey ? [{
               key: "account",
@@ -999,6 +1022,7 @@ function CognitiveSpendView({
           onClearAll={() => {
             setSelectedPlatform("");
             setPaymentFilter("");
+            setReportedMethodFilter("");
             setBillingFilter("");
             setSelectedAccountKey("");
             setSelectedBusinessManagerKey("");
@@ -1059,6 +1083,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="workspace">Workspace</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} description="Reported by LemonMax for this account and date. A dash means no agency was supplied. Funding assignments are managed separately." direction={dailySortDirection} onSort={requestDailySort} sortKey="agency">Agency</SortableTableHead>
+                  <SortableTableHead activeSortKey={dailySortKey} description="Payment method reported by LemonMax for this account-day." direction={dailySortDirection} onSort={requestDailySort} sortKey="reportedPaymentMethod">LemonMax method</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="provider">Account provider</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={dailySortKey} direction={dailySortDirection} onSort={requestDailySort} sortKey="paymentMethod">Payment method</SortableTableHead>
@@ -1076,6 +1101,7 @@ function CognitiveSpendView({
                       <td>{row.workspace}</td>
                       <td><strong>{row.businessManagerName ?? "—"}</strong><small>{row.businessManagerId}</small></td>
                       <td>{row.agencyName ?? "—"}</td>
+                      <td>{reportedPaymentMethodLabel(row.reportedPaymentMethod)}</td>
                       <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
                       <td>{billingTypeLabel([row])}</td>
                       <td>{paymentCell([row])}</td>
@@ -1097,6 +1123,7 @@ function CognitiveSpendView({
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="businessManager">Business manager</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="account">Ad account</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} description="Reported by LemonMax for the account's latest date in this period. A dash means no agency was supplied. Funding assignments are managed separately." direction={accountSortDirection} onSort={requestAccountSort} sortKey="agency">Agency</SortableTableHead>
+                  <SortableTableHead activeSortKey={accountSortKey} description="Payment method reported by LemonMax for this account. Open the daily rows to see changes across the selected period." direction={accountSortDirection} onSort={requestAccountSort} sortKey="reportedPaymentMethod">LemonMax method</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="provider">Account provider</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="billingType">Billing type</SortableTableHead>
                   <SortableTableHead activeSortKey={accountSortKey} direction={accountSortDirection} onSort={requestAccountSort} sortKey="paymentMethod">Payment method</SortableTableHead>
@@ -1127,6 +1154,7 @@ function CognitiveSpendView({
                       </button>
                     </td>
                     <td>{group.agencyName ?? "—"}</td>
+                    <td>{group.reportedPaymentMethodLabel}</td>
                     <td>{fundingState.provider ? <span className="media-funding-provider-cell"><FundingProviderBadge provider={fundingState.provider} />{inherited && <small>via BM</small>}</span> : <span className="media-funding-unassigned">Unassigned</span>}</td>
                     <td>{billingTypeLabel(group.rows)}</td>
                     <td>{paymentCell(group.rows)}</td>

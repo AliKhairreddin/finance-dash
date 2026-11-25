@@ -18,6 +18,7 @@ const mediaSpendRow = v.object({
   accountName: v.optional(v.string()),
   agencyId: v.optional(v.number()),
   agencyName: v.optional(v.string()),
+  reportedPaymentMethod: v.optional(v.union(v.string(), v.null())),
   spend: v.number(),
   currency: v.string(),
   syncedAt: v.string()
@@ -97,6 +98,7 @@ export const listDate = query({
         ...(row.accountName ? { accountName: row.accountName } : {}),
         ...(row.agencyId !== undefined ? { agencyId: row.agencyId } : {}),
         ...(row.agencyName ? { agencyName: row.agencyName } : {}),
+        ...(row.reportedPaymentMethod !== undefined ? { reportedPaymentMethod: row.reportedPaymentMethod } : {}),
         spend: row.spend,
         currency: row.currency,
         syncedAt: row.syncedAt

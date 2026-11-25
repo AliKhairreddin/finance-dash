@@ -17,6 +17,7 @@ export interface MediaSpendRow {
   accountName?: string;
   agencyId?: number;
   agencyName?: string;
+  reportedPaymentMethod?: string | null;
   spend: number;
   currency: string;
   syncedAt: string;
@@ -27,6 +28,7 @@ export interface MediaSpendAccountGroup {
   accountName?: string;
   agencyId?: number;
   agencyName?: string;
+  reportedPaymentMethodLabel: string;
   businessManagerId: string;
   businessManagerName?: string;
   currency: string;
@@ -139,6 +141,19 @@ function mediaSpendRowKey(row: Pick<
   ].map(encodeURIComponent).join(":");
 }
 
+export function reportedPaymentMethodLabel(method: MediaSpendRow["reportedPaymentMethod"]): string {
+  if (method === undefined) return "Not imported";
+  return method ?? "Not reported";
+}
+
+function parseReportedPaymentMethod(value: unknown, rowNumber: number): string | null {
+  if (value === null) return null;
+  if (!isRecord(value) || !Object.hasOwn(value, "Type")) {
+    throw new Error(`LemonMax row ${rowNumber} has an invalid Payment Method`);
+  }
+  return optionalDisplayString(value, "Type", rowNumber, 100) ?? null;
+}
+
 export function parseLemonMaxSpendSummary(
   value: unknown,
   expectedDate: string,
@@ -215,6 +230,7 @@ export function parseLemonMaxSpendSummaryRange(
       ...(accountName ? { accountName } : {}),
       ...(agencyId !== null ? { agencyId: Number(agencyId) } : {}),
       ...(agencyName ? { agencyName } : {}),
+      reportedPaymentMethod: parseReportedPaymentMethod(item["Payment Method"], rowNumber),
       spend,
       currency,
       syncedAt
@@ -317,12 +333,14 @@ export function groupMediaSpendByAccount(rows: readonly MediaSpendRow[]): MediaS
       right.date.localeCompare(left.date) || right.key.localeCompare(left.key)
     )[0];
     const searchTerms = new Set<string>();
+    const reportedMethods = new Set<string>();
     const workspaces = new Set<number>();
     for (const row of accountRows) {
       searchTerms.add(row.accountId);
       if (row.accountName) searchTerms.add(row.accountName);
       if (row.agencyName) searchTerms.add(row.agencyName);
       if (row.agencyId !== undefined) searchTerms.add(String(row.agencyId));
+      reportedMethods.add(reportedPaymentMethodLabel(row.reportedPaymentMethod));
       searchTerms.add(row.businessManagerId);
       if (row.businessManagerName) searchTerms.add(row.businessManagerName);
       searchTerms.add(row.platform);
@@ -330,11 +348,15 @@ export function groupMediaSpendByAccount(rows: readonly MediaSpendRow[]): MediaS
       workspaces.add(row.workspace);
     }
 
+    const methodLabel = reportedMethods.size === 1 ? [...reportedMethods][0] : "Mixed";
+    for (const method of reportedMethods) searchTerms.add(method);
+    searchTerms.add(methodLabel);
     return {
       accountId: latestRow.accountId,
       ...(latestRow.accountName ? { accountName: latestRow.accountName } : {}),
       ...(latestRow.agencyId !== undefined ? { agencyId: latestRow.agencyId } : {}),
       ...(latestRow.agencyName ? { agencyName: latestRow.agencyName } : {}),
+      reportedPaymentMethodLabel: methodLabel,
       businessManagerId: latestRow.businessManagerId,
       ...(latestRow.businessManagerName ? { businessManagerName: latestRow.businessManagerName } : {}),
       currency: latestRow.currency,
