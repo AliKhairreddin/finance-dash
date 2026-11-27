@@ -6,7 +6,7 @@ import { validateTopUpInput, validateTopUpAmount, formatTopUpAmount, topUpAmount
 import { boundedBytes, ingestDocument, secureHeaderMatches } from "./documentIntake";
 import { documentMaximumBytes } from "../shared/financialDocuments";
 import { getDashboardSession } from "./auth";
-import { parseTelegramAuthUsers, telegramApi } from "./telegram";
+import { parseTelegramAuthUsers, sendPrivateTelegramNotice, telegramApi, TelegramRequestRejected } from "./telegram";
 import { draftApi, prepareTopUpDraft } from "./topUpDrafts";
 const client = (env: WorkerEnv) => new ConvexHttpClient(env.CONVEX_URL);
 const auth = (env: WorkerEnv) => ({ serviceToken: env.CONVEX_SERVICE_TOKEN });
@@ -79,13 +79,38 @@ export async function refreshTopUpButtons(env: WorkerEnv, id: Id<"topUpRequests"
 export async function sendTopUpNotification(env: WorkerEnv, id: Id<"topUpRequests">, version: number): Promise<void> {
   const convex = client(env), current = await convex.query(api.topUps.get, { ...auth(env), id });
   if (!current || current.version !== version) return;
-  const [card, wagner] = await Promise.allSettled([
+  const [card, wagner, payment] = await Promise.allSettled([
     current.telegramVersion === version ? undefined : updateTopUpCard(env, convex, current),
     current.wagnerPaidVersion === version && !current.wagnerMessageId && current.status === "paid" && !current.deletedAt
-      ? sendWagnerPaidNotice(env, convex, current) : undefined
+      ? sendWagnerPaidNotice(env, convex, current) : undefined,
+    current.status === "approved" && !current.deletedAt && current.paymentNotice?.state === "pending"
+      ? sendPaymentNotice(env, convex, current) : undefined
   ]);
   if (wagner.status === "rejected") throw new WagnerNoticeError("Could not confirm delivery to the Wagner group");
   if (card.status === "rejected") throw card.reason;
+  if (payment.status === "rejected") throw payment.reason;
+}
+async function sendPaymentNotice(env: WorkerEnv, convex: ConvexHttpClient, r: Doc<"topUpRequests">) {
+  const { chatId } = telegramPerson(env, "Ali M");
+  const attempt = { ...auth(env), id: r._id, token: crypto.randomUUID() };
+  if (!await convex.mutation(api.topUps.claimPaymentNotice, { ...attempt, version: r.version })) return;
+  const text = [
+    `${isCryptoTopUp(r.currency) ? "Purchase request" : "Top-up"} #${r.number} is awaiting payment.`,
+    `${r.companyName} · ${formatTopUpAmount(r.amount, r.currency)}`,
+    ...(r.approvedBy ? [`Approved by ${r.approvedBy}`] : []),
+    "",
+    `After payment, tap Paid on request #${r.number} in the Top-Up Request group.`
+  ].join("\n");
+  let result: Exclude<NonNullable<typeof r.paymentNotice>, { state: "attempted" }>;
+  try {
+    result = { state: "sent", messageId: await sendPrivateTelegramNotice(env, chatId, text) };
+  } catch (error) {
+    if (!(error instanceof TelegramRequestRejected)) return; // An uncertain send must not be repeated automatically.
+    if (error.code === 429) result = { state: "pending", retryAt: Date.now() + (error.retryAfterSeconds ?? 60) * 1000 };
+    else if (error.code === 403 || error.code === 400) result = { state: "blocked" };
+    else return;
+  }
+  await convex.mutation(api.topUps.finishPaymentNotice, { ...attempt, result });
 }
 export class WagnerNoticeError extends Error {}
 async function postWagnerNotice(env: WorkerEnv, text: string) {

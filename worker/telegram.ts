@@ -30,9 +30,16 @@ type TelegramEnv = Pick<
 
 interface TelegramApiEnvelope {
   error_code?: number;
+  retryAfterSeconds?: number;
   description?: string;
   ok: boolean;
   result?: unknown;
+}
+
+export class TelegramRequestRejected extends Error {
+  constructor(method: string, readonly code: number, readonly retryAfterSeconds?: number) {
+    super(`Telegram ${method} request failed`);
+  }
 }
 
 export interface TelegramPrivateMessage {
@@ -161,7 +168,14 @@ export function parseTelegramAuthUsers(value: string | undefined): TelegramAuthU
 
 function telegramApiEnvelope(value: unknown): TelegramApiEnvelope | null {
   if (!isRecord(value) || typeof value.ok !== "boolean") return null;
-  return { ok: value.ok, ...(typeof value.error_code === "number" ? { error_code: value.error_code } : {}), ...(typeof value.description === "string" ? { description: value.description } : {}), ...(Object.hasOwn(value, "result") ? { result: value.result } : {}) };
+  const delay = isRecord(value.parameters) ? value.parameters.retry_after : undefined;
+  return {
+    ok: value.ok,
+    error_code: typeof value.error_code === "number" ? value.error_code : undefined,
+    retryAfterSeconds: typeof delay === "number" && Number.isSafeInteger(delay) && delay > 0 ? delay : undefined,
+    description: typeof value.description === "string" ? value.description : undefined,
+    result: value.result
+  };
 }
 
 async function readBoundedResponseJson(response: Response): Promise<unknown> {
@@ -227,9 +241,20 @@ export async function telegramApi(
   }
   if (!response.ok || !envelope?.ok) {
     if (method.startsWith("editMessage") && envelope?.error_code === 400 && envelope.description?.startsWith("Bad Request: message is not modified")) return true;
+    if (envelope?.ok === false && envelope.error_code) throw new TelegramRequestRejected(method, envelope.error_code, envelope.retryAfterSeconds);
     throw new Error(`Telegram ${method} request failed`);
   }
   return envelope.result;
+}
+
+export async function sendPrivateTelegramNotice(env: Pick<TelegramEnv, "TELEGRAM_BOT_TOKEN">, chatId: string, text: string) {
+  if (!/^[1-9]\d*$/.test(chatId)) throw new Error("Expected a private Telegram chat");
+  const message = await telegramApi(env, "sendMessage", { chat_id: chatId, text, disable_notification: false, link_preview_options: { is_disabled: true } });
+  if (!isRecord(message) || !isRecord(message.chat) || message.chat.type !== "private" || String(message.chat.id) !== chatId ||
+      typeof message.message_id !== "number" || !Number.isSafeInteger(message.message_id) || message.message_id <= 0) {
+    throw new Error("Missing receipt for the private Telegram message");
+  }
+  return message.message_id;
 }
 
 export async function sendTelegramMessage(

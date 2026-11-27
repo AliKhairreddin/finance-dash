@@ -6,17 +6,55 @@ const id = "request-abc";
 const env = { CONVEX_URL: "https://test.convex.cloud", CONVEX_SERVICE_TOKEN: "service", AUTH_SESSION_SECRET: "signature-test-secret", TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_AUTH_USERS_JSON: JSON.stringify({ Ali: "111", "Ali M": "222", Amin: "333", OtherAdmin: "444" }), TOPUP_TELEGRAM_CHAT_ID: "-5336756761", TOPUP_WAGNER_CHAT_ID: "-123", PUBLIC_APP_URL: "https://finance.test" } as unknown as WorkerEnv;
 const pending = { _id: id, version: 1, telegramMessageId: 7, status: "pending", draftStatus: "awaiting_approval", number: 10, entity: "dn", priority: "Urgent", companyName: "Example", team: "Cognitive", member: "Member", amount: 100, currency: "USD", openBalance: -20, lastThreeDaysSpend: 10, expectedThreeDaysSpend: 20, paymentMethod: "Bank Transfer", commission: "3%", createdAt: "2026-10-22T12:00:00Z", contentType: "application/pdf", documentId: "document", fileName: "invoice.pdf" };
 function callback(user: number, action = "approve", version = 1, chat = -5336756761) { return { callback_query: { id: "callback-1", data: `tu:${action}:${id}:${version}`, from: { id: user }, message: { message_id: 7, chat: { id: chat } } } }; }
-async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null, membership: Record<string, unknown> | "unavailable" = { status: "member" }) {
+async function mocked(run: (calls: { path: string; body: any }[]) => Promise<void>, record: any = pending, deletedSnapshot: any = null, membership: Record<string, unknown> | "unavailable" = { status: "member" }, privateResponse?: () => Response) {
   const original = globalThis.fetch; const calls: { path: string; body: any }[] = [];
   globalThis.fetch = async (input, init) => { const url = String(input), body = JSON.parse(String(init?.body)); const path = url.includes("api.telegram.org") ? url.split("/").at(-1)! : body.path; calls.push({ path, body });
     if (path === "getChatMember") return membership === "unavailable"
       ? Response.json({ ok: false, error_code: 429, parameters: { retry_after: 30 } }, { status: 429 })
       : Response.json({ ok: true, result: { user: { id: body.user_id, is_bot: false, first_name: "Group member" }, ...membership } });
     const args = Array.isArray(body.args) ? body.args[0] : body.args;
+    if (path === "topUps:claimPaymentNotice" || path === "topUps:finishPaymentNotice") {
+      const claimed = record.paymentNotice?.state === "pending";
+      if (path === "topUps:claimPaymentNotice" && claimed) record.paymentNotice = { state: "attempted", token: args.token };
+      if (path === "topUps:finishPaymentNotice" && record.paymentNotice?.token === args.token) record.paymentNotice = args.result;
+      return Response.json({ status: "success", value: path === "topUps:claimPaymentNotice" ? claimed : null });
+    }
+    if (path === "sendMessage" && body.chat_id === "222") return privateResponse?.() ?? Response.json({ ok: true, result: { message_id: 12, chat: { id: 222, type: "private" } } });
     const adjustment = record?.adjustUserId === args?.userId && record?.adjustPromptId === args?.promptId ? record : null;
     return url.includes("api.telegram.org") ? Response.json({ ok: true, result: path === "sendMessage" ? { message_id: 8, chat: { id: Number(body.chat_id) } } : true }) : Response.json({ status: "success", value: path === "topUps:rateLimit" ? true : path === "topUps:get" ? record : path === "topUps:deletedNotification" ? deletedSnapshot : path === "topUps:findAdjustment" ? adjustment : path === "topUps:transition" ? { ...record, status: "approved" } : null }); };
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
+test("approval edits the group card and sends one private payment alert to Ali M across draft updates", async () => {
+  const approved = { ...pending, status: "approved", version: 2, approvedBy: "Amin", paymentNotice: { state: "pending" } };
+  await mocked(async calls => {
+    await sendTopUpNotification(env, id as never, 2);
+    approved.version = 3;
+    await sendTopUpNotification(env, id as never, 3);
+    const messages = calls.filter(c => c.path === "sendMessage");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].body.chat_id, "222");
+    assert.equal(messages[0].body.disable_notification, false);
+    assert.match(messages[0].body.text, /Top-up #10 is awaiting payment\.\nExample · 100 USD\nApproved by Amin/);
+    assert.match(messages[0].body.text, /tap Paid on request #10 in the Top-Up Request group/);
+    assert.deepEqual(approved.paymentNotice, { state: "sent", messageId: 12 });
+    assert.ok(calls.some(c => c.path === "editMessageText" && c.body.chat_id === env.TOPUP_TELEGRAM_CHAT_ID && c.body.message_id === 7));
+  }, approved);
+});
+test("private alerts preserve blocked, throttled and uncertain Telegram results without posting in the group", async () => {
+  for (const code of [403, 429, 500, 200]) {
+    const approved = { ...pending, status: "approved", version: 2, telegramVersion: 2, paymentNotice: { state: "pending", retryAt: 0 } };
+    const before = Date.now();
+    await mocked(async calls => {
+      await sendTopUpNotification(env, id as never, 2);
+      assert.equal(approved.paymentNotice.state, code === 403 ? "blocked" : code === 429 ? "pending" : "attempted");
+      if (code === 429) assert.ok(approved.paymentNotice.retryAt >= before + 600_000);
+      else await sendTopUpNotification(env, id as never, 2);
+      assert.deepEqual(calls.filter(c => c.path === "sendMessage").map(c => c.body.chat_id), ["222"]);
+    }, approved, null, {}, () => code === 200
+      ? Response.json({ ok: true, result: { message_id: 8, chat: { id: 111, type: "private" } } })
+      : Response.json({ ok: false, error_code: code, parameters: { retry_after: 600 } }, { status: code }));
+  }
+});
 test("the delivery test posts one labelled notice without accessing any payment", async () => {
   await mocked(async calls => {
     assert.deepEqual(await testWagnerNotice(env), { chatId: env.TOPUP_WAGNER_CHAT_ID, messageId: 8 });

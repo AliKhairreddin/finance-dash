@@ -78,6 +78,57 @@ test("Revolut requests queue an unsent draft on approval; card and crypto paymen
     assert.deepEqual((await db.ctx.db.get("state")).paymentAllocations, []);
   }
 });
+test("a payment alert survives draft revisions and reserves one private send until its receipt is recorded", async () => {
+  const db = setup();
+  const request = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  const id = request._id;
+  const claim = { ...auth, id, version: 2, token: "first" };
+  assert.equal(await db.run(topUps.claimPaymentNotice, claim), false);
+  await db.run(topUps.transition, { ...auth, id, version: 1, action: "approve", actor: "Amin" });
+  assert.equal(await db.run(topUps.claimPaymentNotice, claim), true);
+  assert.equal(await db.run(topUps.claimPaymentNotice, { ...claim, token: "second" }), false);
+  await db.run(topUps.claimDraft, { ...auth, id, token: "draft" });
+  await db.run(topUps.draftResult, { ...auth, id, token: "draft", status: "created", draftId: "bank-draft" });
+  assert.equal(await db.run(topUps.claimPaymentNotice, { ...claim, version: 3 }), false);
+  await db.run(topUps.saveMessage, { ...auth, id, version: 3, messageId: 7 });
+  const delivery = { id, version: 3, token: "card" };
+  await db.run(topUps.claimDelivery, delivery);
+  await db.run(topUps.deliveryResult, delivery);
+  assert.match((await db.ctx.db.get(id)).notificationError, /unconfirmed/);
+  await db.run(topUps.finishPaymentNotice, { ...auth, id, token: "wrong", result: { state: "sent", messageId: 66 } });
+  assert.equal((await db.ctx.db.get(id)).paymentNotice.state, "attempted");
+  await db.run(topUps.finishPaymentNotice, { ...auth, id, token: "first", result: { state: "sent", messageId: 77 } });
+  await db.run(topUps.retryNotification, { ...auth, id });
+  assert.equal(await db.run(topUps.claimPaymentNotice, { ...claim, version: 3 }), false);
+  assert.deepEqual((await db.ctx.db.get(id)).paymentNotice, { state: "sent", messageId: 77 });
+});
+
+test("a private alert respects flood waits and can be explicitly enabled once on an existing approval", async () => {
+  const db = setup();
+  const request = await db.run(topUps.create, { ...auth, input: input(), documentId: "doc" });
+  const id = request._id;
+  await db.run(topUps.transition, { ...auth, id, version: 1, action: "approve", actor: "Amin" });
+  await db.ctx.db.patch(id, { paymentNotice: undefined });
+  await db.run(topUps.retryNotification, { ...auth, id });
+  assert.equal((await db.ctx.db.get(id)).paymentNotice, undefined);
+  await db.run(topUps.retryNotification, { ...auth, id, includePaymentNotice: true });
+  const claim = { ...auth, id, version: 2, token: "dm" };
+  assert.equal(await db.run(topUps.claimPaymentNotice, claim), true);
+  await db.run(topUps.retryNotification, { ...auth, id, includePaymentNotice: true });
+  assert.equal(await db.run(topUps.claimPaymentNotice, claim), false);
+  const retryAt = Date.now() + 600_000;
+  await db.run(topUps.finishPaymentNotice, { ...auth, id, token: "dm", result: { state: "pending", retryAt } });
+  const delivery = { id, version: 2, token: "card" };
+  await db.run(topUps.claimDelivery, delivery);
+  await db.run(topUps.deliveryResult, delivery);
+  assert.ok((db.scheduled.at(-1) as [number])[0] >= retryAt - Date.now());
+  await db.run(topUps.retryNotification, { ...auth, id });
+  assert.equal(await db.run(topUps.claimPaymentNotice, claim), false);
+  await db.run(topUps.transition, { ...auth, id, version: 2, action: "paid", actor: "Ali M" });
+  await db.ctx.db.patch(id, { paymentNotice: { state: "pending" } });
+  assert.equal(await db.run(topUps.claimPaymentNotice, { ...claim, version: 3 }), false);
+});
+
 test("only marking a Wagner request Paid creates a Wagner notice and delivery requires its own receipt", async () => {
   for (const team of ["Wagner", "Cognitive"]) {
     const db = setup();

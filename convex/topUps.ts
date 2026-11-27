@@ -2,7 +2,8 @@ import { ConvexError, v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { topUpInputFields, topUpRecord, paymentDetails } from "./topUpSchema";
+import { topUpInputFields, topUpRecord, paymentDetails, paymentNoticeResult } from "./topUpSchema";
+import type { Doc } from "./_generated/dataModel";
 import { validateTopUpInput, validateTopUpAmount, isCryptoTopUp, topUpTransition } from "../shared/topUps";
 function authorize(token: string) { if (!process.env.CONVEX_SERVICE_TOKEN || token !== process.env.CONVEX_SERVICE_TOKEN) throw new ConvexError("Unauthorized"); }
 const now = () => new Date().toISOString();
@@ -68,7 +69,7 @@ export const transition = mutation({
     }
     const at = now(); const version = r.version + 1;
     await ctx.db.patch(r._id, { status, amount, providerId, version, updatedAt: at, adjustPromptId: undefined, adjustUserId: undefined, adjustExpiresAt: undefined, adjustError: undefined,
-      ...(a.action === "approve" ? { approvedBy: a.actor, draftStatus: prepareDraft ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
+      ...(a.action === "approve" ? { approvedBy: a.actor, paymentNotice: { state: "pending" as const }, draftStatus: prepareDraft ? "queued" : "not_applicable" } : {}), ...(a.action === "paid" ? { paidBy: a.actor } : {}),
       ...(a.action === "reject" ? { draftStatus: "not_applicable" } : {}),
       ...(a.action === "paid" && r.team.trim().toLowerCase() === "wagner" ? { wagnerPaidVersion: version } : {}),
       events: [...r.events, { at, actor: a.actor, action: a.action, amount }].slice(-200), notificationError: undefined });
@@ -108,19 +109,70 @@ export const claimDelivery = internalMutation({ args: { id: v.id("topUpRequests"
   await ctx.db.patch(d._id, { state: "sending", token: a.token, attempts: d.attempts + 1 });
   await ctx.scheduler.runAfter(120_000, internal.topUps.recoverDelivery, a); return true;
 } });
+function paymentNoticeError(r: Doc<"topUpRequests"> | null) {
+  if (!r || r.deletedAt || r.status !== "approved") return;
+  switch (r.paymentNotice?.state) {
+    case "pending": return "Ali M’s private payment alert is awaiting delivery.";
+    case "attempted": return "Delivery of Ali M’s private payment alert is unconfirmed. Check his bot chat before retrying.";
+    case "blocked": return "Telegram declined Ali M’s private payment alert. Ask him to open the finance bot, tap Start or unblock it, then retry.";
+  }
+}
+
+export const claimPaymentNotice = mutation({
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), token: v.string() }, returns: v.boolean(),
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    const r = await ctx.db.get(a.id);
+    if (!r || r.deletedAt || r.status !== "approved" || r.version !== a.version || r.paymentNotice?.state !== "pending" || (r.paymentNotice.retryAt ?? 0) > Date.now()) return false;
+    // Telegram has no idempotency key for sendMessage. Reserve the send before contacting it.
+    await ctx.db.patch(a.id, { paymentNotice: { state: "attempted", token: a.token } });
+    return true;
+  }
+});
+export const finishPaymentNotice = mutation({
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), token: v.string(), result: paymentNoticeResult }, returns: v.null(),
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    const r = await ctx.db.get(a.id);
+    if (r?.paymentNotice?.state === "attempted" && r.paymentNotice.token === a.token) await ctx.db.patch(a.id, { paymentNotice: a.result });
+    return null;
+  }
+});
+
 export const deliveryResult = internalMutation({ args: { id: v.id("topUpRequests"), version: v.number(), token: v.string(), error: v.optional(v.string()) }, returns: v.null(), handler: async (ctx, a) => {
   const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
   if (!d || d.state !== "sending" || d.token !== a.token) return null;
   const r = await ctx.db.get(a.id);
   const missingReceipt = r?.version === a.version && r.wagnerPaidVersion === a.version && !r.wagnerMessageId;
-  const error = a.error ?? (missingReceipt ? "Wagner Paid notice delivery could not be confirmed." : undefined);
-  const retry = !!error && d.attempts < 4 && r?.version === a.version;
+  const privateError = paymentNoticeError(r);
+  const error = a.error ?? (missingReceipt ? "Wagner Paid notice delivery could not be confirmed." : privateError);
+  const retry = !!error && d.attempts < 4 && r?.version === a.version && (!!a.error || !privateError || r.paymentNotice?.state === "pending");
   await ctx.db.patch(d._id, { state: error ? retry ? "pending" : "failed" : "sent", error });
   if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version ? { notificationError: error } : {}) });
-  if (retry) await ctx.scheduler.runAfter(Math.min(900_000, 60_000 * 2 ** d.attempts), internal.topUpProcessing.deliver, { id: a.id, version: a.version });
+  if (retry) {
+    const retryAt = r.paymentNotice?.state === "pending" ? r.paymentNotice.retryAt ?? 0 : 0;
+    await ctx.scheduler.runAfter(Math.max(retryAt - Date.now(), Math.min(900_000, 60_000 * 2 ** d.attempts)), internal.topUpProcessing.deliver, { id: a.id, version: a.version });
+  }
   if (r && r.version !== a.version) await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null;
 } });
-export const retryNotification = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests") }, returns: v.null(), handler: async (ctx, a) => { authorize(a.serviceToken); const r = await ctx.db.get(a.id); if (!r) throw new ConvexError("Request not found"); const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", r.version)).unique(); if (d?.state === "sending") throw new ConvexError("Delivery is already running"); if (d) await ctx.db.patch(d._id, { state: "pending", attempts: 0 }); await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null; } });
+export const retryNotification = mutation({
+  args: { serviceToken: v.string(), id: v.id("topUpRequests"), includePaymentNotice: v.optional(v.boolean()) }, returns: v.null(),
+  handler: async (ctx, a) => {
+    authorize(a.serviceToken);
+    const r = await ctx.db.get(a.id);
+    if (!r) throw new ConvexError("Request not found");
+    if (a.includePaymentNotice && (r.deletedAt || r.status !== "approved" || r.paymentNotice)) return null;
+    const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", r.version)).unique();
+    if (d?.state === "sending" || r.telegramDeliveryToken) throw new ConvexError("Delivery is already running");
+    if (r.status === "approved" && !r.deletedAt && (r.paymentNotice?.state === "attempted" || r.paymentNotice?.state === "blocked" || (!r.paymentNotice && a.includePaymentNotice))) {
+      await ctx.db.patch(a.id, { paymentNotice: { state: "pending" } });
+    }
+    if (d) await ctx.db.patch(d._id, { state: "pending", attempts: 0 });
+    else await ctx.db.insert("topUpDeliveries", { requestId: a.id, version: r.version, state: "pending", attempts: 0 });
+    await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version });
+    return null;
+  }
+});
 export const saveMessage = mutation({ args: { serviceToken: v.string(), id: v.id("topUpRequests"), version: v.number(), messageId: v.number() }, returns: v.null(), handler: async (ctx, a) => {
   authorize(a.serviceToken); const r = await ctx.db.get(a.id);
   if (r && a.version <= r.version && (!r.telegramMessageId || r.telegramMessageId === a.messageId)) await ctx.db.patch(a.id, { telegramMessageId: a.messageId, telegramVersion: Math.max(r.telegramVersion ?? 0, a.version) }); return null;
@@ -147,9 +199,11 @@ export const recoverDelivery = internalMutation({ args: { id: v.id("topUpRequest
   const d = await ctx.db.query("topUpDeliveries").withIndex("by_request_version", q => q.eq("requestId", a.id).eq("version", a.version)).unique();
   if (!d || d.state !== "sending" || d.token !== a.token) return null;
   const r = await ctx.db.get(a.id);
-  const delivered = r?.telegramVersion === a.version && (r.wagnerPaidVersion !== a.version || !!r.wagnerMessageId);
-  await ctx.db.patch(d._id, { state: delivered ? "sent" : "failed", error: delivered ? undefined : "Telegram delivery was interrupted. Retry from the dashboard." });
-  if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version && !delivered ? { notificationError: "Telegram delivery was interrupted. Retry from the dashboard." } : {}) });
+  const privateError = paymentNoticeError(r);
+  const delivered = r?.telegramVersion === a.version && (r.wagnerPaidVersion !== a.version || !!r.wagnerMessageId) && !privateError;
+  const error = delivered ? undefined : privateError ?? "Telegram delivery was interrupted. Retry from the dashboard.";
+  await ctx.db.patch(d._id, { state: delivered ? "sent" : "failed", error });
+  if (r?.telegramDeliveryToken === a.token) await ctx.db.patch(r._id, { telegramDeliveryToken: undefined, ...(r.version === a.version && !delivered ? { notificationError: error } : {}) });
   if (r && r.version !== a.version) await ctx.scheduler.runAfter(0, internal.topUpProcessing.deliver, { id: a.id, version: r.version }); return null;
 } });
 export const recoverDraft = internalMutation({ args: { id: v.id("topUpRequests"), token: v.string() }, returns: v.null(), handler: async (ctx, a) => {
